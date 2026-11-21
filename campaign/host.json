@@ -1,0 +1,47 @@
+{
+  "sysctl": {
+    "brand": "Apple M5 Max",
+    "perflevel0_name": "Super",
+    "perflevel1_name": "Performance",
+    "perflevel0_physicalcpu": 6,
+    "perflevel1_physicalcpu": 12,
+    "ncpu": 18,
+    "memsize_bytes": 51539607552
+  },
+  "gpu": {
+    "gpu_cores": 40,
+    "metal_support": "Metal 4"
+  },
+  "sw_vers": {
+    "product_name": "macOS",
+    "product_version": "27.2",
+    "build_version": "26B123"
+  },
+  "xcodebuild": [
+    "Xcode 27.2",
+    "Build version 27B52"
+  ],
+  "sdk_version": "27.2",
+  "metal_toolchain": {
+    "metal_path": "/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v27.2.47.0.y1lcdr/Metal.xctoolchain/usr/bin/metal",
+    "toolchain_version": "27.2.47.0",
+    "metal_version": "Apple metal version 32023.922 (metalfe-32023.922.4)",
+    "sdk_path": "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk"
+  },
+  "zig": "0.17.1",
+  "free_disk_bytes": 611526115328,
+  "pmset_therm": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+  "metal": {
+    "swift": "/usr/bin/swift",
+    "name": "Apple M5 Max",
+    "recommendedMaxWorkingSetSize": "40200896512",
+    "hasUnifiedMemory": "true",
+    "maxBufferLength": "30150672384",
+    "supportsFamily.apple7": "true",
+    "supportsFamily.apple8": "true",
+    "supportsFamily.apple9": "true",
+    "supportsFamily.apple10": "true",
+    "supportsFamily.metal3": "true",
+    "supportsFamily.metal4": "true"
+  }
+}

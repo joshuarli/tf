@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "inputs": [
+    {
+      "name": "zig-0.17.1-aarch64-macos",
+      "version": "0.17.1",
+      "sha256": "75f1bc7a1e9852f17ec9a0c1895f767c4ec56d46bc8a834920eece1d0359dd8d",
+      "url": "https://ziglang.org/download/0.17.1/zig-aarch64-macos-0.17.1.tar.xz",
+      "size": 54001240,
+      "role": "toolchain",
+      "license": "MIT",
+      "purpose": "Pinned Zig 0.17.1 macOS aarch64 tarball; installed Zig must match this version"
+    }
+  ]
+}

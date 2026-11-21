@@ -43,6 +43,20 @@ inline float i2p_bf(const device bfloat* p, size_t i) { return float(p[i]); }
   O[(size_t)p.y * a.n + p.x] = a.cap * precise::tanh(acc / a.cap);
 }
 
+[[kernel]] void i2p_cap_exact(const device float* X [[buffer(0)]], const device bfloat* W [[buffer(1)]],
+    constant i2p_cap_args& a [[buffer(2)]], device float* O [[buffer(3)]],
+    uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]) {
+  const uint row = tg.x * 32u + sg;
+  if (row >= a.n) return;
+  const device bfloat* w = W + (size_t)row * a.k;
+  const device float* x = X + (size_t)tg.y * a.k;
+  float acc = 0.0f;
+  for (uint k = lane; k < a.k; k += 32u) acc = fma(x[k], i2p_bf(w, k), acc);
+  acc = simd_sum(acc);
+  if (lane == 0u) O[(size_t)tg.y * a.n + row] = a.cap * precise::tanh(acc / a.cap);
+}
+
 [[kernel]] void i2p_router_exact(const device float* X [[buffer(0)]], const device bfloat* W [[buffer(1)]],
     constant i2p_router_args& a [[buffer(2)]], device float* O [[buffer(3)]],
     uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],

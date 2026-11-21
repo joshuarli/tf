@@ -10,12 +10,13 @@ recorded unavailable.
 import hashlib
 import json
 import os
-import socket
 import sys
 import urllib.request
 from pathlib import Path
 
-WORK = Path(__file__).resolve().parents[3]
+import harness
+
+WORK = harness.WORK
 
 
 def shim() -> Path:

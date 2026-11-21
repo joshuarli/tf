@@ -12,7 +12,7 @@ comparators: comparator-rec comparator-mlx-lm
 
 define comparator-run
 	cd $(CAMPAIGN_DIR) && env $(CMP_ENV) UV_PROJECT_ENVIRONMENT=$(WORK)/venv-$(1) \
-		$(UV) run --frozen --project campaign/comparators/$(1) python campaign/comparators/run.py $(1) \
+		$(UV) run --frozen --project comparators/$(1) python comparators/run.py $(1) \
 		--model-dir $(FLINT_DIR) --cells '$(CMP_CELLS)' --pairs $(CMP_PAIRS) $(if $(PROMPTS),--prompts '$(PROMPTS)',)
 endef
 
@@ -25,9 +25,9 @@ comparator-mlx-lm:
 	$(call comparator-run,mlx-lm)
 
 session-b-ar:
-	cd $(CAMPAIGN_DIR) && $(UV) run --project $(CAMPAIGN_DIR) python campaign/comparators/session.py \
+	cd $(CAMPAIGN_DIR) && $(UV) run --project $(CAMPAIGN_DIR) python comparators/session.py \
 		--model flint --mode ar --cells '$(CMP_CELLS)' --session B --pairs-start 4 --pairs-stop 6
 
 session-b-copy:
-	cd $(CAMPAIGN_DIR) && $(UV) run --project $(CAMPAIGN_DIR) python campaign/comparators/session.py \
+	cd $(CAMPAIGN_DIR) && $(UV) run --project $(CAMPAIGN_DIR) python comparators/session.py \
 		--model flint --mode copy --cells '$(CMP_CELLS)' --session B --pairs-start 4 --pairs-stop 6

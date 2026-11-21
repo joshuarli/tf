@@ -402,6 +402,11 @@ def quality_result(cases, *, set_name="dev", temperature=0, reasons=None):
                        "failed": sum(1 for _, passed in cases if not passed)}}
 
 
+def base_source(relative: str) -> str:
+    return subprocess.run(["git", "show", f"{BASE_REV}:{relative}"], cwd=REPO, capture_output=True,
+                          check=True).stdout.decode()
+
+
 def legacy_quality_exit(record):
     """The base revision returned 0 when only scoring failed, so its exit code was not a qualification."""
     request_failures = sum(1 for case in record["cases"] if case["reason"].startswith("request failed"))
@@ -444,6 +449,13 @@ class QualityCompletion(unittest.TestCase):
                                 "--result", str(candidate), "--baseline", str(baseline))
         self.assertEqual(result.returncode, 1)
         self.assertIn("2 cases lost", result.stderr)
+
+    def test_base_revision_exit_ignored_scoring_failures(self):
+        source = base_source("campaign/quality/run.py")
+        self.assertIn("return 1 if failures else 0", source)
+        self.assertNotIn("complete coverage", source)
+        self.assertTrue((CAMPAIGN / "quality" / "qualify.py").is_file(),
+                        "qualification must live in a separate command")
 
     def test_zero_exit_after_a_scoring_failure_is_not_a_qualification(self):
         cases = [(f"case-{n}", True) for n in range(12)]
@@ -522,6 +534,19 @@ class PiCompletion(unittest.TestCase):
     def test_complete_run_with_all_checkers_qualifies(self):
         result = self.qualify(pi_result([(name, True) for name in self.names]))
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_base_revision_exit_ignored_checker_outcomes(self):
+        source = base_source("campaign/pi/run.py")
+        self.assertIn('return 0 if totals["completed"] == totals["tasks"] and totals["parse_errors"] == 0 else 1',
+                      source)
+        exit_line = next(line for line in source.splitlines() if line.strip().startswith("return 0 if totals"))
+        self.assertNotIn("checker_passed", exit_line)
+
+    def test_base_revision_recorded_the_requested_binary_for_a_reused_server(self):
+        source = base_source("campaign/pi/run.py")
+        self.assertIn("SERVER_PORT = 8888", source)
+        self.assertIn("if healthy(base):\n        return None, False", source)
+        self.assertIn('"binary": {"path": str(binary), "sha256": harness.sha256_file(binary)}', source)
 
     def test_zero_exit_with_a_failed_checker_is_not_a_qualification(self):
         candidate = pi_result([(name, name != "bugfix-window") for name in self.names])

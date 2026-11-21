@@ -193,7 +193,7 @@ pub const Forward = struct {
         const text = &c.text;
         const index = c.loop.physicalLayer(text.layers, slot);
         const lay: *const Layer = &m.weights.layers[index];
-        const full = cfg.isGlobal(index);
+        const full = c.isFull(index);
         const s = f.s;
         const inp: B = b(s.x);
 

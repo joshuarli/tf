@@ -250,11 +250,11 @@ inline float i2_bf(const device bfloat* p, size_t i) { return float(p[i]); }
     const device float* VALUES [[buffer(2)]], const device float* B [[buffer(3)]], const device float* sink [[buffer(4)]],
     constant i2_attn_args& a [[buffer(5)]], device float* O [[buffer(6)]],
     uint h [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
-  const uint D = a.dim, per = D / 32u;
+  const uint D = a.dim, per = max(1u, D / 32u);
   const uint kv = h / (a.heads / a.kv);
   const float tau = a.tau ? 1.0f + a.alpha * precise::log(max(1.0f, (float(a.pos) + 1.0f) / a.floor)) : 1.0f;
   float qv[4];
-  for (uint j = 0; j < per; ++j) qv[j] = Q[h * D + lane + 32u * j] * a.scale * tau;
+  for (uint j = 0; j < per; ++j) qv[j] = (lane + 32u * j < D) ? Q[h * D + lane + 32u * j] * a.scale * tau : 0.0f;
   const float sk = sink[h];
   const uint lo = a.window ? (a.pos + 1u > a.window ? a.pos + 1u - a.window : 0u) : 0u;
   float top = 0.0f, mass = 1.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -262,16 +262,16 @@ inline float i2_bf(const device bfloat* p, size_t i) { return float(p[i]); }
     const uint col = min(a.pos - j, a.extent);
     const size_t at = ((size_t)j * a.kv + kv) * D;
     float dot = 0.0f;
-    for (uint u = 0; u < per; ++u) dot = fma(qv[u], KEYS[at + lane + 32u * u], dot);
+    for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) dot = fma(qv[u], KEYS[at + lane + 32u * u], dot);
     const float score = simd_sum(dot) + B[h * (a.extent + 1u) + col] - sk;
     const float peak = max(top, score);
     const float rescale = precise::exp(top - peak);
     const float w = precise::exp(score - peak);
     mass = mass * rescale + w;
-    for (uint u = 0; u < per; ++u) acc[u] = acc[u] * rescale + w * VALUES[at + lane + 32u * u];
+    for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) acc[u] = acc[u] * rescale + w * VALUES[at + lane + 32u * u];
     top = peak;
   }
-  for (uint u = 0; u < per; ++u) O[h * D + lane + 32u * u] = acc[u] / mass;
+  for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) O[h * D + lane + 32u * u] = acc[u] / mass;
 }
 
 // The relative bias row for one token: B[h, dist] = sum_r proj[r, dist] * R[h, r] * tau for `dist` in [0, extent),

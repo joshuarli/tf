@@ -88,59 +88,6 @@ inline float i2_dotx(const device bfloat* w, const device float* X, uint k, uint
   if (lane == 0u) O[row] = a.cap * precise::tanh(acc / a.cap);
 }
 
-struct i2_ctl_args { uint k0, k1, m0, m1; };
-
-[[kernel]] void i2_dmv_ctl(const device float* H2 [[buffer(0)]], const device bfloat* D [[buffer(1)]],
-    const device bfloat* G [[buffer(2)]], const device bfloat* F [[buffer(3)]],
-    device float* T0 [[buffer(4)]], device float* T1 [[buffer(5)]], device float* N [[buffer(6)]],
-    constant i2_ctl_args& a [[buffer(7)]],
-    uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]],
-    uint t [[thread_position_in_threadgroup]]) {
-  threadgroup float H[4608];
-  threadgroup float normed[64];
-  threadgroup float4* h4 = (threadgroup float4*)H;
-  const device float4* s4 = (const device float4*)H2;
-  for (uint i = t; i < a.k0 / 4u; i += 1024u) h4[i] = s4[i];
-  threadgroup_barrier(mem_flags::mem_threadgroup);
-  for (uint r = 0u; r < 2u; ++r) {
-    const uint row = sg * 2u + r;
-    if (row >= a.m0) continue;
-    const float acc = i2_dot(D + (size_t)row * a.k0, H, a.k0, lane);
-    if (lane == 0u) normed[row] = acc;
-  }
-  threadgroup_barrier(mem_flags::mem_threadgroup);
-  if (t < a.m0) N[t] = normed[t];
-  for (uint c = 0u; c < 9u; ++c) {
-    float acc0[8] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
-    float acc1[8] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
-    for (uint r = 0u; r < 8u; ++r) {
-      const uint row = sg * 72u + c * 8u + r;
-      const bool live = row < a.m1;
-      const device bfloat* gw = G + (size_t)(live ? row : 0u) * a.k1;
-      const device bfloat* fw = F + (size_t)(live ? row : 0u) * a.k1;
-      float s0 = 0.0f, s1 = 0.0f;
-      for (uint i = lane; i < a.k1; i += 32u) {
-        s0 = fma(normed[i], float(gw[i]), s0);
-        s1 = fma(normed[i], float(fw[i]), s1);
-      }
-      s0 = simd_sum(s0);
-      s1 = simd_sum(s1);
-      if (lane == 0u) {
-        acc0[r] = s0;
-        acc1[r] = s1;
-      }
-    }
-    if (lane == 0u) {
-      for (uint r = 0u; r < 8u; ++r) {
-        const uint row = sg * 72u + c * 8u + r;
-        if (row >= a.m1) continue;
-        T0[row] = acc0[r];
-        T1[row] = acc1[r];
-      }
-    }
-  }
-}
-
 [[kernel]] void i2_dmv_fusedx(const device float* X0 [[buffer(0)]], const device float* X1 [[buffer(1)]],
     const device float* X2 [[buffer(2)]], const device bfloat* W0 [[buffer(3)]], device float* O0 [[buffer(4)]],
     const device bfloat* W1 [[buffer(5)]], device float* O1 [[buffer(6)]],

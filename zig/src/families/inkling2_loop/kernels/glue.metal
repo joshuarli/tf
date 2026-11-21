@@ -320,18 +320,14 @@ inline float i2_bf(const device bfloat* p, size_t i) { return float(p[i]); }
 }
 
 // tanh in place, for a controller's width-wide gates.
-[[kernel]] void i2_tanh(device float* A [[buffer(0)]], constant i2_pair_args& a [[buffer(1)]],
-    uint i [[thread_position_in_grid]]) {
-  if (i >= a.count) return;
-  A[i] = precise::tanh(A[i]);
-}
-
-// A loop controller's output: cur - forget * cur + gain * message.
+// A loop controller's output from its raw gain and forget projections: cur - tanh(forget) * cur + tanh(gain) * message.
 [[kernel]] void i2_ctl(const device float* CUR [[buffer(0)]], const device float* MSG [[buffer(1)]],
     const device float* GAIN [[buffer(2)]], const device float* FORGET [[buffer(3)]],
     constant i2_pair_args& a [[buffer(4)]], device float* O [[buffer(5)]], uint i [[thread_position_in_grid]]) {
   if (i >= a.count) return;
-  O[i] = CUR[i] - FORGET[i] * CUR[i] + GAIN[i] * MSG[i];
+  const float gain = precise::tanh(GAIN[i]);
+  const float forget = precise::tanh(FORGET[i]);
+  O[i] = CUR[i] - forget * CUR[i] + gain * MSG[i];
 }
 
 [[kernel]] void i2_copy(const device float* X [[buffer(0)]], device float* O [[buffer(1)]],

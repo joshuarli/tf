@@ -369,8 +369,6 @@ pub const Forward = struct {
             f.lin(ctl.gain, b(s.normed), bo(s.tanh, 0));
             f.lin(ctl.forget, b(s.normed), bo(s.tanh, f.h * 4));
         }
-        f.flat(.tanh, Pair{ .count = f.h }, &.{ bo(s.tanh, 0), A }, f.h);
-        f.flat(.tanh, Pair{ .count = f.h }, &.{ bo(s.tanh, f.h * 4), A }, f.h);
         f.flat(.ctl, Pair{ .count = f.h }, &.{ cur, message, bo(s.tanh, 0), bo(s.tanh, f.h * 4), A, out }, f.h);
     }
 

@@ -85,6 +85,7 @@ test {
     _ = @import("drafter_depth_sweep_test.zig");
     _ = @import("drafted_chances_test.zig");
     _ = @import("drafted_copy_test.zig");
+    _ = @import("no_drafts_test.zig");
     _ = @import("root_copy_test.zig");
     _ = @import("drafted_grammar_test.zig");
     _ = @import("windows_grammar_test.zig");

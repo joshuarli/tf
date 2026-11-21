@@ -212,6 +212,17 @@ pub const Forward = struct {
         f.count += 1;
     }
 
+    fn convolveDynPre(f: Forward, x: B, out: B, weight: Tensor, dyn_out: B, ring: B, channels: u32, conv_heads: u32, layout: u32, dyn: bool) void {
+        const taps: u32 = cfg.conv_taps;
+        const mul: u32 = if (dyn) 2 else 1;
+        const norm: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(mul * taps + 1)));
+        const args = Conv{ .channels = channels, .heads = conv_heads, .ring = st.ring, .pos = f.pos, .layout = layout, .norm = norm };
+        f.set(.conv, args, &.{ x, ring, t(weight), dyn_out, A, out });
+        f.enc.dispatchThreads(mtl.Size.of(channels, 1, 1), mtl.Size.of(256, 1, 1));
+        f.set(.conv_store, args, &.{ x, ring, A });
+        f.enc.dispatchThreads(mtl.Size.of(channels, 1, 1), mtl.Size.of(256, 1, 1));
+    }
+
     fn rings(f: Forward, slot: u32) [4]B {
         const kv: usize = f.kvw;
         return .{
@@ -363,8 +374,8 @@ pub const Forward = struct {
         const ring = f.rings(slot);
         if (f.dense()) |p| {
             f.projGroup(p, lay, inputs, full);
-            f.convolve(b(s.k), b(s.kc), a.k_conv, null, A, b(s.kdyn), ring[0], f.kvw, if (full) f.kv else 0, @intFromBool(full));
-            f.convolve(b(s.v), b(s.vc), a.v_conv, null, A, b(s.vdyn), ring[1], f.kvw, if (full) f.kv else 0, @intFromBool(full));
+            f.convolveDynPre(b(s.k), b(s.kc), a.k_conv, b(s.kdyn), ring[0], f.kvw, if (full) f.kv else 0, @intFromBool(full), full);
+            f.convolveDynPre(b(s.v), b(s.vc), a.v_conv, b(s.vdyn), ring[1], f.kvw, if (full) f.kv else 0, @intFromBool(full), full);
         } else {
             f.lin(a.q, inputs[0], b(s.q));
             f.lin(a.r, inputs[0], b(s.r));

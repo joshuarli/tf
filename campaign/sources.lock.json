@@ -431,6 +431,66 @@
       "purpose": "xgrammar v0.2.8 sources for libtfgrammar; the checkout HEAD and submodule commits are pinned in campaign/quality/xgrammar.pins.json",
       "model": "xgrammar",
       "store": "src"
+    },
+    {
+      "name": "recursive-oss/rec-e53663b262af4cb1ca498e596ca8b1a2d79e0800.tar.gz",
+      "version": "e53663b262af4cb1ca498e596ca8b1a2d79e0800",
+      "sha256": "8a03484dfd1e10c9a2f43bee12932e8f860936fc35419ffd4efdd44e6d48b2a5",
+      "url": "https://codeload.github.com/recursive-oss/rec/tar.gz/e53663b262af4cb1ca498e596ca8b1a2d79e0800",
+      "size": 184934,
+      "role": "comparator",
+      "license": "Apache-2.0",
+      "purpose": "rec v0.1.0 at e53663b2, the Flint oracle and speed comparator; engine/src/rec_mlx serves Flint on MLX with the affine INT4 checkpoint (plan Decision 9)",
+      "model": "rec",
+      "store": "src"
+    },
+    {
+      "name": "exo-explore/exo-a60b95698ca81737d367443674dd5563cbc9559b.tar.gz",
+      "version": "a60b95698ca81737d367443674dd5563cbc9559b",
+      "sha256": "8039751e81e7b866e224a85829b160e0cd5a7e61c10a24010ef762b89e56dac5",
+      "url": "https://codeload.github.com/exo-explore/exo/tar.gz/a60b95698ca81737d367443674dd5563cbc9559b",
+      "size": 3084147,
+      "role": "comparator",
+      "license": "Apache-2.0",
+      "purpose": "Exo main at a60b9569 on 2026-11-21; distributed MLX/Metal engine with a flint family (src/exo/worker/engines/mlx/models/flint)",
+      "model": "exo-main",
+      "store": "src"
+    },
+    {
+      "name": "exo-explore/exo-c4685725bf6a71fb424e668744744499d44a4fea.tar.gz",
+      "version": "c4685725bf6a71fb424e668744744499d44a4fea",
+      "sha256": "8152b3274ceefea7e7fc28a3381871d766dc941eac2a138290fb6e9df6ba24b1",
+      "url": "https://codeload.github.com/exo-explore/exo/tar.gz/c4685725bf6a71fb424e668744744499d44a4fea",
+      "size": 2705468,
+      "role": "comparator",
+      "license": "Apache-2.0",
+      "purpose": "Exo PR #2533 head at c4685725; gates fused M5 kernels behind a bit-exact check (plan Decision 15)",
+      "model": "exo-2533",
+      "store": "src"
+    },
+    {
+      "name": "ml-explore/mlx-lm-6b572ab1b531dd8fd2d13f6f36a89c2eccda18ea.tar.gz",
+      "version": "6b572ab1b531dd8fd2d13f6f36a89c2eccda18ea",
+      "sha256": "bc9dd7d984860b3372b8324bb97c226e628877236fb6edcb8e3d49aa187c8cd7",
+      "url": "https://codeload.github.com/ml-explore/mlx-lm/tar.gz/6b572ab1b531dd8fd2d13f6f36a89c2eccda18ea",
+      "size": 483335,
+      "role": "comparator",
+      "license": "MIT",
+      "purpose": "mlx-lm at the rev Exo pins (6b572ab1), the only revision with mlx_lm/models/flint.py; serves the same affine INT4 checkpoint",
+      "model": "mlx-lm",
+      "store": "src"
+    },
+    {
+      "name": "justrach/nanoattention-6f782a8dace846e4e64a5a12cbdf5c0252166199.tar.gz",
+      "version": "6f782a8dace846e4e64a5a12cbdf5c0252166199",
+      "sha256": "8e2dd0760bc42c11ea079f589aefcb494b71baca3e63f08f82deb20d9ad60b35",
+      "url": "https://codeload.github.com/justrach/nanoattention/tar.gz/6f782a8dace846e4e64a5a12cbdf5c0252166199",
+      "size": 862878,
+      "role": "comparator",
+      "license": "MIT",
+      "purpose": "codegraff's nanoattention (Rach's engine: native Zig/Metal Flint inference, MIT original code) at main 6f782a8d on 2026-11-21, public and runnable",
+      "model": "nanoattention",
+      "store": "src"
     }
   ]
 }

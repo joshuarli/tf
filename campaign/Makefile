@@ -5,6 +5,8 @@ MAIN_ROOT := $(abspath $(shell git rev-parse --path-format=absolute --git-common
 WORK := $(MAIN_ROOT)/.work
 BASELINE_WT := $(WORK)/wt/baseline
 GPU_LOCK := $(WORK)/gpu.lock
+HEAVY_PY := $(CURDIR)/heavy.py
+HEAVY := python3 $(HEAVY_PY) --
 LOGS := $(WORK)/logs/baseline
 export TMPDIR := $(WORK)/tmp
 export ZIG_GLOBAL_CACHE_DIR := $(WORK)/zig-global-cache
@@ -43,7 +45,7 @@ baseline-timings: check-zig baseline-toolchain
 	cd $(BASELINE_WT) && /usr/bin/time -p zig build native -Dcpu=apple_m1 -Dversion=1.0.0 2> $(LOGS)/native-cold.log
 	cd $(BASELINE_WT) && /usr/bin/time -p zig build native -Dcpu=apple_m1 -Dversion=1.0.0 2> $(LOGS)/native-warm.log
 	cd $(BASELINE_WT) && /usr/bin/time -p zig build test-flint-draft-host > $(LOGS)/flint-draft-host.log 2>&1
-	cd $(BASELINE_WT) && lockf $(GPU_LOCK) /usr/bin/time -p zig build test test-golden -Dcpu=apple_m1 --summary all > $(LOGS)/test-golden.log 2>&1 || echo "test test-golden exited $$?" >> $(LOGS)/test-golden.log
+	cd $(BASELINE_WT) && $(HEAVY) /usr/bin/time -p zig build test test-golden -Dcpu=apple_m1 --summary all > $(LOGS)/test-golden.log 2>&1 || echo "test test-golden exited $$?" >> $(LOGS)/test-golden.log
 
 .PHONY: parity quality pi-harness
 

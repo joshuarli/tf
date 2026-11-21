@@ -26,6 +26,7 @@ MAIN = _main_root()
 CAMPAIGN = REPO / "campaign"
 WORK = MAIN / ".work"
 GPU_LOCK = WORK / "gpu.lock"
+HEAVY = Path(__file__).resolve().parents[1] / "heavy.py"
 TMP = WORK / "tmp"
 TOOLS = REPO / "tools"
 BASELINE_BIN = WORK / "wt" / "baseline" / "zig-out" / "native" / "bin" / "tensorfold-native"
@@ -110,9 +111,9 @@ def drafter_path() -> Path | None:
 
 
 def load_limit_gb() -> int:
-    record = json.loads(HOST_RECORD.read_bytes())
-    working_set = int(record["metal"]["recommendedMaxWorkingSetSize"])
-    return int(0.9 * working_set / 1e9)
+    sys.path.insert(0, str(HEAVY.parent))
+    import heavy
+    return heavy.FLINT_LOAD_LIMIT_GB
 
 
 def host_summary() -> dict:
@@ -263,7 +264,7 @@ class Server:
 
     @property
     def argv(self) -> list[str]:
-        return ["lockf", str(GPU_LOCK), str(self.binary), "serve", str(self.model), "--host", "127.0.0.1",
+        return [sys.executable, str(HEAVY), "--", str(self.binary), "serve", str(self.model), "--host", "127.0.0.1",
                 "--port", str(self.port), "--parallel", "1", "--prompt-cache-gib", str(self.prompt_cache_gib),
                 "--no-update-check", *self.extra_args]
 

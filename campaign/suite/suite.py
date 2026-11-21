@@ -20,6 +20,7 @@ MAIN = Path(subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git
                            capture_output=True, text=True, check=True).stdout.strip()).parent
 WORK = MAIN / ".work"
 GPU_LOCK = WORK / "gpu.lock"
+HEAVY = CAMPAIGN / "heavy.py"
 BASELINE_BIN = WORK / "wt/baseline/zig-out/native/bin/tensorfold-native"
 BASELINE_SHA = "8c2c8e6f4fd9f2c111d6fba7d89251a32a5afb309cc950ee3ff2d6a50816ac87"
 FLINT = Path.home() / "models/flint-int4@3b93f9053b53"
@@ -49,7 +50,7 @@ def zig(*args: str) -> tuple[str, ...]:
 
 
 def flint_run(mode: str, *extra: str) -> tuple[str, ...]:
-    return ("lockf", str(GPU_LOCK), str(FLINT_RUN), str(FLINT), str(FIXTURES / "code-1000.json"), mode, *extra)
+    return ("python3", str(HEAVY), "--", str(FLINT_RUN), str(FLINT), str(FIXTURES / "code-1000.json"), mode, *extra)
 
 
 WORKLOADS = [
@@ -93,7 +94,7 @@ WORKLOADS = [
              "observed 60+ min", ("target:ref-oracles", "inkling-weights"), make("ref-check", "MODEL=inkling2-mini",
                                                                                    "REF_RERUN=1")),
     Workload("golden-suite", "full", "repo", "zig build test test-golden, milestone suite", "observed 9 min",
-             ("zig",), ("lockf", str(GPU_LOCK), "zig", "build", "test", "test-golden", "-Dcpu=apple_m1")),
+             ("zig",), ("python3", str(HEAVY), "--", "zig", "build", "test", "test-golden", "-Dcpu=apple_m1")),
 ]
 
 

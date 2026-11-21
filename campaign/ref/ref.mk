@@ -37,12 +37,12 @@ ref-oracles: $(LLAMA_LOGITS) $(GGUF)
 	@test -f $(INKLING_DIR)/model-00001-of-00001.safetensors || \
 		{ echo "missing $(INKLING_DIR); run make -C campaign fetch NAMES=inkling-2-mini" >&2; exit 2; }
 	@rm -rf $(REF_OUT) && mkdir -p $(REF_OUT)/ref $(REF_OUT)/llama
-	lockf $(GPU_LOCK) $(REF_PY) $(REF_DIR)inkling2_loop_ref.py \
+	$(HEAVY) $(REF_PY) $(REF_DIR)inkling2_loop_ref.py \
 		--model $(INKLING_DIR) --histories $(HISTORIES) --out-dir $(REF_OUT)/ref \
 		--expert-cache-gib 10
 	@set -e; for name in $(shell jaq -r '.[].name' $(HISTORIES)); do \
 		ids=$$(jaq -r --arg n "$$name" '.[] | select(.name == $$n) | .token_ids | @csv' $(HISTORIES) | tr -d '"'); \
-		lockf $(GPU_LOCK) $(LLAMA_LOGITS) --model $(GGUF) --ids "$$ids" \
+		$(HEAVY) $(LLAMA_LOGITS) --model $(GGUF) --ids "$$ids" \
 			--out $(REF_OUT)/llama/$$name.bin --threads 6 >> $(REF_OUT)/llama.log 2>&1; \
 	done
 	$(REF_PY) $(REF_DIR)receipts.py record --out-dir $(REF_OUT) --llama-commit $(LLAMA_COMMIT)

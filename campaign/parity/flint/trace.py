@@ -202,7 +202,7 @@ def main() -> int:
     p.add_argument("--binary", type=Path, required=True)
     p.add_argument("--python", type=Path, required=True)
     p.add_argument("--oracle-script", type=Path, required=True)
-    p.add_argument("--lock", type=Path, required=True)
+    p.add_argument("--heavy", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--exact-histories", default="debug-session-nan-loss,json-invoice-records")
     p.add_argument("--compare-only", action="store_true")
@@ -247,13 +247,14 @@ def main() -> int:
             dump_dir = trace_dir / "tf" / name
             dump_dir.mkdir(parents=True, exist_ok=True)
             subprocess.run(
-                ["lockf", str(args.lock), str(args.binary), str(args.model_dir), str(args.logits / "tf" / "ids" / f"{name}.json"), "dump", f"{spec},{dump_dir}"],
+                ["python3", str(args.heavy), "--", str(args.binary), str(args.model_dir), str(args.logits / "tf" / "ids" / f"{name}.json"), "dump", f"{spec},{dump_dir}"],
                 check=True,
             )
         subprocess.run(
             [
-                "lockf",
-                str(args.lock),
+                "python3",
+                str(args.heavy),
+                "--",
                 str(args.python),
                 str(args.oracle_script),
                 str(args.corpus),
@@ -274,7 +275,7 @@ def main() -> int:
         prompt_path.write_text(json.dumps(ids[:split]))
         cont_path.write_text(json.dumps(ids[split:]))
         got = subprocess.run(
-            ["lockf", str(args.lock), str(args.binary), str(args.model_dir), str(prompt_path), "exact", str(cont_path)],
+            ["python3", str(args.heavy), "--", str(args.binary), str(args.model_dir), str(prompt_path), "exact", str(cont_path)],
             check=True,
             capture_output=True,
             text=True,

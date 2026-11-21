@@ -33,7 +33,7 @@ make -C campaign build-baseline
 make -C campaign baseline-timings
 ```
 
-`build-baseline` creates a detached worktree of `fa13df5d` at `.work/wt/baseline`, overrides only `.zig-version` and `minimum_zig_version` to the pinned Zig, builds `tensorfold-native` and prints its sha256. `baseline-timings` reruns the cold and warm builds and the baseline suites, writing logs to `.work/logs/baseline/`. The suite that touches Metal runs under `lockf .work/gpu.lock`. [baseline.md](baseline.md) records the results and the known red tests.
+`build-baseline` creates a detached worktree of `fa13df5d` at `.work/wt/baseline`, overrides only `.zig-version` and `minimum_zig_version` to the pinned Zig, builds `tensorfold-native` and prints its sha256. `baseline-timings` reruns the cold and warm builds and the baseline suites, writing logs to `.work/logs/baseline/`. The suite that touches Metal runs through `heavy.py`, which holds `.work/gpu.lock` (with `lockf -k`) and stops the command if its process tree passes 28 GB; every model-loading command in the campaign uses it, so the campaign stays under the owner's 32 GB cap. [baseline.md](baseline.md) records the results and the known red tests.
 
 ## Resume
 

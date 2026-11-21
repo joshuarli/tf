@@ -25,14 +25,14 @@ parity-flint: check-zig
 	cd $(FLINT_REPO) && $(FLINT_PY) campaign/$(FLINT_DIR)/tokenizer_identity.py \
 		campaign/$(FLINT_CORPUS) $(FLINT_LOGITS)/tokenizer-check $(FLINT_MODEL_DIR)/tokenizer.json
 	cd $(FLINT_REPO) && $(FLINT_PY) campaign/$(FLINT_DIR)/run_tf.py \
-		campaign/$(FLINT_CORPUS) $(FLINT_REPO)/zig-out/bin/tf-flint-run $(FLINT_MODEL_DIR) $(FLINT_LOGITS)/tf $(GPU_LOCK)
-	cd $(FLINT_REPO) && lockf $(GPU_LOCK) $(FLINT_PY) campaign/$(FLINT_DIR)/oracle.py \
+		campaign/$(FLINT_CORPUS) $(FLINT_REPO)/zig-out/bin/tf-flint-run $(FLINT_MODEL_DIR) $(FLINT_LOGITS)/tf $(HEAVY_PY)
+	cd $(FLINT_REPO) && $(HEAVY) $(FLINT_PY) campaign/$(FLINT_DIR)/oracle.py \
 		campaign/$(FLINT_CORPUS) $(FLINT_MODEL_DIR) $(FLINT_LOGITS)/oracle 10
-	cd $(FLINT_REPO) && lockf $(GPU_LOCK) $(FLINT_PY) campaign/$(FLINT_DIR)/oracle_chunked.py \
+	cd $(FLINT_REPO) && $(HEAVY) $(FLINT_PY) campaign/$(FLINT_DIR)/oracle_chunked.py \
 		campaign/$(FLINT_CORPUS) $(FLINT_MODEL_DIR) $(FLINT_LOGITS)/oracle-chunked 4096
 	cd $(FLINT_REPO) && $(FLINT_PY) campaign/$(FLINT_DIR)/tokenizer_identity.py \
 		campaign/$(FLINT_CORPUS) $(FLINT_LOGITS)/tokenizer-check $(FLINT_MODEL_DIR)/tokenizer.json
-	cd $(FLINT_REPO) && $(FLINT_PY) campaign/$(FLINT_DIR)/compare.py \
+	cd $(FLINT_REPO) && $(HEAVY) $(FLINT_PY) campaign/$(FLINT_DIR)/compare.py \
 		--histories campaign/$(FLINT_CORPUS) --tf $(FLINT_LOGITS)/tf --ref $(FLINT_LOGITS)/oracle \
 		--out $(FLINT_LOGITS)/comparison.json --logits-out $(FLINT_LOGITS)/divergent \
 		--other $(FLINT_LOGITS)/oracle-chunked \
@@ -40,7 +40,7 @@ parity-flint: check-zig
 	cd $(FLINT_REPO) && $(FLINT_PY) campaign/$(FLINT_DIR)/trace.py \
 		--corpus campaign/$(FLINT_CORPUS) --model-dir $(FLINT_MODEL_DIR) --logits $(FLINT_LOGITS) \
 		--binary $(FLINT_REPO)/zig-out/bin/tf-flint-run --python $(FLINT_PY) \
-		--oracle-script campaign/$(FLINT_DIR)/oracle_trace.py --lock $(GPU_LOCK) \
+		--oracle-script campaign/$(FLINT_DIR)/oracle_trace.py --heavy $(HEAVY_PY) \
 		--out $(FLINT_LOGITS) --exact-histories debug-session-nan-loss,json-invoice-records
 	cd $(FLINT_REPO) && $(FLINT_PY) campaign/$(FLINT_DIR)/report.py \
 		$(FLINT_LOGITS)/comparison.json campaign/$(FLINT_CORPUS) campaign/$(FLINT_REPORT) \

@@ -4,7 +4,7 @@ The baseline is TensorFold `fa13df5dd1fdd23ada775510a464c9aa03a39e09` built with
 
 - `tensorfold-native` sha256: `8c2c8e6f4fd9f2c111d6fba7d89251a32a5afb309cc950ee3ff2d6a50816ac87`
 - Built with `zig build native -Dcpu=apple_m1 -Dversion=1.0.0`, Zig 0.17.1, Xcode 27.2 (27B52), Metal toolchain 27.2.47.0, macOS 27.2 (26B123). [host.json](host.json) has the full host record.
-- The Metal device reports `recommendedMaxWorkingSetSize` W = 40,200,896,512 bytes, so benchmark servers set `FLINT_LOAD_LIMIT_GB=36` (floor(0.9·W/1e9)).
+- The Metal device reports `recommendedMaxWorkingSetSize` W = 40,200,896,512 bytes, so benchmark servers set `FLINT_LOAD_LIMIT_GB=36` (floor(0.9·W/1e9)) until the owner's 32 GB campaign cap; since then they set 27 (Decision 8 in [plan.md](plan.md)).
 
 ## Loop timings
 

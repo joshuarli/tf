@@ -68,6 +68,7 @@ pub const families: []const api.Family = &.{
     .{ .model_type = "flint", .formats = &.{"mlx-q4g64"} },
     .{ .model_type = "unlimited-ocr", .formats = &.{"bf16"} },
     .{ .model_type = "ricursive", .formats = &.{ "bf16", "modelopt-nvfp4-mlp" } },
+    .{ .model_type = "inkling2_loop", .formats = &.{ "nvfp4", "mxfp8" } },
 };
 /// Gemma 4 31B (gemma4) and 12B (gemma4_unified, its text model): one native family, gemma4.zig's host.
 fn isGemma4(model_type: []const u8) bool {
@@ -156,6 +157,7 @@ pub fn open(a: Allocator, gpa: Allocator, io: std.Io, o: api.Open, problem: *[]c
     if (std.mem.eql(u8, o.model_type, "glm5_next")) return openGlm(a, gpa, io, o, problem);
     if (isGemma4(o.model_type)) return @import("gemma4.zig").open(a, gpa, io, o, problem);
     if (std.mem.eql(u8, o.model_type, "unlimited-ocr")) return @import("uocr.zig").open(a, gpa, io, o, problem);
+    if (std.mem.eql(u8, o.model_type, "inkling2_loop")) return @import("inkling2_loop.zig").open(a, gpa, io, o, problem);
     if (o.vision != null and !std.mem.eql(u8, o.model_type, "step5_vl") and !std.mem.eql(u8, o.model_type, "minimax_m3_vl")) {
         problem.* = try std.fmt.allocPrint(a, "--vision: the native engine reads images for GLM-5.3-Flash, Qwen3.8-27B, Qwen3.8 Flash Next, Gemma 4, Step-5, MiniMax-M3.1-Flash and Unlimited-OCR-2 only, not {s} checkpoints", .{o.model_type});
         return null;

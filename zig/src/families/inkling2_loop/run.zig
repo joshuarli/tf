@@ -1,18 +1,21 @@
-//! `tf-inkling2-loop-run <model> <tokens.json> logits <out>`: every position's float32 logits from a teacher-forced
-//! pass on Metal, which the campaign's parity check compares with `campaign/ref/inkling2_loop_ref.py`.
+//! `tf-inkling2-loop-run`: teacher-forced passes on Metal for the campaign's parity check and the family's own checks.
+//! Every mode runs the same per-token forward; they differ in what they report and whether they feed the model back.
 const std = @import("std");
 const mtl = @import("metal");
-const inkling = @import("native.zig");
+const tf = @import("tensorfold");
+const inkling = tf.inkling2_loop;
 
 const usage =
-    \\tf-inkling2-loop-run <model> <tokens.json> logits <out>   f32 logits [tokens, 200058], one pass
-    \\tf-inkling2-loop-run <model> <tokens.json> layer <out>    one layer's output row at the token's position
+    \\tf-inkling2-loop-run <model> <tokens.json> logits <out>       f32 logits [tokens, 200058], teacher-forced
+    \\tf-inkling2-loop-run <model> <tokens.json> greedy <steps> <out>  then <steps> greedy tokens, one decode a step
+    \\tf-inkling2-loop-run <model> <tokens.json> trace <out>        per-tensor summaries in the reference's order
+    \\tf-inkling2-loop-run <model> <tokens.json> reset <out>        the same logits twice from a fresh cache, byte-compared
     \\
 ;
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len != 5) {
+    if (args.len < 5) {
         std.debug.print("{s}", .{usage});
         return error.ExpectedArgs;
     }
@@ -24,28 +27,123 @@ pub fn main(init: std.process.Init) !void {
     const ids = try std.json.parseFromSlice([]u32, gpa, bytes, .{});
     defer ids.deinit();
     if (ids.value.len == 0) return error.EmptyPrompt;
+    const mode = args[3];
     const m = try inkling.Model.load(gpa, init.io, args[1]);
     defer m.deinit();
     const c = &m.config;
+    const vocab: usize = c.text.unpadded_vocab;
+    const t0 = now();
+    if (std.mem.eql(u8, mode, "greedy")) {
+        if (args.len != 6) {
+            std.debug.print("{s}", .{usage});
+            return error.ExpectedArgs;
+        }
+        const steps = try std.fmt.parseInt(usize, args[4], 10);
+        var cache = try inkling.Cache.init(m.device, c, ids.value.len + steps);
+        defer cache.deinit();
+        var scratch = try inkling.Scratch.init(m.device, c);
+        defer scratch.deinit();
+        const out = try gpa.alloc(u32, steps);
+        defer gpa.free(out);
+        try run(m, &scratch, &cache, ids.value);
+        for (0..steps) |i| {
+            out[i] = argmax(scratch.logits.slice(f32, vocab));
+            try inkling.position(m, &scratch, &cache, out[i]);
+        }
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[5], .data = std.mem.sliceAsBytes(out) });
+        std.debug.print("inkling2_loop greedy: {d} prompt tokens, {d} steps, {d} ms\n", .{ ids.value.len, steps, (now() - t0) / std.time.ns_per_ms });
+        return;
+    }
     var cache = try inkling.Cache.init(m.device, c, ids.value.len);
     defer cache.deinit();
     var scratch = try inkling.Scratch.init(m.device, c);
     defer scratch.deinit();
-    const vocab: usize = c.text.unpadded_vocab;
+    if (std.mem.eql(u8, mode, "reset")) {
+        const first = try gpa.alloc(f32, ids.value.len * vocab);
+        defer gpa.free(first);
+        try capture(m, &scratch, &cache, ids.value, first, vocab);
+        cache.len = 0;
+        const second = try gpa.alloc(f32, ids.value.len * vocab);
+        defer gpa.free(second);
+        try capture(m, &scratch, &cache, ids.value, second, vocab);
+        if (!std.mem.eql(u8, std.mem.sliceAsBytes(first), std.mem.sliceAsBytes(second))) {
+            std.debug.print("inkling2_loop reset: the rerun differs from the first pass\n", .{});
+            return error.NotDeterministic;
+        }
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[4], .data = std.mem.sliceAsBytes(first) });
+        std.debug.print("inkling2_loop reset: {d} rows reproduced bit for bit in {d} ms\n", .{ ids.value.len, (now() - t0) / std.time.ns_per_ms });
+        return;
+    }
+    if (std.mem.eql(u8, mode, "continue")) {
+        if (args.len != 6) {
+            std.debug.print("{s}", .{usage});
+            return error.ExpectedArgs;
+        }
+        const split = try std.fmt.parseInt(usize, args[4], 10);
+        if (split == 0 or split >= ids.value.len) {
+            std.debug.print("continue: the split must land inside the {d}-token history\n", .{ids.value.len});
+            return error.ExpectedArgs;
+        }
+        cache.len = 0;
+        const whole = try gpa.alloc(f32, ids.value.len * vocab);
+        defer gpa.free(whole);
+        try capture(m, &scratch, &cache, ids.value, whole, vocab);
+        cache.len = 0;
+        const head = try gpa.alloc(f32, split * vocab);
+        defer gpa.free(head);
+        try capture(m, &scratch, &cache, ids.value[0..split], head, vocab);
+        const rest = try gpa.alloc(f32, (ids.value.len - split) * vocab);
+        defer gpa.free(rest);
+        try capture(m, &scratch, &cache, ids.value[split..], rest, vocab);
+        const tail = whole[split * vocab ..];
+        if (!std.mem.eql(u8, std.mem.sliceAsBytes(head), std.mem.sliceAsBytes(whole[0 .. split * vocab])) or
+            !std.mem.eql(u8, std.mem.sliceAsBytes(rest), std.mem.sliceAsBytes(tail)))
+        {
+            std.debug.print("inkling2_loop continue: the split pass differs from one pass\n", .{});
+            return error.NotIncremental;
+        }
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[5], .data = std.mem.sliceAsBytes(whole) });
+        std.debug.print("inkling2_loop continue: {d} tokens from a {d}-token split reproduce one pass in {d} ms\n", .{ ids.value.len, split, (now() - t0) / std.time.ns_per_ms });
+        return;
+    }
     const out = try gpa.alloc(f32, ids.value.len * vocab);
     defer gpa.free(out);
-    const mode = args[3];
-    const t0 = now();
-    for (ids.value, 0..) |id, i| {
-        try inkling.position(m, &scratch, &cache, id);
-        if (std.mem.eql(u8, mode, "logits")) @memcpy(out[i * vocab ..][0..vocab], scratch.logits.slice(f32, vocab));
-    }
-    if (!std.mem.eql(u8, mode, "logits")) {
+    if (std.mem.eql(u8, mode, "logits")) {
+        try capture(m, &scratch, &cache, ids.value, out, vocab);
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[4], .data = std.mem.sliceAsBytes(out) });
+        std.debug.print("inkling2_loop logits: {d} rows in {d} ms\n", .{ ids.value.len, (now() - t0) / std.time.ns_per_ms });
+    } else if (std.mem.eql(u8, mode, "trace")) {
+        var t = try inkling.Trace.init(gpa, c);
+        defer t.deinit();
+        for (ids.value, 0..) |id, i| {
+            try inkling.positionTrace(m, &scratch, &cache, id, &t);
+            @memcpy(out[i * vocab ..][0..vocab], scratch.logits.slice(f32, vocab));
+        }
+        try t.write(init.io, args[4]);
+        std.debug.print("inkling2_loop trace: {d} rows, {d} tensors in {d} ms\n", .{ ids.value.len, t.names.items.len, (now() - t0) / std.time.ns_per_ms });
+    } else {
         std.debug.print("{s}", .{usage});
         return error.UnknownMode;
     }
-    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[4], .data = std.mem.sliceAsBytes(out) });
-    std.debug.print("inkling2_loop logits: {d} rows in {d} ms\n", .{ ids.value.len, (now() - t0) / std.time.ns_per_ms });
+}
+
+fn run(m: *const inkling.Model, s: *inkling.Scratch, cache: *inkling.Cache, ids: []const u32) !void {
+    for (ids) |id| try inkling.position(m, s, cache, id);
+}
+
+fn capture(m: *const inkling.Model, s: *inkling.Scratch, cache: *inkling.Cache, ids: []const u32, out: []f32, vocab: usize) !void {
+    for (ids, 0..) |id, i| {
+        try inkling.position(m, s, cache, id);
+        @memcpy(out[i * vocab ..][0..vocab], s.logits.slice(f32, vocab));
+    }
+}
+
+fn argmax(x: []const f32) u32 {
+    var best: usize = 0;
+    for (x, 0..) |v, i| {
+        if (v > x[best]) best = i;
+    }
+    return @intCast(best);
 }
 
 fn now() u64 {

@@ -13,6 +13,8 @@ pub const Model = model.Model;
 pub const Cache = state.Cache;
 pub const Scratch = state.Scratch;
 pub const position = forward.position;
+pub const positionTrace = forward.positionTrace;
+pub const Trace = state.Trace;
 
 /// Which family's checkpoint this is: the native registry's entry.
 pub const model_type = "inkling2_loop";

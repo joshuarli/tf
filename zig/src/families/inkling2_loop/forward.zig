@@ -80,6 +80,7 @@ pub const Forward = struct {
     pos: u32,
     blocks: [st.mix_states]B = @splat(b(undefined)),
     count: usize = 0,
+    capture: ?*st.Trace = null,
 
     fn set(f: Forward, g: wts.Glue, args: anytype, bufs: []const B) void {
         f.enc.setPipeline(f.m.pipe(g));
@@ -230,12 +231,14 @@ pub const Forward = struct {
         }
 
         f.attention(lay, slot, full, inputs);
+        if (f.capture) |cap| f.record(cap, slot, 0, b(s.o), f.h);
         if (ip % text.block == 0) {
             f.pushBlock(inp);
             f.copyN(b(s.o), b(s.x), f.h);
         } else f.addN(b(s.x), b(s.o), f.h);
 
         f.copyN(b(s.x), b(s.ffnin), f.h);
+        if (f.capture) |cap| f.record(cap, slot, 1, b(s.ffnin), f.h);
         f.mixBlocks(b(s.x), m.weights.mlp_queries[index], bo(s.mixout, 0));
         if (msg) |got| {
             const ctl = lay.controllers[3] orelse return error.MissingController;
@@ -247,6 +250,12 @@ pub const Forward = struct {
         f.convolve(b(s.moe), b(s.aconv), lay.mlp_post, null, A, A, slots[3], f.h, 0, 0);
         f.copyN(b(s.ffnin), b(s.x), f.h);
         f.addN(b(s.x), b(s.aconv), f.h);
+        if (f.capture) |cap| f.record(cap, slot, 2, b(s.x), f.h);
+    }
+
+    fn record(f: Forward, _: *st.Trace, slot: u32, which: usize, src: B, cols: u32) void {
+        const at = (@as(usize, slot) * st.trace_rows + which) * f.h * 4;
+        f.copyN(src, bo(f.s.capture, at), cols);
     }
 
     /// The four messages of one core layer: its stacked cross-pass query rows over the bank, newest state first.
@@ -391,6 +400,11 @@ pub const Bank = struct { states: []const B, out: B };
 
 /// One token's forward: `cache.len` positions precede it; the logits land in `s.logits`.
 pub fn position(m: *const Model, s: *Scratch, cache: *Cache, id: u32) !void {
+    return positionTrace(m, s, cache, id, null);
+}
+
+/// The same pass, recording the executed slots' rows into `t` when it is given.
+pub fn positionTrace(m: *const Model, s: *Scratch, cache: *Cache, id: u32, trace: ?*st.Trace) !void {
     const c = &m.config;
     const text = &c.text;
     const pool = mtl.objc.Pool.push();
@@ -409,6 +423,7 @@ pub fn position(m: *const Model, s: *Scratch, cache: *Cache, id: u32) !void {
         .dim = text.local.dim,
         .drel = text.d_rel,
         .pos = @intCast(cache.len),
+        .capture = trace,
     };
     f.embed(id);
     for (0..c.loop.core_start) |i| try f.layer(@intCast(i), @intCast(i), null);
@@ -446,6 +461,24 @@ pub fn position(m: *const Model, s: *Scratch, cache: *Cache, id: u32) !void {
     if (cb.failure()) |msg| {
         std.log.err("inkling2_loop forward: {s}", .{msg});
         return error.GpuFailed;
+    }
+    if (trace) |tr| {
+        var slots: [cfg.max_layers]u32 = undefined;
+        var n: usize = 0;
+        for (0..c.loop.core_start) |i| {
+            slots[n] = @intCast(i);
+            n += 1;
+        }
+        const core = c.loop.core_end - c.loop.core_start;
+        for (0..c.loop.passes) |p| for (c.loop.core_start..c.loop.core_end) |ip| {
+            slots[n] = if (p == 0) @intCast(ip) else @intCast(text.layers + (p - 1) * core + (ip - c.loop.core_start));
+            n += 1;
+        };
+        for (c.loop.core_end..text.layers) |i| {
+            slots[n] = @intCast(i);
+            n += 1;
+        }
+        try tr.position(s.capture, slots[0..n], cache.len);
     }
     cache.len += 1;
 }

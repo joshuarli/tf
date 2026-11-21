@@ -161,6 +161,11 @@ class Inkling2LoopReference:
 
         self.trace = None
         self.trace_row = None
+        self.router_path = None
+        self.router_rows = {}
+        self.force_picks = []
+        self.row_dump = None
+        self.row_stash = {}
         self._weights: dict[str, np.ndarray] = {}
         self._experts: dict[tuple[int, int], object] = {}
         self._expert_bytes = 0
@@ -282,6 +287,10 @@ class Inkling2LoopReference:
             row = np.asarray(arr[self.trace_row], dtype=np.float32)
             self.trace.write(f"{name}-row{self.trace_row} {row.mean():.9g} {row.std():.9g}"
                              f" {row.min():.9g} {row.max():.9g}\n")
+        if (self.row_dump is not None and self.trace_row is not None and arr.ndim == 2
+                and arr.shape[0] > self.trace_row and "-row" not in name
+                and name.startswith(("mixin-", "normin-", "attn_out-", "ffn_inp-", "l_out-"))):
+            self.row_stash[name] = np.ascontiguousarray(arr[self.trace_row], dtype=np.float32)
 
     # ---------------------------------------------------------------- graph
 
@@ -397,6 +406,34 @@ class Inkling2LoopReference:
         probs = sigmoid(logits)
         selection = probs + self.w(self.layer_weight(layer, "mlp.gate.bias"))
         order = np.argsort(-selection, axis=1, kind="stable")[:, :self.n_expert_used]
+        if self.force_picks:
+            order = order.copy()
+            for text in self.force_picks:
+                fields = [int(v) for v in text.split(",")]
+                wanted_slot, wanted_expert = fields[0], fields[1]
+                wanted_row = fields[2] if len(fields) > 2 else order.shape[0] - 1
+                if wanted_slot == self._slot:
+                    if wanted_expert in order[wanted_row]:
+                        raise ValueError(f"slot {wanted_slot}: forced expert"
+                                        f" {wanted_expert} already picked")
+                    order[wanted_row, -1] = wanted_expert
+        if self.router_path is not None:
+            positions = np.arange(selection.shape[0])
+            ninth_all = np.argsort(-selection, axis=1, kind="stable")[:, self.n_expert_used]
+            gap_all = selection[positions, order[:, -1]] - selection[positions, ninth_all]
+            last = selection.shape[0] - 1
+            self.router_rows[str(self._slot)] = {
+                "layer": layer,
+                "picks": [int(v) for v in order[last]],
+                "ninth": int(ninth_all[last]),
+                "gap_8_9": float(gap_all[last]),
+                "gap_8_9_prob": float(probs[last, order[last, -1]] - probs[last, ninth_all[last]]),
+                "forced": [text for text in self.force_picks
+                             if int(text.split(",")[0]) == self._slot],
+                "picks_all": [[int(v) for v in row] for row in order],
+                "ninth_all": [int(v) for v in ninth_all],
+                "gaps_all": [float(v) for v in gap_all],
+            }
         denom = np.take_along_axis(probs, order, axis=1).sum(axis=1) + np.float32(1e-20)
         slot = self._slot
         self._record(f"ffn_moe_in-{slot}", x)
@@ -531,6 +568,12 @@ class Inkling2LoopReference:
         self._record("result_norm", cur)
         out = self._lm_head(cur)
         self._record("result_output", out)
+        if self.router_path is not None:
+            Path(self.router_path).write_text(json.dumps(self.router_rows, indent=1) + "\n")
+            self.router_rows = {}
+        if self.row_dump is not None:
+            np.savez(self.row_dump, **{k: v for k, v in self.row_stash.items()})
+            self.row_stash = {}
         return out
 
 
@@ -544,12 +587,19 @@ def main() -> int:
     parser.add_argument("--expert-cache-gib", type=float, default=10.0)
     parser.add_argument("--trace", help="write per-tensor mean/std/min/max, like llama_logits --dump")
     parser.add_argument("--trace-row", type=int, help="also write stats for one token row")
+    parser.add_argument("--router-report", help="write per-slot router top-8 picks and 8th/9th gaps for the last row")
+    parser.add_argument("--force-pick", action="append", default=[],
+                        help="SLOT,EXPERT[,ROW]: rerun with one row's 8th pick replaced (repeatable)")
+    parser.add_argument("--row-dump", help="write an .npz of full last-row vectors for the traced tensors")
     args = parser.parse_args()
 
     model = Inkling2LoopReference(Path(args.model), args.expert_cache_gib)
     trace = open(args.trace, "w", encoding="utf-8") if args.trace else None
     model.trace = trace
     model.trace_row = args.trace_row
+    model.router_path = args.router_report
+    model.force_picks = args.force_pick
+    model.row_dump = args.row_dump
     if args.histories:
         histories = json.loads(Path(args.histories).read_text())
         out_dir = Path(args.out_dir)

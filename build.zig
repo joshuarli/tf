@@ -21,6 +21,7 @@ const golden_build = @import("zig/build/golden.zig");
 const contract_build = @import("zig/build/kernel_contract.zig");
 const video_build = @import("zig/build/video.zig");
 const sys_build = @import("zig/build/sys.zig");
+const fp4_bench = @import("zig/build/fp4_bench.zig");
 
 comptime {
     const required = std.mem.trim(u8, @embedFile(".zig-version"), "\r\n");
@@ -277,6 +278,7 @@ pub fn build(b: *std.Build) void {
     // the chat template's nesting, step, stack and memory limits (zig/src/core/template/limits_test.zig), on every host
     const template_limits = b.createModule(.{ .root_source_file = b.path("zig/src/core/template/template.zig"), .target = b.graph.host, .optimize = .Debug, .link_libc = true });
     b.step("test-template-limits-host", "Chat template nesting, render steps, stack and memory limits without a GPU").dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = template_limits, .filters = &.{"security:"} })).step);
+    if (target.result.os.tag == .macos) fp4_bench.steps(b, target, test_step);
     sys_build.wire(b);
     @import("zig/build/checkpoint_config.zig").tests(b);
     @import("zig/build/checkpoint_config.zig").wire(b);

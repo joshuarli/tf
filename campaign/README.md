@@ -8,7 +8,7 @@ Development-only tooling for the native inference campaign in [plan.md](plan.md)
 - `uv`, `jaq`, Xcode with the Metal toolchain, and `swift` for the Metal device probe.
 - Python dependencies come from [pyproject.toml](pyproject.toml) and [uv.lock](uv.lock) (`laputa-buildlib`, pinned by wheel hash).
 
-Every command runs from the repository root as `make -C campaign <target>`. Each workstream defines its targets in its own `campaign/<dir>/<name>.mk`, which the Makefile includes, so parallel lanes never edit the Makefile itself. Scratch goes to the main checkout's `.work/`: `TMPDIR` is `.work/tmp` and the Zig global cache is `.work/zig-global-cache`.
+Every command runs from the repository root as `make -C campaign <target>`. Each workstream defines its targets in its own `campaign/<dir>/<name>.mk`, which the Makefile includes, so parallel lanes never edit the Makefile itself. `parity`, `quality` and `pi-harness` dispatch on `MODEL` to `<target>-<model>`, which each model's fragment defines. Scratch goes to the main checkout's `.work/`: `TMPDIR` is `.work/tmp` and the Zig global cache is `.work/zig-global-cache`.
 
 ## Fetch weights
 

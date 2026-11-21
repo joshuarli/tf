@@ -29,6 +29,6 @@ Measured on 2026-11-21 by `make -C campaign baseline-timings`. The cold build ra
 | `copied shard pages leave the file cache without changing the copy or stored bytes` | `checkpoint_file_cache`, `src.core.checkpoint_file_cache` | expected 0, found 2 |
 | `PDF render worker: a worker killed by a signal is named as a crash; a limit or a missing reply keeps today's message` | `pdf_worker` (two test binaries) | the `ulimit -t 1` busy loop reports "PDF rendering exceeded resource limits or failed" instead of a crash |
 
-The memcpy check may depend on the toolchain. Whether the unmodified `fa13df5d` built with Zig 0.17.0 also fails it is recorded in [ledger.md](ledger.md).
+The memcpy check also fails on the unmodified `fa13df5d` built with Zig 0.17.0, so it is upstream red rather than an effect of the Zig pin ([ledger.md](ledger.md)).
 
 Logs are in `.work/logs/baseline/` while the scratch tree exists. Rerun `make -C campaign baseline-timings` to reproduce them.

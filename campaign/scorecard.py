@@ -320,6 +320,18 @@ def text(value) -> str:
     return "—" if value is None else str(value)
 
 
+def model_identity(record: dict) -> str:
+    """The checkpoint a record measured: key, revision and quantization, so no table pools or ranks two models."""
+    model = record.get("model") or {}
+    key = model.get("key")
+    if not key:
+        return "model not recorded"
+    hashes = model.get("hashes") or {}
+    revision = str(hashes.get("revision") or "")[:12] or "unpinned"
+    quant = quant_label(key, hashes)
+    return f"{key}@{revision}" + (f" ({quant.split(':', 1)[1]})" if quant and ":" in quant else "")
+
+
 def group(trials: list[dict]) -> dict[tuple, list[dict]]:
     groups: dict[tuple, list[dict]] = {}
     for record in trials:
@@ -327,7 +339,7 @@ def group(trials: list[dict]) -> dict[tuple, list[dict]]:
             continue
         if cold_rate(record) is None:
             continue
-        key = (record.get("engine"), record.get("mode"), record.get("cell"), record.get("prompt_cache_gib"))
+        key = (model_identity(record), record.get("engine"), record.get("mode"), record.get("cell"), record.get("prompt_cache_gib"))
         groups.setdefault(key, []).append(record)
     return groups
 
@@ -372,7 +384,7 @@ def natural(records: list[dict]) -> dict[tuple, dict]:
         run = record.get("natural_termination") or {}
         if not run:
             continue
-        key = (record.get("engine"), record.get("mode"), record.get("cell"), record.get("prompt_cache_gib"))
+        key = (model_identity(record), record.get("engine"), record.get("mode"), record.get("cell"), record.get("prompt_cache_gib"))
         entry = out.setdefault(key, {"classes": {}, "reasons": {}, "tokens": []})
         entry["classes"][run.get("completion")] = entry["classes"].get(run.get("completion"), 0) + 1
         for reason in run.get("finish_reasons") or []:
@@ -402,16 +414,16 @@ def render(trials: list[dict], unavailable: list[dict], files: list[str], malfor
              f"- Unavailable cell records: {len(unavailable)}", f"- Malformed lines skipped: {malformed}", ""]
 
     lines += ["## Matched", "",
-              "Same engine, mode, cell and prompt-cache size. Sampled request peak is the `/memory` high-water mark "
+              "Same model, engine, mode, cell and prompt-cache size. Sampled request peak is the `/memory` high-water mark "
               "after readiness; lifetime peak is the kernel's whole-process high-water mark and is not gated on the "
               "250 ms samples.", "",
-              "| Engine | Mode | Cell | Cache GiB | Trials | Pairs | Cold decode tok/s | Warm decode tok/s | Prefill tok/s | TTFT ms | Total s | Sampled request peak GiB | Lifetime peak GiB | Accept | Tokens/round | Repeatability |",
-              "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
-    for key in sorted(groups, key=lambda k: (str(k[0]), str(k[1]), k[2] or 0, k[3] if k[3] is not None else -1)):
-        engine, mode, cell, cache = key
+              "| Model | Engine | Mode | Cell | Cache GiB | Trials | Pairs | Cold decode tok/s | Warm decode tok/s | Prefill tok/s | TTFT ms | Total s | Sampled request peak GiB | Lifetime peak GiB | Accept | Tokens/round | Repeatability |",
+              "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
+    for key in sorted(groups, key=lambda k: (k[0], str(k[1]), str(k[2]), k[3] or 0, k[4] if k[4] is not None else -1)):
+        model, engine, mode, cell, cache = key
         summary = summaries[key]
         lines.append(
-            f"| {engine} | {mode} | {cell} | {cache} | {summary['decode']['n']} | {summary['pairs']} | "
+            f"| {model} | {engine} | {mode} | {cell} | {cache} | {summary['decode']['n']} | {summary['pairs']} | "
             f"{with_interval(summary['decode'])} | "
             f"{with_interval(summary['decode_warm'])} | {with_interval(summary['prefill'])} | "
             f"{with_interval(summary['ttft_ms'])} | {with_interval(summary['total_s'], 2)} | "
@@ -419,7 +431,7 @@ def render(trials: list[dict], unavailable: list[dict], files: list[str], malfor
             f"{with_range(summary['acceptance'], 3)} | {with_range(summary['committed'], 2)} | "
             f"{repeatability_text(summary['decode'])} |")
     if not groups:
-        lines.append("| — | — | — | — | 0 | — | — | — | — | — | — | — | — | — | — | — |")
+        lines.append("| — | — | — | — | — | 0 | — | — | — | — | — | — | — | — | — | — | — |")
 
     units, rejected = collect_pairs(trials)
     comparisons = paired_comparisons(units)
@@ -452,36 +464,37 @@ def render(trials: list[dict], unavailable: list[dict], files: list[str], malfor
             lines.append(f"| {row['experiment']} | {row['process_pair']} | {row['reason']} |")
 
     lines += ["", "## Best useful", "",
-              "The fastest measured configuration per cell, among engines, modes and configurations that actually "
-              "ran. Heterogeneous configurations stay here rather than entering a matched result.", ""]
+              "The fastest measured configuration per model and cell, among engines, modes and configurations that "
+              "actually ran. Different models are never ranked against each other; heterogeneous configurations of "
+              "one model stay here rather than entering a matched result.", ""]
     best: dict[tuple, list[tuple[float, tuple]]] = {}
     for key, summary in summaries.items():
         if summary["decode"]["n"]:
-            best.setdefault((key[2], key[3]), []).append((summary["decode"]["median"], key))
-    lines += ["| Cell | Cache GiB | Best engine | Mode | Cold decode tok/s | Trials | Other measured |",
-              "| ---: | ---: | --- | --- | ---: | ---: | --- |"]
+            best.setdefault((key[0], key[3], key[4]), []).append((summary["decode"]["median"], key))
+    lines += ["| Model | Cell | Cache GiB | Best engine | Mode | Cold decode tok/s | Trials | Other measured |",
+              "| --- | ---: | ---: | --- | --- | ---: | ---: | --- |"]
     if best:
-        for cell, cache in sorted(best, key=lambda item: (item[0] or 0, item[1] if item[1] is not None else -1)):
-            rows = sorted(best[(cell, cache)], key=lambda item: (-item[0], str(item[1])))
+        for model, cell, cache in sorted(best, key=lambda item: (item[0], item[1] or 0, item[2] if item[2] is not None else -1)):
+            rows = sorted(best[(model, cell, cache)], key=lambda item: (-item[0], str(item[1])))
             rate, key = rows[0]
-            others = ", ".join(f"{k[0]} {k[1]} {number(summaries[k]['decode']['median'])}" for _, k in rows[1:]) or "—"
-            lines.append(f"| {cell} | {cache} | {key[0]} | {key[1]} | {number(rate)} | "
+            others = ", ".join(f"{k[1]} {k[2]} {number(summaries[k]['decode']['median'])}" for _, k in rows[1:]) or "—"
+            lines.append(f"| {model} | {cell} | {cache} | {key[1]} | {key[2]} | {number(rate)} | "
                          f"{summaries[key]['decode']['n']} | {others} |")
     else:
-        lines.append("| — | — | — | — | — | 0 | — |")
+        lines.append("| — | — | — | — | — | — | 0 | — |")
 
     lines += ["", "## Natural termination", "",
               "Requests sent without `ignore_eos` (they do not enter the fixed-length rates above).", ""]
     outcomes = natural(trials)
     if outcomes:
-        lines += ["| Engine | Mode | Cell | Cache GiB | Completions | Finish reasons | Mean tokens |",
-                  "| --- | --- | ---: | ---: | --- | --- | ---: |"]
-        for key in sorted(outcomes, key=lambda k: (str(k[0]), str(k[1]), k[2] or 0, k[3] if k[3] is not None else -1)):
+        lines += ["| Model | Engine | Mode | Cell | Cache GiB | Completions | Finish reasons | Mean tokens |",
+                  "| --- | --- | --- | ---: | ---: | --- | --- | ---: |"]
+        for key in sorted(outcomes, key=lambda k: (k[0], str(k[1]), str(k[2]), k[3] or 0, k[4] if k[4] is not None else -1)):
             entry = outcomes[key]
             completions = ", ".join(f"{name} {count}" for name, count in sorted(entry["classes"].items(), key=str)) or "—"
             reasons = ", ".join(f"{name} {count}" for name, count in sorted(entry["reasons"].items(), key=str)) or "—"
             mean = statistics.fmean(entry["tokens"]) if entry["tokens"] else None
-            lines.append(f"| {key[0]} | {key[1]} | {key[2]} | {key[3]} | {completions} | {reasons} | {number(mean)} |")
+            lines.append(f"| {key[0]} | {key[1]} | {key[2]} | {key[3]} | {key[4]} | {completions} | {reasons} | {number(mean)} |")
     else:
         lines.append("No natural-termination requests were recorded.")
 

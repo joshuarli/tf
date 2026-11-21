@@ -1,4 +1,5 @@
-//! Inkling 2 Mini (`inkling2_loop`) host checks (no GPU).
+//! Inkling 2 Mini (`inkling2_loop`) in the build: the host package's checks, the native Metal family, and the
+//! teacher-forced runner the campaign's parity check drives.
 const std = @import("std");
 
 fn module(b: *std.Build, target: std.Build.ResolvedTarget, root: []const u8) *std.Build.Module {
@@ -34,4 +35,47 @@ pub fn tests(b: *std.Build, target: std.Build.ResolvedTarget, test_step: *std.Bu
     const step = b.step("test-inkling2-loop-host", "Inkling 2 Mini family package: config, quant geometry, weight map, chat template, tokenizer and refusals");
     step.dependOn(&run.step);
     test_step.dependOn(&run.step);
+}
+
+/// The family's own module over the Metal runtime, the core readers and the shared Inkling 2 config.
+pub fn engineModule(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.Build.Module, core: *std.Build.Module) *std.Build.Module {
+    const m = b.createModule(.{
+        .root_source_file = b.path("zig/src/families/inkling2_loop/family.zig"),
+        .target = target,
+        .optimize = .fast,
+        .link_libc = true,
+    });
+    m.addImport("metal", metal);
+    m.addImport("core", core);
+    m.addImport("inkling2_config", b.createModule(.{ .root_source_file = b.path("zig/src/families/inkling2/config.zig"), .target = target, .optimize = .fast }));
+    return m;
+}
+
+/// The family's GPU-side tests, which open the real checkpoint only when `TF_INKLING2_LOOP_DIR` names it.
+pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.Build.Module, core: *std.Build.Module, test_step: *std.Build.Step) void {
+    const m = engineModule(b, target, metal, core);
+    const run = b.addRunArtifact(b.addTest(.{ .root_module = m }));
+    run.has_side_effects = true;
+    const step = b.step("test-inkling2-loop", "Inkling 2 Mini's native Metal forward against the checkpoint and its own state");
+    step.dependOn(&run.step);
+    test_step.dependOn(&run.step);
+}
+
+/// `tf-inkling2-loop-run`: every position's float32 logits, teacher-forced, for the campaign's parity check.
+pub fn runner(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.Build.Module, core: *std.Build.Module) *std.Build.Module {
+    const m = b.createModule(.{
+        .root_source_file = b.path("zig/src/families/inkling2_loop/run.zig"),
+        .target = target,
+        .optimize = .fast,
+        .link_libc = true,
+    });
+    m.addImport("metal", metal);
+    m.addImport("core", core);
+    m.addImport("engine_api", b.createModule(.{ .root_source_file = b.path("zig/src/core/engine_api.zig"), .target = target, .optimize = .fast, .link_libc = true }));
+    m.addImport("inkling2_config", b.createModule(.{ .root_source_file = b.path("zig/src/families/inkling2/config.zig"), .target = target, .optimize = .fast }));
+    return m;
+}
+
+test {
+    _ = std;
 }

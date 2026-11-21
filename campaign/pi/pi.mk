@@ -5,10 +5,15 @@ PI_BIN ?=
 QUALIFY_RESULT ?=
 QUALIFY_BASELINE ?=
 
-.PHONY: pi-harness-flint pi-qualify
+.PHONY: pi-harness-flint pi-harness-inkling2-mini pi-qualify
 
 pi-harness-flint:
 	PI_BIN='$(PI_BIN)' $(UV) run --project $(CURDIR) python $(CURDIR)/pi/run.py --model flint \
+		--bin '$(BIN)' --pi-model $(PI_MODEL) $(if $(PI_ONLY),--only '$(PI_ONLY)',)
+
+pi-harness-inkling2-mini:
+	@echo "$(call serve_preview,inkling2-mini,2)"
+	PI_BIN='$(PI_BIN)' $(UV) run --project $(CURDIR) python $(CURDIR)/pi/run.py --model inkling2-mini \
 		--bin '$(BIN)' --pi-model $(PI_MODEL) $(if $(PI_ONLY),--only '$(PI_ONLY)',)
 
 pi-qualify:

@@ -10,6 +10,7 @@ CANDIDATE_BIN ?=
 .PHONY: bench scorecard prompts prompts-check
 
 bench:
+	$(if $(filter flint,$(MODEL)),,@echo "$(call serve_preview,$(MODEL),2)")
 	$(UV) run --project $(CURDIR) python $(CURDIR)/bench/bench.py \
 		--model $(MODEL) --mode $(MODE) --cells $(CELLS) --prompts '$(PROMPTS)' --pairs $(PAIRS) \
 		--bin '$(BIN)' $(if $(CANDIDATE_BIN),--candidate-bin '$(CANDIDATE_BIN)',)

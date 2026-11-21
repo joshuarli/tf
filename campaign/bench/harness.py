@@ -38,6 +38,15 @@ RUNS_DIR = CAMPAIGN / "runs"
 
 REPO_NAMES = {"flint-int4": "flint-int4", "flint-dflash2": "Flint-DFlash2", "inkling-2-mini": "Inkling-2-Mini"}
 MODEL_KEYS = {"flint": "flint-int4", "inkling2-mini": "inkling-2-mini", "inkling-2-mini": "inkling-2-mini"}
+LOAD_LIMIT_VARS = {"flint-int4": "FLINT_LOAD_LIMIT_GB", "inkling-2-mini": "INKLING_LOAD_LIMIT_GB"}
+UNSUPPORTED_MODES = {
+    "inkling-2-mini": {
+        "copy": "Inkling 2 Mini is text-only in this campaign and has no copy-draft path; run mode ar",
+        "drafter": "Inkling 2 Mini has no served drafter in this campaign (its mtp.safetensors head is not wired); "
+                   "run mode ar",
+    },
+}
+DEFAULT_SERVE_ARGS = {"flint-int4": [], "inkling-2-mini": ["--no-drafts"]}
 
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
@@ -110,13 +119,43 @@ def drafter_path() -> Path | None:
     return path if (path / "config.json").is_file() and (path / "model.safetensors").is_file() else None
 
 
-def load_limit_gb() -> int:
+def load_limit_var(key: str = "flint-int4") -> str:
+    if key not in LOAD_LIMIT_VARS:
+        raise ValueError(f"no load-limit variable for {key!r}; expected one of {sorted(LOAD_LIMIT_VARS)}")
+    return LOAD_LIMIT_VARS[key]
+
+
+def load_limit_gb(key: str = "flint-int4") -> int:
     sys.path.insert(0, str(HEAVY.parent))
     import heavy
-    return heavy.FLINT_LOAD_LIMIT_GB
+    return getattr(heavy, load_limit_var(key))
 
 
-def host_summary() -> dict:
+def model_mode_problem(key: str, mode: str) -> str | None:
+    """The recorded reason a (model, mode) pair is refused, or None when the model serves that mode."""
+    return (UNSUPPORTED_MODES.get(key) or {}).get(mode)
+
+
+def default_serve_args(key: str) -> list[str]:
+    """The acceleration flags a model's plain (non-matmul) runs pass: Inkling 2 Mini serves ar only."""
+    return list(DEFAULT_SERVE_ARGS.get(key, []))
+
+
+def model_key_for_dir(path: Path) -> str | None:
+    """The locked model key whose pinned directory is ``path``, or None for a comparator's own checkpoint."""
+    resolved = Path(path).expanduser().resolve()
+    for key in REPO_NAMES:
+        if key == "flint-dflash2":
+            continue
+        try:
+            if model_dir(key).resolve() == resolved:
+                return key
+        except ValueError:
+            continue
+    return None
+
+
+def host_summary(key: str = "flint-int4") -> dict:
     record = json.loads(HOST_RECORD.read_bytes())
     sysctl = record["sysctl"]
     return {"product": sysctl["brand"], "performance_cores": sysctl["perflevel0_physicalcpu"],
@@ -124,7 +163,7 @@ def host_summary() -> dict:
             "gpu_cores": record["gpu"]["gpu_cores"], "metal": record["gpu"]["metal_support"],
             "os": f"{record['sw_vers']['product_name']} {record['sw_vers']['build_version']}",
             "recommended_max_working_set_bytes": int(record["metal"]["recommendedMaxWorkingSetSize"]),
-            "load_limit_gb": load_limit_gb()}
+            "load_limit_gb": load_limit_gb(key)}
 
 
 def vm_pressure_level() -> int | None:
@@ -245,6 +284,26 @@ def parse_seconds(pattern_line: str | None, marker: str) -> float | None:
         return None
 
 
+def served_identity_name(key: str) -> str:
+    """The model name a served endpoint should report: the repository basename without its revision."""
+    return REPO_NAMES[key]
+
+
+def served_model_matches(key: str, model_id: str | None) -> bool:
+    """Whether a served model id names ``key``; the served name is the checkpoint directory's basename."""
+    if not model_id:
+        return False
+    return str(model_id).lower().startswith(served_identity_name(key).lower())
+
+
+def load_limit_env(model: Path) -> dict[str, str]:
+    """The one load-limit variable a server for ``model`` reads, set to its campaign value."""
+    key = model_key_for_dir(model)
+    if key is None:
+        return {load_limit_var("flint-int4"): str(load_limit_gb("flint-int4"))}
+    return {load_limit_var(key): str(load_limit_gb(key))}
+
+
 class Server:
     """A model server under the GPU lock: ready wait, log parsing, /memory sampling and a group-only stop."""
 
@@ -252,7 +311,7 @@ class Server:
         self.binary, self.model, self.extra_args = Path(binary), Path(model), list(extra_args)
         self.prompt_cache_gib = prompt_cache_gib
         self.log_path = Path(log_path)
-        self.env = dict(os.environ, FLINT_LOAD_LIMIT_GB=str(load_limit_gb()), TENSORFOLD_NO_UPDATE_CHECK="1")
+        self.env = dict(os.environ, **load_limit_env(self.model), TENSORFOLD_NO_UPDATE_CHECK="1")
         self.port: int | None = None
         self.base: str | None = None
         self.process: subprocess.Popen | None = None

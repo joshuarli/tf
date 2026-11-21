@@ -11,7 +11,8 @@ opened the old file and a newcomer that creates a new one both hold "the" lock.
 
 The campaign as a whole stays under 32 GB so the host remains usable: one heavy
 command at a time (the lock) gets 28 GB, leaving 4 GB for builds, clients and
-agents. Flint servers set FLINT_LOAD_LIMIT_GB to fit inside the heavy cap.
+agents. Flint servers set FLINT_LOAD_LIMIT_GB and Inkling 2 Mini servers set
+INKLING_LOAD_LIMIT_GB to fit inside the heavy cap.
 """
 
 import argparse
@@ -31,6 +32,7 @@ GPU_LOCK = MAIN_ROOT / ".work" / "gpu.lock"
 
 HEAVY_CAP_GB = 28
 FLINT_LOAD_LIMIT_GB = 27
+INKLING_LOAD_LIMIT_GB = 26
 
 RUSAGE_INFO_V2 = 2
 PHYS_FOOTPRINT_OFFSET = 72

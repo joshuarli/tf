@@ -1,0 +1,11 @@
+[project]
+name = "flint-comparator-rec"
+version = "0.1.0"
+description = "F3 comparator: rec v0.1.0 (rec_mlx) serving the Flint INT4 checkpoint"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+    "rec-mlx @ git+https://github.com/recursive-oss/rec@e53663b262af4cb1ca498e596ca8b1a2d79e0800#subdirectory=engine",
+]
+
+[tool.uv]
+package = false

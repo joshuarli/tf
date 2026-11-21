@@ -145,7 +145,7 @@ out-of-window row becomes `−sink`, for full layers distances past 1024 read th
 extra zero-value logit (`transformers/models/inkling2/modeling_inkling2.py`, `eager_attention_forward`).
 
 Full layers scale Q and R by `tau = 1 + 0.1·log(max(1, (pos+1)/8192))` (`src/models/inkling2.cpp:258-261`,
-`config.json:22-23`). For positions below 8191 this is exactly 1; the three histories here never reach it.
+`config.json:22-23`). For the first 8192 positions the log term is exactly 0, so `tau = 1`; these histories never reach it.
 
 ### Clipping and normalization
 
@@ -261,8 +261,8 @@ The tiny fixture `trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration
 core [2,6), 3 passes, rank 8, 8 experts, NVFP4 layers 0–5 and MXFP8 6–7) is pinned and fetched with the same lock.
 On that fixture the reference and llama.cpp (F32 KV cache) agree to `max |Δlogit| = 1.8e-7`,
 `mean |Δlogit| = 2.5e-8`, correlation `0.99999999999`, and identical top-1 at every position even at margins of
-5e-4. The tiny fixture's random weights make
-its margins too small to say anything about the 0.1-logit rule; it is a graph check, not a model check.
+5e-4. The tiny fixture's random weights make its margins too small to say anything about the 0.1-logit rule; it is
+a graph check, not a model check.
 
 ## Checks
 

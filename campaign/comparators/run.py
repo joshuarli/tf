@@ -166,7 +166,7 @@ def run(args) -> int:
     failures = 0
     meta_base = server.metadata(model_dir)
     for cell, cache_gib in cells:
-        for pair in range(1, args.pairs + 1):
+        for pair in args.pair_list:
             port = harness.free_port()
             base = f"http://127.0.0.1:{port}"
             argv = server.argv(model_dir, port, cache_gib, OUTPUT_TOKENS)
@@ -207,12 +207,16 @@ def main() -> int:
     parser.add_argument("--mode", default="greedy")
     parser.add_argument("--cells", default="1024,4096,32768")
     parser.add_argument("--prompts", default="all")
-    parser.add_argument("--pairs", type=int, default=3)
+    parser.add_argument("--pairs", default=None, help="count (default 3) or an explicit comma list")
     parser.add_argument("--ready-timeout", type=float, default=1800)
     parser.add_argument("--run-id", default=None)
     args = parser.parse_args()
-    if args.pairs < 1:
-        parser.error("--pairs must be at least 1")
+    if isinstance(args.pairs, str):
+        args.pair_list = [int(token) for token in args.pairs.split(",") if token.strip()]
+        if not args.pair_list:
+            parser.error("--pairs named no pair")
+    else:
+        args.pair_list = list(range(1, 4))
     return run(args)
 
 

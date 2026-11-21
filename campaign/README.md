@@ -38,3 +38,23 @@ make -C campaign baseline-timings
 ## Resume
 
 Read the **Status** block of [plan.md](plan.md), run `make -C campaign host`, compare the result with the committed `host.json`, then take the next item.
+
+## Checks and benchmarks
+
+`make -C campaign bench-list` prints every workload with its tier, area, purpose and cost. Pick the smallest tier, or the named workloads, that cover a change.
+
+| Tier | What it runs | Cost |
+| --- | --- | --- |
+| `edit` | CPU fixtures and host tests: the logit gate's controls, the evidence fixtures, quality cases, the prompt corpus, Flint and Inkling 2 Mini host tests | about 30 s warm |
+| `change` | one short round on the GPU: `tf-flint-run` decode steps and one-row against 16-row self-consistency (no server, the fastest Flint loop), the served smoke, one 1,024-token bench process, the cached Inkling reference check | minutes |
+| `scenario` | the six-pair primary matrix, the quality dev set, the Pi tasks, Flint parity | tens of minutes each |
+| `full` | the 48-case quality set, the 104 GB Inkling oracle rerun, `zig build test test-golden` | manual only |
+
+```sh
+make -C campaign bench-check TIER=change            # preflight only: names each unmet requirement and its fix
+make -C campaign bench-dry NAMES=flint-steps        # print the commands; writes nothing
+make -C campaign bench-suite TIER=edit              # run; AREAS=flint, NAMES=a,b and SKIP=a,b narrow it
+make -C campaign bench-full FULL=requested          # every tier; only when the owner asks for it
+```
+
+Preflight checks only the selected workloads: the pinned Zig, the frozen baseline's sha256, weight files against their pinned sizes, `tf-flint-run` against its sources, and that each workload's make target exists. It reports host readiness (free disk, memory pressure, thermal state, running servers, the GPU lock holder) without blocking on it. Any unmet requirement stops the run before anything starts. An unknown name or area, or a selection that matches nothing, is an error. A full-tier workload never runs outside `bench-full FULL=requested`. Each run writes per-workload logs and `summary.json` to `.work/suite/<timestamp>/` and exits non-zero if any workload fails. Completion is not a performance verdict: read each workload's own records, which mark invalid trials.

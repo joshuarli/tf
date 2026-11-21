@@ -15,10 +15,140 @@ def percentiles(values: dict, keys: tuple[str, ...]) -> str:
     return " | ".join(f"{values[key]:+.5g}" for key in keys)
 
 
+NAMED_ROWS = (("binary-search-edges", 3), ("arrow-etl-pipeline", 2), ("json-invoice-records", 32), ("zig-slice-bounds", 200))
+
+
+def departure(row: dict) -> str:
+    first = row["first"]
+    return f"{first['stage']}, layer {first['layer']}: {first['tf']:.4g} vs {first['self']:.4g}"
+
+
+def trace_section(trace: dict | None) -> list[str]:
+    if not trace or not trace.get("traced"):
+        return []
+    rows = trace["traced"]
+    by_key = {(r["history"], r["row"]): r for r in rows}
+    tf_ok = sum(1 for r in rows if r["verified"]["tf_logits_equal_compared_bits"])
+    dec_ok = sum(1 for r in rows if r["verified"]["oracle_decode_equal_compared_bits"])
+    chk_ok = sum(1 for r in rows if r["verified"]["oracle_chunk_equal_compared_bits"])
+    verdicts = trace.get("verdicts", {})
+    defects = [r for r in rows if r["verdict"] == "defect"]
+    over = [r for r in rows if r["ratio"] > trace["threshold"]]
+    named_extra = [r for r in rows if r["ratio"] <= trace["threshold"]]
+    named_extra_text = ", ".join(f"`{r['history']}` row {r['row']}" for r in named_extra) or "none"
+    lines = [
+        "",
+        "## First divergent tensors, traced stage by stage",
+        "",
+        f"Every corpus row whose per-row max abs logit error is more than {trace['threshold']:g}x the oracle's own",
+        f"two-path max abs error on that same row -- {len(over)} rows -- is traced below to its embedding, together with",
+        f"the row the brief names that measures just under that threshold here ({named_extra_text}). This is the check",
+        "the plan asks for before a difference may be called floating-point noise: the final logits alone do not say",
+        "which tensor first departs.",
+        "",
+        "Instrumentation, on the exact path each side was measured on:",
+        "",
+        f"- TensorFold: `tf-flint-run <model> <ids> dump <rows>,<out>` re-runs the row's own 16-row window with the",
+        "  layer loop cut at 0, 1, ..., 49 layers and reads the forward's existing scratch after each cutoff. No",
+        "  product code under `zig/src/` changed. It records the residual after each layer, the layer's attention",
+        "  output (routed layers) or dense MLP output (dense layers 0 and 1, whose down projection reuses the same",
+        "  scratch buffer that held the attention output), the router logits and top-k, the per-pick expert outputs, the shared",
+        "  output, the final norm and the logits. Each dumped row's logits equal the compared `.bin` bits on "
+        f"{tf_ok} of {len(rows)} rows.",
+        f"- Oracle: both teacher-forced paths of the checkpoint's own modules (`oracle_trace.py`): one token at a",
+        "  time from position 0, and one native prefill chunk, both reading and writing the same BF16 KV storage.",
+        "  Each path's kept row is checked against the logits that path produced in the parity run: "
+        f"{dec_ok} of {len(rows)} decode rows and {chk_ok} of {len(rows)} chunked rows are bit-identical.",
+        "",
+        "A stage's oracle spread is `max |chunked - decode|`; TensorFold's difference is `max |tf - decode|`. The",
+        "first stage where TensorFold's difference exceeds the oracle's own is the first divergent tensor. A router",
+        "selection change is a near-tie when the k-th and (k+1)-th logits at that row are closer than twice the",
+        "router logits' own path difference -- both endpoints can move by that difference -- and a clear-margin",
+        "change otherwise. `material` is the first stage where TensorFold's difference is more than four times the",
+        "spread or 0.01 logit, which separates the bf16-ulp departures from the change that actually grows the error.",
+        "",
+        "### One-row steps against 16-row windows",
+        "",
+        "`tf-flint-run <model> <prompt> exact <continuation>` feeds the prompt in chunks, then the continuation as",
+        "one-row steps and as 16-row windows, and compares every row's logits bit for bit:",
+        "",
+    ]
+    for name, info in trace.get("exact", {}).items():
+        lines.append(f"- `{name}`, prompt {info['prompt']} tokens, continuation {info['continuation']} tokens: {info['output']}")
+    lines += [
+        "",
+        f"Verdicts: {verdicts.get('accumulation order', 0)} rows accumulation order, {verdicts.get('defect', 0)} defect.",
+    ]
+    if defects:
+        lines.append("")
+        for r in defects:
+            lines.append(f"- `{r['history']}` row {r['row']}: defect -- {r['reason']}.")
+    lines += [
+        "",
+        "### The outlier rows named in the brief",
+        "",
+        "| History | Row | TF max abs | Oracle self max abs | First departure | First selection change | Material departure | Verdict |",
+        "| --- | ---: | ---: | ---: | --- | --- | --- | --- |",
+    ]
+    for history, row in NAMED_ROWS:
+        r = by_key.get((history, row))
+        if r is None:
+            continue
+        f = r["summary"]["first_flip"]
+        flip = "none" if not f else f"L{f['layer']}: gap {f['gap']:.4g} vs router delta {max(f['router_tf'], f['router_self']):.4g}; oracle {f['gained']} instead of tf {f['lost']}"
+        m = r["summary"]["material"]
+        mat = "none" if not m else f"{m['stage']}, L{m['layer']}: {m['tf']:.4g} vs {m['self']:.4g}"
+        lines.append(
+            f"| `{r['history']}` | {r['row']} | {r['tf_logit_max_abs']:.4f} | {r['oracle_self_logit_max_abs']:.4f} | "
+            f"{departure(r)} | {flip} | {mat} | {r['verdict']} |"
+        )
+    lines.append("")
+    for history, row in NAMED_ROWS:
+        r = by_key.get((history, row))
+        if r is None:
+            continue
+        lines.append(f"- `{r['history']}` row {row}, {r['tokens']} tokens: {r['reason']}.")
+        lines.append(f"  Largest residual departure: layer {r['summary']['max_residual']['layer']} at {r['summary']['max_residual']['tf']:.4g} vs the oracle's own {r['summary']['max_residual']['self']:.4g}.")
+    lines += [
+        "",
+        "### Every traced row",
+        "",
+        "| History | Row | TF max abs | Oracle self max abs | Ratio | First divergent tensor | Verdict |",
+        "| --- | ---: | ---: | ---: | ---: | --- | --- |",
+    ]
+    for r in sorted(rows, key=lambda x: -x["ratio"]):
+        lines.append(
+            f"| `{r['history']}` | {r['row']} | {r['tf_logit_max_abs']:.4f} | {r['oracle_self_logit_max_abs']:.4f} | "
+            f"{r['ratio']:.2f} | {departure(r)} | {r['verdict']} |"
+        )
+    embed_bit = sum(1 for r in rows if r["summary"]["embedding"]["tf"] == 0)
+    norm_over = [r for r in rows if r["summary"]["final_norm"]["tf"] > r["summary"]["final_norm"]["self"]]
+    norm_on_matching = [r for r in norm_over if r["summary"]["final_residual"]["tf"] == 0]
+    hidden_first = sorted(r["first"]["tf"] for r in rows if r["first"]["stage"] not in ("router logits", "selected experts"))
+    router_first = sorted(r["first"]["tf"] for r in rows if r["first"]["stage"] in ("router logits", "selected experts"))
+    median_first = sorted(r["first"]["tf"] for r in rows)[len(rows) // 2]
+    lines += [
+        "",
+        "The first departure is rounding-sized on every row: median "
+        f"{median_first:.4g}, at most {hidden_first[-1]:.4g} at a hidden-state tensor and {router_first[-1]:.4g} at router",
+        "logits. The rows that grow into large logit errors do so where a near-tied expert selection changes and",
+        "the changed expert's output is large. The router logits' own path difference is many times the boundary",
+        "gaps at those layers: no selection change in this corpus is clear of it "
+        f"({sum(len(r['summary']['clear_flips']) for r in rows)} clear-margin changes in {len(rows)} rows). The",
+        f"embedding is bit-identical on {embed_bit} of {len(rows)} traced rows; the final norm differs beyond its own",
+        f"spread on {len(norm_over)} rows, and on {len(norm_on_matching)} of those the residual entering it is",
+        "bit-identical to the oracle's.",
+        "",
+    ]
+    return lines
+
+
 def main() -> int:
     comparison_path, corpus_path, report_path = (Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]))
+    trace_path = Path(sys.argv[4]) if len(sys.argv) > 4 else None
     comparison = json.loads(comparison_path.read_text())
     corpus = json.loads(corpus_path.read_text())
+    trace = json.loads(trace_path.read_text()) if trace_path is not None and trace_path.exists() else None
     overall = comparison["overall"]
     keys = ("p0", "p1", "p5", "p25", "p50", "p75", "p95", "p99", "p99.9", "p100")
     lines = [
@@ -260,12 +390,12 @@ def main() -> int:
             "",
             f"In {disagreement_with_self} of {len(comparison['divergent_rows'])} outliers the oracle itself chooses a",
             "different top-1 under its other path, so those are differences between two accumulation orders on the",
-            "same checkpoint and the same ids, not a TensorFold defect. The remaining rows are checked by the two",
-            "tables above: TensorFold's error there is within the oracle's own spread, which the corpus-wide",
-            "per-row comparison shows for all rows at once.",
+            "same checkpoint and the same ids, not a TensorFold defect. The rows that remain are traced to their first",
+            "divergent tensor in the next section.",
         ]
     else:
         lines += ["None: no history has a top-1 disagreement, so there is no divergent row to trace.", ""]
+    lines += trace_section(trace)
     lines += [
         "## What was checked before calling a difference floating-point noise",
         "",

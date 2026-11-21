@@ -11,6 +11,7 @@ const usage =
     \\tf-flint-run <model> <tokens.json> forced <cont.json>,<out>  then cont's tokens a step; bf16 logits before each
     \\tf-flint-run <model> <tokens.json> exact <cont.json>        cont's tokens as one-row steps and as 16-row windows
     \\                                                             after the prompt: every row's logits bit for bit
+    \\tf-flint-run <model> <tokens.json> dump <rows.json>,<dir>    those rows' hidden states after every layer cutoff
     \\tf-flint-run <model> <tokens.json> bench <n>                 the prompt, then n one-row steps: wall, encode, GPU ms
     \\
 ;
@@ -53,6 +54,15 @@ pub fn main(init: std.process.Init) !void {
     defer wide.deinit();
     const vocab: usize = c.vocab;
     var t0 = now();
+    if (std.mem.eql(u8, mode, "dump")) {
+        const comma = std.mem.indexOfScalar(u8, args[4], ',') orelse return error.ExpectedRowsCommaDir;
+        const text = try std.Io.Dir.cwd().readFileAlloc(init.io, args[4][0..comma], gpa, .limited(1 << 20));
+        defer gpa.free(text);
+        const rows = try std.json.parseFromSlice([]u32, gpa, text, .{});
+        defer rows.deinit();
+        try @import("dump.zig").run(init.io, gpa, m, &small, &cache, prompt, rows.value, args[4][comma + 1 ..]);
+        return;
+    }
     if (std.mem.eql(u8, mode, "logits")) {
         const out = try gpa.alloc(u16, prompt.len * vocab);
         defer gpa.free(out);

@@ -9,13 +9,13 @@ short of 512 tokens is recorded invalid.
 import hashlib
 import json
 import os
-import subprocess
-import sys
 import time
 import urllib.request
 from pathlib import Path
 
-WORK = Path(__file__).resolve().parents[3]
+import harness
+
+WORK = harness.WORK
 
 
 def binary() -> Path:
@@ -46,9 +46,8 @@ def wait_ready(base: str, timeout: float) -> None:
 
 
 def model_id(base: str) -> str:
-    with urllib.request.urlopen(f"{base}/v1/models", timeout=10) as response:
-        data = json.loads(response.read())
-    return (data.get("data") or [{}])[0].get("id") or "flint"
+    """mlx-lm maps the request's model name to its --model only as `default_model`; any other name is an HF repo id."""
+    return "default_model"
 
 
 def metadata(model_dir: Path) -> dict:
@@ -62,7 +61,7 @@ def metadata(model_dir: Path) -> dict:
             "hashes": {"revision": "6b572ab1b531dd8fd2d13f6f36a89c2eccda18ea", "weights": weights,
                        "aggregate_sha256": aggregate},
             "omitted": {"ignore_eos": "mlx-lm has no ignore_eos; a reply short of 512 tokens is recorded invalid",
-                        "prompt_cache_gib": "mlx-lm has no prompt-cache size setting"}},
+                        "prompt_cache_gib": "mlx-lm has no prompt-cache size setting"},
             "footprint": None}
 
 

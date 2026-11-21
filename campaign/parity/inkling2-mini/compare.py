@@ -2,11 +2,14 @@
 
 Every position's logits are compared: shape, finiteness, absolute and relative error, the KL between the two
 next-token distributions, top-1 agreement overall and on positions the reference is confident about (its top-2
-margin at least ``--min-margin``), and, for each position that disagrees, the first divergent tensor.
+margin at least ``--min-margin``), and, for each history whose error crosses ``--tensor-tol``, the first divergent
+tensor at the onset position.
 
-The first divergent tensor is found by tracing the one history that disagrees: the reference's own ``--trace``
-writes a summary line a tensor in execution order, the runner's ``trace`` mode writes the same lines, and the first
-name whose summary differs by more than ``--tensor-tol`` is the first tensor to diverge. Both traces run inside the
+The first divergent tensor is found by tracing the onset position's prefix on both sides: the reference's
+``--trace-row`` writes one summary line per tensor for that position's row alone in execution order, the runner's
+``trace <out> <at>`` folds only that position, and the first overlapping name (the slot-indexed mixin, normin,
+attn_out, ffn_inp and l_out tensors, in execution order) whose summary differs by more than ``--tensor-tol`` is the
+first tensor to diverge. The onset-1 prefix is traced the same way as the clean control. Both traces run inside the
 campaign's memory ceiling.
 """
 
@@ -36,6 +39,9 @@ def percentiles(values: np.ndarray) -> str:
     return f"p50 {q[0]:.3e}, p90 {q[1]:.3e}, p99 {q[2]:.3e}, max {q[3]:.3e}"
 
 
+OVERLAP_PREFIXES = ("mixin-", "normin-", "attn_out-", "ffn_inp-", "l_out-")
+
+
 def read_trace(path: Path) -> dict[str, list[float]]:
     out: dict[str, list[float]] = {}
     for line in path.read_text().splitlines():
@@ -49,44 +55,74 @@ def fmt4(v: list[float]) -> str:
     return "(mean {:.6g}, std {:.6g}, min {:.6g}, max {:.6g})".format(*v)
 
 
-def first_divergence(ref_path: Path, metal_path: Path, tol: float) -> str:
+def first_divergence(ref_path: Path, metal_path: Path, pos: int, tol: float) -> str:
     if not ref_path.exists() or not metal_path.exists():
         missing = ref_path if not ref_path.exists() else metal_path
         return f"no trace at {missing}"
-    mine, ref = read_trace(metal_path), read_trace(ref_path)
-    for tensor, want in ref.items():
-        got = mine.get(tensor)
+    mine = read_trace(metal_path)
+    suffix = f"-row{pos}"
+    checked = 0
+    for line in ref_path.read_text().splitlines():
+        fields = line.split()
+        if len(fields) < 5 or not fields[0].endswith(suffix):
+            continue
+        base = fields[0][: -len(suffix)]
+        if not base.startswith(OVERLAP_PREFIXES):
+            continue
+        want = [float(x) for x in fields[1:5]]
+        checked += 1
+        got = mine.get(base)
         if got is None:
-            return f"{tensor}: absent from the Metal trace"
+            return f"{base}: absent from the Metal trace"
         delta = max(abs(a - b) for a, b in zip(got, want))
         if delta > tol:
-            return (f"{tensor}: reference {fmt4(want)} against Metal {fmt4(got)}, "
-                    f"largest difference {delta:.3e}")
-    return f"every one of {len(ref)} traced tensors agrees within {tol:g}"
+            return (f"{base}: reference {fmt4(want)} against Metal {fmt4(got)}, "
+                    f"largest difference {delta:.3e} over {checked} overlapping tensors")
+    if checked == 0:
+        return f"no position-{pos} rows for the overlapping tensors in {ref_path}"
+    return f"every one of {checked} overlapping tensors agrees within {tol:g}"
 
 
-def trace_both(name: str, tokens: list[int], args) -> tuple[Path, Path]:
-    """Write both sides' traces for one history, each inside the campaign's memory ceiling."""
+def trace_prefix(name: str, tokens: list[int], pos: int, args) -> tuple[Path, Path]:
+    """Write both sides' traces for the prefix ending at one position, each inside the memory ceiling."""
     metal_dir, ref_dir = Path(args.metal_traces), Path(args.ref_traces)
     metal_dir.mkdir(parents=True, exist_ok=True)
     ref_dir.mkdir(parents=True, exist_ok=True)
-    ids = metal_dir / f"{name}.tokens.json"
-    ids.write_text(json.dumps(tokens))
-    metal = metal_dir / f"{name}.trace"
-    done = subprocess.run(["python3", args.heavy, "--", args.runner, args.model, str(ids), "trace", str(metal)],
-                          capture_output=True, text=True)
-    if done.returncode != 0:
-        return Path(f"the runner's trace failed: {done.stderr.strip()[-200:]}"), metal
-    ref = ref_dir / f"{name}.trace"
+    ids = metal_dir / f"{name}.p{pos}.tokens.json"
+    ids.write_text(json.dumps(tokens[:pos + 1]))
+    metal = metal_dir / f"{name}.p{pos}.trace"
+    if not metal.exists():
+        done = subprocess.run(["python3", args.heavy, "--", args.runner, args.model, str(ids),
+                               "trace", str(metal), str(pos)], capture_output=True, text=True)
+        if done.returncode != 0:
+            return Path(f"the runner's trace failed: {done.stderr.strip()[-200:]}"), metal
+    ref = ref_dir / f"{name}.p{pos}.trace"
     if not ref.exists():
         venv = Path(args.ref_venv) / "bin" / "python"
         cmd = ["python3", args.heavy, "--", str(venv), args.reference, "--model", args.model,
-               "--tokens", " ".join(str(t) for t in tokens), "--out", str(ref_dir / f"{name}.npy"),
-               "--trace", str(ref), "--expert-cache-gib", "10"]
+               "--tokens", " ".join(str(t) for t in tokens[:pos + 1]),
+               "--out", str(ref_dir / f"{name}.p{pos}.npy"),
+               "--trace", str(ref), "--trace-row", str(pos),
+               "--router-report", str(ref_dir / f"{name}.p{pos}.routers.json"),
+               "--expert-cache-gib", "10"]
         done = subprocess.run(cmd, capture_output=True, text=True)
         if done.returncode != 0:
             return metal, Path(f"the reference's trace failed: {done.stderr.strip()[-200:]}")
     return ref, metal
+
+
+def tightest_routers(ref_dir: Path, name: str, pos: int, count: int = 3) -> str:
+    path = ref_dir / f"{name}.p{pos}.routers.json"
+    if not path.exists():
+        return f"no router report at {path}"
+    rows = json.loads(path.read_text())
+    ranked = sorted(((abs(v["gap_8_9"]), slot) for slot, v in rows.items()))
+    bits = []
+    for gap, slot in ranked[:count]:
+        v = rows[slot]
+        bits.append(f"slot {slot} (layer {v['layer']}): picks {v['picks']} against 9th {v['ninth']}, "
+                    f"8th/9th selection gap {v['gap_8_9']:.3g} (prob gap {v['gap_8_9_prob']:.3g})")
+    return "; ".join(bits)
 
 
 def main() -> int:
@@ -170,25 +206,42 @@ def main() -> int:
                     f"| {agree.mean() * 100:.2f}% | {conf_pct:.2f}% | {int((~agree & confident).sum())} |")
 
         disagreed = np.nonzero(~agree)[0]
-        if disagreed.size:
-            ref_trace = metal_trace = None
-            if can_trace:
-                ref_trace, metal_trace = trace_both(name, tokens, args)
-            for i in disagreed:
-                ref_top, got_top = int(reference[i].argmax()), int(mine[i].argmax())
-                if ref_trace is None:
-                    where = "not traced: no runner, model or memory ceiling was available"
-                elif not ref_trace.exists():
-                    where = str(ref_trace)
-                elif not metal_trace.exists():
-                    where = str(metal_trace)
-                else:
-                    where = first_divergence(ref_trace, metal_trace, args.tensor_tol)
+        for i in disagreed:
+            divergences.append(
+                f"\n### {name} position {int(i)}: reference top-1 {int(reference[i].argmax())}, "
+                f"Metal top-1 {int(mine[i].argmax())}\n"
+                f"- reference top-2 margin {margin[i]:.4g}, largest logit error {err[i].max():.4g}, "
+                f"KL {kl[i]:.4g}")
+        over = np.nonzero(err.max(axis=1) > args.tensor_tol)[0]
+        if over.size:
+            onset = int(over[0])
+            if not can_trace:
                 divergences.append(
-                    f"\n### {name} position {int(i)}: reference top-1 {ref_top}, Metal top-1 {got_top}\n"
-                    f"- reference top-2 margin {margin[i]:.4g}, largest logit error {err[i].max():.4g}, "
-                    f"KL {kl[i]:.4g}\n"
-                    f"- first divergent tensor: {where}")
+                    f"\n### {name} onset position {onset}: largest logit error {err[onset].max():.4g}\n"
+                    "- first divergent tensor: not traced: no runner, model or memory ceiling was available")
+            else:
+                ref_tr, metal_tr = trace_prefix(name, tokens, onset, args)
+                if ref_tr.exists() and metal_tr.exists():
+                    where = first_divergence(ref_tr, metal_tr, onset, args.tensor_tol)
+                    ctrl = "no earlier position"
+                    if onset > 0:
+                        ref_c, metal_c = trace_prefix(name, tokens, onset - 1, args)
+                        if ref_c.exists() and metal_c.exists():
+                            ctrl = first_divergence(ref_c, metal_c, onset - 1, args.tensor_tol)
+                        else:
+                            ctrl = str(ref_c) if not ref_c.exists() else str(metal_c)
+                    routers = tightest_routers(Path(args.ref_traces), name, onset)
+                    divergences.append(
+                        f"\n### {name} onset position {onset}: largest logit error {err[onset].max():.4g}, "
+                        f"KL {kl[onset]:.4g}\n"
+                        f"- first divergent tensor: {where}\n"
+                        f"- clean control at {onset - 1}: {ctrl}\n"
+                        f"- tightest reference router 8th/9th gaps at {onset}: {routers}")
+                else:
+                    bad = str(ref_tr) if not ref_tr.exists() else str(metal_tr)
+                    divergences.append(
+                        f"\n### {name} onset position {onset}: largest logit error {err[onset].max():.4g}\n"
+                        f"- first divergent tensor: {bad}")
 
     abs_flat = np.concatenate(abs_all) if abs_all else np.array([])
     rel_flat = np.concatenate(rel_all) if rel_all else np.array([])

@@ -40,6 +40,13 @@ test "the sources name the kernels the model loads" {
     try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_gu") != null);
     try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_down") != null);
     try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_cap_exact") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_gemm") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_moe_sort") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_moe_offsets") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_moe_count") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_moe_zero") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_down_grouped") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_gu_grouped") != null);
     try std.testing.expect(std.mem.indexOf(u8, prefillSource(false), "I2P_MXFP8 1") == null);
     try std.testing.expect(std.mem.indexOf(u8, prefillSource(true), "I2P_MXFP8 1") != null);
 }

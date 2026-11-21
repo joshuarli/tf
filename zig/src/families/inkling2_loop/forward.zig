@@ -6,6 +6,7 @@ const mtl = @import("metal");
 const cfg = @import("config.zig");
 const st = @import("state.zig");
 const wts = @import("model.zig");
+const kernels = @import("kernels.zig");
 
 const Model = wts.Model;
 const Cache = st.Cache;
@@ -16,6 +17,10 @@ const Controller = wts.Controller;
 
 /// The kernels' argument structs; each mirrors one `struct` in the `.metal` sources.
 const Mv = extern struct { m: u32, k: u32, cap: f32 };
+const Dm = extern struct { m: u32, k: u32, cap: f32 };
+const Dmg = extern struct { k: u32, m0: u32, m1: u32, m2: u32, m3: u32 };
+const Dmgx = extern struct { k0: u32, k1: u32, k2: u32, m: [8]u32, x: [8]u32 };
+const Dctl = extern struct { k0: u32, k1: u32, m0: u32, m1: u32 };
 const Rms = extern struct { width: u32, blocks: u32, eps: f32 };
 const Mix = extern struct { width: u32, depth: u32, k: u32, scale: f32 };
 const Clip = extern struct { heads: u32, width: u32, threshold: f32 };
@@ -83,10 +88,18 @@ pub const Forward = struct {
     capture: ?*st.Trace = null,
 
     fn set(f: Forward, g: wts.Glue, args: anytype, bufs: []const B) void {
-        f.enc.setPipeline(f.m.pipe(g));
+        f.setRaw(f.m.pipe(g), args, bufs);
+    }
+
+    fn setRaw(f: Forward, pipe: mtl.Pipeline, args: anytype, bufs: []const B) void {
+        f.enc.setPipeline(pipe);
         for (bufs, 0..) |buf, i| {
             if (buf.args) f.enc.setValue(args, i) else f.enc.setBuffer(buf.buf, buf.off, i);
         }
+    }
+
+    fn dense(f: Forward) ?kernels.Dense {
+        return kernels.densePipes(f.m.device) catch null;
     }
 
     fn setExpert(f: Forward, mx: bool, e: wts.Experts, args: anytype, bufs: []const B) void {
@@ -99,14 +112,50 @@ pub const Forward = struct {
     /// out[rows] = bf16 W[rows, k] . x[k]; a warp an output row.
     fn lin(f: Forward, w: Tensor, x: B, out: B) void {
         const m: usize = nrows(w);
+        if (f.dense()) |p| {
+            f.setRaw(p.mv, Dm{ .m = @intCast(m), .k = @intCast(width(w)), .cap = 0 }, &.{ x, t(w), A, out });
+            f.enc.dispatchGroups(mtl.Size.of((m + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+            return;
+        }
         f.set(.mv, Mv{ .m = @intCast(m), .k = @intCast(width(w)), .cap = 0 }, &.{ x, t(w), A, out });
         f.enc.dispatchGroups(mtl.Size.of((m + 31) / 32, 1, 1), mtl.Size.of(1024, 1, 1));
     }
 
     /// The unembedding: the soft-capped logits over the unpadded vocabulary.
     fn headModel(f: Forward, w: Tensor, x: B, out: B, vocab: u32) void {
+        if (f.dense()) |p| {
+            f.setRaw(p.mv_cap, Dm{ .m = vocab, .k = @intCast(width(w)), .cap = f.m.config.text.logit_cap }, &.{ x, t(w), A, out });
+            f.enc.dispatchGroups(mtl.Size.of((vocab + 31) / 32, 1, 1), mtl.Size.of(1024, 1, 1));
+            return;
+        }
         f.set(.mv_cap, Mv{ .m = vocab, .k = @intCast(width(w)), .cap = f.m.config.text.logit_cap }, &.{ x, t(w), A, out });
         f.enc.dispatchGroups(mtl.Size.of((vocab + 31) / 32, 1, 1), mtl.Size.of(1024, 1, 1));
+    }
+
+    fn fusedx(f: Forward, p: kernels.Dense, xs: [3]B, ks: [3]u32, ws: [8]Tensor, os: [8]B, ms: [8]u32, xsel: [8]u32) void {
+        var total: usize = 0;
+        for (ms) |r| total += r;
+        f.setRaw(p.fusedx, Dmgx{ .k0 = ks[0], .k1 = ks[1], .k2 = ks[2], .m = ms, .x = xsel }, &.{
+            xs[0], xs[1], xs[2],
+            t(ws[0]), os[0], t(ws[1]), os[1], t(ws[2]), os[2], t(ws[3]), os[3],
+            t(ws[4]), os[4], t(ws[5]), os[5], t(ws[6]), os[6], t(ws[7]), os[7], A,
+        });
+        f.enc.dispatchGroups(mtl.Size.of((total + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+    }
+
+    fn projGroup(f: Forward, p: kernels.Dense, lay: *const Layer, inputs: [3]B, full: bool) void {
+        const a = &lay.attn;
+        const s = f.s;
+        const kd: Tensor = if (full) a.k_dyn.? else a.k;
+        const vd: Tensor = if (full) a.v_dyn.? else a.v;
+        f.fusedx(p, inputs, .{ @intCast(width(a.q)), @intCast(width(a.k)), @intCast(width(a.v)) }, .{ a.q, a.r, a.sink, a.gate, a.k, kd, a.v, vd }, .{ b(s.q), b(s.r), b(s.sink), b(s.gate), b(s.k), if (full) b(s.kdyn) else b(s.k), b(s.v), if (full) b(s.vdyn) else b(s.v) }, .{ @intCast(nrows(a.q)), @intCast(nrows(a.r)), @intCast(nrows(a.sink)), @intCast(nrows(a.gate)), @intCast(nrows(a.k)), if (full) @intCast(nrows(a.k_dyn.?)) else 0, @intCast(nrows(a.v)), if (full) @intCast(nrows(a.v_dyn.?)) else 0 }, .{ 0, 0, 0, 0, 1, 1, 2, 2 });
+    }
+
+    fn fused2(f: Forward, p: kernels.Dense, x: B, w0: Tensor, o0: B, w1: Tensor, o1: B) void {
+        const m0: usize = nrows(w0);
+        const m1: usize = nrows(w1);
+        f.setRaw(p.fused, Dmg{ .k = @intCast(width(w0)), .m0 = @intCast(m0), .m1 = @intCast(m1), .m2 = 0, .m3 = 0 }, &.{ x, t(w0), o0, t(w1), o1, t(w0), o0, t(w0), o0, A });
+        f.enc.dispatchGroups(mtl.Size.of((m0 + m1 + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
     }
 
     /// rms_norm of `count` rows `w` wide; a null weight leaves them unweighted (the depth mix).
@@ -293,10 +342,15 @@ pub const Forward = struct {
         const s = f.s;
         f.rms1(cur, null, bo(s.h2, 0));
         f.rms1(message, null, bo(s.h2, f.h * 4));
-        f.lin(ctl.down, b(s.h2), b(s.normed));
-        f.lin(ctl.gain, b(s.normed), bo(s.tanh, 0));
+        if (f.dense()) |p| {
+            f.lin(ctl.down, b(s.h2), b(s.normed));
+            f.fused2(p, b(s.normed), ctl.gain, bo(s.tanh, 0), ctl.forget, bo(s.tanh, f.h * 4));
+        } else {
+            f.lin(ctl.down, b(s.h2), b(s.normed));
+            f.lin(ctl.gain, b(s.normed), bo(s.tanh, 0));
+            f.lin(ctl.forget, b(s.normed), bo(s.tanh, f.h * 4));
+        }
         f.flat(.tanh, Pair{ .count = f.h }, &.{ bo(s.tanh, 0), A }, f.h);
-        f.lin(ctl.forget, b(s.normed), bo(s.tanh, f.h * 4));
         f.flat(.tanh, Pair{ .count = f.h }, &.{ bo(s.tanh, f.h * 4), A }, f.h);
         f.flat(.ctl, Pair{ .count = f.h }, &.{ cur, message, bo(s.tanh, 0), bo(s.tanh, f.h * 4), A, out }, f.h);
     }
@@ -306,19 +360,26 @@ pub const Forward = struct {
         const a = &lay.attn;
         const text = &f.m.config.text;
         const extent = f.extentOf(full);
-        f.lin(a.q, inputs[0], b(s.q));
-        f.clipScaled(b(s.q), a.q_scale, f.heads, f.dim, text.qk_clip);
-        f.lin(a.r, inputs[0], b(s.r));
-        f.clipScaled(b(s.r), a.r_scale, f.heads, f.drel, text.rel_clip);
         const ring = f.rings(slot);
-        f.lin(a.k, inputs[1], b(s.k));
-        f.convolve(b(s.k), b(s.kc), a.k_conv, a.k_dyn, inputs[1], b(s.kdyn), ring[0], f.kvw, if (full) f.kv else 0, @intFromBool(full));
+        if (f.dense()) |p| {
+            f.projGroup(p, lay, inputs, full);
+            f.convolve(b(s.k), b(s.kc), a.k_conv, null, A, b(s.kdyn), ring[0], f.kvw, if (full) f.kv else 0, @intFromBool(full));
+            f.convolve(b(s.v), b(s.vc), a.v_conv, null, A, b(s.vdyn), ring[1], f.kvw, if (full) f.kv else 0, @intFromBool(full));
+        } else {
+            f.lin(a.q, inputs[0], b(s.q));
+            f.lin(a.r, inputs[0], b(s.r));
+            f.lin(a.sink, inputs[0], b(s.sink));
+            f.lin(a.gate, inputs[0], b(s.gate));
+            f.lin(a.k, inputs[1], b(s.k));
+            f.convolve(b(s.k), b(s.kc), a.k_conv, a.k_dyn, inputs[1], b(s.kdyn), ring[0], f.kvw, if (full) f.kv else 0, @intFromBool(full));
+            f.lin(a.v, inputs[2], b(s.v));
+            f.convolve(b(s.v), b(s.vc), a.v_conv, a.v_dyn, inputs[2], b(s.vdyn), ring[1], f.kvw, if (full) f.kv else 0, @intFromBool(full));
+        }
+        f.clipScaled(b(s.q), a.q_scale, f.heads, f.dim, text.qk_clip);
+        f.clipScaled(b(s.r), a.r_scale, f.heads, f.drel, text.rel_clip);
         f.clipPlain(b(s.kc), f.kv, f.dim, text.qk_clip);
-        f.lin(a.v, inputs[2], b(s.v));
-        f.convolve(b(s.v), b(s.vc), a.v_conv, a.v_dyn, inputs[2], b(s.vdyn), ring[1], f.kvw, if (full) f.kv else 0, @intFromBool(full));
         f.rms(b(s.vc), null, b(s.vc), f.kv, f.dim, text.eps);
         f.kvStore(slot);
-        f.lin(a.sink, inputs[0], b(s.sink));
         f.relative(lay, b(s.r), extent, full);
         f.set(.attn, Attn{
             .heads = f.heads,
@@ -334,7 +395,6 @@ pub const Forward = struct {
             .alpha = text.log_alpha,
         }, &.{ b(s.q), bo(f.cache.keys, f.cache.row(&f.m.config, slot, 0)), bo(f.cache.values, f.cache.row(&f.m.config, slot, 0)), b(s.relbias), b(s.sink), A, b(s.attn) });
         f.enc.dispatchGroups(mtl.Size.of(f.heads, 1, 1), mtl.Size.of(32, 1, 1));
-        f.lin(a.gate, inputs[0], b(s.gate));
         f.flat(.sig_mul, Pair{ .count = f.qw }, &.{ b(s.attn), b(s.gate), A, b(s.attn) }, f.qw);
         f.lin(a.o, b(s.attn), b(s.projout));
         f.convolve(b(s.projout), b(s.o), lay.attn_post, null, A, A, ring[2], f.h, 0, 0);

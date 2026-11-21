@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "contracts": {
+    "f32-vs-f32": {
+      "description": "Both sides compute in float32 over identical decoded checkpoint values and differ only in summation order.",
+      "vocab": 200058,
+      "derivation": "One float32 ULP at a logit magnitude of 32 is 3.8e-6. Inkling 2 Mini executes 48 layer slots whose widest reductions sum about 2,304 terms; a random-walk bound over sqrt(48 x 2304) ~ 330 independent roundings gives about 1.3e-3, so max_abs is 1e-3 per logit and mean_abs 1e-4. For small logit perturbations d, KL is about Var_p(d)/2 <= max_abs^2/2 = 5e-7 per position (bound 1e-6) and mean_abs^2/2 = 5e-9 on average (bound 1e-8).",
+      "bounds": {
+        "max_abs": 1e-3,
+        "mean_abs": 1e-4,
+        "max_position_kl": 1e-6,
+        "mean_kl": 1e-8,
+        "confident_margin": 0.1,
+        "confident_top1": 1.0
+      }
+    }
+  }
+}

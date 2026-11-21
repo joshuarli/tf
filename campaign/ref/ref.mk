@@ -19,15 +19,25 @@ REF_VENV := $(WORK)/venv-ref
 REF_OUT := $(WORK)/ref/inkling2-mini
 REF_UV := $(UV) run --frozen --project $(REF_DIR)
 HISTORIES := $(REF_DIR)histories.json
+REF_PY := env UV_PROJECT_ENVIRONMENT=$(REF_VENV) $(REF_UV) python
 
-.PHONY: ref-check ref-gguf ref-llama-build
+.PHONY: ref-check ref-oracles ref-gate-test ref-gguf ref-llama-build
 
-ref-check: $(LLAMA_LOGITS) $(GGUF)
+ref-check:
 	@test "$(MODEL)" = "inkling2-mini" || { echo "ref-check supports MODEL=inkling2-mini only" >&2; exit 2; }
+	@if [ -z "$(REF_RERUN)" ] && $(REF_PY) $(REF_DIR)receipts.py verify --out-dir $(REF_OUT) --llama-commit $(LLAMA_COMMIT); then :; \
+		else $(MAKE) -C $(CAMPAIGN_DIR) ref-oracles; fi
+	$(REF_PY) $(REF_DIR)compare_logits.py --histories $(HISTORIES) \
+		--ref-dir $(REF_OUT)/ref --llama-dir $(REF_OUT)/llama --contract f32-vs-f32
+
+ref-gate-test:
+	$(REF_PY) $(REF_DIR)test_logit_gate.py
+
+ref-oracles: $(LLAMA_LOGITS) $(GGUF)
 	@test -f $(INKLING_DIR)/model-00001-of-00001.safetensors || \
 		{ echo "missing $(INKLING_DIR); run make -C campaign fetch NAMES=inkling-2-mini" >&2; exit 2; }
 	@rm -rf $(REF_OUT) && mkdir -p $(REF_OUT)/ref $(REF_OUT)/llama
-	lockf $(GPU_LOCK) env UV_PROJECT_ENVIRONMENT=$(REF_VENV) $(REF_UV) python $(REF_DIR)inkling2_loop_ref.py \
+	lockf $(GPU_LOCK) $(REF_PY) $(REF_DIR)inkling2_loop_ref.py \
 		--model $(INKLING_DIR) --histories $(HISTORIES) --out-dir $(REF_OUT)/ref \
 		--expert-cache-gib 10
 	@set -e; for name in $(shell jaq -r '.[].name' $(HISTORIES)); do \
@@ -35,8 +45,7 @@ ref-check: $(LLAMA_LOGITS) $(GGUF)
 		lockf $(GPU_LOCK) $(LLAMA_LOGITS) --model $(GGUF) --ids "$$ids" \
 			--out $(REF_OUT)/llama/$$name.bin --threads 6 >> $(REF_OUT)/llama.log 2>&1; \
 	done
-	env UV_PROJECT_ENVIRONMENT=$(REF_VENV) $(REF_UV) python $(REF_DIR)compare_logits.py --histories $(HISTORIES) \
-		--ref-dir $(REF_OUT)/ref --llama-dir $(REF_OUT)/llama --min-margin 0.1
+	$(REF_PY) $(REF_DIR)receipts.py record --out-dir $(REF_OUT) --llama-commit $(LLAMA_COMMIT)
 
 $(LLAMA_TGZ):
 	$(MAKE) -C $(CAMPAIGN_DIR) fetch NAMES=llama.cpp
@@ -60,11 +69,10 @@ $(LLAMA_LOGITS): $(REF_DIR)llama_logits.cpp $(LLAMA_BIN)/libllama.dylib | $(LLAM
 		-I$(LLAMA_SRC)/include -I$(LLAMA_SRC)/ggml/include $< -o $@ \
 		-L$(LLAMA_BIN) -lllama -lggml -lggml-base -lggml-cpu -Wl,-rpath,$(LLAMA_BIN)
 
-$(CONVERT_VENV)/bin/python:
-	$(UV) venv --python 3.12 $(CONVERT_VENV)
-	$(UV) pip install --python $(CONVERT_VENV)/bin/python torch numpy pyyaml sentencepiece tqdm transformers
+$(CONVERT_VENV)/bin/python: $(REF_DIR)convert/uv.lock
+	env UV_PROJECT_ENVIRONMENT=$(CONVERT_VENV) $(UV) sync --frozen --project $(REF_DIR)convert
 
 ref-gguf: $(GGUF)
-$(GGUF): $(CONVERT_VENV)/bin/python | $(LLAMA_SRC)/.pinned
+$(GGUF): | $(CONVERT_VENV)/bin/python $(LLAMA_SRC)/.pinned
 	cd $(LLAMA_SRC) && $(CONVERT_VENV)/bin/python convert_hf_to_gguf.py $(INKLING_DIR) \
 		--outfile $(GGUF) --outtype f32

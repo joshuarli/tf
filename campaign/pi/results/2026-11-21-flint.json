@@ -1,0 +1,430 @@
+{
+  "agent": {
+    "models_sha256": "07de22ca7a934deaa41a6ad0a16d503c0483ff0e22efcb6688998fce804624af"
+  },
+  "host": {
+    "efficiency_cores": 12,
+    "gpu_cores": 40,
+    "load_limit_gb": 36,
+    "memory_bytes": 51539607552,
+    "metal": "Metal 4",
+    "os": "macOS 26B123",
+    "performance_cores": 6,
+    "product": "Apple M5 Max",
+    "recommended_max_working_set_bytes": 40200896512
+  },
+  "model": {
+    "dir": "/Users/josh/models/flint-int4@3b93f9053b53",
+    "hashes": {
+      "aggregate_sha256": "c0b47a2884c7f16f5ef7f77f616e9737f529dfb5b933481d90f370af2b322e05",
+      "config": [
+        {
+          "name": "flint-int4/chat_template.jinja",
+          "sha256": "7940f4ffa3275c36caa4a582f845aaad79da11018b3961e8fbcad6ae29733466",
+          "size": 2328
+        },
+        {
+          "name": "flint-int4/config.json",
+          "sha256": "80f577a984db1bd40dfff88457b611d4c13e807704a945616be27f28809eed21",
+          "size": 3082
+        },
+        {
+          "name": "flint-int4/generation_config.json",
+          "sha256": "a499c71895e008abd572558a5ad5904feaed92cf2a3b6e2cb0e9cabf03b96ed3",
+          "size": 202
+        },
+        {
+          "name": "flint-int4/special_tokens_map.json",
+          "sha256": "be37b302338dda189bc70bfbe902d8faebeb5986d60c1342713439eefc4ca182",
+          "size": 20192
+        },
+        {
+          "name": "flint-int4/tokenizer.json",
+          "sha256": "a263cce0b7e2b03f7ee07ce809783ef4b47f160c3f268a4ea1524f638da45b68",
+          "size": 10879128
+        },
+        {
+          "name": "flint-int4/tokenizer_config.json",
+          "sha256": "159ac88217e90ffd0a4a294726048bb302829e82e1958dc85bb203aa79138fbf",
+          "size": 30439
+        }
+      ],
+      "other": [
+        {
+          "name": "flint-int4/LICENSE",
+          "sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
+          "size": 11356
+        },
+        {
+          "name": "flint-int4/assets/flint-logo.png",
+          "sha256": "b95290bec100def989fd410999f8129d43068900705a0609a78cdbafa930ad61",
+          "size": 410238
+        },
+        {
+          "name": "flint-int4/flint-int4.json",
+          "sha256": "319822f10e32a5916b57e23c7f05f9e92b24d02b3a136d02a3846b5edab78109",
+          "size": 1206
+        }
+      ],
+      "revision": "3b93f9053b530488405ae9fca51d4900d6ce21f0",
+      "sources_lock_sha256": "721a15204172c0fa1e82cd4d72f2e8cf5803038c173bbf3688272ebcd3e36b75",
+      "weights": [
+        {
+          "name": "flint-int4/model-00000.safetensors",
+          "sha256": "1a362742a0136c95ed751e2c56d83e63d4ed9ac674984b23b368f105d16cfe7a",
+          "size": 4745746152
+        },
+        {
+          "name": "flint-int4/model-00001.safetensors",
+          "sha256": "12979140fa019042ff5cdec4c0237cc87db13b56428ce7fe093dd9d33893ea32",
+          "size": 4682022280
+        },
+        {
+          "name": "flint-int4/model-00002.safetensors",
+          "sha256": "01805c6b882fdec008b0184ec68e7516102205b521e63ca5126f9d52b9aed87b",
+          "size": 4682022280
+        },
+        {
+          "name": "flint-int4/model-00003.safetensors",
+          "sha256": "9380ed032d90e0ff566d49672faf292f354b3b0e7320820c150eeed8c75e9d42",
+          "size": 4682022280
+        },
+        {
+          "name": "flint-int4/model-00004.safetensors",
+          "sha256": "c1ba12d2c2a80feb5e554554a01cfde2b71c2638e27fc0ee597b4121399eff99",
+          "size": 3777099608
+        }
+      ]
+    },
+    "key": "flint-int4"
+  },
+  "pi": {
+    "flags": [
+      "--no-extensions",
+      "--no-mcp",
+      "--no-skills",
+      "-nc",
+      "--no-session",
+      "--mode",
+      "json"
+    ],
+    "model_id": "flint",
+    "path": "/Users/josh/.local/bin/pi",
+    "provider": "tensorfold",
+    "tools": "read,bash,edit,write"
+  },
+  "recorded_at": "2026-11-21T10:29:04.410269+00:00",
+  "schema": 1,
+  "server": {
+    "argv": [
+      "lockf",
+      "/Users/josh/repos/tensorfold-m5/.work/gpu.lock",
+      "/Users/josh/repos/tensorfold-m5/.work/wt/baseline/zig-out/native/bin/tensorfold-native",
+      "serve",
+      "/Users/josh/models/flint-int4@3b93f9053b53",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8888",
+      "--parallel",
+      "1",
+      "--prompt-cache-gib",
+      "2",
+      "--no-update-check"
+    ],
+    "base": "http://127.0.0.1:8888",
+    "binary": {
+      "path": "/Users/josh/repos/tensorfold-m5/.work/wt/baseline/zig-out/native/bin/tensorfold-native",
+      "sha256": "8c2c8e6f4fd9f2c111d6fba7d89251a32a5afb309cc950ee3ff2d6a50816ac87"
+    },
+    "model_ids": null,
+    "owned": true
+  },
+  "tasks": [
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "add-function",
+      "timed_out": false,
+      "turn_latency_ms": [
+        1076,
+        4046,
+        1066,
+        1632,
+        1194,
+        357,
+        1479
+      ],
+      "turn_output_tokens": [
+        111,
+        565,
+        88,
+        209,
+        152,
+        31,
+        191
+      ],
+      "turns": 7,
+      "wall_s": 12.46,
+      "workspace": "/Users/josh/repos/tensorfold-m5/.work/pi/add-function"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "bugfix-dedupe",
+      "timed_out": false,
+      "turn_latency_ms": [
+        735,
+        290,
+        910,
+        415,
+        288,
+        661
+      ],
+      "turn_output_tokens": [
+        59,
+        32,
+        129,
+        41,
+        36,
+        86
+      ],
+      "turns": 6,
+      "wall_s": 6.1,
+      "workspace": "/Users/josh/repos/tensorfold-m5/.work/pi/bugfix-dedupe"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "bugfix-intervals",
+      "timed_out": false,
+      "turn_latency_ms": [
+        952,
+        488,
+        1889,
+        514,
+        1392
+      ],
+      "turn_output_tokens": [
+        81,
+        57,
+        276,
+        54,
+        190
+      ],
+      "turns": 5,
+      "wall_s": 8.19,
+      "workspace": "/Users/josh/repos/tensorfold-m5/.work/pi/bugfix-intervals"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "bugfix-window",
+      "timed_out": false,
+      "turn_latency_ms": [
+        550,
+        233,
+        1779,
+        346,
+        231,
+        1215
+      ],
+      "turn_output_tokens": [
+        20,
+        12,
+        264,
+        18,
+        13,
+        170
+      ],
+      "turns": 6,
+      "wall_s": 5.74,
+      "workspace": "/Users/josh/repos/tensorfold-m5/.work/pi/bugfix-window"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "multifile-config",
+      "timed_out": false,
+      "turn_latency_ms": [
+        854,
+        283,
+        259,
+        1163,
+        325,
+        926
+      ],
+      "turn_output_tokens": [
+        70,
+        21,
+        12,
+        155,
+        28,
+        120
+      ],
+      "turns": 6,
+      "wall_s": 5.18,
+      "workspace": "/Users/josh/repos/tensorfold-m5/.work/pi/multifile-config"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "read-and-answer",
+      "timed_out": false,
+      "turn_latency_ms": [
+        486,
+        3146,
+        513,
+        1760
+      ],
+      "turn_output_tokens": [
+        11,
+        448,
+        52,
+        257
+      ],
+      "turns": 4,
+      "wall_s": 8.08,
+      "workspace": "/Users/josh/repos/tensorfold-m5/.work/pi/read-and-answer"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "refactor-preserve",
+      "timed_out": false,
+      "turn_latency_ms": [
+        505,
+        2964,
+        3384,
+        390,
+        1637
+      ],
+      "turn_output_tokens": [
+        11,
+        443,
+        509,
+        13,
+        227
+      ],
+      "turns": 5,
+      "wall_s": 11.95,
+      "workspace": "/Users/josh/repos/tensorfold-m5/.work/pi/refactor-preserve"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "shell-inspect",
+      "timed_out": false,
+      "turn_latency_ms": [
+        1484,
+        1042,
+        582,
+        1159
+      ],
+      "turn_output_tokens": [
+        64,
+        145,
+        46,
+        136
+      ],
+      "turns": 4,
+      "wall_s": 7.75,
+      "workspace": "/Users/josh/repos/tensorfold-m5/.work/pi/shell-inspect"
+    }
+  ],
+  "totals": {
+    "checker_passed": 8,
+    "completed": 8,
+    "parse_errors": 0,
+    "server_log_parse_errors": 0,
+    "tasks": 8
+  }
+}

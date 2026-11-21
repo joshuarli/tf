@@ -1,0 +1,1 @@
+Refactor `report.py` without changing behavior: replace `grade_bucket`'s if-chain with a single loop over an ordered `(threshold, grade)` table, and make `summarize` a single pass that computes the count from `scores` rather than recomputing `len` twice. Keep the public functions and their outputs identical. Run `test_report.py` afterwards to prove nothing changed.

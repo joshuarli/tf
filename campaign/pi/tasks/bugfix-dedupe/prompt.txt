@@ -1,0 +1,1 @@
+`dedupe.py` has a bug: `dedupe` returns the input unchanged because the membership list it checks is never populated. Fix `dedupe` so it keeps the first occurrence of each item and preserves order. Run the tests to confirm.

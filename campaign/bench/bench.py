@@ -3,6 +3,7 @@
 import argparse
 import datetime as dt
 import json
+import time
 import sys
 from pathlib import Path
 
@@ -210,6 +211,8 @@ def trial(path: Path, *, run_id: str, experiment: str, session: str, engine: str
     before = harness.conditions()
     record["pressure_before"] = before["pressure"]
     mark = server.sample_mark()
+    own = harness.process_tree(server.process.pid)
+    gpu_before, gpu_started = harness.gpu_time_by_pid(), time.perf_counter()
     text = (harness.REPO / prompt["path"]).read_text(encoding="utf-8")
     try:
         cold = harness.chat_request(server.base, model_id, text, max_tokens=OUTPUT_TOKENS, temperature=TEMPERATURE,
@@ -222,9 +225,12 @@ def trial(path: Path, *, run_id: str, experiment: str, session: str, engine: str
                                        ignore_eos=False, seed=SEED)
         record["natural_termination"] = harness.request_record(natural, "natural")
         record["footprint"] = server.stats(mark)
+        users, gpu_reasons = harness.gpu_contention(gpu_before, harness.gpu_time_by_pid(),
+                                                    time.perf_counter() - gpu_started, own)
+        record["gpu_other_users"] = users
         after = harness.conditions()
         record["pressure_after"] = after["pressure"]
-        record["invalid_reasons"] = before["pressure_reasons"] + after["pressure_reasons"]
+        record["invalid_reasons"] = before["pressure_reasons"] + gpu_reasons + after["pressure_reasons"]
         for name, run in (("cold", cold), ("warm", warm)):
             if not run.get("complete"):
                 record["invalid_reasons"].append(f"{name} request did not complete")

@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -203,10 +204,78 @@ def therm() -> dict:
     return {"cpu_speed_limit": speed, "warnings": warnings, "raw": out.strip()}
 
 
+GPU_CLIENT = re.compile(r'"accumulatedGPUTime"=(\d+)')
+GPU_CREATOR = re.compile(r'"IOUserClientCreator" = "pid (\d+), ([^"]*)"')
+
+
+def gpu_time_by_pid() -> dict[int, tuple[str, int]]:
+    """Every Metal client's accumulated GPU nanoseconds, summed per process, from IOKit."""
+    out = subprocess.run(["ioreg", "-r", "-w", "0", "-l", "-c", "AGXDeviceUserClient"],
+                         capture_output=True, text=True).stdout
+    totals: dict[int, tuple[str, int]] = {}
+    pending = 0
+    for line in out.splitlines():
+        if '"AppUsage" = ' in line:
+            pending = sum(int(value) for value in GPU_CLIENT.findall(line))
+        elif match := GPU_CREATOR.search(line):
+            pid, name = int(match.group(1)), match.group(2)
+            totals[pid] = (name, totals.get(pid, (name, 0))[1] + pending)
+            pending = 0
+    return totals
+
+
+def gpu_contention(before: dict[int, tuple[str, int]], after: dict[int, tuple[str, int]], seconds: float,
+                   own: set[int], limit_pct: float = 5.0) -> tuple[list[dict], list[str]]:
+    """GPU time other processes used over a timed window, and the invalid reason it implies."""
+    users = []
+    for pid, (name, ns) in after.items():
+        if pid in own:
+            continue
+        used = ns - before.get(pid, (name, ns))[1]
+        if used > 0:
+            users.append({"pid": pid, "name": name, "gpu_s": used / 1e9})
+    total = sum(user["gpu_s"] for user in users)
+    pct = 100 * total / seconds if seconds > 0 else 0.0
+    reasons = [f"other processes used {pct:.1f}% GPU time during the trial "
+               f"({', '.join(f'{u['name']} pid={u['pid']}' for u in sorted(users, key=lambda u: -u['gpu_s'])[:3])})"] \
+        if pct > limit_pct else []
+    return users, reasons
+
+
+def process_tree(root: int) -> set[int]:
+    out = subprocess.run(["ps", "-Ao", "pid=,ppid="], capture_output=True, text=True).stdout
+    children: dict[int, list[int]] = {}
+    for line in out.splitlines():
+        pid, ppid = (int(field) for field in line.split())
+        children.setdefault(ppid, []).append(pid)
+    found, stack = set(), [root]
+    while stack:
+        pid = stack.pop()
+        found.add(pid)
+        stack.extend(children.get(pid, []))
+    return found
+
+
+def gpu_gate() -> tuple[dict, list[str]]:
+    """`gpu-gate-ready -1` before a trial: other GPU users, utilization, pressure, swap and compressor."""
+    try:
+        run = subprocess.run(["gpu-gate-ready", "-1"], capture_output=True, text=True,
+                             env=dict(os.environ, GPU_GATE_WAIT="0"))
+    except FileNotFoundError:
+        return {"status": "unavailable"}, []
+    detail = (run.stderr or run.stdout).strip()
+    if run.returncode == 0:
+        return {"status": "quiet"}, []
+    if run.returncode == 75:
+        return {"status": "contended", "detail": detail}, [f"gpu-gate-ready: {detail.splitlines()[0]}"]
+    return {"status": f"error {run.returncode}", "detail": detail}, []
+
+
 def conditions() -> dict:
     level = vm_pressure_level()
-    pressure = {"vm_pressure_level": level, "free_percent": free_percent(), "therm": therm()}
-    reasons = []
+    gate, gate_reasons = gpu_gate()
+    pressure = {"vm_pressure_level": level, "free_percent": free_percent(), "therm": therm(), "gpu_gate": gate}
+    reasons = list(gate_reasons)
     if level is not None and level != 1:
         reasons.append(f"memory pressure level {level}")
     speed = pressure["therm"]["cpu_speed_limit"]

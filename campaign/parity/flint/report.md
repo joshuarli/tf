@@ -15,7 +15,7 @@ on the same checkpoint and every position is compared.
 - TensorFold: `tf-flint-run <model> <ids> logits`, bf16 logits in 16-row windows from position 0, `zig build tf-flint-run -Dcpu=apple_m1`.
 - Oracle licence: Apache-2.0 (`recursive-oss/rec`). TensorFold is Apache-2.0.
 - Tokenization: TensorFold's Zig tokenizer reproduces the checkpoint tokenizer's ids on every rendered history before either engine runs (0 disagreements).
-- The oracle's own residency claim is checked on the same machine: a resident decode step equals the native one-token forward bit for bit (row 10 of linked-list-reversal, the equivalence rec asserts in tests/validate_resident.py, bit-identical).
+- The oracle's own residency claim is checked on the same machine: a resident decode step equals the native one-token forward bit for bit (row 10 of linked-list-reversal, the equivalence asserted in tests/validate_resident.py, bit-identical).
 
 ## Error distribution
 

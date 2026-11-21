@@ -3,9 +3,37 @@
 //! `glue` is the dense graph: one token at a time, f32 activations, the checkpoint's bf16 weights widened per read.
 //! `experts` runs the routed projections in the two stored formats, decoding the checkpoint's own bytes. Both mirror
 //! `campaign/ref/inkling2_loop_ref.py`, a transcription of llama.cpp `40b7a546`.
+//! `dense` re-runs the bf16 matvecs (`i2_mv`, `i2_mv_cap`) with the activation staged once a threadgroup and
+//! vectorized weight loads, plus a fused form for projections sharing one input. `forward.zig` compiles it beside
+//! the model library and falls back to `glue` when that compile fails.
 const std = @import("std");
+const mtl = @import("metal");
 
 pub const glue = @embedFile("kernels/glue.metal");
+
+pub const dense = @embedFile("kernels/dense.metal");
+
+pub const dense_names = [_][:0]const u8{ "i2_dmv", "i2_dmv_cap", "i2_dmv_fused", "i2_dmv_fusedx", "i2_dmv_ctl" };
+
+pub const Dense = struct { mv: mtl.Pipeline, mv_cap: mtl.Pipeline, fused: mtl.Pipeline, fusedx: mtl.Pipeline, ctl: mtl.Pipeline };
+
+var dense_owner: ?mtl.Device = null;
+var dense_pipes: ?Dense = null;
+
+pub fn densePipes(device: mtl.Device) !Dense {
+    if (dense_pipes) |p| if (dense_owner.?.id == device.id) return p;
+    const lib = try mtl.Library.fromSource(device, dense, mtl.CompileOptions.mlx());
+    const pipes = Dense{
+        .mv = try mtl.Pipeline.init(device, lib, dense_names[0], false),
+        .mv_cap = try mtl.Pipeline.init(device, lib, dense_names[1], false),
+        .fused = try mtl.Pipeline.init(device, lib, dense_names[2], false),
+        .fusedx = try mtl.Pipeline.init(device, lib, dense_names[3], false),
+        .ctl = try mtl.Pipeline.init(device, lib, dense_names[4], false),
+    };
+    dense_owner = device;
+    dense_pipes = pipes;
+    return pipes;
+}
 
 /// The routed experts' source for one stored format: MXFP8 defines its decoder, NVFP4 is the default.
 pub fn expertSource(comptime mxfp8: bool) []const u8 {

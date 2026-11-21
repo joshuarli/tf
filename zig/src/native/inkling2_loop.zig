@@ -66,14 +66,14 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
     };
     const budget = if (limit > resident + load_margin) limit - resident - load_margin else 0;
     const most: usize = m.config.text.max_context;
-    const fits = host_mod.longestFitting(m, budget, most);
+    const fits = inkling.Cache.longestFitting(&m.config, budget, most);
     const window: i64 = o.context orelse @intCast(fits);
     if (window < 1 or window > fits) {
-        problem.* = try std.fmt.allocPrint(a, "--context {d}: this Mac's Inkling caches fit {d} tokens under its load limit (75% of RAM, or INKLING_LOAD_LIMIT_GB)", .{ window, fits });
+        problem.* = try std.fmt.allocPrint(a, "--context {d}: this Mac's Inkling caches fit {d} tokens under its load limit (75% of RAM, or INKLING_LOAD_LIMIT_GB): {d} global slots a token plus {d} local rings of {d}", .{ window, fits, inkling.Cache.globalSlots(&m.config), inkling.Cache.localSlots(&m.config), m.config.text.window });
         m.deinit();
         return null;
     }
-    std.log.info("inkling2_loop: {d:.1} GiB for caches, context up to {d} tokens", .{ @as(f64, @floatFromInt(budget)) / (1 << 30), window });
+    std.log.info("inkling2_loop: {d:.1} GiB for caches ({d:.1} GiB in {d} local rings, {d} KiB a token over {d} global slots), context up to {d} tokens", .{ @as(f64, @floatFromInt(budget)) / (1 << 30), @as(f64, @floatFromInt(inkling.Cache.fixedBytes(&m.config))) / (1 << 30), inkling.Cache.localSlots(&m.config), inkling.Cache.bytesPerToken(&m.config) >> 10, inkling.Cache.globalSlots(&m.config), window });
     const eos = readEos(a, io, o.dir, m.config.eos);
     const h = host_mod.openHost(gpa, io, m, @intCast(window), eos, limit) catch |err| {
         m.deinit();

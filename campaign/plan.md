@@ -5,13 +5,12 @@
 - **Goal:** a faster, leaner native Zig/Metal TensorFold on this M5 Max. Flint comes first, then a qualified Inkling 2 Mini port (see **Acceptance**).
 - **Upstream frozen at:** `fa13df5dd1fdd23ada775510a464c9aa03a39e09` (TensorFold `main`, 2026-11-21). The campaign branch is `campaign/m5`.
 - **Last accepted revision:** `7ed909515` (C1 merge).
-- **Accepted:** C0 (fetch, host and build-baseline exit 0; second fetch downloads nothing); F1 (`--no-drafts` already disables copies and the drafter: `no_drafts_test.zig` in `test-flint-draft-host`; `make -C campaign smoke MODEL=flint MODE=ar` gives 512 tokens, 0 drafted, 1.00 tokens per decode round, about 169 tok/s); C1 (`make -C campaign bench MODEL=flint MODE=ar CELLS=1024 PAIRS=1` plus a byte-identical second `scorecard`; baseline ar at 1,024 tokens decodes at 153 tok/s with a 22.5 GiB peak). **Red:** none beyond **Baseline**. **Parked:** none.
+- **Accepted:** C0 (fetch, host and build-baseline exit 0; second fetch downloads nothing); F1 (`--no-drafts` already disables copies and the drafter: `no_drafts_test.zig` in `test-flint-draft-host`; `make -C campaign smoke MODEL=flint MODE=ar` gives 512 tokens, 0 drafted, 1.00 tokens per decode round, about 169 tok/s); C1 (`make -C campaign bench MODEL=flint MODE=ar CELLS=1024 PAIRS=1` plus a byte-identical second `scorecard`; baseline ar at 1,024 tokens decodes at 153 tok/s with a 22.5 GiB peak); Q1 (`make -C campaign quality MODEL=flint SET=dev`: 12/12 on the baseline; 48 cases; libtfgrammar built from xgrammar v0.2.8 `97787376`). **Red:** none beyond **Baseline**. **Parked:** none.
 - **In flight** (bridge workers; lane `.work/wt/<lane>`, branch `lane/<lane>`):
   - I0 `i0-inkling-ref`, `usrw_9cd7b765-da4c-4972-99c8-e9e46c79da45`;
   - F2 `f2-parity`, `usrw_4bb1c566-c653-43f6-8d38-cab9288ef301`;
-  - Q1 `q1-quality`, `usrw_fd82649c-5f24-46d7-a6fc-92d031977efb`. Its xgrammar lock entry is added by the parent after I0 merges;
   - H1 `h1-pi`, `usrw_9a24993e-a0cd-4bff-b396-1e551c842a90`.
-- **Next:** F3 after F2; I1 after I0.
+- **Next:** F3 after F2; I1 after I0. After I0 merges, add the pending xgrammar entry from the ledger to `sources.lock.json`.
 - **Resume:** run `worker_status` on each in-flight session, then review and merge each lane whose acceptance passes. `.work/wt/c0-ground` holds an earlier C0 worker's leftover worktree. That worker has exited, and its branch is merged except commit `91a5a06a1`, which was superseded and not adopted.
 
 ## Charter

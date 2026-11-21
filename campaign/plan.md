@@ -32,7 +32,7 @@
   - a campaign script over 2× its recorded time with unchanged inputs.
   
   Record anything smaller in the ledger and leave it.
-- Parity before optimization. Product performance is measured and logged from F3 on, but it gates nothing until phase 4.
+- Per-model dependencies, not phase barriers (owner steering, 2026-11-21). Each model advances on its own chain (see **Sequence**). Profiling is diagnostic and may run while parity investigations continue. Promoting changed arithmetic waits for that model's qualified correctness contract. Speculation is a separate branch after the model's target path is qualified, and comparators run alongside engineering under the GPU lock; neither blocks autoregressive optimization. Broad comparator coverage is needed only before a competitive claim.
 - **Lanes:** parallel for the disjoint sets named in **Sequence**, serial otherwise. Each lane works in `.work/wt/<lane>` on branch `lane/<id>`, following `orchestrate`'s worktree lifecycle; never `/tmp`. Set `TMPDIR=$PWD/.work/tmp`. The parent integrates into `campaign/m5` and runs the parent steering checkpoint (`orchestrate` skill, `references/campaigns.md`, section "Parent steering checkpoint") after each accepted slice.
 - **GPU lock:** take it for any timed run, any process that loads a full model, and the Metal device suite. Use `lockf ~/repos/tensorfold-m5/.work/gpu.lock <command>`. No compiles inside a timed window. Stop only processes the campaign started.
 - **Commits:** Conventional Commits, scoped to the workstream (`campaign`, `flint`, `inkling2-loop`, `metal`). Put the item ID in the body. End every commit with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Code comments never cite this doc.
@@ -71,14 +71,15 @@ The owner made the first two decisions on 2026-11-21:
    - **Inkling 2 Mini:** the semantic reference is llama.cpp `src/models/inkling2-loop.cpp` plus `conversion/inkling2.py`, pinned at the commit I0 records (master was `40b7a546defe1f60edd1338c719552ffc58c89a0` on 2026-11-21). The vLLM recipe and the model card's linked code are cross-checks. The numerical oracle is `campaign/ref/inkling2_loop_ref.py`: a CPU float32 reference that streams one layer at a time and decodes the checkpoint's exact NVFP4/MXFP8 values. It needs no 105 GB float32 load. `trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration@5e761216759d5d040c09f458d5f077b9aaa5ac78` is the tiny unit fixture.
    - **Delegated (I0):** if llama.cpp converts the official checkpoint to GGUF without requantizing, use it as a second teacher-forced oracle and as the matched comparator. Otherwise it goes only in the "best useful" table. Tie-break: the float32 reference wins.
 10. **Prescribed: quality rules.** These are fixed now and never relaxed later.
-    - Unchanged-arithmetic transformations must be bit-identical to the frozen baseline on logits (`tf-flint-run exact` or the Inkling equivalent).
+    - Unchanged-arithmetic transformations must be bit-identical to the frozen baseline on logits: compare the frozen baseline's and the candidate's tensor and logit dumps on identical forced histories. `tf-flint-run exact` is only a self-consistency check inside one build (one-row steps against 16-row windows); keep it, but it does not compare builds.
+    - Every logit comparison passes `campaign/ref/logit_gate.py` under a declared arithmetic contract in `campaign/ref/gate_policy.json`: expected shape and position count, nonempty evidence, finite values and numerical bounds derived from the datatype contract, not from a candidate's results.
     - Reordering changes are judged on the F2/I2 teacher-forced corpus:
       - The candidate's mean KL to the oracle must stay within 1.10× the baseline's.
       - Top-1 agreement with the baseline must be at least 99.5% on positions where the baseline's top-2 margin is at least 0.1 logit.
       - Every disagreeing position must be traced to its first divergent tensor before acceptance.
     - Q1 quality suite: no more than one case lost against the baseline, and every lost case is examined. Lossy requantization and KV compression are separate experimental configurations, never promoted as speedups.
     - Deterministic operator, state and protocol fixtures allow zero new failures.
-11. **Prescribed: performance gates.** These apply in phase 4 only.
+11. **Prescribed: performance gates.** These apply to promotion only; a rejected screen needs no six-pair run.
     - **Promotion:** a geometric-mean gain of at least 3%, with a paired 95% CI above 1.0.
     - **No regressions:** no primary-cell decode or prefill regression above 5%, and peak-memory growth no more than max(2%, 128 MiB).
     - **Memory route:** a change may instead qualify with at least 5% lower peak memory and no latency regression above 2%.
@@ -94,7 +95,7 @@ The owner made the first two decisions on 2026-11-21:
     | Inkling | Qualified native text inference, then the same optimization process against I3's baseline |
 
 13. **Prescribed: speculation.** Advertise greedy-only speculation first, labelled as such. A sampled mode needs the Leviathan et al. acceptance/rejection correction, or the model's native method. Its proof is the item's own enumerable-distribution tests and argument, as §7 of the source draft required (see **Sequence** F5/I5). Every mode keeps its no-drafter path and automatic fallback, and fallback cost is included in timings.
-14. **Delegated: optimization order.** Inside phase 4, the executor ranks hypotheses by measured cost share and keeps the ranked table in `campaign/ledger.md`. Candidates come from §8 A–E of the source draft:
+14. **Delegated: optimization order.** For each model's optimization, the executor ranks hypotheses by measured cost share and keeps the ranked table in `campaign/ledger.md`. Candidates come from §8 A–E of the source draft:
     - A: Exo #2533 fusions;
     - B: M5 TensorOps/MPP matrix paths and quantized layouts;
     - C: attention and state;
@@ -122,7 +123,13 @@ Host facts measured on 2026-11-21:
 
 ## Sequence
 
-The phases run in order. Within a phase, items whose owned files are disjoint run in parallel. Every item ends on its acceptance command plus the narrowest affected suite, run on the integrated `campaign/m5`. The full `zig build test test-golden` runs at milestones M1 (after F3), M2 (after I3) and the close.
+Items run on per-model chains, and items whose owned files are disjoint run in parallel:
+
+- **Flint:** trustworthy measurement (C2, C3) and F2's divergence trace, then a profile at 1K and 32K, then one bounded O-item screened and, if promising, qualified on the promotion matrix and held-out prompts. F5 speculation branches off after the target path is qualified.
+- **Inkling 2 Mini:** I2's executable native forward path, then I3 minimal serving, then the frozen first-native baseline, then profiling and O-items. I5 branches off after I3.
+- **Comparators:** one runnable strong comparator is the early anchor (F3). The full matrix is needed only before a competitive claim.
+
+The phase headings below group items; they are not barriers. Every item ends on its acceptance command plus the narrowest affected suite, run on the integrated `campaign/m5`. The full `zig build test test-golden` runs at milestones M1 (after F3), M2 (after I3) and the close.
 
 **Disjoint ownership sets:**
 - `campaign/` (C, Q and H items, plus the F2 and I2 harness files): one writer at a time.
@@ -220,9 +227,9 @@ I-items own the Inkling set. They may start code work parallel to F-items, and u
 - **I1. Family loader and refusals** (M, after I0). This covers config, tensor map, tokenizer and template, NVFP4/MXFP8 geometry checks, registration, and a clear refusal of image parts and `--vision`. Vision is out of scope.
   
   **Acceptance:** `zig build test-inkling2-loop-host` passes, including tests that the refusals fire.
-- **I2. Forward pass on Metal, teacher-forced** (L, after I1). Reuse the shared NVFP4/FP8 kernels and the Flint/GLM attention pieces where their contracts match; write new kernels only where they do not. State stays explicit for each pass.
+- **I2. Executable native forward path** (L, after I1). Reuse the shared NVFP4/FP8 kernels and the Flint/GLM attention pieces where their contracts match; write new kernels only where they do not. State stays explicit for each pass. Increments: a traceable tiny-fixture path through all loop passes and both packed formats; a short teacher-forced path on the real checkpoint with experts kept packed; incremental continuation equal to recomputation, with distinct per-pass KV and convolution state; focused probes at convolution, window and position boundaries using targeted fixtures and selected rows. Name the arithmetic configuration implemented. The checkpoint's quantization metadata specifies activation quantization while the reference computes float32 activations, so a higher-precision-activation path is qualified as that configuration, and the official activation-quantized path is validated separately before claiming equivalence. The MTP tap interpretation stays marked inferred.
   
-  **Acceptance:** `make -C campaign parity MODEL=inkling2-mini` meets Decision 10 against the reference on 16 histories.
+  **Acceptance:** the pinned checkpoint loads within the memory budget; `tf-inkling2-loop-run` executes a short prompt through all execution slots and at least two greedy decode steps with speculation off; captured logits and selected intermediates pass the logit gate under the declared initial-port contract (independent oracle and state checks, not a regression bound against an I3 baseline that does not yet exist); reset and rerun reproduce the result bit for bit.
 - **I3. Serving and baseline** (M, after I2, C1, Q1 and H1). Cover chunked versus full prefill, cached continuation versus a fresh request, EOS, cancellation, context limits, reset after errors, reasoning template, special tokens and tool-call syntax. Then freeze the Inkling baseline matrix. Comparators: llama.cpp (Metal, ggml-org GGUF), MLX (`mlx-community/Inkling-2-Mini-4bit` through mlx-vlm), Exo and Ollama where they run.
   
   **Acceptance:** `zig build test-inkling2-loop`, `make -C campaign quality MODEL=inkling2-mini SET=full`, `make -C campaign pi-harness MODEL=inkling2-mini` and `make -C campaign scorecard`. **Milestone M2:** full suite.

@@ -82,7 +82,7 @@ pub const Weights = struct {
 pub const glue_names = [_][:0]const u8{
     "i2_mv",         "i2_mv_cap",  "i2_embed",    "i2_rms",       "i2_mix",  "i2_mix4", "i2_clip_scaled",
     "i2_clip",       "i2_conv",    "i2_conv_store", "i2_kv_store", "i2_attn", "i2_relbias", "i2_sig_mul",
-    "i2_add",        "i2_sub",     "i2_mul",      "i2_tanh",      "i2_ctl",  "i2_copy", "i2_bcast",
+    "i2_add",        "i2_sub",     "i2_mul",      "i2_ctl",  "i2_copy", "i2_bcast",
     "i2_zero",       "i2_route",   "i2_to_bf16",  "i2_combine",   "i2_plan",
 };
 
@@ -104,7 +104,6 @@ pub const Glue = enum {
     add,
     sub,
     mul,
-    tanh,
     ctl,
     copy,
     bcast,

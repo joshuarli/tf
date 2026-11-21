@@ -29,7 +29,7 @@
   
   Record anything smaller in the ledger and leave it.
 - Parity before optimization. Product performance is measured and logged from F3 on, but it gates nothing until phase 4.
-- **Lanes:** parallel for the disjoint sets named in **Sequence**, serial otherwise. Each lane works in `.work/wt/<lane>` on branch `lane/<id>`, following `orchestrate`'s worktree lifecycle; never `/tmp`. Set `TMPDIR=$PWD/.work/tmp`. The parent integrates into `campaign/m5` and runs the [parent steering checkpoint](/Users/josh/.claude/skills/orchestrate/references/campaigns.md#parent-steering-checkpoint) after each accepted slice.
+- **Lanes:** parallel for the disjoint sets named in **Sequence**, serial otherwise. Each lane works in `.work/wt/<lane>` on branch `lane/<id>`, following `orchestrate`'s worktree lifecycle; never `/tmp`. Set `TMPDIR=$PWD/.work/tmp`. The parent integrates into `campaign/m5` and runs the parent steering checkpoint (`orchestrate` skill, `references/campaigns.md`, section "Parent steering checkpoint") after each accepted slice.
 - **GPU lock:** take it for any timed run, any process that loads a full model, and the Metal device suite. Use `lockf ~/repos/tensorfold-m5/.work/gpu.lock <command>`. No compiles inside a timed window. Stop only processes the campaign started.
 - **Commits:** Conventional Commits, scoped to the workstream (`campaign`, `flint`, `inkling2-loop`, `metal`). Put the item ID in the body. End every commit with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Code comments never cite this doc.
 - **TensorFold rules:** follow `docs/recipes/SKILL.md`, `docs/kernel-contract.md` (for GPU work) and `docs/recipes/adding-a-zig-family.md` (for I-items). Skip their ATC, PR and publication steps; see **Execution boundary**.

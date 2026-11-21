@@ -240,9 +240,10 @@ checkpoint.
 - **Oracle configuration.** The 104 GB f32 GGUF is mmapped with lazy tensor reads and computed on the CPU
   (`n_gpu_layers = 0`, CPU device only, `op_offload = false`); it cannot be resident on the GPU. The KV cache is
   forced to **F32** (`type_k = type_v = GGML_TYPE_F32`). That last setting matters: llama.cpp's default is F16, and
-  F16 K/V values drift from the checkpoint's f32 trajectory by up to ~1e-2 in logits on these histories, which is
-  enough to flip one top-1 at a 0.33-logit margin. With F32 K/V the two implementations agree to
-  `max |Δlogit| < 1e-4` at every position.
+  with F16 K/V one top-1 flipped at a 0.33-logit margin. No receipt of the F16 run was kept, so its drift figure is
+  unverified (the run report gave up to 13 logits, an earlier draft of this page ~1e-2). With F32 K/V the retained
+  receipts in `campaign/ref/oracle_receipts.json` show `max |Δlogit| = 1.35e-4` (history `greet`, position 5) and at
+  most 1.4e-4 at every position.
 
 `make -C campaign ref-gguf` builds the converter venv and the GGUF under `.work`; the GGUF is never written to
 `~/models`.
@@ -274,8 +275,11 @@ make -C campaign ref-check MODEL=inkling2-mini
 `ref-check` runs the reference and llama.cpp (`llama_logits` against the converted GGUF) on the four teacher-forced
 histories in `campaign/ref/histories.json`, each rendered with the pinned chat template and tokenised by the pinned
 tokenizer, under the campaign GPU lock, one full model at a time. It prints, per history, the per-position top-1
-agreement, top-2 margin, absolute logit error and KL, and exits non-zero when any position with a teacher margin of
-at least 0.1 logit disagrees.
+agreement, top-2 margin, absolute logit error and KL. It exits non-zero unless every history has the expected shape
+and finite values, stays within the `f32-vs-f32` bounds in `campaign/ref/gate_policy.json` (derived from float32
+rounding, not from these results), and agrees on top-1 wherever the teacher's margin is at least 0.1 logit. The
+oracle outputs are reused while `campaign/ref/oracle_receipts.json` matches their inputs; `REF_RERUN=1` or a changed
+input reruns them, and `make -C campaign ref-gate-test` runs the gate's negative controls.
 
 | history | tokens | max abs logit error | mean abs logit error | mean KL | top-1, all positions | top-1, confident |
 | --- | --- | --- | --- | --- | --- | --- |

@@ -16,6 +16,7 @@ from pathlib import Path
 import harness
 
 WORK = harness.WORK
+HEAVY = harness.HEAVY
 
 
 def binary() -> Path:
@@ -23,7 +24,7 @@ def binary() -> Path:
 
 
 def argv(model_dir: Path, port: int, cache_gib: int, max_output: int) -> list[str]:
-    return ["lockf", str(WORK / "gpu.lock"), str(binary()), "--model", str(model_dir),
+    return ["python3", str(HEAVY), "--", str(binary()), "--model", str(model_dir),
             "--host", "127.0.0.1", "--port", str(port), "--temp", "0", "--top-p", "1", "--top-k", "0",
             "--max-tokens", str(max_output), "--log-level", "WARNING"]
 

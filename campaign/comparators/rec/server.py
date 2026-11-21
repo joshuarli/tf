@@ -17,6 +17,7 @@ from pathlib import Path
 import harness
 
 WORK = harness.WORK
+HEAVY = harness.HEAVY
 
 
 def shim() -> Path:
@@ -24,7 +25,7 @@ def shim() -> Path:
 
 
 def argv(model_dir: Path, port: int, cache_gib: int, max_output: int) -> list[str]:
-    return ["lockf", str(WORK / "gpu.lock"), sys.executable, "-m", "rec_mlx.cli", "serve", "flint",
+    return ["python3", str(HEAVY), "--", sys.executable, "-m", "rec_mlx.cli", "serve", "flint",
             "--model-dir", str(model_dir), "--manifest", str(model_dir / "flint-int4.json"),
             "--context-limit", "262144", "--grammar", "none", "--port", str(port)]
 

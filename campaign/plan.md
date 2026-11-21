@@ -65,7 +65,8 @@ The owner made the first two decisions on 2026-11-21:
 
    The fetch total stays under 120 GB; 621 GiB is free. Never delete files you did not create. Only one full model is resident at a time.
 8. **Prescribed: memory.** The machine has 48 GiB of RAM. C0 records the Metal device's `recommendedMaxWorkingSetSize` (W).
-   - Every benchmark server sets `FLINT_LOAD_LIMIT_GB=floor(0.9·W/1e9)` (or the Inkling equivalent) and an explicit `--prompt-cache-gib`.
+   - Owner cap (2026-11-21): the campaign as a whole stays under 32 GB so the host stays usable for other work. Every command that loads a model or uses more than about 2 GB runs through `campaign/heavy.py`, which takes the GPU lock and stops the process tree past 28 GB; bare `lockf` is not used. The f32 GGUF oracle cannot run under this cap and is reached only through its receipts.
+   - Every benchmark server sets `FLINT_LOAD_LIMIT_GB=27` (`heavy.FLINT_LOAD_LIMIT_GB`; or the Inkling equivalent) and an explicit `--prompt-cache-gib`. At 27 Flint keeps 1.7 GiB for caches and serves up to 56,192 tokens, enough for the 32K cells; runs recorded before the cap used 36 and pair only with runs at the same limit.
    - Prompt cache is 0 for cold-prefill cells and 2 otherwise.
    - Speculation may add at most 4 GiB of draft residency, which is min(4 GiB, 10% of RAM).
    - A run that sees memory pressure or thermal throttling (`pmset -g therm`, `memory_pressure`) is recorded as an invalid trial and the workload is reduced. Never change system settings.
@@ -116,7 +117,7 @@ The owner made the first two decisions on 2026-11-21:
 - `zig build test-flint-draft-host`: 17.7 s;
 - `zig build test test-golden -Dcpu=apple_m1`: 547.6 s under the GPU lock, with 7 known red steps (the memcpy link check plus three tests in two modules each).
 
-The benchmark load limit is `FLINT_LOAD_LIMIT_GB=36`, from W = 40,200,896,512 bytes.
+The benchmark load limit was `FLINT_LOAD_LIMIT_GB=36`, from W = 40,200,896,512 bytes, until the owner's 32 GB cap; it is now 27 (Decision 8).
 
 Host facts measured on 2026-11-21:
 - Apple M5 Max: 6 performance and 12 efficiency CPU cores, a 40-core GPU with Metal 4, and 48 GiB of RAM.

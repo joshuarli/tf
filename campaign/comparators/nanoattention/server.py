@@ -18,11 +18,12 @@ from pathlib import Path
 import harness
 
 WORK = harness.WORK
+HEAVY = harness.HEAVY
 BIN = WORK / "build" / "nanoattention@6f782a8dace8" / "zig-out" / "bin" / "flint"
 
 
 def argv(model_dir: Path, port: int, cache_gib: int, max_output: int) -> list[str]:
-    return ["lockf", str(WORK / "gpu.lock"), str(BIN), "session", str(model_dir), "--context", "262144"]
+    return ["python3", str(HEAVY), "--", str(BIN), "session", str(model_dir), "--context", "262144"]
 
 
 def env(model_dir: Path, cache_gib: int) -> dict:

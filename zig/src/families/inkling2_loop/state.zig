@@ -177,68 +177,77 @@ test "the state's rings and mix lists carry the graph's widths" {
 
 /// Rows one executed slot writes into the capture buffer: its attention output, the FFN's input and its output.
 pub const trace_rows = 3;
+/// The summaries the trace keeps for one tensor: count, mean, standard deviation, min, max.
+const Summary = struct { n: usize = 0, mean: f64 = 0, m2: f64 = 0, lo: f32 = std.math.inf(f32), hi: f32 = -std.math.inf(f32) };
 
-/// A token's per-slot rows, read back from the forward's shared capture buffer after the command buffer commits.
-/// `names` and `values` hold one summary row a tensor (mean, standard deviation, min, max), which is the reference's
-/// own `--trace` line format, in the reference's execution order.
+/// Per-tensor summaries in the reference's execution order. The reference summarizes a whole tensor, which for a
+/// teacher-forced pass spans every position, so each row folds in every position's values as the pass walks them.
 pub const Trace = struct {
     gpa: std.mem.Allocator,
     slots: usize,
     h: usize,
     names: std.ArrayList([]const u8),
-    values: std.ArrayList([4]f32),
+    sums: std.ArrayList(Summary),
 
     pub fn init(gpa: std.mem.Allocator, c: *const cfg.Config) !Trace {
-        return .{
-            .gpa = gpa,
-            .slots = c.slots(),
-            .h = c.text.hidden,
-            .names = .empty,
-            .values = .empty,
-        };
+        var t = Trace{ .gpa = gpa, .slots = c.slots(), .h = c.text.hidden, .names = .empty, .sums = .empty };
+        try t.reserve(c);
+        return t;
+    }
+
+    /// The names in the order they will be written: every executed slot's three rows.
+    fn reserve(t: *Trace, c: *const cfg.Config) !void {
+        var slot: u32 = 0;
+        while (slot < t.slots) : (slot += 1) {
+            if (slot >= c.text.layers) {
+                const span = c.loop.core_end - c.loop.core_start;
+                const at = slot - c.text.layers;
+                const base = c.loop.core_start + at % span;
+                if (base >= c.loop.core_start and base < c.loop.core_end) {} else continue;
+            }
+            inline for (.{ "attn_out", "ffn_inp", "l_out" }) |prefix| {
+                const name = try std.fmt.allocPrint(t.gpa, "{s}-{d}", .{ prefix, slot });
+                try t.names.append(t.gpa, name);
+            }
+        }
+        try t.sums.appendNTimes(t.gpa, .{}, t.names.items.len);
     }
 
     pub fn deinit(t: *Trace) void {
         for (t.names.items) |name| t.gpa.free(name);
         t.names.deinit(t.gpa);
-        t.values.deinit(t.gpa);
+        t.sums.deinit(t.gpa);
     }
 
-    /// One token's rows, in the reference's order: every executed slot's three rows, with `pos` naming the token.
+    /// Fold this position's rows in. `capture` holds `[slots][trace_rows][h]` as the forward wrote it.
     pub fn position(t: *Trace, capture: mtl.Buffer, slots: []const u32, _: usize) !void {
         const rows = capture.slice(f32, t.slots * trace_rows * t.h);
         for (slots) |slot| {
             const base: usize = @as(usize, slot) * trace_rows * t.h;
-            try t.row("attn_out", slot, rows[base..][0..t.h]);
-            try t.row("ffn_inp", slot, rows[base + t.h ..][0..t.h]);
-            try t.row("l_out", slot, rows[base + 2 * t.h ..][0..t.h]);
+            for (0..trace_rows) |r| t.fold(@as(usize, slot) * trace_rows + r, rows[base + r * t.h ..][0..t.h]);
         }
     }
 
-    fn row(t: *Trace, comptime prefix: []const u8, slot: u32, x: []const f32) !void {
-        var sum: f64 = 0;
-        for (x) |v| sum += v;
-        const mean = sum / @as(f64, @floatFromInt(x.len));
-        var sq: f64 = 0;
-        var lo = x[0];
-        var hi = x[0];
+    fn fold(t: *Trace, at: usize, x: []const f32) void {
+        var s = &t.sums.items[at];
         for (x) |v| {
-            const d = @as(f64, v) - mean;
-            sq += d * d;
-            if (v < lo) lo = v;
-            if (v > hi) hi = v;
+            s.n += 1;
+            const d = @as(f64, v) - s.mean;
+            s.mean += d / @as(f64, @floatFromInt(s.n));
+            s.m2 += d * (@as(f64, v) - s.mean);
+            if (v < s.lo) s.lo = v;
+            if (v > s.hi) s.hi = v;
         }
-        const name = try std.fmt.allocPrint(t.gpa, "{s}-{d}", .{ prefix, slot });
-        try t.names.append(t.gpa, name);
-        try t.values.append(t.gpa, .{ @floatCast(mean), @floatCast(@sqrt(sq / @as(f64, @floatFromInt(x.len)))), lo, hi });
     }
 
     pub fn write(t: *Trace, io: std.Io, path: []const u8) !void {
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(t.gpa);
         for (t.names.items, 0..) |name, i| {
-            const v = t.values.items[i];
-            try out.print(t.gpa, "{s} {e:.9} {e:.9} {e:.9} {e:.9}\n", .{ name, v[0], v[1], v[2], v[3] });
+            const s = t.sums.items[i];
+            if (s.n == 0) continue;
+            const sd = @sqrt(s.m2 / @as(f64, @floatFromInt(s.n)));
+            try out.print(t.gpa, "{s} {d:.9} {d:.9} {d:.9} {d:.9}\n", .{ name, s.mean, sd, s.lo, s.hi });
         }
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = out.items });
     }

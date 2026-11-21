@@ -8,6 +8,9 @@ pub const Scratch = @import("state.zig").Scratch;
 pub const Trace = @import("state.zig").Trace;
 pub const position = @import("forward.zig").position;
 pub const positionTrace = @import("forward.zig").positionTrace;
+pub const prefill = @import("prefill.zig").prefill;
+pub const PrefillScratch = @import("prefill.zig").PrefillScratch;
+pub const default_chunk = @import("prefill.zig").default_chunk;
 pub const refuse = @import("refuse.zig");
 pub const kernels = @import("kernels.zig");
 
@@ -21,4 +24,6 @@ test {
     _ = @import("forward.zig");
     _ = @import("kernels.zig");
     _ = @import("refuse.zig");
+    _ = @import("prefill.zig");
+    _ = @import("prefill_test.zig");
 }

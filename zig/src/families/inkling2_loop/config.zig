@@ -66,6 +66,48 @@ pub const Config = struct {
     }
 };
 
+/// A checkpoint's expert geometry per layer, read from its own tensor headers rather than from config.json.
+pub const Expert = enum { nvfp4, mxfp8 };
+
+/// The text shard's file name, from `model.safetensors.index.json`; the checkpoint splits the text stack from the
+/// MTP head, so exactly one file holds it.
+pub fn shard(a: std.mem.Allocator, io: std.Io, dir: []const u8) ![]const u8 {
+    const idx = try std.fs.path.join(a, &.{ dir, "model.safetensors.index.json" });
+    defer a.free(idx);
+    const body = try std.Io.Dir.cwd().readFileAlloc(io, idx, a, .limited(1 << 26));
+    defer a.free(body);
+    const doc = try std.json.parseFromSliceLeaky(std.json.Value, a, body, .{});
+    if (doc != .object) return error.BadIndex;
+    const map = doc.object.get("weight_map") orelse return error.BadIndex;
+    if (map != .object) return error.BadIndex;
+    var found: ?[]const u8 = null;
+    var it = map.object.iterator();
+    while (it.next()) |kv| {
+        if (kv.value_ptr.* != .string) return error.BadIndex;
+        const f = kv.value_ptr.string;
+        if (std.mem.indexOf(u8, f, "..") != null or std.fs.path.isAbsolute(f)) return error.BadIndex;
+        if (found) |g| {
+            if (!std.mem.eql(u8, g, f)) return error.MultipleShards;
+        } else found = f;
+    }
+    return a.dupe(u8, found orelse return error.BadIndex);
+}
+
+/// Each layer's expert format from its `w13_weight` header: packed U8 is NVFP4, F8_E4M3 is MXFP8.
+pub fn expertFormats(entries: anytype, layers: u32, out: []Expert) !void {
+    if (out.len < layers) return error.FormatCount;
+    for (0..layers) |i| {
+        var buf: [96]u8 = undefined;
+        const name = try std.fmt.bufPrint(&buf, "model.llm.layers.{d}.mlp.experts.w13_weight", .{i});
+        const e = entries.get(name) orelse return error.NoExperts;
+        out[i] = switch (e.dtype) {
+            .u8 => .nvfp4,
+            .f8_e4m3 => .mxfp8,
+            else => return error.ExpertFormat,
+        };
+    }
+}
+
 fn get(o: std.json.ObjectMap, key: []const u8, why: *Why) !std.json.Value {
     return o.get(key) orelse {
         why.set("config.json has no {s}", .{key});

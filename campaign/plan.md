@@ -6,9 +6,9 @@
 - **Upstream frozen at:** `fa13df5dd1fdd23ada775510a464c9aa03a39e09` (TensorFold `main`, 2026-11-21). The campaign branch is `campaign/m5`.
 - **Last accepted revision:** `281c91250` (F1 merge).
 - **Accepted:** C0 (fetch, host and build-baseline exit 0; second fetch downloads nothing), F1 (`--no-drafts` already disables copies and the drafter: `no_drafts_test.zig` in `test-flint-draft-host`; `make -C campaign smoke MODEL=flint MODE=ar` gives 512 tokens, 0 drafted, 1.00 tokens per decode round, about 169 tok/s). **Red:** none beyond **Baseline**. **Parked:** none.
-- **In flight:** C1, the benchmark harness (bridge worker `usrw_b6fdcac1-14d2-44e6-be6e-462d9a7307eb`, lane `.work/wt/c1-bench`, branch `lane/c1-bench`); I0, the Inkling 2 Mini prior-art map and reference (bridge worker `usrw_9cd7b765-da4c-4972-99c8-e9e46c79da45`, lane `.work/wt/i0-inkling-ref`, branch `lane/i0-inkling-ref`).
-- **Next:** F2 once C1 lands; Q1 and H1 after C1; I1 after I0.
-- **Resume:** run `worker_status` on both sessions, then review and merge each lane whose acceptance passes. `.work/wt/c0-ground` holds an earlier C0 worker's leftover worktree. That worker has exited, and its branch is merged except commit `91a5a06a1`, which was superseded and not adopted.
+- **In flight:** C1, the benchmark harness (bridge worker `usrw_b6fdcac1-14d2-44e6-be6e-462d9a7307eb`, lane `.work/wt/c1-bench`, branch `lane/c1-bench`); I0, the Inkling 2 Mini prior-art map and reference (bridge worker `usrw_9cd7b765-da4c-4972-99c8-e9e46c79da45`, lane `.work/wt/i0-inkling-ref`, branch `lane/i0-inkling-ref`); F2, Flint parity (bridge worker `usrw_4bb1c566-c653-43f6-8d38-cab9288ef301`, lane `.work/wt/f2-parity`, branch `lane/f2-parity`).
+- **Next:** Q1 and H1 after C1; F3 after C1 and F2; I1 after I0.
+- **Resume:** run `worker_status` on each in-flight session, then review and merge each lane whose acceptance passes. `.work/wt/c0-ground` holds an earlier C0 worker's leftover worktree. That worker has exited, and its branch is merged except commit `91a5a06a1`, which was superseded and not adopted.
 
 ## Charter
 

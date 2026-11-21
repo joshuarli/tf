@@ -84,6 +84,22 @@ def rejected(trials):
     return scorecard.collect_pairs(trials)[1]
 
 
+class PromptLengthPins(unittest.TestCase):
+    """The corpus was sized with Flint's tokenizer; an Inkling 1,349-token prompt was marked invalid against 1024."""
+
+    def test_manifest_model_uses_the_manifest_length(self):
+        prompt = {"name": "code-1024", "measured_prompt_tokens": 1024}
+        self.assertEqual(bench.expected_prompt_tokens("flint-int4", prompt, "flint-int4@3b93f9053b53"), 1024)
+
+    def test_other_models_use_their_own_pin_or_none(self):
+        self.assertEqual(bench.expected_prompt_tokens("inkling-2-mini", {"name": "code-1024", "measured_prompt_tokens": 1024},
+                                                      "flint-int4@3b93f9053b53"), 1349)
+        self.assertIsNone(bench.expected_prompt_tokens("inkling-2-mini", {"name": "prose-32768", "measured_prompt_tokens": 32768},
+                                                       "flint-int4@3b93f9053b53"))
+        self.assertIsNone(bench.expected_prompt_tokens("no-such-model", {"name": "code-1024", "measured_prompt_tokens": 1024},
+                                                       "flint-int4@3b93f9053b53"))
+
+
 class ModelSeparation(unittest.TestCase):
     """Flint at 160 tok/s and Inkling at 30 tok/s under one engine label used to pool into one 95 tok/s row."""
 

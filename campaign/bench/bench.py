@@ -180,6 +180,18 @@ def record_failure(path: Path, *, run_id: str, experiment: str, session: str, en
         stream.flush()
 
 
+def expected_prompt_tokens(model_key: str, prompt: dict, manifest_model: str) -> int | None:
+    """The served prompt length a cell must reproduce for this model: the manifest's, which was measured with
+    its own model's tokenizer, or a per-model pin in campaign/prompts/lengths-<key>.json."""
+    if manifest_model.split("@", 1)[0] == model_key:
+        return prompt["measured_prompt_tokens"]
+    pins = harness.CAMPAIGN / "prompts" / f"lengths-{model_key}.json"
+    if not pins.is_file():
+        return None
+    entry = (json.loads(pins.read_text(encoding="utf-8")).get("prompts") or {}).get(prompt["name"]) or {}
+    return entry.get("prompt_tokens")
+
+
 def trial(path: Path, *, run_id: str, experiment: str, session: str, engine: str, binary: dict, model_key: str,
           mode: str, flags: list[str], cell: int, cache_gib: int, pair: int, order: int, prompt: dict,
           server: harness.Server, model_id: str, hashes: dict, identity: dict) -> None:
@@ -189,7 +201,7 @@ def trial(path: Path, *, run_id: str, experiment: str, session: str, engine: str
               "pairing": pairing(experiment, session, cell, mode, pair, binary.get("role"), identity),
               "prompt": {"name": prompt["name"], "set": prompt["set"], "topic": prompt["topic"],
                          "path": prompt["path"], "sha256": prompt["sha256"],
-                         "tokens": prompt["measured_prompt_tokens"],
+                         "tokens": prompt["expected_prompt_tokens"],
                          "local_content_tokens": prompt["local_content_tokens"]},
               "model": {"key": model_key, "dir": str(server.model), "served": model_id, "hashes": hashes},
               "server": {"argv": server.argv, "port": server.port, **server.timing()},
@@ -218,8 +230,13 @@ def trial(path: Path, *, run_id: str, experiment: str, session: str, engine: str
                 record["invalid_reasons"].append(f"{name} request did not complete")
             if run.get("tokens") != OUTPUT_TOKENS:
                 record["invalid_reasons"].append(f"{name} returned {run.get('tokens')} tokens, not {OUTPUT_TOKENS}")
-            if run.get("prompt_tokens") != cell:
-                record["invalid_reasons"].append(f"{name} prompt_tokens {run.get('prompt_tokens')} != cell {cell}")
+            expected = prompt["expected_prompt_tokens"]
+            if expected is None:
+                record["invalid_reasons"].append(
+                    f"{name} prompt_tokens {run.get('prompt_tokens')}: no pinned length for {model_key} "
+                    f"(add it to campaign/prompts/lengths-{model_key}.json)")
+            elif run.get("prompt_tokens") != expected:
+                record["invalid_reasons"].append(f"{name} prompt_tokens {run.get('prompt_tokens')} != pinned {expected}")
         cold_cached = record["requests"]["cold"].get("cached_tokens")
         warm_cached = record["requests"]["warm"].get("cached_tokens")
         record["cache_observed"] = {"prompt_cache_gib": cache_gib, "cold_cached_tokens": cold_cached,
@@ -263,6 +280,9 @@ def run(args) -> int:
     missing = [cell for cell, _ in cells if not by_cell.get(cell)]
     if missing:
         raise SystemExit(f"no prompts for cells {missing} from selection {args.prompts!r}")
+    for prompts in by_cell.values():
+        for prompt in prompts:
+            prompt["expected_prompt_tokens"] = expected_prompt_tokens(key, prompt, manifest["model"])
     verify_prompts(by_cell)
     flags, wants_drafter, copy_drafts = mode_args(args.mode)
     drafter = harness.drafter_path() if wants_drafter else None

@@ -40,7 +40,7 @@ pub fn tests(b: *std.Build, target: std.Build.ResolvedTarget, test_step: *std.Bu
 /// The family's own module over the Metal runtime, the core readers and the shared Inkling 2 config.
 pub fn engineModule(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.Build.Module, core: *std.Build.Module) *std.Build.Module {
     const m = b.createModule(.{
-        .root_source_file = b.path("zig/src/families/inkling2_loop/native.zig"),
+        .root_source_file = b.path("zig/src/families/inkling2_loop/family.zig"),
         .target = target,
         .optimize = .fast,
         .link_libc = true,

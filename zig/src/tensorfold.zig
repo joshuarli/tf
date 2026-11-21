@@ -87,7 +87,7 @@ pub const ricursive = @import("families/ricursive/ricursive.zig");
 pub const lfm2_moe = @import("families/lfm2_moe/lfm2_moe.zig");
 pub const flashnext_pack = @import("families/flashnext/pack.zig");
 pub const lfm3 = @import("families/lfm3/lfm3.zig");
-pub const inkling2_loop = @import("families/inkling2_loop/native.zig");
+pub const inkling2_loop = @import("families/inkling2_loop/family.zig");
 pub const inkling2_loop_refuse = @import("families/inkling2_loop/refuse.zig");
 
 test {

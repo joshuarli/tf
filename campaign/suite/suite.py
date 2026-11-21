@@ -22,8 +22,8 @@ WORK = MAIN / ".work"
 GPU_LOCK = WORK / "gpu.lock"
 HEAVY = CAMPAIGN / "heavy.py"
 BASELINE_BIN = WORK / "wt/baseline/zig-out/native/bin/tensorfold-native"
-INKLING_SERVE_SOURCE = REPO / "zig/src/native/inkling2_loop.zig"
-INKLING_SCAFFOLD_MARKER = "opens for teacher-forced logits only"
+INKLING_BIN = Path(os.environ.get("INKLING_BIN", str(REPO / "zig-out/native/bin/tensorfold-native")))
+INKLING_SOURCES = [REPO / "zig/src/native/inkling2_loop.zig", REPO / "zig/src/native/inkling2_loop_host.zig", REPO / "zig/src/families/inkling2_loop"]
 BASELINE_SHA = "8c2c8e6f4fd9f2c111d6fba7d89251a32a5afb309cc950ee3ff2d6a50816ac87"
 FLINT = Path.home() / "models/flint-int4@3b93f9053b53"
 INKLING = Path.home() / "models/Inkling-2-Mini@ed40e7da625f"
@@ -80,11 +80,11 @@ WORKLOADS = [
              ("target:bench", "baseline", "flint-weights"),
              make("bench", "MODEL=flint", "MODE=ar", "CELLS=1024", "PAIRS=1")),
     Workload("inkling-smoke", "change", "inkling", "served greedy 512 tokens with zero drafts", "unmeasured",
-             ("target:smoke", "baseline", "inkling-weights", "inkling-serve"),
-             make("smoke", "MODEL=inkling2-mini", "MODE=ar")),
+             ("target:smoke", "inkling-binary", "inkling-weights"),
+             make("smoke", "MODEL=inkling2-mini", "MODE=ar", f"SMOKE_BIN={INKLING_BIN}")),
     Workload("inkling-bench-1k", "change", "inkling", "served 1,024-token cells, one process", "unmeasured",
-             ("target:bench", "baseline", "inkling-weights", "inkling-serve"),
-             make("bench", "MODEL=inkling2-mini", "MODE=ar", "CELLS=1024", "PAIRS=1")),
+             ("target:bench", "inkling-binary", "inkling-weights"),
+             make("bench", "MODEL=inkling2-mini", "MODE=ar", "CELLS=1024", "PAIRS=1", f"BIN={INKLING_BIN}")),
     Workload("inkling-ref", "change", "inkling", "reference against llama.cpp from verified receipts",
              "observed 1 s cached", ("target:ref-check",), make("ref-check", "MODEL=inkling2-mini")),
     Workload("flint-matrix-ar", "scenario", "flint", "primary matrix, ar, six pairs", "estimated 60 min",
@@ -95,11 +95,11 @@ WORKLOADS = [
     Workload("flint-pi", "scenario", "flint", "8 Pi coding tasks", "observed 15 min",
              ("target:pi-harness-flint", "baseline", "flint-weights"), make("pi-harness", "MODEL=flint")),
     Workload("inkling-quality-dev", "scenario", "inkling", "12-case quality dev set, text-only cases",
-             "unmeasured", ("target:quality-inkling2-mini", "baseline", "inkling-weights", "inkling-serve"),
-             make("quality", "MODEL=inkling2-mini", "SET=dev")),
+             "unmeasured", ("target:quality-inkling2-mini", "inkling-binary", "inkling-weights"),
+             make("quality", "MODEL=inkling2-mini", "SET=dev", f"BIN={INKLING_BIN}")),
     Workload("inkling-pi", "scenario", "inkling", "Pi coding tasks that need no images", "unmeasured",
-             ("target:pi-harness-inkling2-mini", "baseline", "inkling-weights", "inkling-serve"),
-             make("pi-harness", "MODEL=inkling2-mini")),
+             ("target:pi-harness-inkling2-mini", "inkling-binary", "inkling-weights"),
+             make("pi-harness", "MODEL=inkling2-mini", f"BIN={INKLING_BIN}")),
     Workload("flint-parity", "scenario", "flint", "teacher-forced logits against rec_mlx", "estimated 60 min",
              ("target:parity-flint", "flint-weights"), make("parity", "MODEL=flint")),
     Workload("flint-quality-full", "full", "flint", "48-case quality set", "estimated 45 min",
@@ -164,19 +164,14 @@ def requirement(need: str, targets: set[str], fix_fixture: bool) -> str | None:
         bad = [p.name for p, size in sizes.items() if not p.exists() or p.stat().st_size != size]
         name = "flint-int4" if need == "flint-weights" else "inkling-2-mini"
         return None if sizes and not bad else f"{name} weights missing or wrong size ({', '.join(bad[:3])}); run `make -C campaign fetch NAMES={name}`"
-    if need == "inkling-serve":
-        if not INKLING_SERVE_SOURCE.is_file():
-            return ("the native binary cannot serve Inkling: zig/src/native/inkling2_loop.zig is absent, so the registry "
-                    "has no inkling2_loop family; the I3 serving lane has not landed")
-        if INKLING_SCAFFOLD_MARKER in INKLING_SERVE_SOURCE.read_text(encoding="utf-8", errors="replace"):
-            return (f"the native binary cannot serve Inkling: zig/src/native/inkling2_loop.zig still says "
-                    f"\"{INKLING_SCAFFOLD_MARKER}\", the teacher-forced-only scaffold; the I3 serving lane has not landed")
-        if BASELINE_BIN.exists():
-            sources = [INKLING_SERVE_SOURCE, *(REPO / "zig/src/families/inkling2_loop").rglob("*.zig")]
-            stale = newest([p.parent for p in sources if p.is_file()]) > BASELINE_BIN.stat().st_mtime
-            if stale:
-                return ("the native binary cannot serve Inkling yet: the baseline binary predates the Inkling serving "
-                        "sources; run `make -C campaign build-baseline`")
+    if need == "inkling-binary":
+        if not INKLING_BIN.is_file():
+            return (f"campaign native binary missing at {INKLING_BIN}; run `zig build native -Dcpu=apple_m1 -Dversion=1.0.0` at the repo root" + (" or set INKLING_BIN" if "INKLING_BIN" not in os.environ else ""))
+        files = [p for p in INKLING_SOURCES if p.is_file()]
+        dirs = [p for p in INKLING_SOURCES if p.is_dir()]
+        latest = max([p.stat().st_mtime for p in files] + ([newest(dirs)] if dirs else []), default=0.0)
+        if latest > INKLING_BIN.stat().st_mtime:
+            return (f"campaign native binary {INKLING_BIN} predates the Inkling sources; rebuild with `zig build native -Dcpu=apple_m1 -Dversion=1.0.0`")
         return None
     if need == "flint-run-fresh":
         if not FLINT_RUN.exists():

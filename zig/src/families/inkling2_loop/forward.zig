@@ -376,16 +376,23 @@ pub const Forward = struct {
         f.lin(lay.router, input, b(s.router));
         f.set(.route, Route{ .experts = E, .topk = K, .route_scale = c.text.route_scale }, &.{ b(s.router), t(lay.router_bias), A, b(s.picks), b(s.wts) });
         f.enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(1, 1, 1));
-        f.set(.plan, Plan{ .slots = K, .experts = E }, &.{ b(s.picks), A, b(s.offsets), b(s.order) });
-        f.enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(1, 1, 1));
+        const codes = b(if (lay.mxfp8) m.t256 else m.t16);
         f.setExpert(lay.mxfp8, .gu, Moe{ .k = f.h, .n = inter, .rows = 2 * inter, .gate_cap = c.text.gate_cap, .up_cap = c.text.up_cap }, &.{
-            input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.offsets), b(s.order), A, b(s.act),
+            input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.picks), b(s.order), A, b(s.act), codes,
         });
-        f.enc.dispatchGroups(mtl.Size.of((inter + 31) / 32, E, 1), mtl.Size.of(256, 1, 1));
-        f.setExpert(lay.mxfp8, .down, Moe{ .k = inter, .n = f.h, .rows = f.h, .gate_cap = 0, .up_cap = 0 }, &.{
-            b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.offsets), b(s.order), A, b(s.down),
-        });
-        f.enc.dispatchGroups(mtl.Size.of((f.h + 31) / 32, E, 1), mtl.Size.of(256, 1, 1));
+        f.enc.dispatchGroups(mtl.Size.of(inter, K, 1), mtl.Size.of(32, 1, 1));
+        const down = Moe{ .k = inter, .n = f.h, .rows = f.h, .gate_cap = 0, .up_cap = 0 };
+        if (lay.mxfp8) {
+            f.setExpert(true, .down, down, &.{
+                b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.picks), b(s.order), A, b(s.down),
+            });
+            f.enc.dispatchGroups(mtl.Size.of((f.h + 63) / 64, K, 1), mtl.Size.of(64, 1, 1));
+        } else {
+            f.setExpert(false, .down, down, &.{
+                b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.picks), b(s.order), A, b(s.down), codes,
+            });
+            f.enc.dispatchGroups(mtl.Size.of(f.h, K, 1), mtl.Size.of(32, 1, 1));
+        }
         f.set(.combine, Combine{ .width = f.h, .topk = K }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
         f.enc.dispatchThreads(mtl.Size.of(f.h, 1, 1), mtl.Size.of(256, 1, 1));
     }

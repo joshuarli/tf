@@ -12,7 +12,9 @@ exits with the command's status. The final receipt line separates the charged
 peak, the footprint, the resident size and the host's pressure, swap and
 pagein changes. `-k` keeps the lock file: without it lockf unlinks the file on
 exit, and a waiter that already opened the old file and a newcomer that
-creates a new one both hold "the" lock.
+creates a new one both hold "the" lock. A heavy.py started inside another one's
+tree (a make target that wraps its own heavy commands) sees CAMPAIGN_GPU_LOCK_HELD
+and runs under the held lock instead of waiting on it forever.
 
 The campaign as a whole stays under 32 GB so the host remains usable: one heavy
 command at a time (the lock) gets 28 GB, leaving 4 GB for builds, clients and
@@ -41,6 +43,7 @@ INKLING_LOAD_LIMIT_GB = 26
 
 RUSAGE_INFO_V2 = 2
 RESIDENT_SIZE_OFFSET = 64
+LOCK_HELD_ENV = "CAMPAIGN_GPU_LOCK_HELD"
 PRESSURE_CRITICAL = 4
 _libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
 
@@ -121,7 +124,9 @@ def main() -> int:
     if not command:
         parser.error("no command")
     cap = int(args.cap_gb * 1e9)
-    child = subprocess.Popen(["lockf", "-k", str(GPU_LOCK), *command], start_new_session=True)
+    held = os.environ.get(LOCK_HELD_ENV) == str(GPU_LOCK)
+    argv = command if held else ["lockf", "-k", str(GPU_LOCK), *command]
+    child = subprocess.Popen(argv, start_new_session=True, env={**os.environ, LOCK_HELD_ENV: str(GPU_LOCK)})
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda *_: (stop(child), sys.exit(130)))
     peak_footprint = peak_resident = peak_charged = 0

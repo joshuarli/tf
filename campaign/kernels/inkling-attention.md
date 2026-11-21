@@ -64,3 +64,14 @@ python3 campaign/kernels/inkling_profile.py timeline --log timeline.log
 The 83-token prompt is the first 400 bytes of `campaign/prompts/dev/code-1024.txt` (83 tokens). Exact runs:
 `bench 14 2` at 1,334 tokens gave 107.9 ms wall without the timeline and 107.4 ms with `TF_METAL4_TIMELINE=4`;
 at 83 tokens, 97.3 ms (`bench 4 2`) and 95.8 ms (`bench 14 2` with the timeline).
+
+## Ring KV cache for the 40 local slots
+
+`state.zig:Cache` keeps one KV row per position for the 8 global slots (physical layers 5, 11x3, 17x3, 23)
+and a ring of `window` (1,024) rows for each of the 40 local slots. `Cache.row` maps a local store to
+`base(slot) + (pos % window) * kvw * 4`; the split kernel maps its read the same way
+(`rj = window ? j % window : j` in `kernels/attention.metal`), so the arithmetic over the window is
+unchanged and local results are bit-identical to the full cache. Per-token bytes fall from
+`48 * kvw * 8` to `8 * kvw * 8` (65,536 B), with the 40 rings (320 MiB) plus the convolution rings as the
+fixed cost in `Cache.fixedBytes`; `Cache.longestFitting` divides the remaining budget by the global-only
+rate. The server log and `--context` refusal name the 8-global/40-local split.

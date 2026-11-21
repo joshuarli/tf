@@ -53,4 +53,4 @@ quality: quality-$(MODEL)
 
 pi-harness: pi-harness-$(MODEL)
 
-include $(sort $(wildcard */*.mk))
+include $(sort $(wildcard */*.mk */*/*.mk))

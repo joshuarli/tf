@@ -6,7 +6,7 @@
 - **Upstream frozen at:** `fa13df5dd1fdd23ada775510a464c9aa03a39e09` (TensorFold `main`, 2026-11-21). The campaign branch is `campaign/m5`.
 - **Last accepted revision:** none.
 - **Accepted:** none. **Red:** none. **Parked:** none.
-- **In flight:** C0, the ground slice (lane `.work/wt/c0-ground`, branch `lane/c0-ground`).
+- **In flight:** C0, the ground slice (lane `.work/wt/c0-ground`, branch `lane/c0-ground`) — acceptance proof recorded.
 - **Next:** F1, after C0. I0 may start in parallel with F1.
 
 ## Charter
@@ -102,13 +102,25 @@ The owner made the first two decisions on 2026-11-21:
 
 ## Baseline
 
-C0 fills this section. The loop timings record:
+Timings (2026-11-21, host above), `/usr/bin/time -p`:
 
-- `zig build native -Dcpu=apple_m1 -Dversion=1.0.0`, cold and warm no-op;
-- `zig build test test-golden -Dcpu=apple_m1`, under the GPU lock;
-- `zig build test-flint-draft-host`.
+- `zig build native -Dcpu=apple_m1 -Dversion=1.0.0`, cold (empty cache): **239.3 s** (featuring concurrent weight downloads; an isolated reproduction with Zig 0.17.0 measured 209.28 s — see [baseline.md](baseline.md));
+- the same build, warm no-op: **4.0 s** (isolated reproduction: 3.57 s);
+- `zig build test-flint-draft-host`: **17.7 s** (isolated: 15.18 s);
+- `zig build test test-golden -Dcpu=apple_m1`, under the GPU lock: **547.6 s** (Zig 0.17.1 run), and **226.59 s** in the isolated Zig 0.17.0 reproduction (931/938 steps, 5,238/5,300 tests passed; `--summary all` and concurrent-lane contention affect the counted steps).
 
-Known red records each failing test name in the baseline, so the executor never mistakes it for its own.
+Frozen `tensorfold-native` sha256 (Zig 0.17.1): `8c2c8e6f4fd9f2c111d6fba7d89251a32a5afb309cc950ee3ff2d6a50816ac87`.
+Zig 0.17.0 build: `9a8968ac165be5c4990faf57d0c719e9c4440a61e08fcbc229d38c80f78285a9`.
+
+Known red at fa13df5d, each failing test name recorded in [baseline.md](baseline.md):
+
+- `run sh` memcpy/`nm -m` check (tensorfold-native links its own memcpy);
+- `the release's vision_config parses to the defaults` (`vision`, `families.deepseek_v41.metal.vision`);
+- `copied shard pages leave the file cache without changing the copy or stored bytes` (`checkpoint_file_cache`) — not reproduced in the isolated run;
+- `PDF render worker: a worker killed by a signal is named as a crash; a limit or a missing reply keeps today's message` (`pdf_worker`, two binaries);
+- `GLM copies and transforms join before shard eviction; errors and duplicate opens retain ownership` (`families.glm.weights_fix_test`) — observed only in the isolated run.
+
+Do not fix any of them.
 
 Host facts measured on 2026-11-21:
 - Apple M5 Max: 6 performance and 12 efficiency CPU cores, a 40-core GPU with Metal 4, and 48 GiB of RAM.

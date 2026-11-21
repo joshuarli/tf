@@ -18,6 +18,12 @@ Measured on 2026-11-21 by `make -C campaign baseline-timings`. The cold build ra
 | `zig build test test-golden -Dcpu=apple_m1`, under the GPU lock | 547.6 s |
 | `make -C campaign fetch NAMES="flint-int4 inkling-2-mini"`, all files already verified | 17.2 s |
 
+An independent reproduction with Zig 0.17.0 on the pristine `fa13df5d` tree (2026-11-21, `/usr/bin/time -p`):
+`zig build native -Dcpu=apple_m1 -Dversion=1.0.0` cold **209.28 s** (user 203.13, sys 7.74);
+warm no-op **3.57 s** (user 3.06, sys 0.37); `zig build test-flint-draft-host -Dcpu=apple_m1` **15.18 s**
+(user 19.25, sys 1.37, exit 0); `tensorfold-native` sha256
+`9a8968ac165be5c4990faf57d0c719e9c4440a61e08fcbc229d38c80f78285a9` (Zig 0.17.0 build).
+
 ## Known red
 
 `zig build test test-golden -Dcpu=apple_m1` on the baseline: 928 of 938 steps succeeded with 7 failed, and 16,372 of 16,519 tests passed with 141 skipped and 6 failed. The goldens report 324 of 337 equal and 0 unexpected differences. Every failure:
@@ -28,6 +34,15 @@ Measured on 2026-11-21 by `make -C campaign baseline-timings`. The cold build ra
 | `the release's vision_config parses to the defaults` | `vision`, `families.deepseek_v41.metal.vision` | expected `error.UnsupportedVision`, found `error.ZeroHeads` |
 | `copied shard pages leave the file cache without changing the copy or stored bytes` | `checkpoint_file_cache`, `src.core.checkpoint_file_cache` | expected 0, found 2 |
 | `PDF render worker: a worker killed by a signal is named as a crash; a limit or a missing reply keeps today's message` | `pdf_worker` (two test binaries) | the `ulimit -t 1` busy loop reports "PDF rendering exceeded resource limits or failed" instead of a crash |
+| `GLM copies and transforms join before shard eviction; errors and duplicate opens retain ownership` | `families.glm.weights_fix_test` | fails at fa13df5d on Zig 0.17.0 (see below); not observed in the 0.17.1 run above |
+
+A second reproduction of the same command on the pristine `fa13df5d` tree with Zig 0.17.0
+(`lockf ... zig build test test-golden -Dcpu=apple_m1`, 2026-11-21) gave 931/938 steps succeeded
+(5 failed), 5,238/5,300 tests passed (57 skipped, 5 failed), real 226.59 s (user 139.46, sys 51.95)
+under the GPU lock. Its failed tests are: the `vision_config` test in `vision` and in
+`families.deepseek_v41.metal.vision`, the `GLM copies and transforms join before shard eviction`
+test, and the `PDF render worker` test in `pdf_worker` (two binaries). The `copied shard pages`
+failure above did not reproduce on this run. Every failing test name from both runs is known red at fa13df5d.
 
 The memcpy check may depend on the toolchain. Whether the unmodified `fa13df5d` built with Zig 0.17.0 also fails it is recorded in [ledger.md](ledger.md).
 

@@ -1,0 +1,102 @@
+The following are consecutive excerpts from configuration and documentation files. Read them and return exactly one JSON object, with no prose around it, matching this schema: {"summary": string, "components": [{"name": string, "kind": string}], "decisions": [{"id": string, "reason": string}]}. Use names that appear in the excerpts and keep every string under forty words.
+
+===== docs/receipts/glm-fp4local-80517fc3/tp2/serve/ex-111/conc.json =====
+{
+ "label": "ex-111",
+ "tokens": 256,
+ "mixed": false,
+ "cells": [
+  {
+   "prompt": "code",
+   "temperature": 1.0,
+   "streams": 1,
+   "failed": 0,
+   "unmeasured": 0,
+   "aggregate_tps": 38.9,
+   "per_stream_tps": 38.9,
+   "ttft_s_max": 0.15,
+   "alone": {
+    "equal": 1,
+    "unequal": 0,
+    "failed": 0
+   },
+   "serial": {
+    "equal": 4,
+    "unequal": 0,
+    "failed": 0
+   },
+   "reps": [
+    {
+     "failed": 0,
+     "unmeasured": 0,
+     "aggregate_tps": 38.910787964107605,
+     "per_stream_tps": [
+      38.9
+     ],
+     "ttft_s": [
+      0.15
+     ],
+     "errors": [],
+     "evidence": [
+      {
+       "prompt_tokens": 14,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "950590a0cb84",
+       "token_sha256": "950590a0cb8473327c8f149a6ea84432a6d6d090cbfc37c6869486c903ed6aa0",
+       "output_sha256": "c8b307fa0becb67c39cbc61f6f8b51c31e2b6443a00c7e9da3fffacb9eace78b"
+      }
+     ],
+     "client_intervals": [
+      {
+       "start": 458504.525620289,
+       "end": 458511.23313454
+      }
+     ],
+     "equal_alone": [
+      true
+     ],
+     "comparisons": [
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "950590a0cb8473327c8f149a6ea84432a6d6d090cbfc37c6869486c903ed6aa0",
+        "output_sha256": "c8b307fa0becb67c39cbc61f6f8b51c31e2b6443a00c7e9da3fffacb9eace78b",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "950590a0cb8473327c8f149a6ea84432a6d6d090cbfc37c6869486c903ed6aa0",
+        "output_sha256": "c8b307fa0becb67c39cbc61f6f8b51c31e2b6443a00c7e9da3fffacb9eace78b",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "950590a0cb8473327c8f149a6ea84432a6d6d090cbfc37c6869486c903ed6aa0",
+        "output_sha256": "c8b307fa0becb67c39cbc61f6f8b51c31e2b6443a00c7e9da3fffacb9eace78b",
+        "complete": true,
+        "error": null
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "prompt": "code",
+   "temperature": 1.0,
+   "streams": 2,
+   "failed": 0,
+   "unmeasured": 0,
+   "aggregate_tps": 44.7,
+   "per_stream_tps": 24.8,
+   "ttft_s_max": 0.42,
+   "steady_tps": 48.4,
+   "alone": {
+    "equal": 2,
+    "unequal": 0,
+    "failed

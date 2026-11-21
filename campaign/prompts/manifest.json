@@ -1,0 +1,816 @@
+{
+  "schema": 1,
+  "model": "flint-int4@3b93f9053b53",
+  "tokenizer": "campaign/prompts/flint_tokenizer.py: byte-level BPE read from the checkpoint's tokenizer.json",
+  "tokenizer_sha256": "a263cce0b7e2b03f7ee07ce809783ef4b47f160c3f268a4ea1524f638da45b68",
+  "rendered_chat_overhead_tokens": 2,
+  "length_note": "content is cut to length - 2 local tokens; the served chat template adds <|user|> and <|assistant|>, so usage.prompt_tokens is the cell",
+  "prompts": [
+    {
+      "name": "code-1024",
+      "set": "dev",
+      "topic": "code",
+      "cell": 1024,
+      "path": "campaign/prompts/dev/code-1024.txt",
+      "sha256": "c5a63fccf2c9866ac60e5b13ec268e2a56546fbed3b1b4d2cbfa5b808b0de4aa",
+      "bytes": 4045,
+      "local_content_tokens": 1022,
+      "measured_prompt_tokens": 1024,
+      "sources_sha256": "6863938340961d6005ba36a200521537f207ce6ad68e2f4ef11a051f77183e82",
+      "sources": [
+        {
+          "path": "zig/src/server/slide_correction_source.zig",
+          "sha256": "b39864613ada610be312db88787e2bd870c0cf7fdb915fac48337a156e8a8ad8",
+          "bytes": 1787,
+          "complete": true
+        },
+        {
+          "path": "zig/src/metal/sync.zig",
+          "sha256": "960be3e3c395f6c86e566ecf1f79f1958eab55bff668c1de7a155326f09c667a",
+          "bytes": 1033,
+          "complete": true
+        },
+        {
+          "path": "zig/src/families/hy4_flash/index_cuda.zig",
+          "sha256": "a0e5c71854e961a0bbcdb445377ac4ccdcf2339daee8d229b1287abb6d5afaa5",
+          "bytes": 5426,
+          "complete": false
+        }
+      ],
+      "instruction": "You are reviewing a large native inference codebase. Below are consecutive excerpts from several source files, each introduced by a line of the form ===== path =====. Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text.",
+      "measured_cache_state": "cold"
+    },
+    {
+      "name": "code-4096",
+      "set": "dev",
+      "topic": "code",
+      "cell": 4096,
+      "path": "campaign/prompts/dev/code-4096.txt",
+      "sha256": "c594c497ab49b61d38ccdaab8561cf7bacc367cd02d5b0aa55ac32e90b9f4eef",
+      "bytes": 14968,
+      "local_content_tokens": 4094,
+      "measured_prompt_tokens": 4096,
+      "sources_sha256": "fbd1bd61864c0156c096e4e224c14654a4e62a96fd4642330bdf09900f51cf4d",
+      "sources": [
+        {
+          "path": "zig/src/server/slide_correction_source.zig",
+          "sha256": "b39864613ada610be312db88787e2bd870c0cf7fdb915fac48337a156e8a8ad8",
+          "bytes": 1787,
+          "complete": true
+        },
+        {
+          "path": "zig/src/metal/sync.zig",
+          "sha256": "960be3e3c395f6c86e566ecf1f79f1958eab55bff668c1de7a155326f09c667a",
+          "bytes": 1033,
+          "complete": true
+        },
+        {
+          "path": "zig/src/families/hy4_flash/index_cuda.zig",
+          "sha256": "a0e5c71854e961a0bbcdb445377ac4ccdcf2339daee8d229b1287abb6d5afaa5",
+          "bytes": 5426,
+          "complete": true
+        },
+        {
+          "path": "zig/src/families/hy4_flash/moe_exl3_cuda.zig",
+          "sha256": "cf7d412f731fedb9373a035248a6cf832cd141ad4d99895292f2a02f2f7d4ddb",
+          "bytes": 3929,
+          "complete": true
+        },
+        {
+          "path": "zig/src/families/qwen3_5/cuda_dspine_weights.zig",
+          "sha256": "185433d6f63e7a51f4867fa1312e314dd6f08eef5abb6f75b637e6161d811482",
+          "bytes": 6122,
+          "complete": false
+        }
+      ],
+      "instruction": "You are reviewing a large native inference codebase. Below are consecutive excerpts from several source files, each introduced by a line of the form ===== path =====. Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text.",
+      "measured_cache_state": "cold"
+    },
+    {
+      "name": "code-32768",
+      "set": "dev",
+      "topic": "code",
+      "cell": 32768,
+      "path": "campaign/prompts/dev/code-32768.txt",
+      "sha256": "766cb5c5d82a9180f370fbab417f1c4fac8dd219284635e3b21c54f45735f213",
+      "bytes": 114768,
+      "local_content_tokens": 32766,
+      "measured_prompt_tokens": 32768,
+      "sources_sha256": "a9ae3162127988b8f1d241b932f8876a5b39bf3756ff862964a8cb9475e4d03f",
+      "sources": [
+        {
+          "path": "zig/src/server/slide_correction_source.zig",
+          "sha256": "b39864613ada610be312db88787e2bd870c0cf7fdb915fac48337a156e8a8ad8",
+          "bytes": 1787,
+          "complete": true
+        },
+        {
+          "path": "zig/src/metal/sync.zig",
+          "sha256": "960be3e3c395f6c86e566ecf1f79f1958eab55bff668c1de7a155326f09c667a",
+          "bytes": 1033,
+          "complete": true
+        },
+        {
+          "path": "zig/src/families/hy4_flash/index_cuda.zig",
+          "sha256": "a0e5c71854e961a0bbcdb445377ac4ccdcf2339daee8d229b1287abb6d5afaa5",
+          "bytes": 5426,
+          "complete": true
+        },
+        {
+          "path": "zig/src/families/hy4_flash/moe_exl3_cuda.zig",
+          "sha256": "cf7d412f731fedb9373a035248a6cf832cd141ad4d99895292f2a02f2f7d4ddb",
+          "bytes": 3929,
+          "complete": true
+        },
+        {
+          "path": "zig/src/families/qwen3_5/cuda_dspine_weights.zig",
+          "sha256": "185433d6f63e7a51f4867fa1312e314dd6f08eef5abb6f75b637e6161d811482",
+          "bytes": 6122,
+          "complete": true
+        },
+        {
+          "path": "zig/src/families/glm/cuda_prompt_trace.zig",
+          "sha256": "2e2998ae93f566c484165a3e6066e61fef73b0553a4e2cd902e733ec37010e8d",
+          "bytes": 5752,
+          "complete": true
+        },
+        {
+          "path": "zig/src/server/images_progress.zig",
+          "sha256": "f61f0cf7de0729deed70bc48a1579ca3e80ec6f963bd370795fa6afe3fd94db1",
+          "bytes": 3247,
+          "complete": true
+        },
+        {
+          "path": "zig/src/families/deepseek_v41/phases_timed.zig",
+          "sha256": "f344c3dea73ced44e61bcce420c262774fa985bc63af04e692b6569dc215837b",
+          "bytes": 6338,
+          "complete": true
+        },
+        {
+          "path": "zig/src/families/flashnext/backend.zig",
+          "sha256": "45379c6ad5ce83797e05fbecad57a6350a893344f2d8b6285e001a9d7b2c8805",
+          "bytes": 29105,
+          "complete": true
+        },
+        {
+          "path": "zig/src/core/ocr_html.zig",
+          "sha256": "42918d65badbdcc708b2048205862ba2973585bd26db750a5086719387d395ec",
+          "bytes": 17182,
+          "complete": true
+        },
+        {
+          "path": "zig/src/core/picture/webp.zig",
+          "sha256": "edcdcfd63e871cc507c39838f1dc394b715a77597909894d43e9151cdea258c6",
+          "bytes": 7226,
+          "complete": true
+        },
+        {
+          "path": "zig/src/sessions/disk_test.zig",
+          "sha256": "27c847fa3e28d4bc44ae3ddbcaf760b49776d30e1c04a7e78b8fcd1431ed0ffa",
+          "bytes": 16528,
+          "complete": true
+        },
+        {
+          "path": "zig/src/families/qwen27/gdn_pool.zig",
+          "sha256": "38c9d0e7a2bba4e4f3f45a77e58964b07bcdaba022f94c4ac6796c135763896e",
+          "bytes": 5965,
+          "complete": true
+        },
+        {
+          "path": "zig/src/core/lane_stream.zig",
+          "sha256": "61932f024603641041ad63672dd4bd23553ff191e91be74314bddcd8473ed675",
+          "bytes": 4037,
+          "complete": false
+        }
+      ],
+      "instruction": "You are reviewing a large native inference codebase. Below are consecutive excerpts from several source files, each introduced by a line of the form ===== path =====. Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text.",
+      "measured_cache_state": "cold"
+    },
+    {
+      "name": "prose-1024",
+      "set": "dev",
+      "topic": "prose",
+      "cell": 1024,
+      "path": "campaign/prompts/dev/prose-1024.txt",
+      "sha256": "1d63bf9f3da787c95031b66edf6cbd95dc130389e7d47a83207c138b91fbfe56",
+      "bytes": 3736,
+      "local_content_tokens": 1022,
+      "measured_prompt_tokens": 1024,
+      "sources_sha256": "52116cea65813744ac1f4402a1047ac5d9c0862bd858ec200e2403f32a8fc3b6",
+      "sources": [
+        {
+          "path": "docs/recipes/nemotron-3.5-super-vl.md",
+          "sha256": "371a9f12c621ecc462f3a3947eba8d3045da0d24010f3641228606fc52750b45",
+          "bytes": 10056,
+          "complete": false
+        }
+      ],
+      "instruction": "The following are consecutive excerpts from engineering notes and design documents. Reason carefully about the argument they build. Restate the central claim in your own words, set out the evidence offered for it, identify the weakest inference and why it is weak, and say what measurement or observation would settle it.",
+      "measured_cache_state": "cold"
+    },
+    {
+      "name": "prose-4096",
+      "set": "dev",
+      "topic": "prose",
+      "cell": 4096,
+      "path": "campaign/prompts/dev/prose-4096.txt",
+      "sha256": "5e7dd075ada2f20c5507c45b494eb741a6d0649bc0e4f2ed28bca6fc7f7d96aa",
+      "bytes": 15480,
+      "local_content_tokens": 4094,
+      "measured_prompt_tokens": 4096,
+      "sources_sha256": "ee5df579ba597222496640a40e3d7fcd99e36d93a6e2cbda9c547771cd3e60e9",
+      "sources": [
+        {
+          "path": "docs/recipes/nemotron-3.5-super-vl.md",
+          "sha256": "371a9f12c621ecc462f3a3947eba8d3045da0d24010f3641228606fc52750b45",
+          "bytes": 10056,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/deepseek-v41-cuda.md",
+          "sha256": "c8c12c7f072bc0b8b8bfe477e8a3baee003f654688753f36e3338915ada70b51",
+          "bytes": 2446,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/minimax-h3-metal.md",
+          "sha256": "5f1f76a5540e4ea89a935c49254718b6e467b889e28e21a7393811dbbfe037e2",
+          "bytes": 11081,
+          "complete": false
+        }
+      ],
+      "instruction": "The following are consecutive excerpts from engineering notes and design documents. Reason carefully about the argument they build. Restate the central claim in your own words, set out the evidence offered for it, identify the weakest inference and why it is weak, and say what measurement or observation would settle it.",
+      "measured_cache_state": "cold"
+    },
+    {
+      "name": "prose-32768",
+      "set": "dev",
+      "topic": "prose",
+      "cell": 32768,
+      "path": "campaign/prompts/dev/prose-32768.txt",
+      "sha256": "de784b6863fdcc11c42760a1db34cdfb08341364f4bd7c830267fe33699b73a4",
+      "bytes": 121527,
+      "local_content_tokens": 32766,
+      "measured_prompt_tokens": 32768,
+      "sources_sha256": "680cd33f23fb6d21c85ec501ac7d55682b9b22b43308bd76e87e5edbe7cbaf30",
+      "sources": [
+        {
+          "path": "docs/recipes/nemotron-3.5-super-vl.md",
+          "sha256": "371a9f12c621ecc462f3a3947eba8d3045da0d24010f3641228606fc52750b45",
+          "bytes": 10056,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/deepseek-v41-cuda.md",
+          "sha256": "c8c12c7f072bc0b8b8bfe477e8a3baee003f654688753f36e3338915ada70b51",
+          "bytes": 2446,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/minimax-h3-metal.md",
+          "sha256": "5f1f76a5540e4ea89a935c49254718b6e467b889e28e21a7393811dbbfe037e2",
+          "bytes": 11081,
+          "complete": true
+        },
+        {
+          "path": "RUNBOOK.md",
+          "sha256": "9ac181a58bafcf193417ae7ba21da6644198bcb92d51836cebee7ac6355b98e8",
+          "bytes": 35153,
+          "complete": true
+        },
+        {
+          "path": "docs/receipts/qwen-unread-chunks-2941/README.md",
+          "sha256": "ec6b262e96f0c9217c164a33b0041cba091ed8f8773bd414205db7257d020281",
+          "bytes": 7810,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/fluid-subgraph-residency.md",
+          "sha256": "e913e16555864e61c931f0c87ae1c16556763ac34ad8fcda8865757a14fe08c8",
+          "bytes": 12572,
+          "complete": true
+        },
+        {
+          "path": "docs/receipts/glm-fp4local-80517fc3/README.md",
+          "sha256": "517a25b6025bb9cfbfb79aba0625014e975d4b2f5bcc9d799de7dddaf7fea195",
+          "bytes": 14351,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/dots-mocr-cuda.md",
+          "sha256": "a237fc36bc8d1e591b8921a553a1272bfe83b9c7e7a1a0165568ee83a950ac5f",
+          "bytes": 3874,
+          "complete": true
+        },
+        {
+          "path": "campaign/baseline.md",
+          "sha256": "b949333987cea4777c4833e7bddea1fe0eebfdce97130ee4c384b95257bb0038",
+          "bytes": 2827,
+          "complete": true
+        },
+        {
+          "path": "docs/receipts/pr1381-review/README.md",
+          "sha256": "838aa0f78b8997144503f09b0d97edef0873728763a055dffe9011b6de296258",
+          "bytes": 8558,
+          "complete": true
+        },
+        {
+          "path": "docs/receipts/rocm-host-identity/README.md",
+          "sha256": "2e2b71e6c8a7910f5d782e3e0f52c67de9682fc9ab024354784e0d688b0ec716",
+          "bytes": 15370,
+          "complete": false
+        }
+      ],
+      "instruction": "The following are consecutive excerpts from engineering notes and design documents. Reason carefully about the argument they build. Restate the central claim in your own words, set out the evidence offered for it, identify the weakest inference and why it is weak, and say what measurement or observation would settle it.",
+      "measured_cache_state": "cold"
+    },
+    {
+      "name": "structured-1024",
+      "set": "dev",
+      "topic": "structured",
+      "cell": 1024,
+      "path": "campaign/prompts/dev/structured-1024.txt",
+      "sha256": "12d86f119aa7aaa6c18892daaad2c39a7e187330f8c6ef24eb9066d4e945e5a6",
+      "bytes": 2207,
+      "local_content_tokens": 1022,
+      "measured_prompt_tokens": 1024,
+      "sources_sha256": "13ca811c7bf965aa345d81f51a09f398b20e679c74adf72e94be1ef0c77c8f1d",
+      "sources": [
+        {
+          "path": "docs/receipts/glm-fp4local-80517fc3/video/ref-fp4local.json",
+          "sha256": "b8f3042c6e4d1534ec1c100729a535730ea3c9b815f2e1b567a663b2c760259e",
+          "bytes": 58005,
+          "complete": false
+        }
+      ],
+      "instruction": "The following are consecutive excerpts from configuration and documentation files. Read them and return exactly one JSON object, with no prose around it, matching this schema: {\"summary\": string, \"components\": [{\"name\": string, \"kind\": string}], \"decisions\": [{\"id\": string, \"reason\": string}]}. Use names that appear in the excerpts and keep every string under forty words.",
+      "measured_cache_state": "cold"
+    },
+    {
+      "name": "structured-4096",
+      "set": "dev",
+      "topic": "structured",
+      "cell": 4096,
+      "path": "campaign/prompts/dev/structured-4096.txt",
+      "sha256": "e5c57f2d85d41060d709deffb8552e97bf1e7a668e4c2dd785ecc003f3bd10d2",
+      "bytes": 8304,
+      "local_content_tokens": 4094,
+      "measured_prompt_tokens": 4096,
+      "sources_sha256": "13ca811c7bf965aa345d81f51a09f398b20e679c74adf72e94be1ef0c77c8f1d",
+      "sources": [
+        {
+          "path": "docs/receipts/glm-fp4local-80517fc3/video/ref-fp4local.json",
+          "sha256": "b8f3042c6e4d1534ec1c100729a535730ea3c9b815f2e1b567a663b2c760259e",
+          "bytes": 58005,
+          "complete": false
+        }
+      ],
+      "instruction": "The following are consecutive excerpts from configuration and documentation files. Read them and return exactly one JSON object, with no prose around it, matching this schema: {\"summary\": string, \"components\": [{\"name\": string, \"kind\": string}], \"decisions\": [{\"id\": string, \"reason\": string}]}. Use names that appear in the excerpts and keep every string under forty words.",
+      "measured_cache_state": "cold"
+    },
+    {
+      "name": "structured-32768",
+      "set": "dev",
+      "topic": "structured",
+      "cell": 32768,
+      "path": "campaign/prompts/dev/structured-32768.txt",
+      "sha256": "6a4b20aea65ffaead0f47c5e2212bf6c5739e700192127a51162f7125726d4bb",
+      "bytes": 70110,
+      "local_content_tokens": 32766,
+      "measured_prompt_tokens": 32768,
+      "sources_sha256": "3b763c19300410dc3f5fb835b0e879d6e8e015c77a73c32d4e8eb165181bb05c",
+      "sources": [
+        {
+          "path": "docs/receipts/glm-fp4local-80517fc3/video/ref-fp4local.json",
+          "sha256": "b8f3042c6e4d1534ec1c100729a535730ea3c9b815f2e1b567a663b2c760259e",
+          "bytes": 58005,
+          "complete": true
+        },
+        {
+          "path": "docs/receipts/rocm-host-identity/gpu-run/35b.drafts.json",
+          "sha256": "9bb8baa0274cf8e4a1658dbc77ecf8fa22764e79ab3cec1bac093bbda47e6470",
+          "bytes": 2864,
+          "complete": true
+        },
+        {
+          "path": "zig/src/families/glm_ocr/fixtures/config.json",
+          "sha256": "ad537817b2becde827cbb23569a1dd83a352ee64cc34ce751a4ef000ecce4b5f",
+          "bytes": 1737,
+          "complete": true
+        },
+        {
+          "path": "app/src/lib/preferences/packs/th/google-account-recovery.json",
+          "sha256": "7483dd35f15cfbb47a9d15f9f55346320080e1862176642dc0fdd6782446ccbf",
+          "bytes": 1283,
+          "complete": true
+        },
+        {
+          "path": "app/src/lib/preferences/packs/th/cluster-workspace.json",
+          "sha256": "344ad2e7dad7fff9a5c9d8d7aa51bdca12abee29e784b02dc13d494c15aa95ee",
+          "bytes": 9093,
+          "complete": false
+        }
+      ],
+      "instruction": "The following are consecutive excerpts from configuration and documentation files. Read them and return exactly one JSON object, with no prose around it, matching this schema: {\"summary\": string, \"components\": [{\"name\": string, \"kind\": string}], \"decisions\": [{\"id\": string, \"reason\": string}]}. Use names that appear in the excerpts and keep every string under forty words.",
+      "measured_cache_state": "cold"
+    },
+    {
+      "name": "heldout-code-1024",
+      "set": "holdout",
+      "topic": "code",
+      "cell": 1024,
+      "path": "campaign/prompts/holdout/heldout-code-1024.txt",
+      "sha256": "3b54fcba0853433fee560c40c50c222faf5818f75a9f072e58e9ec2d73426887",
+      "bytes": 3559,
+      "local_content_tokens": 1022,
+      "measured_prompt_tokens": 1024,
+      "sources_sha256": "a2e05755a898f8a7fea447cc2e4b7a1ea39bf12aec8167f23aa125471004c1c8",
+      "sources": [
+        {
+          "path": "zig/src/families/qwen4/ple_control_source.zig",
+          "sha256": "152620c782696aaf5e2d5c9cc198e8892c8443287f861917f6ec2d37b6abcc85",
+          "bytes": 5140,
+          "complete": false
+        }
+      ],
+      "instruction": "You are reviewing a large native inference codebase. Below are consecutive excerpts from several source files, each introduced by a line of the form ===== path =====. Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text.",
+      "measured_cache_state": "cold"
+    },
+    {
+      "name": "heldout-code-4096",
+      "set": "holdout",
+      "topic": "code",
+      "cell": 4096,
+      "path": "campaign/prompts/holdout/heldout-code-4096.txt",
+      "sha256": "cb96b86eed958addb3b0fdb132abf7dbc34871aacc16e3134e6364d197b8cbd0",
+      "bytes": 12751,
+      "local_content_tokens": 4094,
+      "measured_prompt_tokens": 4096,
+      "sources_sha256": "82d5e8a204a0b7299aab9ba285f48f01992bce57b65d8c17550203d83fc5e8c3",
+      "sources": [
+        {
+          "path": "zig/src/families/qwen4/ple_control_source.zig",
+          "sha256": "152620c782696aaf5e2d5c9cc198e8892c8443287f861917f6ec2d37b6abcc85",
+          "bytes": 5140,
+          "complete": true
+        },
+        {
+          "path": "zig/src/hip/kernel_tests/exl3.zig",
+          "sha256": "f3942db63fbc47f625ac6c99eb2b947de1b668a8e926ebaed399c1b52a08c6d7",
+          "bytes": 12572,
+          "complete": false
+        }
+      ],
+      "instruction": "You are reviewing a large native inference codebase. Below are consecutive excerpts from several source files, each introduced by a line of the form ===== path =====. Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text.",
+      "measured_cache_state": "cold"
+    },
+    {
+      "name": "heldout-code-32768",
+      "set": "holdout",
+      "topic": "code",
+      "cell": 32768,
+      "path": "campaign/prompts/holdout/heldout-code-32768.txt",
+      "sha256": "75cb3e09e0ca5cad5f9e970a1b59e6afb0cb94b0b132de97ebf7b2918e234be6",
+      "bytes": 109566,
+      "local_content_tokens": 32766,
+      "measured_prompt_tokens": 32768,
+      "sources_sha256": "5e40d1e33aa12e6c3f984fa9e57a378cac57f6937f541749adde240e1441ca4b",
+      "sources": [
+        {
+          "path": "zig/src/families/qwen4/ple_control_source.zig",
+          "sha256": "152620c782696aaf5e2d5c9cc198e8892c8443287f861917f6ec2d37b6abcc85",
+          "bytes": 5140,
+          "complete": true
+        },
+        {
+          "path": "zig/src/hip/kernel_tests/exl3.zig",
+          "sha256": "f3942db63fbc47f625ac6c99eb2b947de1b668a8e926ebaed399c1b52a08c6d7",
+          "bytes": 12572,
+          "complete": true
+        },
+        {
+          "path": "zig/src/server/chat_cli.zig",
+          "sha256": "3921b1062b9acd8de19a15ef671a85aa534715cd6badde89f4f20052c10e143a",
+          "bytes": 18853,
+          "complete": true
+        },
+        {
+          "path": "zig/src/families/flashnext/replay_prompt_chunks.zig",
+          "sha256": "29fad86036acc9b6698fe5e8da33fc99e0b05e0d7a0370ebae1120ed46b8c5a4",
+          "bytes": 19079,
+          "complete": true
+        },
+        {
+          "path": "zig/src/families/deepseek_v41/world4_plan_test.zig",
+          "sha256": "862139585859b9e8e30e68f933fbbc55f2c02ee2d652efeff78d8dd64086e6f0",
+          "bytes": 2431,
+          "complete": true
+        },
+        {
+          "path": "zig/src/families/deepseek_v41/slots_cli.zig",
+          "sha256": "e441678000e0fa330d0fe12fe36d7378cd5ce0eda75ff6e5525fbffb29bfe42f",
+          "bytes": 5540,
+          "complete": true
+        },
+        {
+          "path": "zig/src/families/deepseek_v41/run.zig",
+          "sha256": "18c2c743fe4d06fefed2ff0c20dce9252db314625244b783d4b2b53c6d0ff137",
+          "bytes": 22424,
+          "complete": true
+        },
+        {
+          "path": "zig/build/dsv41_cuda.zig",
+          "sha256": "6e8e97ba70811d33019b94f01cfca5cb0eba28ff4e067359624ec84312e7c105",
+          "bytes": 9402,
+          "complete": true
+        },
+        {
+          "path": "zig/src/server/slide_recheck.zig",
+          "sha256": "65d7a5d63e7ed2f09b23c868d5eada70d93de65d8f67b4684aefc29575ee0f8f",
+          "bytes": 15294,
+          "complete": false
+        }
+      ],
+      "instruction": "You are reviewing a large native inference codebase. Below are consecutive excerpts from several source files, each introduced by a line of the form ===== path =====. Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text.",
+      "measured_cache_state": "cold"
+    },
+    {
+      "name": "heldout-prose-1024",
+      "set": "holdout",
+      "topic": "prose",
+      "cell": 1024,
+      "path": "campaign/prompts/holdout/heldout-prose-1024.txt",
+      "sha256": "b0a864a398c8fd3cf012c9f8dd3ca854a6a9f1c1811781d95b3eeafb7615fcfe",
+      "bytes": 4787,
+      "local_content_tokens": 1022,
+      "measured_prompt_tokens": 1024,
+      "sources_sha256": "334fcf0e7b4d1955439ea4c2a3ca41e38c1b114391b6c3b8abc25e152f9a1cda",
+      "sources": [
+        {
+          "path": "docs/atc/SKILL.md",
+          "sha256": "d4f2af878b858ce8c01fcff99ec906781de6ad6b8ebcd4c043d8a06afa0d4055",
+          "bytes": 7855,
+          "complete": false
+        }
+      ],
+      "instruction": "The following are consecutive excerpts from engineering notes and design documents. Reason carefully about the argument they build. Restate the central claim in your own words, set out the evidence offered for it, identify the weakest inference and why it is weak, and say what measurement or observation would settle it.",
+      "measured_cache_state": "cold"
+    },
+    {
+      "name": "heldout-prose-4096",
+      "set": "holdout",
+      "topic": "prose",
+      "cell": 4096,
+      "path": "campaign/prompts/holdout/heldout-prose-4096.txt",
+      "sha256": "fddd733efbe11233d6000503d427284e63e82bcc767a361064fd0b7866e49c8f",
+      "bytes": 16195,
+      "local_content_tokens": 4094,
+      "measured_prompt_tokens": 4096,
+      "sources_sha256": "7370fe21fd5ed481492c4b065175c52b8eeed4a0ff6863aba7a9c81ea79b1855",
+      "sources": [
+        {
+          "path": "docs/atc/SKILL.md",
+          "sha256": "d4f2af878b858ce8c01fcff99ec906781de6ad6b8ebcd4c043d8a06afa0d4055",
+          "bytes": 7855,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/qwen-image-2.1.md",
+          "sha256": "dfce0e5edd4d44074f862f3f8b89d8be831b6a327ff4d9cb26e5efc55db73e95",
+          "bytes": 3281,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/gemma-4-12b-native.md",
+          "sha256": "af6932ada1c953dc1443792de0e0065ab0255c38e6d854e5e8bbebc89ad609bb",
+          "bytes": 12141,
+          "complete": false
+        }
+      ],
+      "instruction": "The following are consecutive excerpts from engineering notes and design documents. Reason carefully about the argument they build. Restate the central claim in your own words, set out the evidence offered for it, identify the weakest inference and why it is weak, and say what measurement or observation would settle it.",
+      "measured_cache_state": "cold"
+    },
+    {
+      "name": "heldout-prose-32768",
+      "set": "holdout",
+      "topic": "prose",
+      "cell": 32768,
+      "path": "campaign/prompts/holdout/heldout-prose-32768.txt",
+      "sha256": "a629344de9bb4f4eb4b06b6b1894083b9b2073af03a052eea3545d4a10e3245f",
+      "bytes": 125137,
+      "local_content_tokens": 32766,
+      "measured_prompt_tokens": 32768,
+      "sources_sha256": "e8fde499e5aeac5dfe4953b5bf6dec1c2da253bdc109add84f883d5291befd73",
+      "sources": [
+        {
+          "path": "docs/atc/SKILL.md",
+          "sha256": "d4f2af878b858ce8c01fcff99ec906781de6ad6b8ebcd4c043d8a06afa0d4055",
+          "bytes": 7855,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/qwen-image-2.1.md",
+          "sha256": "dfce0e5edd4d44074f862f3f8b89d8be831b6a327ff4d9cb26e5efc55db73e95",
+          "bytes": 3281,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/gemma-4-12b-native.md",
+          "sha256": "af6932ada1c953dc1443792de0e0065ab0255c38e6d854e5e8bbebc89ad609bb",
+          "bytes": 12141,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/glm-5.3-flash.md",
+          "sha256": "4e15ba4f5fd42f884cbb1dd77899c972394af80b2d128c75cb17c3d57beee87b",
+          "bytes": 22859,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/ling-bf16-forward.md",
+          "sha256": "03514d17d18ea445f3e99f823037c888647ace5c156769dbdc9d9398fe5a4aaa",
+          "bytes": 4353,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/adding-a-family.md",
+          "sha256": "e009d99418357c3d31b4cda069fce67c267941bb3a34741f1b8f326dee2810f0",
+          "bytes": 4845,
+          "complete": true
+        },
+        {
+          "path": "docs/receipts/glm-sampling-95818b3/README.md",
+          "sha256": "871aae0bbbc9f64c21d7a795b8ae08968e11c747a2d9b06a8de641a707039536",
+          "bytes": 4074,
+          "complete": true
+        },
+        {
+          "path": "docs/runtime/cuda-copy-sources.md",
+          "sha256": "0cf0c9e025e04d7f0f8ff9aa8ae09599c3f2c925b5ebad0149b0603897ae7f26",
+          "bytes": 3660,
+          "complete": true
+        },
+        {
+          "path": "docs/receipts/flashnext-readout-fused/README.md",
+          "sha256": "d1e36b3dc6b5a46e0d4d23481d4772fadeeb2034264944dc0bea051d155259a0",
+          "bytes": 8867,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/qwen4-dense.md",
+          "sha256": "d6f235964f523d58f072dc74d430eaa88b6324f1304e0af84a8ac4833c780120",
+          "bytes": 9263,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/idol-cuda.md",
+          "sha256": "ebaac7de1aa558242fe5aa1781ebef556fe9b9e0f8ea05e042c0d3d13adee325",
+          "bytes": 3685,
+          "complete": true
+        },
+        {
+          "path": "docs/receipts/gfx1151-cancel-76aafcf2/README.md",
+          "sha256": "4dfa053b09d0f5584088538097e0094a19bda027f59f0363bc8c747aa0f50e82",
+          "bytes": 4992,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/adding-a-zig-family.md",
+          "sha256": "29766bca4515f2704eb204a8e7be18e30bcd2f038bf38a6c27d3f5df58a71b6f",
+          "bytes": 27647,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/qwen4-living-weights.md",
+          "sha256": "7aa56c4c2a6c8920f23ffc27b595e9daafa90e1db817b69e12f0d0758322eea7",
+          "bytes": 7987,
+          "complete": false
+        }
+      ],
+      "instruction": "The following are consecutive excerpts from engineering notes and design documents. Reason carefully about the argument they build. Restate the central claim in your own words, set out the evidence offered for it, identify the weakest inference and why it is weak, and say what measurement or observation would settle it.",
+      "measured_cache_state": "cold"
+    },
+    {
+      "name": "heldout-structured-1024",
+      "set": "holdout",
+      "topic": "structured",
+      "cell": 1024,
+      "path": "campaign/prompts/holdout/heldout-structured-1024.txt",
+      "sha256": "3a5e753a65cc8b0b782449655468780d3d1f738c16fa71365c11fcf1a130313d",
+      "bytes": 2762,
+      "local_content_tokens": 1022,
+      "measured_prompt_tokens": 1024,
+      "sources_sha256": "726b803674f0c1abcd5dcb3e4e9d229df7652ecc4f9f852cc48df200af4793b7",
+      "sources": [
+        {
+          "path": "docs/receipts/glm-fp4local-80517fc3/tp2/serve/ex-111/conc.json",
+          "sha256": "7936bcfa48d36a5fdc2727496c60d93ff847182ca7c72e3cb7360a342a9adb85",
+          "bytes": 46116,
+          "complete": false
+        }
+      ],
+      "instruction": "The following are consecutive excerpts from configuration and documentation files. Read them and return exactly one JSON object, with no prose around it, matching this schema: {\"summary\": string, \"components\": [{\"name\": string, \"kind\": string}], \"decisions\": [{\"id\": string, \"reason\": string}]}. Use names that appear in the excerpts and keep every string under forty words.",
+      "measured_cache_state": "cold"
+    },
+    {
+      "name": "heldout-structured-4096",
+      "set": "holdout",
+      "topic": "structured",
+      "cell": 4096,
+      "path": "campaign/prompts/holdout/heldout-structured-4096.txt",
+      "sha256": "d054ce31913b24fdbaccad9c5eda3bf523c8977f975a5e13de1fa5d6f71bd14c",
+      "bytes": 10625,
+      "local_content_tokens": 4094,
+      "measured_prompt_tokens": 4096,
+      "sources_sha256": "726b803674f0c1abcd5dcb3e4e9d229df7652ecc4f9f852cc48df200af4793b7",
+      "sources": [
+        {
+          "path": "docs/receipts/glm-fp4local-80517fc3/tp2/serve/ex-111/conc.json",
+          "sha256": "7936bcfa48d36a5fdc2727496c60d93ff847182ca7c72e3cb7360a342a9adb85",
+          "bytes": 46116,
+          "complete": false
+        }
+      ],
+      "instruction": "The following are consecutive excerpts from configuration and documentation files. Read them and return exactly one JSON object, with no prose around it, matching this schema: {\"summary\": string, \"components\": [{\"name\": string, \"kind\": string}], \"decisions\": [{\"id\": string, \"reason\": string}]}. Use names that appear in the excerpts and keep every string under forty words.",
+      "measured_cache_state": "cold"
+    },
+    {
+      "name": "heldout-structured-32768",
+      "set": "holdout",
+      "topic": "structured",
+      "cell": 32768,
+      "path": "campaign/prompts/holdout/heldout-structured-32768.txt",
+      "sha256": "c8d76cf547f8911c6b21178afa410739393b68af946d53ed1edafc96a2865d8d",
+      "bytes": 100070,
+      "local_content_tokens": 32766,
+      "measured_prompt_tokens": 32768,
+      "sources_sha256": "b705ff1fec5cebefc5c9ca0f9fb26c5321da8d0fb283d5dd55cd1294bc4da818",
+      "sources": [
+        {
+          "path": "docs/receipts/glm-fp4local-80517fc3/tp2/serve/ex-111/conc.json",
+          "sha256": "7936bcfa48d36a5fdc2727496c60d93ff847182ca7c72e3cb7360a342a9adb85",
+          "bytes": 46116,
+          "complete": true
+        },
+        {
+          "path": "app/src/lib/preferences/packs/hi/engine-advanced.json",
+          "sha256": "fd8bd79e73831424408901a3098fcdae71e6a2eba30a57762fc003014b37fea1",
+          "bytes": 4991,
+          "complete": true
+        },
+        {
+          "path": "docs/receipts/xpu-qwen27-logprobs/bench.json",
+          "sha256": "a6a324b7117df1415cab93a449b31c04876f119602c909e8192d9e1502683bbe",
+          "bytes": 2379,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/qwen4-living-weights.md",
+          "sha256": "7aa56c4c2a6c8920f23ffc27b595e9daafa90e1db817b69e12f0d0758322eea7",
+          "bytes": 7987,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/qwen3-embedding-metal.md",
+          "sha256": "281792b6c9a32f52bfd9dc64fd9d0ed07bc3a94d0eecc85e74d2472518344fd4",
+          "bytes": 3079,
+          "complete": true
+        },
+        {
+          "path": "app/src/lib/preferences/packs/ko/extra-005.json",
+          "sha256": "f671d134bde2da00aae7804ee1c151a45373577793025e1e1a3322200cc45f57",
+          "bytes": 13158,
+          "complete": true
+        },
+        {
+          "path": "app/src/lib/preferences/packs/ko/007.json",
+          "sha256": "d54bd7f3b77cc9db15f84c4aaa8d68b25065692b1e914c57a347a1dce0eaf34f",
+          "bytes": 17955,
+          "complete": true
+        },
+        {
+          "path": "docs/receipts/glm-kv-live-half-555f052d/records/fresh/turns.json",
+          "sha256": "2f0ebd995ab9e3ba5886ec7ee7ca54b1a3a62c335f74ae4a1398163cb25ba438",
+          "bytes": 11578,
+          "complete": false
+        }
+      ],
+      "instruction": "The following are consecutive excerpts from configuration and documentation files. Read them and return exactly one JSON object, with no prose around it, matching this schema: {\"summary\": string, \"components\": [{\"name\": string, \"kind\": string}], \"decisions\": [{\"id\": string, \"reason\": string}]}. Use names that appear in the excerpts and keep every string under forty words.",
+      "measured_cache_state": "cold"
+    }
+  ],
+  "measured_by": {
+    "binary_sha256": "8c2c8e6f4fd9f2c111d6fba7d89251a32a5afb309cc950ee3ff2d6a50816ac87",
+    "host": {
+      "product": "Apple M5 Max",
+      "performance_cores": 6,
+      "efficiency_cores": 12,
+      "memory_bytes": 51539607552,
+      "gpu_cores": 40,
+      "metal": "Metal 4",
+      "os": "macOS 26B123",
+      "recommended_max_working_set_bytes": 40200896512,
+      "load_limit_gb": 36
+    }
+  }
+}

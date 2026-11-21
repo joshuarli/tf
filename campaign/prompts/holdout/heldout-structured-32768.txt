@@ -1,0 +1,2570 @@
+The following are consecutive excerpts from configuration and documentation files. Read them and return exactly one JSON object, with no prose around it, matching this schema: {"summary": string, "components": [{"name": string, "kind": string}], "decisions": [{"id": string, "reason": string}]}. Use names that appear in the excerpts and keep every string under forty words.
+
+===== docs/receipts/glm-fp4local-80517fc3/tp2/serve/ex-111/conc.json =====
+{
+ "label": "ex-111",
+ "tokens": 256,
+ "mixed": false,
+ "cells": [
+  {
+   "prompt": "code",
+   "temperature": 1.0,
+   "streams": 1,
+   "failed": 0,
+   "unmeasured": 0,
+   "aggregate_tps": 38.9,
+   "per_stream_tps": 38.9,
+   "ttft_s_max": 0.15,
+   "alone": {
+    "equal": 1,
+    "unequal": 0,
+    "failed": 0
+   },
+   "serial": {
+    "equal": 4,
+    "unequal": 0,
+    "failed": 0
+   },
+   "reps": [
+    {
+     "failed": 0,
+     "unmeasured": 0,
+     "aggregate_tps": 38.910787964107605,
+     "per_stream_tps": [
+      38.9
+     ],
+     "ttft_s": [
+      0.15
+     ],
+     "errors": [],
+     "evidence": [
+      {
+       "prompt_tokens": 14,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "950590a0cb84",
+       "token_sha256": "950590a0cb8473327c8f149a6ea84432a6d6d090cbfc37c6869486c903ed6aa0",
+       "output_sha256": "c8b307fa0becb67c39cbc61f6f8b51c31e2b6443a00c7e9da3fffacb9eace78b"
+      }
+     ],
+     "client_intervals": [
+      {
+       "start": 458504.525620289,
+       "end": 458511.23313454
+      }
+     ],
+     "equal_alone": [
+      true
+     ],
+     "comparisons": [
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "950590a0cb8473327c8f149a6ea84432a6d6d090cbfc37c6869486c903ed6aa0",
+        "output_sha256": "c8b307fa0becb67c39cbc61f6f8b51c31e2b6443a00c7e9da3fffacb9eace78b",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "950590a0cb8473327c8f149a6ea84432a6d6d090cbfc37c6869486c903ed6aa0",
+        "output_sha256": "c8b307fa0becb67c39cbc61f6f8b51c31e2b6443a00c7e9da3fffacb9eace78b",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "950590a0cb8473327c8f149a6ea84432a6d6d090cbfc37c6869486c903ed6aa0",
+        "output_sha256": "c8b307fa0becb67c39cbc61f6f8b51c31e2b6443a00c7e9da3fffacb9eace78b",
+        "complete": true,
+        "error": null
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "prompt": "code",
+   "temperature": 1.0,
+   "streams": 2,
+   "failed": 0,
+   "unmeasured": 0,
+   "aggregate_tps": 44.7,
+   "per_stream_tps": 24.8,
+   "ttft_s_max": 0.42,
+   "steady_tps": 48.4,
+   "alone": {
+    "equal": 2,
+    "unequal": 0,
+    "failed": 0
+   },
+   "serial": {
+    "equal": 4,
+    "unequal": 0,
+    "failed": 0
+   },
+   "reps": [
+    {
+     "failed": 0,
+     "unmeasured": 0,
+     "aggregate_tps": 44.73098090291592,
+     "steady_tps": 48.41762656310543,
+     "per_stream_tps": [
+      27.1,
+      22.4
+     ],
+     "ttft_s": [
+      0.42,
+      0.15
+     ],
+     "errors": [],
+     "evidence": [
+      {
+       "prompt_tokens": 14,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "950590a0cb84",
+       "token_sha256": "950590a0cb8473327c8f149a6ea84432a6d6d090cbfc37c6869486c903ed6aa0",
+       "output_sha256": "c8b307fa0becb67c39cbc61f6f8b51c31e2b6443a00c7e9da3fffacb9eace78b"
+      },
+      {
+       "prompt_tokens": 14,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "b94a7bd1b3ff",
+       "token_sha256": "b94a7bd1b3ffe7829775dae1c37814b8dbc58160ea8a19af3360e1aa6dcdd4e1",
+       "output_sha256": "057a28544e2fc7a06bb968e33dbbc69ccdeb08c0aea2cfb7c5242bfc565741ff"
+      }
+     ],
+     "client_intervals": [
+      {
+       "start": 458511.233979161,
+       "end": 458521.051580926
+      },
+      {
+       "start": 458511.233873737,
+       "end": 458522.794587053
+      }
+     ],
+     "equal_alone": [
+      true,
+      true
+     ],
+     "comparisons": [
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "950590a0cb8473327c8f149a6ea84432a6d6d090cbfc37c6869486c903ed6aa0",
+        "output_sha256": "c8b307fa0becb67c39cbc61f6f8b51c31e2b6443a00c7e9da3fffacb9eace78b",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "950590a0cb8473327c8f149a6ea84432a6d6d090cbfc37c6869486c903ed6aa0",
+        "output_sha256": "c8b307fa0becb67c39cbc61f6f8b51c31e2b6443a00c7e9da3fffacb9eace78b",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "950590a0cb8473327c8f149a6ea84432a6d6d090cbfc37c6869486c903ed6aa0",
+        "output_sha256": "c8b307fa0becb67c39cbc61f6f8b51c31e2b6443a00c7e9da3fffacb9eace78b",
+        "complete": true,
+        "error": null
+       }
+      },
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "b94a7bd1b3ffe7829775dae1c37814b8dbc58160ea8a19af3360e1aa6dcdd4e1",
+        "output_sha256": "057a28544e2fc7a06bb968e33dbbc69ccdeb08c0aea2cfb7c5242bfc565741ff",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "b94a7bd1b3ffe7829775dae1c37814b8dbc58160ea8a19af3360e1aa6dcdd4e1",
+        "output_sha256": "057a28544e2fc7a06bb968e33dbbc69ccdeb08c0aea2cfb7c5242bfc565741ff",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "b94a7bd1b3ffe7829775dae1c37814b8dbc58160ea8a19af3360e1aa6dcdd4e1",
+        "output_sha256": "057a28544e2fc7a06bb968e33dbbc69ccdeb08c0aea2cfb7c5242bfc565741ff",
+        "complete": true,
+        "error": null
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "prompt": "code",
+   "temperature": 1.0,
+   "streams": 4,
+   "failed": 0,
+   "unmeasured": 0,
+   "aggregate_tps": 60.2,
+   "per_stream_tps": 16.9,
+   "ttft_s_max": 1.09,
+   "steady_tps": 64.7,
+   "alone": {
+    "equal": 4,
+    "unequal": 0,
+    "failed": 0
+   },
+   "serial": {
+    "equal": 4,
+    "unequal": 0,
+    "failed": 0
+   },
+   "reps": [
+    {
+     "failed": 0,
+     "unmeasured": 0,
+     "aggregate_tps": 60.19136802396555,
+     "steady_tps": 64.69336795514737,
+     "per_stream_tps": [
+      17.6,
+      15.0,
+      16.6,
+      17.1
+     ],
+     "ttft_s": [
+      0.73,
+      0.15,
+      1.09,
+      0.43
+     ],
+     "errors": [],
+     "evidence": [
+      {
+       "prompt_tokens": 14,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "950590a0cb84",
+       "token_sha256": "950590a0cb8473327c8f149a6ea84432a6d6d090cbfc37c6869486c903ed6aa0",
+       "output_sha256": "c8b307fa0becb67c39cbc61f6f8b51c31e2b6443a00c7e9da3fffacb9eace78b"
+      },
+      {
+       "prompt_tokens": 14,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "b94a7bd1b3ff",
+       "token_sha256": "b94a7bd1b3ffe7829775dae1c37814b8dbc58160ea8a19af3360e1aa6dcdd4e1",
+       "output_sha256": "057a28544e2fc7a06bb968e33dbbc69ccdeb08c0aea2cfb7c5242bfc565741ff"
+      },
+      {
+       "prompt_tokens": 14,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "6642e40d33c3",
+       "token_sha256": "6642e40d33c31a5db195cf3ac9956792b3237419b59cc996886dc3cd26ee7b7b",
+       "output_sha256": "9d0023c5324bb8e6900942c44c0a37965e9fc2d645b9518524537872f67501d9"
+      },
+      {
+       "prompt_tokens": 14,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "6c97574b6d3c",
+       "token_sha256": "6c97574b6d3c87434dca08b1f0b10d29b419c8f7ab8c37ebb5ad0926270991ae",
+       "output_sha256": "4ee8febba1190b3a6850eb3bf5cdbe758c8886ce7f0432c7ec212b409895d692"
+      }
+     ],
+     "client_intervals": [
+      {
+       "start": 458522.79703898,
+       "end": 458537.988127317
+      },
+      {
+       "start": 458522.796035272,
+       "end": 458539.895893882
+      },
+      {
+       "start": 458522.796575686,
+       "end": 458539.238245572
+      },
+      {
+       "start": 458522.79591964,
+       "end": 458538.148254789
+      }
+     ],
+     "equal_alone": [
+      true,
+      true,
+      true,
+      true
+     ],
+     "comparisons": [
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "950590a0cb8473327c8f149a6ea84432a6d6d090cbfc37c6869486c903ed6aa0",
+        "output_sha256": "c8b307fa0becb67c39cbc61f6f8b51c31e2b6443a00c7e9da3fffacb9eace78b",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "950590a0cb8473327c8f149a6ea84432a6d6d090cbfc37c6869486c903ed6aa0",
+        "output_sha256": "c8b307fa0becb67c39cbc61f6f8b51c31e2b6443a00c7e9da3fffacb9eace78b",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "950590a0cb8473327c8f149a6ea84432a6d6d090cbfc37c6869486c903ed6aa0",
+        "output_sha256": "c8b307fa0becb67c39cbc61f6f8b51c31e2b6443a00c7e9da3fffacb9eace78b",
+        "complete": true,
+        "error": null
+       }
+      },
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "b94a7bd1b3ffe7829775dae1c37814b8dbc58160ea8a19af3360e1aa6dcdd4e1",
+        "output_sha256": "057a28544e2fc7a06bb968e33dbbc69ccdeb08c0aea2cfb7c5242bfc565741ff",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "b94a7bd1b3ffe7829775dae1c37814b8dbc58160ea8a19af3360e1aa6dcdd4e1",
+        "output_sha256": "057a28544e2fc7a06bb968e33dbbc69ccdeb08c0aea2cfb7c5242bfc565741ff",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "b94a7bd1b3ffe7829775dae1c37814b8dbc58160ea8a19af3360e1aa6dcdd4e1",
+        "output_sha256": "057a28544e2fc7a06bb968e33dbbc69ccdeb08c0aea2cfb7c5242bfc565741ff",
+        "complete": true,
+        "error": null
+       }
+      },
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "6642e40d33c31a5db195cf3ac9956792b3237419b59cc996886dc3cd26ee7b7b",
+        "output_sha256": "9d0023c5324bb8e6900942c44c0a37965e9fc2d645b9518524537872f67501d9",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "6642e40d33c31a5db195cf3ac9956792b3237419b59cc996886dc3cd26ee7b7b",
+        "output_sha256": "9d0023c5324bb8e6900942c44c0a37965e9fc2d645b9518524537872f67501d9",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "6642e40d33c31a5db195cf3ac9956792b3237419b59cc996886dc3cd26ee7b7b",
+        "output_sha256": "9d0023c5324bb8e6900942c44c0a37965e9fc2d645b9518524537872f67501d9",
+        "complete": true,
+        "error": null
+       }
+      },
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "6c97574b6d3c87434dca08b1f0b10d29b419c8f7ab8c37ebb5ad0926270991ae",
+        "output_sha256": "4ee8febba1190b3a6850eb3bf5cdbe758c8886ce7f0432c7ec212b409895d692",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "6c97574b6d3c87434dca08b1f0b10d29b419c8f7ab8c37ebb5ad0926270991ae",
+        "output_sha256": "4ee8febba1190b3a6850eb3bf5cdbe758c8886ce7f0432c7ec212b409895d692",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "6c97574b6d3c87434dca08b1f0b10d29b419c8f7ab8c37ebb5ad0926270991ae",
+        "output_sha256": "4ee8febba1190b3a6850eb3bf5cdbe758c8886ce7f0432c7ec212b409895d692",
+        "complete": true,
+        "error": null
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "prompt": "chat",
+   "temperature": 1.0,
+   "streams": 1,
+   "failed": 0,
+   "unmeasured": 0,
+   "aggregate_tps": 29.1,
+   "per_stream_tps": 29.1,
+   "ttft_s_max": 0.22,
+   "alone": {
+    "equal": 1,
+    "unequal": 0,
+    "failed": 0
+   },
+   "serial": {
+    "equal": 4,
+    "unequal": 0,
+    "failed": 0
+   },
+   "reps": [
+    {
+     "failed": 0,
+     "unmeasured": 0,
+     "aggregate_tps": 29.070572135335468,
+     "per_stream_tps": [
+      29.1
+     ],
+     "ttft_s": [
+      0.22
+     ],
+     "errors": [],
+     "evidence": [
+      {
+       "prompt_tokens": 32,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "9842a795db37",
+       "token_sha256": "9842a795db3725bcbafc8f42d161150739f454cd43900ccec1abc9933f88b41b",
+       "output_sha256": "c011c3d752c75b46f47a102d07b0f71f7597c16a461092666c264bec03bb652b"
+      }
+     ],
+     "client_intervals": [
+      {
+       "start": 458634.743431645,
+       "end": 458643.738553431
+      }
+     ],
+     "equal_alone": [
+      true
+     ],
+     "comparisons": [
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "9842a795db3725bcbafc8f42d161150739f454cd43900ccec1abc9933f88b41b",
+        "output_sha256": "c011c3d752c75b46f47a102d07b0f71f7597c16a461092666c264bec03bb652b",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "9842a795db3725bcbafc8f42d161150739f454cd43900ccec1abc9933f88b41b",
+        "output_sha256": "c011c3d752c75b46f47a102d07b0f71f7597c16a461092666c264bec03bb652b",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "9842a795db3725bcbafc8f42d161150739f454cd43900ccec1abc9933f88b41b",
+        "output_sha256": "c011c3d752c75b46f47a102d07b0f71f7597c16a461092666c264bec03bb652b",
+        "complete": true,
+        "error": null
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "prompt": "chat",
+   "temperature": 1.0,
+   "streams": 2,
+   "failed": 0,
+   "unmeasured": 0,
+   "aggregate_tps": 39.9,
+   "per_stream_tps": 20.4,
+   "ttft_s_max": 0.56,
+   "steady_tps": 41.0,
+   "alone": {
+    "equal": 2,
+    "unequal": 0,
+    "failed": 0
+   },
+   "serial": {
+    "equal": 4,
+    "unequal": 0,
+    "failed": 0
+   },
+   "reps": [
+    {
+     "failed": 0,
+     "unmeasured": 0,
+     "aggregate_tps": 39.93170097528753,
+     "steady_tps": 41.01029337600842,
+     "per_stream_tps": [
+      20.4,
+      20.5
+     ],
+     "ttft_s": [
+      0.21,
+      0.56
+     ],
+     "errors": [],
+     "evidence": [
+      {
+       "prompt_tokens": 32,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "9842a795db37",
+       "token_sha256": "9842a795db3725bcbafc8f42d161150739f454cd43900ccec1abc9933f88b41b",
+       "output_sha256": "c011c3d752c75b46f47a102d07b0f71f7597c16a461092666c264bec03bb652b"
+      },
+      {
+       "prompt_tokens": 32,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "8f747a2ab066",
+       "token_sha256": "8f747a2ab0661a066944c7a7e450a84216ed89d2eddc301f4f310a4889d71764",
+       "output_sha256": "1764ae38fb3853bf0f0d7b3e45fd02c8ba77a94f745ef870544646bd00d8f7f2"
+      }
+     ],
+     "client_intervals": [
+      {
+       "start": 458643.739717698,
+       "end": 458656.443549319
+      },
+      {
+       "start": 458643.739450195,
+       "end": 458656.725589845
+      }
+     ],
+     "equal_alone": [
+      true,
+      true
+     ],
+     "comparisons": [
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "9842a795db3725bcbafc8f42d161150739f454cd43900ccec1abc9933f88b41b",
+        "output_sha256": "c011c3d752c75b46f47a102d07b0f71f7597c16a461092666c264bec03bb652b",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "9842a795db3725bcbafc8f42d161150739f454cd43900ccec1abc9933f88b41b",
+        "output_sha256": "c011c3d752c75b46f47a102d07b0f71f7597c16a461092666c264bec03bb652b",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "9842a795db3725bcbafc8f42d161150739f454cd43900ccec1abc9933f88b41b",
+        "output_sha256": "c011c3d752c75b46f47a102d07b0f71f7597c16a461092666c264bec03bb652b",
+        "complete": true,
+        "error": null
+       }
+      },
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "8f747a2ab0661a066944c7a7e450a84216ed89d2eddc301f4f310a4889d71764",
+        "output_sha256": "1764ae38fb3853bf0f0d7b3e45fd02c8ba77a94f745ef870544646bd00d8f7f2",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "8f747a2ab0661a066944c7a7e450a84216ed89d2eddc301f4f310a4889d71764",
+        "output_sha256": "1764ae38fb3853bf0f0d7b3e45fd02c8ba77a94f745ef870544646bd00d8f7f2",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "8f747a2ab0661a066944c7a7e450a84216ed89d2eddc301f4f310a4889d71764",
+        "output_sha256": "1764ae38fb3853bf0f0d7b3e45fd02c8ba77a94f745ef870544646bd00d8f7f2",
+        "complete": true,
+        "error": null
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "prompt": "chat",
+   "temperature": 1.0,
+   "streams": 4,
+   "failed": 0,
+   "unmeasured": 0,
+   "aggregate_tps": 50.6,
+   "per_stream_tps": 13.6,
+   "ttft_s_max": 1.35,
+   "steady_tps": 53.6,
+   "alone": {
+    "equal": 4,
+    "unequal": 0,
+    "failed": 0
+   },
+   "serial": {
+    "equal": 4,
+    "unequal": 0,
+    "failed": 0
+   },
+   "reps": [
+    {
+     "failed": 0,
+     "unmeasured": 0,
+     "aggregate_tps": 50.57109451899479,
+     "steady_tps": 53.63850327130672,
+     "per_stream_tps": [
+      13.5,
+      13.7,
+      13.7,
+      12.9
+     ],
+     "ttft_s": [
+      0.22,
+      1.35,
+      0.94,
+      0.57
+     ],
+     "errors": [],
+     "evidence": [
+      {
+       "prompt_tokens": 32,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "9842a795db37",
+       "token_sha256": "9842a795db3725bcbafc8f42d161150739f454cd43900ccec1abc9933f88b41b",
+       "output_sha256": "c011c3d752c75b46f47a102d07b0f71f7597c16a461092666c264bec03bb652b"
+      },
+      {
+       "prompt_tokens": 32,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "8f747a2ab066",
+       "token_sha256": "8f747a2ab0661a066944c7a7e450a84216ed89d2eddc301f4f310a4889d71764",
+       "output_sha256": "1764ae38fb3853bf0f0d7b3e45fd02c8ba77a94f745ef870544646bd00d8f7f2"
+      },
+      {
+       "prompt_tokens": 32,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "2b7ba7cd6cfa",
+       "token_sha256": "2b7ba7cd6cfa2798ecac17a73f0c36973fadd7773d03d0172f748c5ae76867ec",
+       "output_sha256": "ebfeac9a42128c436ff3c32932ced9fc509581937b284e8fc7d528f3a5e35752"
+      },
+      {
+       "prompt_tokens": 32,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "2e4cb369c515",
+       "token_sha256": "2e4cb369c5155d59caa91a3f021437eeb23df358177a170c713bf4e5a40c94aa",
+       "output_sha256": "72c8213eefa4e151211840ebce85e09f240020fed0baf5b966c29b3b64be1bf8"
+      }
+     ],
+     "client_intervals": [
+      {
+       "start": 458656.726852239,
+       "end": 458675.896307145
+      },
+      {
+       "start": 458656.72752238,
+       "end": 458676.694262423
+      },
+      {
+       "start": 458656.72788145,
+       "end": 458676.345056812
+      },
+      {
+       "start": 458656.726760896,
+       "end": 458677.113084314
+      }
+     ],
+     "equal_alone": [
+      true,
+      true,
+      true,
+      true
+     ],
+     "comparisons": [
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "9842a795db3725bcbafc8f42d161150739f454cd43900ccec1abc9933f88b41b",
+        "output_sha256": "c011c3d752c75b46f47a102d07b0f71f7597c16a461092666c264bec03bb652b",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "9842a795db3725bcbafc8f42d161150739f454cd43900ccec1abc9933f88b41b",
+        "output_sha256": "c011c3d752c75b46f47a102d07b0f71f7597c16a461092666c264bec03bb652b",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "9842a795db3725bcbafc8f42d161150739f454cd43900ccec1abc9933f88b41b",
+        "output_sha256": "c011c3d752c75b46f47a102d07b0f71f7597c16a461092666c264bec03bb652b",
+        "complete": true,
+        "error": null
+       }
+      },
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "8f747a2ab0661a066944c7a7e450a84216ed89d2eddc301f4f310a4889d71764",
+        "output_sha256": "1764ae38fb3853bf0f0d7b3e45fd02c8ba77a94f745ef870544646bd00d8f7f2",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "8f747a2ab0661a066944c7a7e450a84216ed89d2eddc301f4f310a4889d71764",
+        "output_sha256": "1764ae38fb3853bf0f0d7b3e45fd02c8ba77a94f745ef870544646bd00d8f7f2",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "8f747a2ab0661a066944c7a7e450a84216ed89d2eddc301f4f310a4889d71764",
+        "output_sha256": "1764ae38fb3853bf0f0d7b3e45fd02c8ba77a94f745ef870544646bd00d8f7f2",
+        "complete": true,
+        "error": null
+       }
+      },
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "2b7ba7cd6cfa2798ecac17a73f0c36973fadd7773d03d0172f748c5ae76867ec",
+        "output_sha256": "ebfeac9a42128c436ff3c32932ced9fc509581937b284e8fc7d528f3a5e35752",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "2b7ba7cd6cfa2798ecac17a73f0c36973fadd7773d03d0172f748c5ae76867ec",
+        "output_sha256": "ebfeac9a42128c436ff3c32932ced9fc509581937b284e8fc7d528f3a5e35752",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "2b7ba7cd6cfa2798ecac17a73f0c36973fadd7773d03d0172f748c5ae76867ec",
+        "output_sha256": "ebfeac9a42128c436ff3c32932ced9fc509581937b284e8fc7d528f3a5e35752",
+        "complete": true,
+        "error": null
+       }
+      },
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "2e4cb369c5155d59caa91a3f021437eeb23df358177a170c713bf4e5a40c94aa",
+        "output_sha256": "72c8213eefa4e151211840ebce85e09f240020fed0baf5b966c29b3b64be1bf8",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "2e4cb369c5155d59caa91a3f021437eeb23df358177a170c713bf4e5a40c94aa",
+        "output_sha256": "72c8213eefa4e151211840ebce85e09f240020fed0baf5b966c29b3b64be1bf8",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "2e4cb369c5155d59caa91a3f021437eeb23df358177a170c713bf4e5a40c94aa",
+        "output_sha256": "72c8213eefa4e151211840ebce85e09f240020fed0baf5b966c29b3b64be1bf8",
+        "complete": true,
+        "error": null
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "prompt": "code",
+   "temperature": 0.0,
+   "streams": 1,
+   "failed": 0,
+   "unmeasured": 0,
+   "aggregate_tps": 56.1,
+   "per_stream_tps": 56.1,
+   "ttft_s_max": 0.14,
+   "alone": {
+    "equal": 1,
+    "unequal": 0,
+    "failed": 0
+   },
+   "serial": {
+    "equal": 1,
+    "unequal": 0,
+    "failed": 0
+   },
+   "reps": [
+    {
+     "failed": 0,
+     "unmeasured": 0,
+     "aggregate_tps": 56.13439026160403,
+     "per_stream_tps": [
+      56.1
+     ],
+     "ttft_s": [
+      0.14
+     ],
+     "errors": [],
+     "evidence": [
+      {
+       "prompt_tokens": 14,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "f1f736f680e3",
+       "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+       "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553"
+      }
+     ],
+     "client_intervals": [
+      {
+       "start": 458696.381720108,
+       "end": 458701.06907698
+      }
+     ],
+     "equal_alone": [
+      true
+     ],
+     "comparisons": [
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "prompt": "code",
+   "temperature": 0.0,
+   "streams": 2,
+   "failed": 0,
+   "unmeasured": 0,
+   "aggregate_tps": 63.0,
+   "per_stream_tps": 32.3,
+   "ttft_s_max": 0.44,
+   "steady_tps": 65.1,
+   "alone": {
+    "equal": 2,
+    "unequal": 0,
+    "failed": 0
+   },
+   "serial": {
+    "equal": 1,
+    "unequal": 0,
+    "failed": 0
+   },
+   "reps": [
+    {
+     "failed": 0,
+     "unmeasured": 0,
+     "aggregate_tps": 63.00261604713391,
+     "steady_tps": 65.13375039189911,
+     "per_stream_tps": [
+      31.9,
+      32.7
+     ],
+     "ttft_s": [
+      0.15,
+      0.44
+     ],
+     "errors": [],
+     "evidence": [
+      {
+       "prompt_tokens": 14,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "f1f736f680e3",
+       "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+       "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553"
+      },
+      {
+       "prompt_tokens": 14,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "f1f736f680e3",
+       "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+       "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553"
+      }
+     ],
+     "client_intervals": [
+      {
+       "start": 458701.070275902,
+       "end": 458709.221292188
+      },
+      {
+       "start": 458701.069983327,
+       "end": 458709.311159342
+      }
+     ],
+     "equal_alone": [
+      true,
+      true
+     ],
+     "comparisons": [
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       }
+      },
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "prompt": "code",
+   "temperature": 0.0,
+   "streams": 4,
+   "failed": 0,
+   "unmeasured": 0,
+   "aggregate_tps": 85.0,
+   "per_stream_tps": 22.3,
+   "ttft_s_max": 1.06,
+   "steady_tps": 91.2,
+   "alone": {
+    "equal": 4,
+    "unequal": 0,
+    "failed": 0
+   },
+   "serial": {
+    "equal": 1,
+    "unequal": 0,
+    "failed": 0
+   },
+   "reps": [
+    {
+     "failed": 0,
+     "unmeasured": 0,
+     "aggregate_tps": 84.9621063412719,
+     "steady_tps": 91.24904543377123,
+     "per_stream_tps": [
+      22.5,
+      23.0,
+      21.9,
+      22.1
+     ],
+     "ttft_s": [
+      0.73,
+      1.06,
+      0.15,
+      0.42
+     ],
+     "errors": [],
+     "evidence": [
+      {
+       "prompt_tokens": 14,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "f1f736f680e3",
+       "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+       "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553"
+      },
+      {
+       "prompt_tokens": 14,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "f1f736f680e3",
+       "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+       "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553"
+      },
+      {
+       "prompt_tokens": 14,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "f1f736f680e3",
+       "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+       "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553"
+      },
+      {
+       "prompt_tokens": 14,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "f1f736f680e3",
+       "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+       "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553"
+      }
+     ],
+     "client_intervals": [
+      {
+       "start": 458709.312861845,
+       "end": 458721.379327025
+      },
+      {
+       "start": 458709.313318915,
+       "end": 458721.46562603
+      },
+      {
+       "start": 458709.31265295,
+       "end": 458721.111593382
+      },
+      {
+       "start": 458709.312535159,
+       "end": 458721.254335917
+      }
+     ],
+     "equal_alone": [
+      true,
+      true,
+      true,
+      true
+     ],
+     "comparisons": [
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       }
+      },
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       }
+      },
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       }
+      },
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "f1f736f680e36fb36a46727385bb591461eeaf78e49e2712ab886e85ac497ba3",
+        "output_sha256": "5bb6f2535458db4bcfe375c6786a1734ecf4505d923cfdbe2ddc3d93d4e29553",
+        "complete": true,
+        "error": null
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "prompt": "chat",
+   "temperature": 0.0,
+   "streams": 1,
+   "failed": 0,
+   "unmeasured": 0,
+   "aggregate_tps": 30.8,
+   "per_stream_tps": 30.8,
+   "ttft_s_max": 0.21,
+   "alone": {
+    "equal": 1,
+    "unequal": 0,
+    "failed": 0
+   },
+   "serial": {
+    "equal": 1,
+    "unequal": 0,
+    "failed": 0
+   },
+   "reps": [
+    {
+     "failed": 0,
+     "unmeasured": 0,
+     "aggregate_tps": 30.787354685993247,
+     "per_stream_tps": [
+      30.8
+     ],
+     "ttft_s": [
+      0.21
+     ],
+     "errors": [],
+     "evidence": [
+      {
+       "prompt_tokens": 32,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "0c5820aa8286",
+       "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+       "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2"
+      }
+     ],
+     "client_intervals": [
+      {
+       "start": 458744.615273035,
+       "end": 458753.112098251
+      }
+     ],
+     "equal_alone": [
+      true
+     ],
+     "comparisons": [
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "prompt": "chat",
+   "temperature": 0.0,
+   "streams": 2,
+   "failed": 0,
+   "unmeasured": 0,
+   "aggregate_tps": 43.5,
+   "per_stream_tps": 22.2,
+   "ttft_s_max": 0.57,
+   "steady_tps": 45.1,
+   "alone": {
+    "equal": 2,
+    "unequal": 0,
+    "failed": 0
+   },
+   "serial": {
+    "equal": 1,
+    "unequal": 0,
+    "failed": 0
+   },
+   "reps": [
+    {
+     "failed": 0,
+     "unmeasured": 0,
+     "aggregate_tps": 43.5315402462309,
+     "steady_tps": 45.05521274012107,
+     "per_stream_tps": [
+      22.0,
+      22.4
+     ],
+     "ttft_s": [
+      0.21,
+      0.57
+     ],
+     "errors": [],
+     "evidence": [
+      {
+       "prompt_tokens": 32,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "0c5820aa8286",
+       "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+       "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2"
+      },
+      {
+       "prompt_tokens": 32,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "0c5820aa8286",
+       "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+       "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2"
+      }
+     ],
+     "client_intervals": [
+      {
+       "start": 458753.113362356,
+       "end": 458764.896043497
+      },
+      {
+       "start": 458753.113092582,
+       "end": 458765.043655486
+      }
+     ],
+     "equal_alone": [
+      true,
+      true
+     ],
+     "comparisons": [
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       }
+      },
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "prompt": "chat",
+   "temperature": 0.0,
+   "streams": 4,
+   "failed": 0,
+   "unmeasured": 0,
+   "aggregate_tps": 58.0,
+   "per_stream_tps": 15.1,
+   "ttft_s_max": 1.35,
+   "steady_tps": 61.7,
+   "alone": {
+    "equal": 4,
+    "unequal": 0,
+    "failed": 0
+   },
+   "serial": {
+    "equal": 1,
+    "unequal": 0,
+    "failed": 0
+   },
+   "reps": [
+    {
+     "failed": 0,
+     "unmeasured": 0,
+     "aggregate_tps": 58.00574375971202,
+     "steady_tps": 61.66854339408025,
+     "per_stream_tps": [
+      15.0,
+      15.5,
+      15.2,
+      14.9
+     ],
+     "ttft_s": [
+      0.56,
+      1.35,
+      0.94,
+      0.21
+     ],
+     "errors": [],
+     "evidence": [
+      {
+       "prompt_tokens": 32,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "0c5820aa8286",
+       "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+       "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2"
+      },
+      {
+       "prompt_tokens": 32,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "0c5820aa8286",
+       "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+       "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2"
+      },
+      {
+       "prompt_tokens": 32,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "0c5820aa8286",
+       "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+       "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2"
+      },
+      {
+       "prompt_tokens": 32,
+       "cached_tokens": 0,
+       "tokens": 256,
+       "cache_state": "cold",
+       "complete": true,
+       "token_sha": "0c5820aa8286",
+       "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+       "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2"
+      }
+     ],
+     "client_intervals": [
+      {
+       "start": 458765.045426373,
+       "end": 458782.660573772
+      },
+      {
+       "start": 458765.045063031,
+       "end": 458782.843855243
+      },
+      {
+       "start": 458765.045211366,
+       "end": 458782.769516619
+      },
+      {
+       "start": 458765.044945015,
+       "end": 458782.391145486
+      }
+     ],
+     "equal_alone": [
+      true,
+      true,
+      true,
+      true
+     ],
+     "comparisons": [
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       }
+      },
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       }
+      },
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       }
+      },
+      {
+       "concurrent": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       },
+       "alone": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       },
+       "serial": {
+        "tokens": 256,
+        "token_sha256": "0c5820aa82864eb281f80dffc6cd34fb865b2bf4aeea61128c8680a088de784e",
+        "output_sha256": "88df3a840ebfd834afb178433102979253113dc3c306a55b5c490836521167f2",
+        "complete": true,
+        "error": null
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
+
+
+===== app/src/lib/preferences/packs/hi/engine-advanced.json =====
+{
+ "Engine advanced": "इंजन उन्नत सेटिंग्स",
+ "Variables passed to the built-in engine": "अंतर्निहित इंजन को भेजे जाने वाले वेरिएबल",
+ "Engine variables": "इंजन वेरिएबल",
+ "Environment variables passed to the built-in TensorFold engine process. Use these to raise a model load limit or adjust engine behaviour without leaving the app.": "अंतर्निहित TensorFold इंजन प्रक्रिया को भेजे जाने वाले एनवायरनमेंट वेरिएबल। मॉडल लोड सीमा बढ़ाने या ऐप छोड़े बिना इंजन का व्यवहार बदलने के लिए इनका उपयोग करें।",
+ "Current app-side load limit:": "वर्तमान ऐप-साइड लोड सीमा:",
+ "{value0} is managed by TensorFold or the system.": "{value0} को TensorFold या सिस्टम प्रबंधित करता है, इसे यहाँ सेट नहीं किया जा सकता।",
+ "No variables set. The engine runs with its defaults.": "कोई वेरिएबल सेट नहीं है। इंजन डिफ़ॉल्ट मानों से चलता है।",
+ "Add variable": "वेरिएबल जोड़ें",
+ "Each variable can appear only once.": "हर वेरिएबल केवल एक बार आ सकता है।",
+ "Common variables": "सामान्य वेरिएबल",
+ "Saved values reach each engine process at its next launch; the loaded model keeps the values it started with until it reloads.": "सहेजे गए मान हर इंजन प्रक्रिया की अगली शुरुआत पर लागू होंगे; लोड किया गया मॉडल रीलोड होने तक अपने शुरुआती मान रखता है।",
+ "Saved values take effect the next time a model loads.": "सहेजे गए मान अगली बार मॉडल लोड होने पर प्रभावी होंगे।",
+ "A load limit above the 70% default leaves less memory for everything else on this Mac. Raise it only when the engine reported that the model just barely did not fit.": "डिफ़ॉल्ट 70% से ऊपर की लोड सीमा इस Mac के बाकी कार्यों के लिए कम मेमोरी छोड़ती है। इसे केवल तभी बढ़ाएँ जब इंजन ने बताया हो कि मॉडल बाल-बाल नहीं समा रहा।",
+ "GB cap for loading GLM-5.3, replacing the 70% of RAM limit. Also raises the app-side memory check.": "GLM-5.3 लोड करने के लिए GB सीमा, जो 70% RAM सीमा को बदलती है। यह ऐप-साइड मेमोरी जाँच भी बढ़ाती है।",
+ "GB cap for loading Flash Next models, replacing the 70% of RAM limit. Also raises the app-side memory check.": "Flash Next मॉडल लोड करने के लिए GB सीमा, जो 70% RAM सीमा को बदलती है। यह ऐप-साइड मेमोरी जाँच भी बढ़ाती है।",
+ "Set 1 to keep the engine off the network; model downloads need the connection back on.": "इंजन को नेटवर्क से बाहर रखने के लिए 1 सेट करें; मॉडल डाउनलोड के लिए फिर से कनेक्शन चाहिए होगा।",
+ "Where Hugging Face caches downloads. TensorFold keeps its own model folders in Settings → Model folders.": "Hugging Face डाउनलोड कहाँ सहेजता है। TensorFold अपने मॉडल फ़ोल्डर सेटिंग्स → मॉडल फ़ोल्डर में रखता है।",
+ "Engine knob: append per-request records to a file for diagnostics.": "इंजन विकल्प: निदान के लिए अनुरोध-वार रिकॉर्ड फ़ाइल में जोड़ें।",
+ "Set 1 to hide the engine live text display in its terminal; the served model is unchanged.": "इंजन के टर्मिनल में लाइव टेक्स्ट प्रदर्शन छिपाने के लिए 1 सेट करें; सेवाया गया मॉडल वैसा ही रहता है।",
+ "Engine knob: mix a salt into request seeds.": "इंजन विकल्प: अनुरोध सीड्स में नमक मिलाएँ।"
+}
+
+===== docs/receipts/xpu-qwen27-logprobs/bench.json =====
+[
+ {
+  "cell": "short drafted greedy",
+  "prompt_tokens": 32,
+  "completion_tokens": 256,
+  "tok_s_without": 111.1713824833492,
+  "tok_s_with": 105.75203411599874,
+  "cost_pct": 4.87476924932741,
+  "runs_without": [
+   111.1668991592123,
+   111.16468074080302,
+   111.19321496815618,
+   111.17453720392714,
+   111.1713824833492
+  ],
+  "runs_with": [
+   105.75693834065986,
+   105.73989576358262,
+   105.7805665551248,
+   105.75098849792809,
+   105.75203411599874
+  ]
+ },
+ {
+  "cell": "short drafted sampled",
+  "prompt_tokens": 32,
+  "completion_tokens": 256,
+  "tok_s_without": 123.00324348419413,
+  "tok_s_with": 116.34523160211633,
+  "cost_pct": 5.412875053927626,
+  "runs_without": [
+   122.85752881596105,
+   122.99887253167928,
+   123.01385388443698,
+   123.0049551716024,
+   123.00324348419413
+  ],
+  "runs_with": [
+   116.35999039134386,
+   116.3502309441312,
+   116.05085264561944,
+   116.34523160211633,
+   116.25313078760252
+  ]
+ },
+ {
+  "cell": "short plain greedy",
+  "prompt_tokens": 32,
+  "completion_tokens": 256,
+  "tok_s_without": 33.4172248063832,
+  "tok_s_with": 32.87078969862006,
+  "cost_pct": 1.6351899684343845,
+  "runs_without": [
+   33.41734383381792,
+   33.41519311795702,
+   33.412874622282594,
+   33.4172248063832,
+   33.41778967218402
+  ],
+  "runs_with": [
+   32.86810876730984,
+   32.87114631362093,
+   32.868259267692075,
+   32.8716605398089,
+   32.87078969862006
+  ]
+ },
+ {
+  "cell": "8k drafted greedy",
+  "prompt_tokens": 7457,
+  "completion_tokens": 256,
+  "tok_s_without": 65.93189029766108,
+  "tok_s_with": 63.998996645632204,
+  "cost_pct": 2.9316521084144456,
+  "runs_without": [
+   65.95607797875896,
+   65.93189029766108,
+   65.93038245874818,
+   65.93374775738124,
+   65.93183339682727
+  ],
+  "runs_with": [
+   64.00129828001236,
+   64.00623528879503,
+   63.97321127902577,
+   63.99236074651446,
+   63.998996645632204
+  ]
+ },
+ {
+  "cell": "short drafted greedy x2 concurrent (aggregate incl. prefill)",
+  "prompt_tokens": 32,
+  "completion_tokens": 256,
+  "tok_s_without": 180.39111005680326,
+  "tok_s_with": 157.03299260875357,
+  "cost_pct": 12.94859676881774,
+  "runs_without": [
+   181.517087671181,
+   180.39111005680326,
+   181.26224884225508,
+   178.3352345937945,
+   180.24162784902495
+  ],
+  "runs_with": [
+   156.99351281051233,
+   158.86372754326675,
+   158.88631850753004,
+   157.03299260875357,
+   157.0306386475563
+  ]
+ }
+]
+
+
+===== docs/recipes/qwen4-living-weights.md =====
+# Qwen4 Living Weights: host backward and implementation plan
+
+This is the host mathematical step for #1804. It does not enable learning in the native Qwen4 engine.
+`families/qwen4/qsa_backward.zig` computes the continuous selected-attention adjoint for FP32 or FP64 arrays.
+Q and upstream gradients are `[rows, heads, width]`; K/V and their adjoints are token-major
+`[capacity, kv_heads, width]`. Query head `h` reads KV head `h / (heads / kv_heads)`.
+The served QSA scale is 0.0625 at width 256. The host routine accepts an explicit scale for synthetic checks.
+
+For each causal row, dense attention reads keys `0..end`. Sparse attention reads exactly the supplied unique IDs,
+including any incomplete causal tail. IDs beyond `end`, duplicate IDs and empty selections are refused.
+The selection is a fixed tape. No surrogate derivative is supplied for pooling, score ranking or top-k decisions.
+Unselected and future K/V rows are never read and their adjoints stay zero. Shared K/V adjoints accumulate every
+query-head and row use. Shape, selection, alias and input-finiteness admission precedes gradient writes.
+Numeric overflow clears the output adjoints and returns an error. Inputs and the selection tape remain unchanged.
+
+The proved attention formula is `p = softmax(scale * Q K^T)`, `O = p V` over the fixed selection:
+
+```text
+dP[j] = dot(dO, V[j])
+dS[j] = p[j] * (dP[j] - sum_i p[i] dP[i])
+dQ += scale * dS[j] * K[j]
+dK[j] += scale * dS[j] * Q
+dV[j] += p[j] * dO
+```
+
+The separate output-gate pullback takes saved forward context and sigmoid values. It uses the saved sigmoid for
+the context adjoint and the ordinary sigmoid derivative for the logit adjoint. Forward cuts are straight-through
+in this local mathematical model. Independent finite differences freeze each cast's offset at the base point;
+they do not differentiate a discontinuous rounding function. Both cut and uncut output-gate cases are checked.
+
+```sh
+zig build test-qwen4-qsa-backward-host -j1 --summary all
+```
+
+The independent reference evaluates a dense binary64 masked loss rather than calling the backward's helpers.
+Tiny cases check every Q/K/V and gated-output coordinate at three central step sizes. Directional cases use the
+served 24 query heads, 4 KV heads and width 256, with 129 dense keys and 2,051 sparse keys including a three-token
+tail. Tests also cover poisoned unused cache rows, shared-head accumulation, malformed tapes, aliases and repeats.
+FP64 checks use `1e-8 + 1e-6 * abs(slope)`; FP32 checks use `2e-7 + 3e-5 * abs(slope)`.
+These are host derivative-check limits, not new device fidelity or whole-model acceptance thresholds.
+
+The CUDA tensor-core attention path stores BF16 probability operands; Metal's split softmax retains FP32
+probabilities. This step does not model those backend-specific probability cuts, split reduction orders, Q/K
+RMS/RoPE or their stored intermediates. It is not a gradient receipt for either device profile. The native forward,
+its probability stores and all shader sources remain unchanged. Future backward kernels need their own contracts.
+
+## CUDA pocket and trainer
+
+1. Adapt the dense pocket storage and shard writer used by Qwen3.5, with a Qwen4 family descriptor keyed by its
+   declared config. Preserve original tensor bytes and separate base columns from appended neurons when loading.
+   Use the same serialized family/tensor/quantization description on both backends. Reject unsupported learning
+   layouts before allocation; a group-32 Flash Next transpose must never be applied to group-64/128 or other formats.
+2. Add hooks at the dense MLP branch before the HC writeback in the shared Flash Next layer graph. Every prompt,
+   verify and decode pass must run the same hook. Keep the empty-pocket branch free of allocations, readbacks,
+   synchronization and added launches. Supply per-stream untaught masks, including mixed taught/untaught batches.
+3. Reuse Flash Next's HC branch/readout backward and GDN backward with explicit Qwen4 geometry and gate mode.
+   Qwen4's default SiLU must not inherit Flash Next's sigmoid derivative. Make the backward mode explicit and prove
+   both modes with a planted wrong-gate control before reuse, preserving Flash Next's existing mode and arithmetic.
+   Add dense SwiGLU/base-weight and pocket-input gradients, the LM head/loss
+   path, and optional PLE backward. Until PLE backward is present, learning on PLE configs must refuse explicitly.
+4. Record Q/K norm inputs, stored rotary frequencies, V, output gates and the exact selected IDs/counts/row ends
+   from the same forward. The backward must use this tape, not reselect. Implement selected softmax backward in
+   FP32, accumulating shared K/V uses without lost writes. Integrate the Q/K RMS, rotary, projections and HC chain.
+   Keep each sequence's cache ownership explicit; packed training sequences must not read another sequence's keys.
+5. Define and test the backward convention for every probability, context and gate cut in the actual CUDA profile.
+   Finite differences of the ideal formula above cannot qualify BF16 probability stores. Check local cut offsets
+   and the complete computed graph, with controls that drop a cut or transpose a GQA group.
+
+## Metal pocket and trainer
+
+Reuse the shared family descriptor, learned-neuron layout, fitting policy and shard writer. Follow the existing
+Nemotron Metal trainer's ownership and residency structure, with Qwen4 operators and its own forward tape. Device
+buffers and captured metadata must survive command completion. Keep training scratch separate from served streams;
+drain outstanding work before changing pocket buffers and invalidate prompt states after any successful edit.
+
+Port the qualified CUDA backward stages as Metal operators without replacing inference with CPU work. Reuse HC,
+GDN and dense projection derivatives only where layout, precision and gate mode match. Register any new operators
+and their served shapes, exceptional classes, repeats/aliasing, accumulator stress and launch limits. Pending
+compiler/resource records stay unmeasured until actual images are checked. Include pre-M5 and M5 implementations.
+
+## Gates before advertising learning
+
+Use a tiny nonzero Qwen4-shaped model to check whole trainer/serving loss and directional gradients at early rows,
+layer boundaries, GDN/QSA and PLE layers. A whole-model finite-difference probe must record whether its selected
+IDs change under perturbation. Selection crossings are nondifferentiable witnesses, not permission to widen the
+gradient bound or silently freeze a real serving pass. The local fixed-selection check remains a separate receipt.
+
+Test fitting, held-out recall, unrelated-fact retention, exact take-out/delete/rollback, cancellation and save failure
+through the existing shared learner/server acceptance path. Round outputs exactly as they will be stored before
+judging a fit. Compare the immutable base tensor bytes before/after, and reopen each backend's saved folder on the
+other. Assert that untaught streams read the original model even beside taught streams.
+
+Each affected checkpoint and profile is then run on a CUDA GPU and on pre-M5 and M5 Macs. Match binary/runtime,
+model/tokenizer revisions, prompts, seeds, quantization and cache settings. Require empty-folder tokens and speed
+equal to the base, drafted/plain and concurrent/solo equality, every prompt cut, resume/restart and rejection cleanup.
+Measure learning time and peak host/device memory separately. No device, real-checkpoint or performance gate is
+claimed by this host step; the portable layout and complete CUDA/Metal trainers remain follow-up work.
+
+Existing owners are the MLP HC seam in `families/flashnext/forward_graph.zig:34`, the CUDA HC/GDN trainer chain in
+`families/flashnext/cuda_train.zig:369`, shared GDN backward in `cuda/gdn_train.zig:299`, and Qwen4's indexed-attention
+and output-gate adapters in `families/qwen4/gpu_ops.zig:169` and `families/qwen4/metal_gpu.zig:196` under `zig/src/`.
+
+
+===== docs/recipes/qwen3-embedding-metal.md =====
+# Qwen3-Embedding on Metal
+
+The native Metal server serves Qwen3-Embedding-0.6B, 4B and 8B from their published BF16 safetensors. Their dense forward uses tensor units, so this path requires an M5 or later GPU. An earlier GPU is refused at load. The checkpoint directory must include its tokenizer, config, last-token pooling config and modules list.
+
+```sh
+zig build native -Doptimize=ReleaseFast -j8
+zig-out/native/bin/tensorfold-native serve /path/to/Qwen3-Embedding-0.6B
+```
+
+Send text, token IDs, a batch of strings or a batch of ID lists to `/v1/embeddings`. Text uses the checkpoint's tokenizer with its special-token postprocessor. An explicit ID list is used as given; include the terminal token when the checkpoint's recipe calls for one. Task instructions belong in the input text, as in the checkpoint's recipe; the server adds none.
+
+```json
+{"input":["What is photosynthesis?","Plants turn sunlight into chemical energy."],"dimensions":128,"encoding_format":"float"}
+```
+
+The final normalized last-token row is pooled. The checkpoint's Normalize module controls L2 normalization. MRL widths range from 32 through the hidden width (1,024, 2,560 or 4,096). A shortened vector is cropped then normalized. `base64` returns little-endian FP32 bytes. Batch members use their own positions and chunk boundaries, with exactly the same bits as an input sent alone.
+
+One pass admits at most 128 inputs and at most the admitted window's total tokens. The default window is 32,768 tokens; `--context 0` requests the checkpoint's trained limit. The memory budget can shrink the window down to 2,048. Empty inputs, out-of-vocabulary IDs, unsupported widths and batches beyond the admitted limits are refused. This is a prompt-only engine: generation, reranking, drafters, recording, learning, vision and multi-device loading are unsupported.
+
+Host checks precede GPU checks:
+
+```sh
+zig build test-qwen3-metal-host test-native -Doptimize=ReleaseFast -j8
+zig build tf-kernel-contract -Doptimize=ReleaseFast -j8
+zig-out/bin/tf-kernel-contract --only 'qwen3 heads'
+zig-out/bin/tf-kernel-contract --only llama
+```
+
+`zig/tests/qwen3_metal/reference.py` and `reference.c` implement an independent FP32 forward from these checkpoint files. They use BLAS for matrix products and no model library. Build the C helper on a Mac with Accelerate:
+
+```sh
+cc -O2 -ffp-contract=off -dynamiclib zig/tests/qwen3_metal/reference.c -framework Accelerate -o reference.dylib
+python3 -B zig/tests/qwen3_metal/test_reference.py ./reference.dylib
+python3 -B zig/tests/qwen3_metal/device.py --binary zig-out/native/bin/tensorfold-native --library ./reference.dylib --output embedding-check /path/to/Qwen3-Embedding-0.6B /path/to/Qwen3-Embedding-4B /path/to/Qwen3-Embedding-8B
+```
+
+The served check reports max absolute and cosine differences against FP32 at every size, throughput, exact batching and repetitions, MRL crops, concurrent requests and named refusals. GPU checks require the operator's exclusive device queue. CUDA and HIP have their own device gates; this check does not claim their numbers.
+
+
+===== app/src/lib/preferences/packs/ko/extra-005.json =====
+{
+  "Type ": "유형 ",
+  "USB or Wi-Fi · Android and iPhone": "USB 또는 Wi-Fi · Android 및 iPhone",
+  "Unavailable: {value0}": "사용 불가: {value0}",
+  "Uncertain, check Google before repeating": "불확실함, 반복 전에 Google 확인",
+  "Undo": "실행 취소",
+  "Undoing": "실행 취소 중",
+  "Unknown format": "알 수 없는 형식",
+  "Unknown host key": "알 수 없는 호스트 키",
+  "Unload": "해제",
+  "Unnamed element": "이름 없는 요소",
+  "Unpin this message": "이 메시지 고정 해제",
+  "Unsaved bot connection changes": "저장하지 않은 봇 연결 변경",
+  "Unsaved changes · Saved bot connection remains enabled": "저장하지 않은 변경 · 저장된 봇 연결은 켜짐",
+  "Unsaved changes · Saved connection remains enabled": "저장하지 않은 변경 · 저장된 연결은 켜짐",
+  "Unsaved connection changes": "저장하지 않은 연결 변경",
+  "Untitled chat": "제목 없는 채팅",
+  "Untitled conversation": "제목 없는 대화",
+  "Untitled event": "제목 없는 일정",
+  "Untitled room": "제목 없는 방",
+  "Update": "업데이트",
+  "Update available": "업데이트 사용 가능",
+  "Update ready": "업데이트 준비 완료",
+  "Updated {value0}": "갱신됨 {value0}",
+  "Updates existing memory": "기존 메모리 갱신",
+  "Updating VM…": "VM 업데이트 중…",
+  "Use Chat layout": "채팅 레이아웃 사용",
+  "Use TLS for {value0}": "{value0}에 TLS 사용",
+  "Use a simpler chat layout inside Full mode.": "전체 모드에서 간단한 채팅 레이아웃을 사용합니다.",
+  "Use for new chat": "새 채팅에 사용",
+  "Use gateway-qualified model ids such as ": "게이트웨이 한정 모델 ID를 사용하세요. 예: ",
+  "Use installed ": "설치된 항목 사용 ",
+  "Use model": "모델 사용",
+  "Use once before ": "다음 전에 한 번 사용 ",
+  "Use plain email addresses for guests.": "참석자는 일반 이메일 주소를 사용하세요.",
+  "Use the available screen elements; protected content may hide the image.": "사용 가능한 화면 요소를 사용하세요. 보호된 콘텐츠는 이미지를 숨길 수 있습니다.",
+  "Use the verified installer for this release.": "이 릴리스의 검증된 설치 프로그램을 사용하세요.",
+  "Use this model": "이 모델 사용",
+  "User turns and Guide notes": "사용자 턴 및 안내 메모",
+  "Uses this bot’s selected local model.": "이 봇이 선택한 로컬 모델을 사용합니다.",
+  "Uses your existing tool approval settings.": "기존 도구 승인 설정을 사용합니다.",
+  "VM action failed; no work moved to this Mac.": "VM 작업 실패. 작업을 이 Mac으로 옮기지 않았습니다.",
+  "VM limits also apply; MCP tools are unavailable in the guest.": "VM 제한도 적용됩니다. 게스트에서는 MCP 도구를 사용할 수 없습니다.",
+  "VM setup complete": "VM 설정 완료",
+  "Verified ({value0}{value1})": "검증됨({value0}{value1})",
+  "Verify": "검증",
+  "Verify again": "다시 검증",
+  "Verifying": "검증 중",
+  "Verifying update": "업데이트 검증 중",
+  "Verifying…": "검증 중…",
+  "View all missions ({value0})": "모든 미션 보기({value0})",
+  "View events": "일정 보기",
+  "View release notes": "릴리스 노트 보기",
+  "Voice input": "음성 입력",
+  "Wait for the learning checkpoint to finish saving": "학습 체크포인트 저장 완료를 기다리세요",
+  "Waiting": "대기 중",
+  "Waiting for Google…": "Google 기다리는 중…",
+  "Waiting for phone": "휴대전화 기다리는 중",
+  "Waiting for the host to begin managed setup.": "호스트가 관리형 설정을 시작하기를 기다립니다.",
+  "Waiting for the model to load": "모델 로드 기다리는 중",
+  "Waiting for the save dialog…": "저장 대화상자 기다리는 중…",
+  "Waiting on ": "대기 대상 ",
+  "Waiting on {value0}": "{value0} 기다리는 중",
+  "Wake": "깨우기",
+  "Waking...": "깨우는 중…",
+  "What should we do next?": "다음으로 무엇을 할까요?",
+  "Widget from ": "다음의 위젯: ",
+  "Work activity: {value0} active items, {value1} need attention": "작업 활동: {value0}개 진행 중, {value1}개 확인 필요",
+  "Worker completed; review its changes.": "워커가 완료되었습니다. 변경을 검토하세요.",
+  "Worker finished; review its changes.": "워커가 끝났습니다. 변경을 검토하세요.",
+  "Worker required": "워커 필요",
+  "Worker running": "워커 실행 중",
+  "Worker started and needs your approval.": "워커가 시작되었으며 승인이 필요합니다.",
+  "Worker started but encountered an error; open it for details.": "워커가 시작되었지만 오류가 발생했습니다. 열어 세부 정보를 보세요.",
+  "Worker started in its own worktree.": "별도 worktree에서 워커가 시작되었습니다.",
+  "Worker stopped; its worktree is preserved.": "워커가 중지되었으며 worktree는 유지됩니다.",
+  "Working": "작업 중",
+  "Working on the task": "작업 수행 중",
+  "Working set {value0} tokens": "작업 집합 {value0}토큰",
+  "Working tree": "작업 트리",
+  "Workspace approval rules": "작업 공간 승인 규칙",
+  "Worktrees are local-only for now — use Branch here.": "worktree는 현재 로컬 전용입니다. 여기에 브랜치 만들기를 사용하세요.",
+  "Wrap long lines": "긴 줄 줄바꿈",
+  "Writing…": "쓰는 중…",
+  "You have unsaved changes.": "저장하지 않은 변경이 있습니다.",
+  "You skipped this question; no option was selected.": "질문을 건너뛰었으며 선택한 항목이 없습니다.",
+  "Your answer": "내 답변",
+  "Your conversation is retained. Open Bots to review the selection and start a new chat; this captured configuration stays blocked.": "대화는 유지됩니다. 봇을 열어 선택을 검토하고 새 채팅을 시작하세요. 캡처된 구성은 차단된 상태로 남습니다.",
+  "Your conversation is still here. Restore or resume the bot before continuing.": "대화는 그대로 있습니다. 계속하기 전에 봇을 복원하거나 재개하세요.",
+  "Your local model can read the screen and request actions for up to 15 minutes; this conversation stays local after access ends. Start a separate chat for cloud models.": "로컬 모델이 최대 15분간 화면을 읽고 작업을 요청할 수 있습니다. 접근이 끝나도 대화는 로컬에 남습니다. 클라우드 모델은 별도 채팅을 사용하세요.",
+  "Your previous model and profile were restored.": "이전 모델과 프로필을 복원했습니다.",
+  "Your previous model has been restored; your chat selection is unchanged.": "이전 모델이 복원되었으며 채팅 선택은 그대로입니다.",
+  "Your selected external model will receive these source excerpts.": "선택한 외부 모델에 이 소스 구절이 전송됩니다.",
+  "Your workers ": "내 워커 ",
+  "Your workers are still running; finished work will appear here.": "워커가 아직 실행 중입니다. 끝난 작업이 여기에 표시됩니다.",
+  "Your worktree is preserved at ": "worktree 보관 위치 ",
+  "Zoom ": "확대/축소 ",
+  "all events": "모든 이벤트",
+  "all-day end is exclusive, so a one-day event ends on the following date.": "종일 일정은 종료일을 포함하지 않으므로 하루 일정은 다음 날에 끝납니다.",
+  "and ": "및 ",
+  "applied": "적용됨",
+  "approved": "승인됨",
+  "as ": "역할 ",
+  "asks": "요청",
+  "assigns": "할당",
+  "assistant": "어시스턴트",
+  "attachment stays": "첨부 유지",
+  "attachments stay": "첨부 유지",
+  "auto from ~/.omlx": "~/.omlx에서 자동 가져오기",
+  "available to models out of ": "모델에 사용 가능한 메모리 / 전체 ",
+  "available · ": "사용 가능 · ",
+  "binary": "실행 파일",
+  "bytes, ": "바이트, ",
+  "caps ": "상한 ",
+  "changed ": "변경됨 ",
+  "changed since review": "검토 후 변경됨",
+  "checking": "확인 중",
+  "cloud": "클라우드",
+  "cloud seat": "클라우드 역할",
+  "concludes": "결론",
+  "confidence · ": "신뢰도 · ",
+  "connected ": "연결됨 ",
+  "continue setup to reuse it.": "설정을 계속하여 재사용하세요.",
+  "cycle ": "주기 ",
+  "defaults to {value0}": "기본값: {value0}",
+  "detached": "분리됨",
+  "done": "완료",
+  "enable failover first": "먼저 장애 조치 켜기",
+  "ev ": "ev ",
+  "event changes": "일정 변경",
+  "exit ": "종료 ",
+  "expired {value0}": "{value0}에 만료됨",
+  "expires in {value0}": "{value0} 후 만료",
+  "facts · Page ": "개 사실 · 페이지 ",
+  "failed · ": "실패 · ",
+  "failed: ": "실패: ",
+  "failover policy": "장애 조치 정책",
+  "from ": "보낸 사람 ",
+  "from the shared Hugging Face cache at ": "다음 공유 Hugging Face 캐시에서: ",
+  "generated ": "생성됨 ",
+  "iMessage access": "iMessage 접근",
+  "idle": "유휴",
+  "ignored": "무시됨",
+  "import": "가져오기",
+  "inbound · ": "수신 · ",
+  "include seconds and the UTC offset; the preview checks daylight-saving offsets and ambiguous times.": "초와 UTC 오프셋을 포함하세요. 미리보기에서 일광 절약 오프셋과 중복 시각을 확인합니다.",
+  "inherit provider models": "공급자 모델 상속",
+  "it printed no version": "버전 출력 없음",
+  "item": "항목",
+  "items": "항목",
+  "just now": "방금",
+  "k tokens across ": "천 토큰, 대상 ",
+  "key passphrase": "키 암호 문구",
+  "last used {value0}": "최근 사용 {value0}",
+  "later conversation ": "개 이후 대화 ",
+  "legacy no expiry · inactive": "기존 만료 없음 · 비활성",
+  "legacy unlimited · inactive": "기존 무제한 · 비활성",
+  "legacy unscoped · inactive": "기존 범위 없음 · 비활성",
+  "line": "행",
+  "list the shared targets; ": "공유 대상을 나열합니다. ",
+  "listening": "수신 대기 중",
+  "loading": "불러오는 중",
+  "local": "로컬",
+  "local seat": "로컬 역할",
+  "macOS sandbox-exec available": "macOS sandbox-exec 사용 가능",
+  "manual": "수동",
+  "message": "메시지",
+  "messages, ": "개 메시지, ",
+  "missing": "없음",
+  "model": "모델",
+  "models": "모델",
+  "msgs · ": "개 메시지 · ",
+  "needs approval": "승인 필요",
+  "never": "안 함",
+  "never checked": "확인한 적 없음",
+  "new": "새로",
+  "new event": "새 일정",
+  "no AGENTS.md found": "AGENTS.md 없음",
+  "no branch": "브랜치 없음",
+  "no folder": "폴더 없음",
+  "no heartbeat": "하트비트 없음",
+  "no model": "모델 없음",
+  "no reset": "초기화 없음",
+  "no tools": "도구 없음",
+  "normal": "일반",
+  "not applicable to a deleted lesson": "삭제한 학습에는 적용되지 않음",
+  "not checked": "확인 안 됨",
+  "not current while deletion is in progress": "삭제 중에는 현재 상태가 아님",
+  "not reported": "보고 안 됨",
+  "not started": "시작 안 됨",
+  "now": "지금",
+  "objects": "개 객체",
+  "of ": "/ ",
+  "often any value": "보통 임의의 값",
+  "one completion": "한 번 완료",
+  "open the worker to follow its progress.": "워커를 열어 진행 상황을 확인하세요.",
+  "opened ": "열림 ",
+  "operator": "운영자",
+  "overlay": "오버레이",
+  "passed": "통과",
+  "password": "비밀번호",
+  "pid ": "pid ",
+  "pocket neurons · Layers ": "포켓 뉴런 · 레이어 ",
+  "preserved ": "유지됨 ",
+  "project {value0}": "프로젝트 {value0}",
+  "queued": "대기열에 있음",
+  "ran ": "실행됨 ",
+  "reachable": "연결 가능",
+  "ready": "준비 완료",
+  "ready · ": "준비 완료 · ",
+  "recalled · ": "회상됨 · ",
+  "replay {value0}s": "재실행 {value0}초",
+  "reset {value0}": "초기화 {value0}",
+  "retry 3x": "3회 재시도",
+  "returns to the chief of staff; ": "비서실장으로 돌아갑니다. ",
+  "review ": "검토 ",
+  "revoked": "취소됨",
+  "risk ": "위험 ",
+  "running": "실행 중",
+  "runs as a full agent (tools + files)": "전체 에이전트로 실행(도구 및 파일)",
+  "s": "초",
+  "saved {value0}": "저장됨 {value0}",
+  "says": "발언",
+  "scope · ": "범위 · ",
+  "seen {value0}": "최근 확인 {value0}",
+  "sha256: ": "SHA256: ",
+  "shared": "공유",
+  "single": "단일",
+  "steps · repeat ": "단계 · 반복 ",
+  "stopped": "중지됨",
+  "tests ": "테스트 ",
+  "the workspace": "작업 공간",
+  "this address": "이 주소",
+  "tick ": "실행 틱 ",
+  "to ": "받는 사람 ",
+  "trusted tools allowed": "신뢰한 도구 허용",
+  "trusted tools gated": "신뢰한 도구도 승인 필요",
+  "turn ": "턴 ",
+  "unredacted": "가리지 않음",
+  "unsupported · ": "지원 안 됨 · ",
+  "untrusted": "신뢰하지 않음",
+  "update": "업데이트",
+  "v": "v",
+  "votes": "표",
+  "v{value0}": "v{value0}",
+  "waiting on ": "대기 대상 ",
+  "with ": "및 ",
+  "with HMAC-SHA256 (header ": "HMAC-SHA256 사용(헤더 ",
+  "work": "작업",
+  "working": "작업 중",
+  "workspace {value0}": "작업 공간 {value0}"
+}
+
+
+===== app/src/lib/preferences/packs/ko/007.json =====
+{
+  "Optional AI tools and your data": "선택적 AI 도구 및 데이터",
+  "Optional channel guidance": "선택적 채널 지침",
+  "Optional helper models": "선택적 보조 모델",
+  "optional override": "선택적 재정의",
+  "optional, secret — enables reading": "선택 사항, 비밀 값 — 읽기를 켭니다",
+  "Or paste recipe JSON": "또는 레시피 JSON 붙여넣기",
+  "Orchestrator": "Orchestrator",
+  "Orchestrator client": "Orchestrator 클라이언트",
+  "Orchestrator name": "Orchestrator 이름",
+  "Orchestrator server": "Orchestrator 서버",
+  "Orchestrator URL": "Orchestrator URL",
+  "Orchestrators": "Orchestrators",
+  "Original captured selection": "원래 캡처한 선택",
+  "Original content": "원래 내용",
+  "Original prompt": "원래 프롬프트",
+  "Original saved selection": "원래 저장한 선택",
+  "Original verified": "원본 검증됨",
+  "outbound · enable an inbound endpoint to start the local listener.": "송신 · 로컬 수신기를 시작하려면 수신 엔드포인트를 켜세요.",
+  "Outbound events": "송신 이벤트",
+  "Outlook": "Outlook",
+  "outlook.office365.com": "outlook.office365.com",
+  "Output tokens": "출력 토큰",
+  "Outputs": "출력",
+  "Overview": "개요",
+  "packet": "패킷",
+  "Page title": "페이지 제목",
+  "pages processed": "개 페이지 처리됨",
+  "Pair this browser": "이 브라우저 페어링",
+  "Pair WhatsApp": "WhatsApp 페어링",
+  "Paired": "페어링됨",
+  "Paired devices": "페어링된 기기",
+  "Paired session": "페어링된 세션",
+  "Pairing": "페어링 중",
+  "Pairing code": "페어링 코드",
+  "Pairing gives this phone a revocable device session for task status and start, guide and stop actions; transcripts, file diffs and approvals remain on the Mac.": "페어링하면 이 휴대전화에 취소 가능한 기기 세션을 부여하여 작업 상태 확인과 시작, 지시, 중지 작업을 할 수 있습니다. 기록, 파일 차이 및 승인은 Mac에 남습니다.",
+  "Pairing IP and port": "페어링 IP 및 포트",
+  "Pairing link or code": "페어링 링크 또는 코드",
+  "Pane layout": "패널 레이아웃",
+  "passage": "구절",
+  "Password": "비밀번호",
+  "paste pairing token": "페어링 토큰 붙여넣기",
+  "Paste text to see what an external model would receive": "외부 모델이 받을 내용을 보려면 텍스트를 붙여 넣으세요",
+  "Pause": "일시 중지",
+  "pending": "대기 중",
+  "PENDING": "대기 중",
+  "pending).": "대기 중).",
+  "Per run": "실행별",
+  "Performance": "성능",
+  "Period": "기간",
+  "Permission guide": "권한 안내",
+  "Permission mode": "권한 모드",
+  "Permissions": "권한",
+  "Persona": "페르소나",
+  "Personal + work": "개인 및 업무",
+  "Personal Access or bot token": "개인 액세스 또는 봇 토큰",
+  "Phase": "단계",
+  "Phone": "휴대전화",
+  "Phone connection method": "휴대전화 연결 방식",
+  "Phone control": "휴대전화 제어",
+  "Phone control requires a local model in a chat running on this Mac; screens are captured on request; once you grant access, that conversation stays on local models with web research off. Start a separate chat for cloud models.": "휴대전화 제어는 이 Mac에서 실행 중인 채팅의 로컬 모델이 필요합니다. 화면은 요청 시 캡처하며 권한을 부여하면 이 대화는 웹 조사를 끈 로컬 모델에 유지됩니다. 클라우드 모델에는 별도 채팅을 시작하세요.",
+  "Phone control runs in the desktop app on this Mac.": "휴대전화 제어는 이 Mac의 데스크톱 앱에서 실행됩니다.",
+  "Phone device": "휴대전화 기기",
+  "Phone messages and history are inbox content; they never grant permissions or run bot commands automatically.": "휴대전화 메시지와 기록은 받은 편지함 콘텐츠입니다. 권한을 부여하거나 봇 명령을 자동 실행하지 않습니다.",
+  "Phone name": "휴대전화 이름",
+  "Phone number ID": "전화번호 ID",
+  "phone or email handle (blank = all)": "전화번호 또는 이메일 식별자(비워 두면 모두)",
+  "Phone preview": "휴대전화 미리보기",
+  "pi": "pi",
+  "Pi CLI": "Pi CLI",
+  "Pick a cloud provider": "클라우드 공급자 선택",
+  "Pick a folder to run a loop.": "반복 작업을 실행할 폴더를 선택하세요.",
+  "Pick a local runtime": "로컬 런타임 선택",
+  "Pick one model for the whole board, or split draft, review, build, and gate phases.": "보드 전체에 모델 하나를 쓰거나 초안, 검토, 구현 및 관문 단계별로 나누세요.",
+  "Pick one per chat, room seat, automation, or ticket run.": "채팅, 방 역할, 자동화 또는 티켓 실행별로 하나씩 선택하세요.",
+  "Pick the model each local or cloud agent uses.": "각 로컬 또는 클라우드 에이전트가 사용할 모델을 고르세요.",
+  "Pick the provider type first, then TensorFold fills in the sensible endpoint shape.": "공급자 종류를 먼저 고르면 적절한 엔드포인트 형식을 채워 줍니다.",
+  "pid": "pid",
+  "Pin a model to a prompt and a schedule — it runs on its own and delivers the result.": "모델을 프롬프트와 일정에 고정하면 스스로 실행하여 결과를 전달합니다.",
+  "Pinned": "고정됨",
+  "Piper": "Piper",
+  "Plain email addresses, separated by commas": "일반 이메일 주소, 쉼표로 구분",
+  "Plain text (.txt)": "일반 텍스트 (.txt)",
+  "Plan": "계획",
+  "Plan a task": "작업 계획",
+  "Plan something small": "작은 계획 만들기",
+  "Planner": "플래너",
+  "Planner · Builder · Reviewer": "플래너 · 빌더 · 검토자",
+  "Planner + builder + reviewer": "플래너 + 빌더 + 검토자",
+  "Planner, builder, and reviewer make a balanced default room team.": "플래너, 빌더 및 검토자는 균형 잡힌 기본 방 팀입니다.",
+  "Planning": "계획 중",
+  "Planning council": "계획 협의회",
+  "Planning only": "계획만",
+  "Planning only.": "계획만 수행합니다.",
+  "Playback speed": "재생 속도",
+  "Plugin categories": "플러그인 분류",
+  "Plugin registration does not isolate code or confirm successful loading; review the source before approving trust.": "플러그인 등록은 코드를 격리하거나 로드 성공을 확인하지 않습니다. 신뢰를 승인하기 전에 소스를 검토하세요.",
+  "Plugins": "플러그인",
+  "Plugins, delegation and automatic skill review are off for restricted bots. Compaction uses a local summary without extra model requests. TensorFold's Cortheon mode must be off throughout restricted bot work.": "제한된 봇에서는 플러그인, 위임 및 자동 스킬 검토를 끕니다. 압축은 추가 모델 요청 없는 로컬 요약을 사용합니다. 제한된 봇 작업 중 Cortheon은 항상 꺼져 있어야 합니다.",
+  "pocket neurons · Layers": "포켓 뉴런 · 레이어",
+  "Point this app at an Orchestrator URL and token, then inspect and guide work from this machine.": "Orchestrator URL과 토큰을 이 앱에 지정한 다음 이 컴퓨터에서 작업을 확인하고 지시하세요.",
+  "Policy": "정책",
+  "Poll Telegram every few seconds and route allowlisted commands into rooms.": "몇 초마다 Telegram을 폴링하고 허용 목록의 명령을 방으로 전달합니다.",
+  "Port": "포트",
+  "Portable bot recipe": "이동 가능한 봇 레시피",
+  "Pose a problem below to start the huddle.": "아래에 문제를 입력하여 논의를 시작하세요.",
+  "Postmortem": "사후 분석",
+  "Power & local controls": "전원 및 로컬 제어",
+  "Power Guard": "전원 보호",
+  "Preference": "환경 설정",
+  "Preferences": "환경 설정",
+  "Preferences without credentials": "자격 증명 없는 환경 설정",
+  "Prefill": "사전 채우기",
+  "Prefill speed": "사전 채우기 속도",
+  "Preparing learning model": "학습 모델 준비 중",
+  "Preparing your private model copy…": "비공개 모델 사본 준비 중…",
+  "preserved": "유지됨",
+  "Preview": "미리보기",
+  "Preview ·": "미리보기 ·",
+  "Preview model": "모델 미리보기",
+  "Preview only; these are synthetic accounts and sample data, with no real Google sign-in or API requests.": "미리보기 전용입니다. 합성 계정과 샘플 데이터이며 실제 Google 로그인이나 API 요청은 없습니다.",
+  "Previous": "이전",
+  "Priority": "우선순위",
+  "Private copy ready; load it to teach.": "비공개 사본이 준비되었습니다. 로드하여 가르치세요.",
+  "Private network": "사설 네트워크",
+  "Private network interface": "사설 네트워크 인터페이스",
+  "Private or group chat numeric IDs": "개인 또는 그룹 채팅 숫자 ID",
+  "Probe the local server and refresh the model list from its native API.": "로컬 서버를 점검하고 네이티브 API에서 모델 목록을 갱신합니다.",
+  "Probe the node at": "다음 노드 점검:",
+  "Processing enabled local collections…": "켜진 로컬 컬렉션 처리 중…",
+  "profile": "프로필",
+  "Profile": "프로필",
+  "Profile name": "프로필 이름",
+  "Profiles belong to this model and apply to its local chats and API defaults. Saving a loaded model restarts its server when idle and disconnects API clients.": "프로필은 이 모델에 속하며 로컬 채팅과 API 기본값에 적용됩니다. 로드된 모델을 저장하면 유휴 상태에서 서버를 재시작하고 API 클라이언트를 해제합니다.",
+  "Profiles changed in another window. Close and reopen this editor before saving.": "다른 창에서 프로필이 바뀌었습니다. 저장 전에 편집기를 닫고 다시 여세요.",
+  "Progress": "진행률",
+  "project": "프로젝트",
+  "Project": "프로젝트",
+  "Project layers": "프로젝트 레이어",
+  "Project memory": "프로젝트 메모리",
+  "Project root": "프로젝트 루트",
+  "Project skills": "프로젝트 스킬",
+  "projects": "프로젝트",
+  "Projects": "프로젝트",
+  "Projects can target these hosts when their run location is Orchestrator.": "실행 위치가 Orchestrator인 프로젝트에서 이 호스트를 사용할 수 있습니다.",
+  "prompt": "프롬프트",
+  "Prompt —": "프롬프트 —",
+  "Prompt tokens": "프롬프트 토큰",
+  "Propose": "제안",
+  "Propose a mitigation…": "완화 조치 제안…",
+  "Propose new memories": "새 메모리 제안",
+  "Protected screens, passwords, biometrics and some apps prevent capture or control; TensorFold does not bypass phone security or unlock the device.": "보호된 화면, 비밀번호, 생체인식 및 일부 앱은 캡처나 제어를 막습니다. TensorFold는 휴대전화 보안을 우회하거나 잠금을 해제하지 않습니다.",
+  "protected secret": "보호된 비밀 값",
+  "Protocol configuration": "프로토콜 구성",
+  "Provider": "공급자",
+  "Provider {provider} · account {account} · model {model}": "공급자 {provider} · 계정 {account} · 모델 {model}",
+  "Provider connection is configured.": "공급자 연결이 구성되었습니다.",
+  "Provider name": "공급자 이름",
+  "Provider settings": "공급자 설정",
+  "Provider spend guard": "공급자 지출 보호",
+  "Provider tools": "공급자 도구",
+  "Provider type": "공급자 종류",
+  "Providers and tools may retain their own records.": "공급자와 도구가 별도 기록을 유지할 수 있습니다.",
+  "Providers, CLIs, connectors": "공급자, CLI 및 커넥터",
+  "Publish to GitHub": "GitHub에 게시",
+  "Purge": "완전히 지우기",
+  "Purge requires owner role.": "완전 삭제에는 소유자 역할이 필요합니다.",
+  "PY": "PY",
+  "Python": "Python",
+  "Quantization": "양자화",
+  "Quantization is not reported separately by this engine; check the model identifier and its source details.": "이 엔진은 양자화를 별도로 보고하지 않습니다. 모델 식별자와 소스 정보를 확인하세요.",
+  "Question from TensorFold": "TensorFold의 질문",
+  "Questions": "질문",
+  "Queued": "대기열에 있음",
+  "Quick": "빠르게",
+  "ran": "실행됨",
+  "Ran": "실행됨",
+  "rationale (optional)": "이유(선택 사항)",
+  "Re-check": "다시 확인",
+  "Read": "읽기",
+  "Read assistant replies, briefs, and room status aloud.": "어시스턴트 응답, 브리핑 및 방 상태를 읽어 줍니다.",
+  "Read Calendar": "캘린더 읽기",
+  "Read conversation": "대화 읽기",
+  "Read export": "내보내기 읽기",
+  "Read Gmail": "Gmail 읽기",
+  "Read locally with Apple Vision. No vision model or API key is needed. Check every line against the original, especially handwriting, names and numbers; recognition can omit or misread text.": "Apple Vision으로 로컬에서 읽습니다. 비전 모델이나 API 키가 필요 없습니다. 특히 손글씨, 이름 및 숫자는 원본과 모든 줄을 대조하세요. 글자를 빠뜨리거나 잘못 읽을 수 있습니다.",
+  "Read message": "메시지 읽기",
+  "Read only": "읽기 전용",
+  "Read room summary": "방 요약 읽기",
+  "Read room updates automatically": "방 업데이트 자동 읽어 주기",
+  "Read your own iMessage database (~/Library/Messages/chat.db) read-only. Requires Full Disk Access.": "자신의 iMessage 데이터베이스(~/Library/Messages/chat.db)를 읽기 전용으로 읽습니다. 전체 디스크 접근이 필요합니다.",
+  "Read-only rootfs": "읽기 전용 rootfs",
+  "read-only triage": "읽기 전용 초기 분류",
+  "Readiness": "준비 상태",
+  "Readiness Doctor": "준비 상태 진단",
+  "Reading preferences could not be saved. Your previous choices are still active.": "읽기 설정을 저장하지 못했습니다. 이전 선택이 계속 적용됩니다.",
+  "Reading preferences saved for this profile.": "이 프로필의 읽기 설정이 저장되었습니다.",
+  "Reading preview": "읽기 미리보기",
+  "Reading tool names…": "도구 이름 읽는 중…",
+  "Reads freely · asks before writing or running": "자유롭게 읽기 · 쓰기나 실행 전에 확인",
+  "Reads happen when you request a sync; this is a bot connection, not a personal account sign-in, and replies use the assistant approval flow.": "동기화를 요청할 때만 읽습니다. 개인 계정 로그인이 아닌 봇 연결이며 답장은 어시스턴트 승인 흐름을 따릅니다.",
+  "Ready": "준비 완료",
+  "ready ·": "준비 완료 ·",
+  "Ready to close": "닫을 준비 완료",
+  "Reasoning": "추론",
+  "Reasoning channel": "추론 채널",
+  "Rebuild and keep files": "파일을 유지하여 다시 빌드",
+  "Rebuild image": "이미지 다시 빌드",
+  "Recall previous chats and saved project or room memories.": "이전 채팅과 저장된 프로젝트 또는 방 메모리를 회상합니다.",
+  "Recall questions (": "회상 질문(",
+  "recalled ·": "회상됨 ·",
+  "Recap": "요약",
+  "Receive my own WhatsApp chat": "내 WhatsApp 채팅 수신",
+  "Receive notes you send yourself from your linked phone; TensorFold replies are ignored.": "연결된 휴대전화에서 자신에게 보낸 메모를 받습니다. TensorFold의 응답은 무시합니다.",
+  "Recent chats": "최근 채팅",
+  "Recent failovers": "최근 장애 조치",
+  "Recent Google action outcomes": "최근 Google 작업 결과",
+  "Recent journal": "최근 저널",
+  "Recently used": "최근 사용",
+  "Recipe JSON": "레시피 JSON",
+  "Recipe local model": "레시피 로컬 모델",
+  "Recipe workspace": "레시피 작업 공간",
+  "Recipient": "받는 사람",
+  "Recommended": "추천",
+  "Recommended trio": "추천 3인조",
+  "Reconnect with Read Calendar access to view calendars and availability.": "캘린더와 빈 시간을 보려면 캘린더 읽기 권한으로 다시 연결하세요.",
+  "Reconnect with Read Gmail access to browse messages.": "메시지를 보려면 Gmail 읽기 권한으로 다시 연결하세요.",
+  "Reconnect with Send reviewed emails access to prepare a send; local drafts remain available.": "전송을 준비하려면 검토한 이메일 전송 권한으로 다시 연결하세요. 로컬 초안은 계속 사용할 수 있습니다.",
+  "Record review": "검토 기록",
+  "recorded": "기록됨",
+  "Recorded dependency versions": "기록된 의존성 버전",
+  "Recorded hardware and run configuration": "기록된 하드웨어 및 실행 구성",
+  "Recorded hardware, engine version and checkpoint details are not available for this run.": "이 실행에는 하드웨어, 엔진 버전 및 체크포인트 정보 기록이 없습니다.",
+  "Recorded run outcome": "기록된 실행 결과",
+  "Recorded work activity": "기록된 작업 활동",
+  "Recurring runs consume tokens/credits on the pinned provider.": "반복 실행은 고정한 공급자의 토큰/크레딧을 사용합니다.",
+  "Redact": "민감 정보 가리기",
+  "Redact secrets &amp; PII": "비밀 값 및 개인정보 가리기",
+  "redacted": "가려짐",
+  "redacted bundle": "민감 정보가 가려진 묶음",
+  "Redraft:": "초안 다시 작성:",
+  "Reference a workspace file": "작업 공간 파일 참조",
+  "Reference terminal output": "터미널 출력 참조",
+  "refresh": "새로 고침",
+  "Refresh": "새로 고침",
+  "Refresh checks attached phones; connecting never grants a chat access by itself.": "새로 고침은 연결된 휴대전화를 확인합니다. 연결 자체는 채팅 접근을 허용하지 않습니다.",
+  "Refresh devices": "기기 새로 고침",
+  "Refresh devices, select your phone, then allow the current chat to control it.": "기기를 새로 고치고 휴대전화를 선택한 다음 현재 채팅의 제어를 허용하세요.",
+  "Refresh file states": "파일 상태 새로 고침",
+  "Refresh models": "모델 새로 고침",
+  "Refresh phone devices": "휴대전화 기기 새로 고침"
+}
+
+
+===== docs/receipts/glm-kv-live-half-555f052d/records/fresh/turns.json =====
+{
+ "meta": {
+  "config": "fresh",
+  "base": "http://127.0.0.1:18080",
+  "lazy_ms": 0,
+  "pause_s": 3.0,
+  "max_tokens": 48,
+  "first_tokens": 3072,
+  "piece_tokens": 2200,
+  "partial_frac": 0.4,
+  "source": "docs",
+  "model": "kvprobe-native",
+  "log": true
+ },
+ "turns": [
+  {
+   "turn": 1,
+   "kind": "main",
+   "sent_at": 1794077433.0438266,
+   "messages": 1,
+   "mark": 0,
+   "ttft_s": 4.506310939788818,
+   "total_s": 8.274638414382935,
+   "server_ttft_s": 4.50508717,
+   "prefill_s": 4.502643449,
+   "decode_s": 3.768239855,
+   "decode_tps": 12.472666764467412,
+   "prompt_tokens": 3102,
+   "cached_tokens": 0,
+   "completion_tokens": 48,
+   "token_sha256": "e2ca39adac075aae48162378f75de93b30f61705f6e645567d818b1412a28a26",
+   "text_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "rounds": 23,
+   "drafted": 38,
+   "accepted": 25,
+   "log": {
+    "cache": [],
+    "compacted": [],
+    "trimmed": [],
+    "done": [
+     {
+      "prompt": 3102,
+      "cached": 0,
+      "thinking": "True",
+      "effort": "none",
+      "tokens": 48,
+      "sha": "e2ca39adac07",
+      "finish": "length",
+      "rounds": 23,
+      "accepted": 25,
+      "ttft": 4.505,
+      "decode": 3.768,
+      "elapsed": 8.273,
+      "queued": 0.0,
+      "s": 12.5,
+      "drafted": 38,
+      "id": "chatcmpl-39b84560758eec35e8049d488c44ec9e",
+      "at": 44
+     }
+    ],
+    "refused": []
+   },
+   "restored_keep": null,
+   "form": "none (first turn)"
+  },
+  {
+   "turn": 2,
+   "kind": "main",
+   "sent_at": 1794077444.8212042,
+   "messages": 3,
+   "mark": 2048,
+   "ttft_s": 7.734489679336548,
+   "total_s": 11.020740509033203,
+   "server_ttft_s": 7.733848424,
+   "prefill_s": 7.731753088,
+   "decode_s": 3.286369247,
+   "decode_tps": 14.301497022254724,
+   "prompt_tokens": 5322,
+   "cached_tokens": 0,
+   "completion_tokens": 48,
+   "token_sha256": "4be3fc8fb86942953f436e3945f937c23622a751d997ec1b6141a8a9a10ab736",
+   "text_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "rounds": 19,
+   "drafted": 40,
+   "accepted": 28,
+   "log": {
+    "cache": [],
+    "compacted": [],
+    "trimmed": [],
+    "done": [
+     {
+      "prompt": 5322,
+      "cached": 0,
+      "thinking": "True",
+      "effort": "none",
+      "tokens": 48,
+      "sha": "4be3fc8fb869",
+      "finish": "length",
+      "rounds": 19,
+      "accepted": 28,
+      "ttft": 7.734,
+      "decode": 3.286,
+      "elapsed": 11.02,
+      "queued": 0.0,
+      "s": 14.3,
+      "drafted": 40,
+      "id": "chatcmpl-4866c292dd2f1889fa1760da30c3a8fd",
+      "at": 72
+     }
+    ],
+    "refused": []
+   },
+   "restored_keep": 0,
+   "form": "none (nothing resumed)",
+   "since_keep_ms": 11774.933815002441
+  },
+  {
+   "turn": 3,
+   "kind": "main",
+   "sent_at": 1794077459.3446655,
+   "messages": 5,
+   "mark": 4096,
+   "ttft_s": 9.684854507446289,
+   "total_s": 12.818910360336304,
+   "server_ttft_s": 9.684349354,
+   "prefill_s": 9.682338707,
+   "decode_s": 3.134062927,
+   "decode_tps": 14.996508077452525,
+   "prompt_tokens": 7544,
+   "cached_tokens": 0,
+   "completion_tokens": 48,
+   "token_sha256": "74622e0b72f3ef127252b2d3aa12971bf7b54865755883f1d6b20eeda7abddc3",
+   "text_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "rounds": 19,
+   "drafted": 40,
+   "accepted": 28,
+   "log": {
+    "cache": [],
+    "compacted": [],
+    "trimmed": [],
+    "done": [
+     {
+      "prompt": 7544,
+      "cached": 0,
+      "thinking": "True",
+      "effort": "none",
+      "tokens": 48,
+      "sha":

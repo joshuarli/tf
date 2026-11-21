@@ -1,0 +1,1544 @@
+The following are consecutive excerpts from engineering notes and design documents. Reason carefully about the argument they build. Restate the central claim in your own words, set out the evidence offered for it, identify the weakest inference and why it is weak, and say what measurement or observation would settle it.
+
+===== docs/recipes/nemotron-3.5-super-vl.md =====
+# Nemotron 3.5 Super VL
+
+NVIDIA's Nemotron 3.5 Super VL 120B-A12B (`nemotron_h_omni`) runs on the native CUDA engine from NVIDIA's NVFP4
+checkpoint, on one GB10 or split over two. The text model is Nemotron-H with a latent MoE: 88 blocks (40 Mamba-2,
+8 attention, 40 MoE), 512 routed experts with 22 picked a token, each reading and writing a 1,024-wide latent between
+two bf16 projections, a shared expert on the hidden rows, and one MTP layer. The family is
+`zig/src/families/nemotron/` (the latent MoE in `cuda_latent.zig`); images go through the checkpoint's RADIO tower,
+described in [vision](../vision.md#nemotron-35-super-vl-on-cuda).
+
+## Checkpoint
+
+`nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4` at revision `82d93699acd3be9e4617c53360fe5b3f5dbeb1b3`
+(75.1 GB). Its ModelOpt export stores the experts in NVFP4 (e2m1 codes, an e4m3 scale every 16 inputs, one fp32 scale
+an expert), the Mamba, attention and output-head projections in FP8 with static input scales, and the router, latent
+projections, embeddings and the MTP layer's attention in bf16. The engine reads these tensors as stored; nothing is
+converted ahead of time.
+
+## Run on one GB10
+
+```bash
+tensorfold pull nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4@82d93699acd3be9e4617c53360fe5b3f5dbeb1b3
+tensorfold serve nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4 --name super --vision
+```
+
+The weights take 70.8 GiB of the GB10's memory (73.2 GiB with the image tower and its rows). At the default
+16,384-token window the server admits 8 streams at 0.35 GiB each and keeps a prompt cache of about 8 to 10 GiB, and
+about 24 GB of the GB10's memory stays available. Leave the other ranks' variables below unset.
+
+A [community recipe](https://github.com/plotarmordev/Nemotron-3.5-Super-VL-Single-DGX-Spark-TensorFold/tree/72ef12b05b0b3d839ff973ff624e8410859dfb8c)
+from @plotarmordev sets this up on stock v1.1.3: it downloads the release, checks it and the checkpoint against pinned
+sha256 sums, and has start and stop scripts and smoke and benchmark clients.
+
+The MTP draft head can use the embedded draft vocabulary's FP8 output rows or the already-resident full output head.
+A stream drafts on the subset while the last 16 tokens of its context, its prompt's tail at first, are all draft ids,
+and on the full head otherwise; other streams do not change its choice. Each head has its own captured graphs and
+its own measured level cost beside the window costs both share, and shared rounds are priced at the full head's.
+The target still verifies proposals with its unchanged full-vocabulary head.
+For CUDA MTP streams, `--mtp-drafts` caps MTP depth (at most 31 for Super) and `--mtp-confidence` sets a
+cumulative-confidence threshold from 0 to 1 instead of the cost-based cutoff. A zero draft cap disables
+drafting. The same controls apply in lone and shared rounds, including resumes and handoff.
+Positive MTP caps leave copied continuations and Recall on their existing row limits.
+
+## Run on two GB10s
+
+Use NCCL 2.30.7 or newer, the tested minimum for this setup. The runtime refuses versions below 2.30.0;
+2.28.9 can deadlock during startup window-cost timing (#1060).
+
+Rank 0 runs the whole model and serves; rank 1 holds only its share of every MoE layer's experts (the MTP layer's
+too) and computes it for rank 0's jobs. The ranks meet over NCCL, which the engine opens at run time from the system
+(`libnccl.so.2` on the library path); start rank 1 first, with the same binary and checkpoint on both hosts:
+
+```bash
+# on rank 1
+TF_NEMOTRON_RANK=1 TF_NEMOTRON_WORLD=2 NCCL_COMM_ID=192.0.2.1:29741 \
+  tensorfold serve /models/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4
+# on rank 0 (192.0.2.1)
+TF_NEMOTRON_RANK=0 TF_NEMOTRON_WORLD=2 NCCL_COMM_ID=192.0.2.1:29741 \
+  tensorfold serve /models/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4 --name super --vision --host 0.0.0.0
+```
+
+Set `NCCL_SOCKET_IFNAME` and `NCCL_IB_HCA` for the link between the hosts as NCCL documents them. Rank 1 keeps a TCP
+line to rank 0 on the port after `NCCL_COMM_ID`'s (29742 here), opened before NCCL. Before any weight loads, both ranks
+check that they run the same build, model, cut and precision and the same checkpoint layout: config.json, the index,
+and each shard's name, size and header. While the weights load, each rank reads and hashes every byte of every shard
+it holds (sha256), and checks each file against its Hugging Face blob name, which is its sha256, when the folder is a
+Hugging Face snapshot. The ranks exchange those digests before rank 0 serves, so a copy that differs anywhere, by one
+bit, stops both ranks before serving, naming it. A GB10 hashes the 70 GiB checkpoint in about 22 s, at the same time as
+it loads its weights. If either rank fails, it sends its error's name and the other stops with it; if either process
+dies, the other stops within about a second instead of waiting; rank 1 leaves when rank 0's server stops.
+Rank 0 takes 40.1 GiB (42.2 GiB with the tower) and rank 1 31.4 GiB. One prompt pass runs at a time at TP=2
+(`--segments` above 1 is refused).
+
+## How the experts split
+
+Every expert's width is cut into two shares. A rank sums the shares it holds in share order and the ranks meet in
+rank order, so one GB10 and two give the same bits: on the eight release prompts, all 17 replies (greedy, seeded
+sampled and one with thinking) were the same tokens at TP=1 and TP=2. A routed pick carries its share in its pair id,
+so one grouped launch serves every share a rank holds.
+
+Passes of up to a verify window's rows read shared-expert plans built when the buffers load, one per row count;
+longer prompt passes and the other rank's jobs plan the shared expert at their own row count.
+On one GPU those passes run the shared expert on the side stream while the router and routed experts run on the main
+stream: its activations, quantized rows and plan are its own, and events order its input and the final sum.
+
+## Precision
+
+On Blackwell the engine runs the checkpoint's own math by default (`--precision checkpoint`): e4m3 rows into the FP8
+layers and NVFP4 rows into the NVFP4 experts, on the FP8 and block-scaled FP4 tensor cores. `--precision full` keeps
+bf16 rows throughout (W4A16 and W8A16). Each is exact on its own terms; they give different tokens from each other.
+On one GB10, `checkpoint` teacher-forced on `full`'s greedy 256 tokens after three prompts:
+
+| Prompt | Mean KL(full \|\| checkpoint), nats | Same top token | NLL of the fed tokens, full to checkpoint |
+| --- | --- | --- | --- |
+| Python code | 0.0036 | 255 of 256 | 0.0480 to 0.0482 |
+| Long prose | 0.0137 | 246 of 256 | 0.1416 to 0.1514 |
+| Repetition | 0.0057 | 255 of 256 | 0.0179 to 0.0252 |
+| All 768 tokens | 0.0077 | 98.4% | 0.0692 to 0.0749 |
+
+`checkpoint` read a cold 8,192-token prompt in 4.41 s against `full`'s 7.96 s (1.81x; 1.82x at 2,048 tokens) and
+decodes at about the same speed. The [quantization guide](../quantization.md#nvidias-nvfp4-checkpoints-on-cuda)
+describes both modes. Both ranks of a two-GB10 setup must run the same precision; they check it before loading.
+
+Checkpoint prompt passes of 128 rows or more run the FP8 layers in 128-row tiles (128 columns where K slices meet in
+a cluster) and the NVFP4 experts in blocks of 128 pairs of one expert by 128 columns, their inputs and weights staged
+through shared memory; decode keeps its narrow tiles. The per-row MMA steps, split-K summation order and output
+rounding are unchanged. The prompt up kernel quantizes its relu^2 rows to down's NVFP4 input in its epilogue, the same
+bytes the decode path's bf16 rows and separate quantizer give. On one GPU the prompt down kernel runs both expert width
+shares of a pair and adds them in share order before the bf16 rounding the combine applies, so the combine reads one
+bf16 row a pick instead of two fp32 rows. `tf-cuda-test checkpoint` compares the prompt kernels and the combine after
+them with the decode path byte for byte on synthetic inputs.
+
+Router logits of passes over 32 rows run on 128-row by 128-expert register tiles, each logit still one fma chain over
+its slice in input order; `tf-cuda-test glue` compares them with the untiled router and the host reference.
+
+## Exactness and speed
+
+Served on GB10s at a 16,384-token window, the eight release prompts at 256 tokens each, every cell held in both
+precisions: drafted replies equal `"draft": false` (greedy, seeded sampled, thinking on), 2 and 4 concurrent streams
+equal their solo runs, and three-turn chats with regenerate, edit and delete equal a cache-off server's replies.
+
+| Setup | Precision | MTP drafts (greedy, mean of 8 prompts) | `"draft": false` | Cold 8,192-token prompt |
+| --- | --- | --- | --- | --- |
+| One GB10 | `checkpoint` (default) | 38.2 tok/s (29.8 to 49.0) | 18.8 tok/s | 4.41 s |
+| One GB10 | `full` | 38.7 tok/s (30.2 to 50.8) | 19.4 tok/s | 7.96 s |
+| Two GB10s | `checkpoint` (default) | 46.8 tok/s (35.9 to 63.6) | 20.2 tok/s | |
+| Two GB10s | `full` | 48.1 tok/s (36.4 to 65.6) | 21.4 tok/s | |
+
+Four concurrent greedy streams on two GB10s took 6.2 s together against 11.8 s one at a time.
+
+## Images
+
+`--vision` loads the checkpoint's RADIO tower and projector (see [vision](../vision.md#nemotron-35-super-vl-on-cuda)).
+Super VL's `--vision-image-tokens` defaults to 13,312, so up to four images keep the size NVIDIA's processor gives
+them (at most 3,328 tokens each); the flag given explicitly still sets the budget. One request with four full-size
+pictures (3000 x 1340, 13,124 prompt tokens) on one GB10 answered its first token in 11.45 s, its drafted reply
+equal to `"draft": false`, with device memory at 74.4 GiB and 22.9 GB of the GB10 still available. Four full-size
+images take most of the default 16,384-token window, so raise `--context` for long replies after them.
+
+## Not served yet
+
+- `--slide` is refused for this checkpoint, and `--learn-conversations` keeps nothing on disk for it yet (its prompt
+  cache stays in memory).
+- Video and audio parts are refused; the checkpoint's video embedder and sound encoder stay unloaded.
+
+
+===== docs/recipes/deepseek-v41-cuda.md =====
+# Experimental DeepSeek-V4.1 CUDA asset preparation
+
+The native engine remains experimental. CPU build and host-test results do not qualify a checkpoint or GPU.
+Serving still applies the native checkpoint representation and architecture refusals.
+
+Build the CPU generators before preparing the CUDA images:
+
+```sh
+zig build dsv41-assets
+zig build test-dsv41-assets-host test-dsv41-token-map
+zig-out/bin/tf-dsv41-token-map --tokenizer MODEL/tokenizer.json --config MODEL/config.json --output ASSETS/engram-token-map.bin
+zig-out/bin/tf-dsv41-assets aot-needs ASSETS/sigs.json ASSETS/needs.json
+```
+
+The token-map generator validates release geometry and records the original tokenizer and config SHA256 values.
+Its metadata reader accepts the official unquantized configuration for asset generation; this does not admit that
+matrix representation to the serving loader. The file uses `DSENGR01`, including prime buckets, multipliers and
+lookup ids, with a JSON provenance sidecar. The legacy `engram-host.bin` fixture format is not a serving asset.
+
+`aot-needs` executes the family's actual symbolic planner on the CPU. Supply the intended rank, world, context,
+slot, draft, sampling, prefill and image settings through the same environment used for serving. It never opens a
+CUDA driver. Enumerating an image or two-rank plan does not execute a GPU or distributed model.
+
+The external Triton reference tools produce `sigs.json`, compile every specialization in `needs.json` for the
+actual target SM, and write `aot/`. The reference RoPE generator writes `rope.bin` using fixed CPU table blocks;
+its rows must cover context plus 2048. Keep the reference revision, compiler versions, options, manifests and
+hashes with these generated assets. Do not substitute captured images from another checkpoint or profile.
+The recipe's reference tools are versioned separately from this native runtime.
+
+Build installable ARM64 binaries on the native ARM64 host with real runtime and family CUDA images:
+
+```sh
+zig build dsv41-serve -Doptimize=ReleaseSafe -Dnvcc=/usr/local/cuda/bin/nvcc -Ddsv41-nvcc=/usr/local/cuda/bin/nvcc -Dsm=121
+```
+
+This installs rank zero's `tensorfold-dsv41` and the follower tool `tf-dsv41`. The runtime reads
+`TF_DSV41_ASSETS/{rope.bin,engram-token-map.bin,aot/}`. Compile-only targets use inert synthetic images and
+cannot produce a serving qualification receipt. Keep generated images and compiler caches outside source control.
+
+
+===== docs/recipes/minimax-h3-metal.md =====
+# MiniMax H3 / FastH3 transformer on Metal (M5 tensor units)
+
+This is a video model's denoising transformer, not a token model. It has no lane round and no drafted tokens. It
+keeps the checkpoint's precision: bf16 weights read in place from the checkpoint, bf16 activations, fp32 sums. It is
+a test tool beside the engine; nothing in the lane core, the server or another family changes.
+
+## What it is
+
+`zig build tf-h3-dit -Dcpu=apple_m1 -Doptimize=ReleaseFast` builds `zig-out/bin/tf-h3-dit`. It reads the FastH3
+checkpoint's shards and a case file, runs every denoising forward for the packed [text | keyframe | audio | video]
+rows, prints the first forward's velocities against the reference velocities the case holds, and writes the final
+video and audio rows (and the first forward's velocities) as raw float32.
+
+```sh
+zig-out/bin/tf-h3-dit <transformer_dir> <shards> case.safetensors out_prefix [dense | profile | DEFINE, ...]
+```
+
+It needs the M5's tensor units and refuses to load without them. `dense` makes every query tile attend to every tile
+and leaves the pooled branch out (not how the checkpoint was trained; for kernel work only). `profile` times one more
+forward stage by stage.
+
+## Arithmetic
+
+- Block projections: the prefill kernels' `tfp::gemm_nax` (MLX 0.32.3's NAX GEMM), bf16 x w^T as the checkpoint
+  stores w, fp32 sums, bf16 out. The SwiGLU's first projection is one product over its stored [value; gate] rows.
+- Norms, rotary, the gated adds and the SwiGLU round to bf16 where the reference's bf16 MLX arithmetic rounds.
+- Attention is FastH3's video sparse attention over 64-row tiles: a text, keyframe or audio tile attends every
+  tile; a video tile attends the prefix tiles and its top 20% of video tiles by pooled score; the pooled branch is
+  gated in. Tile means, scores, the top-k and the pooled branch are fp32. The routed attention is bf16 q, k and v
+  on the tensor units with fp32 scores and an online softmax across key tiles; its weights are rounded to bf16
+  before the value product, as MLX's attention rounds them.
+
+## Kernel contract
+
+Thirteen kernels are registered (`zig/tests/contract/metal_h3*.zig`), each against its formula in float64, and their
+launches in `registry.zig`. The two GEMM entry points are the prefill source's own and are registered as launches.
+Kernels whose outputs pass through intermediate bf16 roundings declare them as `mids`; their test inputs are of one
+sign where a sum could cancel, so no rounding hides behind a small result.
+
+```sh
+zig build tf-kernel-contract -Dcpu=apple_m1 -Doptimize=ReleaseFast
+zig-out/bin/tf-kernel-contract --only h3
+```
+
+## The case file
+
+The prompt's rows, the schedule and the tile map come in one safetensors file. The exporter that writes one is not in
+this change: it uses the Python 0.6 H3 family, which lives on a fork (`drowzeys/TensorFold`, `tools/zig/h3_case.py` on
+branch `h3-1.0.4`).
+
+| Tensor | Holds |
+|---|---|
+| `text` | The prompt's rows after the condition projection and the token refiner, bf16 |
+| `video`, `audio`, `condition` | Starting noise rows; a first frame's rows when the clip starts from an image |
+| `cos`, `sin` | Rotary tables for every packed row |
+| `adaln`, `times`, `tables.N`, `final` | Each row's line in a block's six modulation tables per step, and the tables |
+| `video_step`, `audio_step` | Per step: the sigma the model sees and the Euler ratio |
+| `tile_slot`, `tile_sizes`, `geometry` | FastVideo's tile map: each row's padded slot, each tile's rows, the counts |
+| `video_in.*`, `audio_in.*`, `video_out.*`, `audio_out.*`, `final_norm.weight` | The small float projections |
+| `video_velocity`, `audio_velocity` | The reference's first forward, for the parity line the tool prints |
+
+## Receipt
+
+Mac Studio, Apple M5 Ultra, 256 GB, macOS 27.0.1, Zig 0.17.0. Checkpoint `FastVideo/FastVideo-FastH3-8-Step-V2`,
+864x480, 124 frames, 8 steps, 15,435 packed rows (36 text, 414 audio, 14,985 video), 288 tiles. Reference: the
+Python 0.6 family in bf16 on MLX 0.32.3 with FastVideo's reference routing; with FastVideo's fp Metal sparse attention
+it takes 27.9 s a forward on the same Mac. Peak process footprint 4.3 GB, the checkpoint mapped read-only beside it.
+The pull request has the full tables.
+
+| Run | A forward (median) | Video velocity against the reference | Audio velocity against the reference |
+|---|---|---|---|
+| Step 1 of 8 | 10.1 s | cosine 0.98981, relative error 0.143 | cosine 0.99987, relative error 0.017 |
+| Step 5 of 8 | 10.1 s | cosine 0.99838, relative error 0.057 | cosine 0.99980, relative error 0.020 |
+
+At step 1 every video tile is noise, so FastH3's top-k among them is decided by differences far below bf16. The same
+binary with only the fp32 summation order of the tile scores reversed differs from itself by video cosine 0.99021 at
+step 1 and 0.99834 at step 5: the comparison with the reference is at that floor.
+
+## A clip that starts from an image
+
+A case exported with a first frame (`h3_case.py --first-frame IMAGE`) has a seventh geometry count: the keyframe's
+rows, between the text (which then also holds the image's vision tokens) and the audio. They enter like video rows
+on every pass, at the keyframe noise level the case's tables give them, and are never stepped.
+
+Same Mac, checkpoint and size, a 864x480 first frame: 16,253 packed rows (449 text, 405 keyframe, 414 audio,
+14,985 video), 302 tiles (22 prefix).
+
+| Run | Video velocity against the reference, step 1 | Audio velocity against the reference, step 1 |
+|---|---|---|
+| From a first frame | cosine 0.99711, relative error 0.076 | cosine 0.99986, relative error 0.017 |
+
+Text to video is bit-identical with and without this change (final video and audio rows, 8 steps).
+
+## Other step counts
+
+With `tables` or `steps=N` the tool makes the run's schedule itself instead of reading the case's. The rungs come from
+the checkpoint's `fastvideo_inference.json`, or N spread evenly from its first rung, with the video and audio shifts
+(a preview checkpoint's from its scheduler folders). Then come every row's timestep at each step and the timestep
+embedder (on the host, float64 sums of the checkpoint's float32 values). Each block's and the final layer's AdaLN
+tables come from `h3_modulation` on the GPU, bf16 inputs and weights with fp32 sums. `from=K` starts at step K of
+a case exported mid-run. The case still supplies the prompt's rows, the noise, the rotary tables and the tile map.
+
+## The released MiniMax-H3, and re-voicing a clip
+
+The tool also loads the released MiniMax-H3 transformer (its FL2VA or Ref2VA folder, `model-*` shards): each head's
+fused [q, k, v] rows in one product, the SwiGLU's [gate; value] rows, dense attention with no routing gates, and its
+own timestep embedder and AdaLN names. `revoice=N` re-voices a finished picture as the Python sampler's `revoice`
+does in its whole-sequence form: every row but the generated audio stays at the keyframe level for every step, the
+audio rows go down the released model's grid of N + 1 points (audio shift 3), and the video rows are not moved.
+A case for it comes from `h3_revoice_case.py` on the fork's exporter branch, from a finished clip's rows.
+
+## Ref2VA: reference pictures, videos and audio
+
+The released Ref2VA transformer loads like FL2VA. A Ref2VA case (`h3_ref2va_case.py` on the fork's exporter branch,
+after `packing.reference_layout`) puts its rows in the engine's order: text, the references' video rows (held at the
+keyframe level, as a first frame's are), the audio rows with the references' clean audio first, then the clip's
+video. Its geometry has an eighth count, the reference audio rows: they enter on every pass at timestep 1 and are
+never stepped. `steps=N` on the released weights makes their own grid of N + 1 points (video shift 12, audio 3).
+
+## Cold start: weights read ahead
+
+`Model.load` reads the transformer shards into the page cache before the first forward, using core's
+`checkpoint_read_ahead` reader with spans of at most 8 MiB. Metal then reads the unchanged bf16 weights through the
+same zero-copy mappings. Missing or truncated shards fail the load before any forward runs.
+
+`TF_LOAD_PREFETCH` selects 0–16 reader threads (16 by default); `0` disables read-ahead and leaves page faults to the
+mapping. This affects only transformer loading, not the prompt encoder or decoder.
+
+Receipt, `tf-h3-dit` at main against this branch, alternating, on an M5 Ultra with macOS 27.0: FastH3-8-Step-V2
+(revision `3da2ddfe`), 8 steps, 22 frames, seed 2077, audio rows on. Cold evicts the 66 GB of shards from the page
+cache first; warm reads them in. Seconds, load + first step / whole run:
+
+| Case | main | read-ahead |
+|---|---|---|
+| 2048 cold, run 1 | 33.6 / 151.7 | 34.2 / 168.5 |
+| 2048 cold, run 2 | 48.9 / 163.3 | 31.8 / 159.3 |
+| 2048 warm | 20.7 / 158.7 | 22.1 / 152.2 |
+| 4096 cold | 160.8 / 1270.7 | 167.8 / 1315.4 |
+| 4096 warm | 136.3 / 1255.5 | 157.8 / 1286.2 |
+
+Video and audio outputs are byte-identical between main and the branch in every run. Read-ahead moves main's
+first-step page faults into the load; it shows no net cold-start win here. The second 2048 warm pair is not run.
+
+`zig build test-h3-read-ahead` checks multi-piece, multi-file byte counts, truncated and missing files, and disabled
+read-ahead. The nightly macOS host checks run this target.
+
+## Not done
+
+- No exporter in the tree, so the tool cannot be exercised from this repository alone.
+- One machine (M5 Ultra). Chips without tensor units are refused.
+- No `tensorfold generate`, no text encoder, decoders or sampler: the forward only.
+
+## Host geometry admission
+
+`zig build test-h3-geometry` tests the case reader and schedule without a GPU or the Metal compiler.
+On macOS, `zig build compile-h3-host` compiles the actual tool with embedded shader source but does not compile or run
+shaders. Device and reference-output checks still need a Mac with the Metal toolchain.
+
+The reader accepts six, seven or eight nonnegative geometry counts. The seventh is held picture/video rows; the eighth
+is held audio, from zero through the total audio count. Text and held picture rows may be empty. A clip's case needs both audio
+and generated video rows for this tool's unconditional buffers and dispatches. A case without `audio_in.weight` is a
+picture's (MiniMax-H3-Image, [minimax-h3-image-metal.md](minimax-h3-image-metal.md)): it carries no audio tensor
+and no audio rows, and may hold an output head per step. Tiles hold one through 64 rows each; their
+unique slots must match the prefix/video partition. Keep may be zero through the generated-video tile count.
+
+Malformed counts, tensor shapes, tile maps, table indices, schedule sizes and overflowing byte products return named
+`H3` errors before shader compilation or scratch allocation. Integer shader dimensions must fit `i32`; GEMM widths must
+be multiples of 256; rotary width must be even and between 2 and 128. The top-k tile map is capped at 32768 tiles for the
+32 KiB threadgroup array. These arithmetic limits do not promise that an admitted request fits the available memory.
+
+
+===== RUNBOOK.md =====
+# Installation runbook
+
+TensorFold runs from a native executable.
+Choose a qualified model and platform from [README.md](docs/supported-models.md#qualified-models), then keep its complete checkpoint outside the source checkout.
+The model directory needs configuration, tokenizer, chat template and weight files.
+An existing complete Hugging Face cache also works.
+
+## macOS installation
+
+Homebrew exposes both `tensorfold` and `tensorfold-native`:
+
+```sh
+brew install ashhart/tensorfold/tensorfold
+tensorfold --version
+tensorfold capabilities --json
+```
+
+For an archive installation, download the arm64 asset and its companion checksum from the
+[latest release](https://github.com/ashhart/TensorFold/releases/latest), with `V` set to its version:
+
+```sh
+V=1.3.2
+curl -fLO https://github.com/ashhart/TensorFold/releases/download/v$V/tensorfold-$V-macos-arm64.tar.gz
+curl -fLO https://github.com/ashhart/TensorFold/releases/download/v$V/tensorfold-$V-macos-arm64.tar.gz.sha256
+shasum -a 256 -c tensorfold-$V-macos-arm64.tar.gz.sha256
+tar -xzf tensorfold-$V-macos-arm64.tar.gz
+cd tensorfold-$V-macos-arm64
+bin/tensorfold-native --version
+bin/tensorfold-native --help
+```
+
+The archive targets Apple Silicon with M1 CPU instructions and a macOS 13 ABI minimum.
+Metal comes from macOS; a prebuilt binary needs no Python, MLX or Xcode installation.
+Keep the archive's `bin`, `lib` and any `share` directories together when relocating it.
+The commands below use `bin/tensorfold-native`; a Homebrew installation can use `tensorfold` instead.
+
+## Model-free Metal counter probe
+
+With the Zig version from `.zig-version` and Xcode's Metal toolchain:
+
+```sh
+zig build tf-metal-counters test-metal-counters-host test-metal-counters-gpu -Dcpu=apple_m1
+./zig-out/bin/tf-metal-counters --capability
+./zig-out/bin/tf-metal-counters
+```
+
+The probe runs three dependent FP32 operators without a checkpoint, verifies
+independent expected output bits and instrumented/uninstrumented identity, and
+prints calibrated GPU counter intervals as JSON. Unsupported sampling is reported
+explicitly; CPU elapsed time is not a replacement for missing GPU samples.
+
+Stage sampling rotates serial encoders with fences. A consumer must rebind its
+pipeline, buffers and constants and redeclare indirect resources after rotations.
+The recorder permits one in-flight command buffer, owns bounded sample storage,
+and resolves samples only after the caller's existing completion wait.
+
+An M3 Ultra on macOS 26.6.2 exercised stage sampling and passed all 13 dedicated
+host/device tests. Dispatch-boundary sampling was unavailable and was not exercised.
+This probe does not establish model fidelity, decode speed or serving support.
+
+## Standalone Metal EXL3 projections
+
+With the Zig version from `.zig-version` and Xcode's Metal toolchain:
+
+```sh
+zig build tf-exl3-bench test-exl3 test-exl3-gpu -Dcpu=apple_m1
+./zig-out/bin/tf-exl3-bench --help
+./zig-out/bin/tf-exl3-bench --qualify-only 1 --warmup 0 --repeats 1
+./zig-out/bin/tf-exl3-bench --warmup 1 --repeats 3 --prefill 32
+```
+
+These commands use deterministic compressed fixtures, not a checkpoint.
+Compact 256-by-128 fixtures check all nine rows and every output column for
+27 width/codebook combinations in BF16 and F32. Larger shapes check every
+candidate output bit against the arithmetic decoder, but the independent FP64
+oracle samples at most two rows and three 128-column blocks. Its worst-column
+metrics are explicitly labelled `worst_sampled`; they are not whole-matrix bounds.
+
+Plain prefill windows of at least 32 rows share decoded weight tiles across four
+SIMDgroups when the pipeline supports 128 threads. Smaller windows, filtered
+routes and indexed experts keep the eight-row kernel. If the prefill pipeline
+is unavailable, the operator uses that existing path. The benchmark's arithmetic
+reference disables the optional prefill pipeline to keep its comparison valid.
+
+The borrowed-buffer API in `zig/src/core/exl3_projection.zig` encodes BF16
+inputs, FP16-rounded rotated inputs, compensated FP32 projection dots and BF16
+or F32 outputs. Scratch holds row intermediates, never a dequantized matrix.
+All buffers and pipelines must survive command completion. GPU-produced IDs
+must be in bounds, scatter destinations unique, and grouped padding must follow
+valid rows. Indexed descriptors share dimensions and require valid resident
+weights disjoint from writable views; use `useMatrix` or caller residency sets.
+The operator validates storage extents, offsets, strides, capacities and aliases,
+but does not read back GPU IDs or plan expert groups.
+
+On an M3 Ultra running macOS 26.6.2, the 82 exercised operator cases had zero
+candidate/baseline bit mismatches and identical independent-oracle errors.
+Timings alternate dispatch order and exclude oracle work and allocations.
+This is operator evidence only: no model loader, family registration, CUDA
+implementation, whole-model fidelity or served-throughput claim is added.
+
+## First server and request
+
+This example uses the complete `TensorFold/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MLX-4bit` checkpoint, including its MTP head:
+
+```sh
+bin/tensorfold-native serve "$HOME/models/nemotron-lightning" \
+  --name local-model --parallel 1 --context 8192 --temperature 0 --no-thinking
+```
+
+This example's `--parallel 1` caps serving at one active request; extra requests wait for a free slot.
+Omit `--parallel` to use `auto`, which asks for up to eight streams as memory and the engine allow.
+Use `--parallel N` for an explicit cap; the engine refuses a count it cannot fit.
+Read the startup capacity line, such as `8 streams at once` on CUDA, for the accepted count.
+For example, `--parallel 4` keeps at most four requests active while the fifth and later requests wait.
+Completing or cancelling an active request frees its slot; cancelling a waiting request removes it from the queue.
+
+Leave the server running and check it from another terminal:
+
+```sh
+curl -fsS http://127.0.0.1:8080/health
+curl -fsS http://127.0.0.1:8080/v1/models
+curl -fsS http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"local-model","messages":[{"role":"user","content":"Say hello in one sentence."}],"max_tokens":128,"temperature":0}'
+```
+
+Use `http://127.0.0.1:8080/v1` as the OpenAI client base URL.
+For streaming, add `"stream": true` to the request.
+The native server also has `/v1/responses` and Anthropic `/v1/messages` routes.
+Serve flags and request overrides are described in [README.md](docs/run-guide.md#serve-flags).
+
+With API authentication off, `/health` includes `live.connections`, the total active plus waiting requests,
+and `live.waiting`, the queued requests. Subtract waiting from connections to get the active count.
+For example, 8 connections with 4 waiting means 4 active and 4 queued.
+When API authentication is enabled, `/health` returns only status.
+
+## Prompt prefill share, budget and admission policy
+
+The native server reads four environment variables when it opens its lane host, and `serve` checks them before it loads the model.
+All are optional. Set them before starting the server.
+`TENSORFOLD_PREFILL_SHARE` takes a number from 0.01 to 1.
+The default is 1, and empty text gives the default. `serve` refuses any other value at start, naming the variable.
+It is the share of wall time long prompt steps get while other streams are decoding.
+A step of length t at share p owes the decoders t (1 - p) / p of decode time.
+The debt grows after each step and falls after each decode round.
+A long prompt's next step runs only when no debt is owed or no stream can decode.
+At the default 1 no debt is recorded, so the only waiting is the ordinary turn-taking: the host runs at most one step of a long prompt each time it turns to it, and chunked prompts still interleave with the decoding streams' rounds.
+Lower values add that debt, finish the long prompt later and leave more time for decoding streams.
+Flash Next's shared sessions on a Mac without tensor units start from a reply share of 0.8 when neither this nor `--decode-share` is set: see [the API](docs/api.md).
+A prompt whose whole uncached pass is at most 512 rows runs outside the share as one call.
+The check compares the prompt's length with the cached state, not how far the fill has reached, so a long prompt whose last rows remain does not become exempt when its unfilled tail is small.
+
+`TENSORFOLD_PREFILL_BUDGET` takes a whole number of prompt rows from 1 to 4,294,967,295.
+The default is 0, which means none.
+Empty text or 0 gives 0, which removes the cap. `serve` refuses a negative number, a fractional form, a value above the range or any other text at start.
+It caps the prompt rows filled in one pass while a stream is ready to decode.
+The cap counts only rows filled while such a stream waits.
+A call that reports no progress spends the allowance anyway and yields, so unknown or stale progress never holds the cap open.
+When a cap is set, one step of a long prompt that has waited long enough goes first.
+When the cap is reached the host stops prompt work for that pass.
+The decoders then take their next round before more prompt rows are filled.
+A single prompt call is never split, so one call can pass the cap.
+Raising the cap lets more prompt work run per pass.
+That delays the decoding streams' next round.
+Lowering it gives those streams their next round sooner.
+That costs more passes to finish the prompts.
+With the default 0 no cap applies: short prompts run as one burst beside decoders, bounded at a lane's worth of newly begun prompts while other work waits.
+
+`TENSORFOLD_PREFILL_POLICY` takes `fcfs`.
+Unset or empty keeps the default order described above. `serve` refuses any other text at start.
+Under `fcfs` the host fills only the oldest long prompt (more than 512 uncached rows) on each visit, in chunks of `TENSORFOLD_PREFILL_TOKENS` rows, and the decoding streams take one round after each chunk.
+A long prompt with no stream decoding beside it takes the engine's own cut, so a lone request runs exactly as without the policy.
+Short prompts run as they do without the policy. `TENSORFOLD_PREFILL_BUDGET` does not apply under a policy; `TENSORFOLD_PREFILL_SHARE` is checked once per visit.
+
+`TENSORFOLD_PREFILL_TOKENS` takes a whole number of prompt rows from 64 to 16384. Values outside the range are clamped.
+The default is 2048, and empty text or 0 gives the default. `serve` refuses text that is not a whole number at start.
+It only matters when `TENSORFOLD_PREFILL_POLICY` is set.
+Smaller chunks shorten each pause the decoding streams see while a prompt fills; larger chunks let later prompts start sooner.
+On flashnext Metal with eight 14336-row prompts arriving together, `fcfs` at 2048 paused decoders about 1.7 s per chunk with the last first token at about 94 s;
+4096 gave about 3.1 s and 87 s; 8192 gave about 5.9 s and 83 s. 16384 matches 8192 at that prompt length.
+
+## Linux and CUDA
+
+For source builds with `zig build native` (including `--prefix` installs): Structured output and required tool calls need the release archive's `lib/` or `zig build grammar -Dxgrammar=DIR`; prepare DIR with `git clone --branch v0.2.8 --recurse-submodules https://github.com/mlc-ai/xgrammar` (use the native build's same `--prefix` for grammar).
+
+Choose `linux-aarch64` for an arm64 host or `linux-x86_64` for an x86_64 host.
+The archives require glibc 2.28 or newer and NVIDIA driver R580 or newer (CUDA 13.0), providing `libcuda.so.1`.
+Their kernels are built with CUDA 13, so TensorFold refuses an older driver at startup; `nvidia-smi` shows the installed one.
+See [qualified models](docs/supported-models.md#qualified-models) for native CUDA serving by family and format.
+Nemotron 3.5 Lightning MLX 4-bit has been checked on GB10 (sm_121, greedy and sampled), RTX 3090 (sm_86, greedy)
+and RTX PRO 6000 Blackwell (sm_120). A receipt on one sm_86 card does not measure every card of that class.
+Flash Next MLX 4-bit has served on a GB10 ([native recipe](docs/recipes/flash-next-cuda.md)).
+[GLM-5.3-Flash](docs/recipes/glm-5.3-flash-cuda.md) has recorded native TP=2 and TP=3 runs, including FP4-Local and
+XSFP4 on two and three GB10s. GLM uses `TF_GLM_RANK`, `TF_GLM_WORLD` and `NCCL_COMM_ID`; other ranked families use
+their supported `--tp` options. [Gemma 4](CHANGELOG.md#114) 12B and 31B MLX checkpoints have served on a GB10 too.
+The largest recorded CUDA server is GLM on three GB10s; GLM refuses more than 16 ranks and `--tp` offers only
+1, 2, 4 or 8, so no native family serves 32 GPUs as one server and no run beyond three is recorded.
+
+Release fatbins contain sm_80, sm_86, sm_120 and sm_121 images. The A100 (sm_80) has kernel checks recorded in
+[#846](https://github.com/ashhart/TensorFold/pull/846), but no served checkpoint on record, so it is not model-qualified.
+Nemotron and dense Qwen's NVFP4/FP8 paths have non-cluster fallbacks for sm_80 to sm_89 (#901, #1470).
+No NVFP4/FP8 model run on sm_80 to sm_89 is recorded; implementation and kernel checks are not whole-model qualification.
+MiniMax-M3.1-Flash refuses an A100: its CUDA path admits only sm_121 at exactly two ranks.
+DeepSeek requires sm_90 or newer and remains refused by the release server pending whole-model gate #827.
+Nemotron's `--precision checkpoint` is refused on an A100 because it needs Blackwell (compute capability 12.x).
+GLM also refuses an FP8 or MXFP8 projection on sm_80 to sm_89 when its shape needs split-K partial storage that
+this family does not hold. CUDA `--slide` learning is admitted only on sm_121.
+Qwen4 has synthetic gates only.
+
+On a GB10 arm64 host (an x86_64 host uses `linux-x86_64` in the same commands):
+
+```sh
+V=1.3.2
+curl -fLO https://github.com/ashhart/TensorFold/releases/download/v$V/tensorfold-$V-linux-aarch64.tar.gz
+curl -fLO https://github.com/ashhart/TensorFold/releases/download/v$V/tensorfold-$V-linux-aarch64.tar.gz.sha256
+sha256sum -c tensorfold-$V-linux-aarch64.tar.gz.sha256
+tar -xzf tensorfold-$V-linux-aarch64.tar.gz
+cd tensorfold-$V-linux-aarch64
+bin/tensorfold-native --version
+```
+
+CUDA fatbins are embedded in the executable, and Nemotron runs on those built-in kernels:
+
+```sh
+bin/tensorfold-native serve "$HOME/models/nemotron-lightning" \
+  --name local-model --parallel 1 --context 8192 --temperature 0 --no-thinking
+```
+
+A captured Triton set is optional: `TENSORFOLD_CUDA_KERNELS` names one (a folder with `aot.json` and `cubins/`), `native`
+forces the built-in kernels, and a set found at `share/tensorfold/cuda/sm<capability>/` beside the executable is used when present.
+A sampled request honours its `seed`, `top_k: 0` turns the top-k filter off, and `/metrics` reports CUDA device memory and
+pinned host memory.
+A request that names no `top_k`, on a checkpoint whose generation config names none, samples with no top-k filter on
+CUDA and Metal alike, so a seeded request draws the same on both. `--top-k 20` gives 0.6.6's CUDA default.
+A conversation's next turn resumes from a prompt state kept where its last turn's history ended, so a reply equals the same
+request with the cache off. `--prompt-cache-gib` sizes kept states. The default takes half the room after streams,
+with a 16 GiB floor on Metal and CUDA device memory, or 8 GiB for unified CUDA host snapshots, clipped to the room.
+Discrete CUDA host snapshots default to 8 GiB. Flash Next's batch host keeps a 16 GiB ceiling before sizing sessions.
+An explicit value overrides it, and 0 turns them off. A state kept inside a prompt chunk costs no extra prompt call.
+A Nemotron 3.5 Lightning state takes 48 MiB plus
+7 KiB a prompt token, in whole 2 MiB pages (62 MiB at 2,048 tokens), and the cache keeps four 48 MiB buffers of its
+budget free for the next states.
+Prompts fill a chunk at a time between decode rounds, so requests that arrive together on a new system prompt would each
+compute it. A request whose prompt shares a cut another prompt is still filling, which its own lookup would resume, waits
+in the queue until that fill stands there, then resumes the cut. `TENSORFOLD_PREFIX_WAIT_MS` bounds the wait (60000 by
+default; 0 turns it off).
+`TF_HEAT_HIGH` and `TF_HEAT_LOW`, in degrees Celsius and set together, make each prompt chunk wait while the hottest
+thermal zone (under `/sys/class/thermal`, or `TF_HEAT_ROOT`) is above the high band, until it is at or under the low one.
+The server logs `heat_wait_s`, a cancel ends the wait, and the reply's tokens do not change.
+On three GB10s serving GLM-5.3-Flash NVFP4 at TP=3, a 1,035,295-token prompt without the bands kept one host's hottest
+zone at 94 C or more for most of the prompt (97.7 C at the top); `TF_HEAT_HIGH=92` and `TF_HEAT_LOW=88` held all three
+at 93.0 C or under, and the first token came 10% later.
+Archives whose names contain `host-only` are CPU verification artifacts and cannot serve CUDA inference.
+
+### Build a server for one GPU
+
+`zig build -Dgpu=<gpu>` builds only `tensorfold-native`, with kernel code for that one GPU architecture and every model family, stripped by default:
+
+```sh
+zig build -Dgpu=spark -Dnvcc=/usr/local/cuda/bin/nvcc            # zig-out/native/bin/tensorfold-native
+zig build -Dgpu=gfx1201 -Dhipcc=/opt/rocm/core/bin/hipcc          # zig-out/native-hip/bin/tensorfold-native
+```
+
+- `-Dgpu`: `sm_80`, `sm_86`, `sm_89`, `sm_120`, `sm_121`, `spark` (GB10, sm_121), or an exact HIP architecture from `zig/src/hip/caps.zig`. It replaces `-Dsm`, `-Dhip` and `-Dhip-arch`.
+- `sm_89` builds, but the release set (sm_80, 86, 120, 121) holds no image qualified on it.
+- The server refuses a GPU of another architecture at startup and names the `-Dgpu` that fits it (HIP already refuses one at device open).
+- CUDA needs `-Dnvcc`, or `-Dfatbins` with prebuilt images; each prebuilt image must hold exactly the one SASS profile its kernel needs on that GPU. `-Dstrip=false` keeps debug info.
+- The build offers no other step: tests, tools and `grammar` need the development build (no `-Dgpu`). Structured output needs `libtfgrammar` in the server's `../lib` (release archive `lib/`, or `zig build grammar -Dxgrammar=DIR`, which installs `native/lib`; copy it to `native-hip/lib` for HIP).
+
+Measured on 2026-11-02 (aarch64 for CUDA, x86_64 for HIP), every model family in every server:
+
+| Hardware GPU | Generic server | `-Dgpu` server | Saved |
+| --- | --- | --- | --- |
+| RTX PRO 6000 (`sm_120`, nvcc 13.3) | 145.5 MB (sm_80, 86, 120, 121) | 44.9 MB | 100.6 MB (69.2%) |
+| GB10 DGX Spark (`spark`, nvcc 13.4) | 146.1 MB (sm_80, 86, 120, 121) | 44.8 MB | 101.3 MB (69.3%) |
+| Radeon AI PRO R9700 (`gfx1201`, ROCm 7.16) | 48.9 MB (`native-hip`, unstripped) | 20.6 MB | 28.3 MB (58.0%) |
+
+### GB10 CPU pinning for long CUDA runs
+
+In [#1033](https://github.com/ashhart/TensorFold/issues/1033), @Bizuayeu reports two CPU threads spinning per CUDA rank,
+even between requests, heating the CPU during long reply runs. Pinning each rank to efficiency cores reduced that heat.
+
+Logical CPUs `0-4,10-14` are the Cortex-A725 efficiency cores, confirmed on two GB10 units. Verify the CPU layout (`lscpu -e`) on
+each host. Add `taskset -c 0-4,10-14` before each rank's existing native launch,
+or add `--cpuset-cpus=0-4,10-14` after `docker run` and before the image name in each rank's container launch.
+Keep the existing model, GPU, network and rank options.
+
+On GLM-5.3-Flash NVFP4, version 1.0.12 plus #1016-#1018, TP=2, with heat bands of 92/88 C, @Bizuayeu's pinned run
+completed 40/40 replies, peaking at 85.1 C; the unrestricted run stopped at the seventh reply at 94.7 C.
+Decode throughput fell 1.1% and prefill throughput 2.7%. These are the contributor's measurements, not 1.1.0 results.
+
+### GB10 GPU clock cap for long CUDA runs
+
+GB10 hosts are reported to power off under sustained GPU load, leaving no log
+([NVIDIA Developer Forums](https://forums.developer.nvidia.com/t/hard-power-off-under-sustained-gpu-load-at-90w-persists-after-full-platform-firmware-update/378315)).
+The reported workaround is a GPU clock cap at 2,200 MHz
+([tonyd2wild/dgx-spark-hard-poweroff-fix](https://github.com/tonyd2wild/dgx-spark-hard-poweroff-fix)).
+`sudo nvidia-smi -lgc 300,2200` sets the cap and `sudo nvidia-smi -rgc` removes it. To set it at each boot, save this
+unit as `/etc/systemd/system/gb10-clock-cap.service` and run `sudo systemctl enable --now gb10-clock-cap`:
+
+```ini
+[Unit]
+Description=GB10 GPU clock cap
+After=nvidia-persistenced.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/nvidia-smi -lgc 300,2200
+ExecStop=/usr/bin/nvidia-smi -rgc
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Cap every rank's host. Under load the clock then reads 2,200 MHz or under
+(`nvidia-smi --query-gpu=clocks.gr --format=csv`). In the serves below, the hottest thermal zone (`/sys/class/thermal`)
+peaked 8 to 11 C above the GPU's own peak. The cap holds the GPU only: on a capped host the hottest zone reached 94 C
+with the GPU idle (312 MHz, 6.7 W) while the kernel contract's checks ran and nvcc built its fatbins. The cap does not
+replace the bands: without them, the 1,035,295-token prompt above (ranks not pinned) reached 97.7 C under the cap, the
+hottest host's clock held at 2,177 to 2,190 MHz.
+
+On GLM-5.3-Flash NVFP4, version 1.1.1, TP=2, each rank on the efficiency cores, @Bizuayeu's serves with the cap,
+twice without it and with it again: the cap made drafted decode about 1% slower, `"draft": false` decode about 1.5%
+slower and a cold prompt of 9,600 to 38,400 tokens 2 to 5% slower, with the same token ids; each GPU peaked at about
+60 W instead of 89 to 92 W, and the hottest thermal zone at 88.6 to 90.7 C instead of 96.8 to 98.1 C. These are the
+contributor's measurements.
+
+## Flash Next and paired Metal serving
+
+Flash Next reads its MLX 6-bit/group-32 checkpoint directly and creates its native layouts locally.
+Other affine bit widths or group sizes are refused before device or pack preparation; the runtime kernels require 6-bit affine with `group_size` 32.
+
+```sh
+bin/tensorfold-native serve "$HOME/models/flash-next-6bit" \
+  --name flash-next --context 32768 --temperature 0 --no-thinking
+```
+
+Prepared packs are stored in `$HOME/.cache/tensorfold/packs/<identity>/`, separate from the checkpoint.
+The directory name is the SHA256 of the existing pack source identity, which records the index, shard sizes and shard headers.
+A complete matching `<model>/zig-pack` is read for compatibility and is never written or repaired.
+New packs are built in a sibling temporary directory and published only after every pack is complete.
+An interrupted build is retried on the next open; its owned temporary directory is then removed.
+The model directory can be read-only, and the cache directory must be writable for a new build.
+
+Leave `TF_FLASHNEXT_DUMP` unset for ordinary direct-checkpoint loading.
+That variable selects an optional older diagnostic recording path.
+The standalone Flash Next qualification is on M5 Ultra; it serves one active reply at a time.
+
+GLM-5.3-Flash's qualified setup uses two M5 Ultras with the same checkpoint, one settings file per rank and a separately built MCDMA library.
+Start rank 1 first, then rank 0 with their respective settings:
+
+```sh
+bin/tensorfold-native serve "$HOME/models/glm-5.3-flash" \
+  --speed-up rank1.json --context 8192 --temperature 0 --no-thinking
+bin/tensorfold-native serve "$HOME/models/glm-5.3-flash" \
+  --speed-up rank0.json --name local-model --context 8192 --temperature 0 --no-thinking
+```
+
+Run each command on its own Mac and send requests to rank 0.
+Run the same release on both Macs: the pair now agrees on learned-state disk space before either Mac writes, and each Mac refuses a peer from an earlier release.
+With `--learn`, states learned by an earlier release are refused when read and learned again.
+Each settings file names `rank`, `library` and `links`; each link names its peer, RDMA device, interface/address, ports and link name.
+[Speed-up settings](docs/speed-up-mode.md#4-write-the-settings-files) has the schema and link setup.
+That guide's two-Mac Flash Next commands load the checkpoint directly, as one Mac does.
+
+On one Mac, GLM loads only when its weights and caches fit in 70% of RAM, 179.2 GB on a 256 GB Mac, and leaves the MTP head on disk when only the head is over.
+`GLM_LOAD_LIMIT_GB=N` sets that limit in GB, up to the GPU's recommended working set; a value that isn't a number above 0 stops the server.
+Past 70% of RAM the server warns at startup: a load that wires most of the RAM can stall macOS until its watchdog restarts the Mac, so run nothing else large beside it.
+GLM enables a shared residency set by default when its unique Metal buffers and a 2 GiB margin fit the load bound.
+`GLM_RESIDENCY=1` keeps that default, `GLM_RESIDENCY=0` disables it, and every other value stops loading before Metal allocations.
+The startup log reports the GiB held or the reason the set was skipped.
+
+A successful Metal residency set keeps weights, live stream state and working buffers wired during idle keepalive.
+This retains the memory already used by serving instead of letting macOS reclaim its pages between requests.
+The shared keepalive commits a small blit every 400 ms; the set alone is insufficient.
+The default keep-warm window is 900 seconds, and `--keep-warm 0` disables it.
+Later buffers join through their owners while they fit the same bound, and leave before they are freed or replaced.
+The bound reserves 2 GiB inside a validated family load limit, or 70% of known RAM by default.
+Neural Engine program weights are separate from Metal buffers and are outside this set.
+
+### Memory pressure on a shared Mac
+
+Engines served through the shared lane host, including Flash Next with `--parallel` above one, Qwen3.8-27B and GLM, read the macOS memory pressure level (`kern.memorystatus_vm_pressure_level`).
+The engine thread reads it at most four times a second and acts on the level:
+
+- Warning: a queued request starts only when no other stream runs, so the server serves one stream at a time.
+  New prompt states are not kept.
+  The prompt cache gives back kept states, least valuable first and one per round, until it holds no more than its soft watermark.
+  With `--spill-gib` each state is written to disk before it goes.
+  A state that a request is restoring is never dropped.
+- Critical: as warning, and new requests get 503 with a message saying the Mac is under critical memory pressure.
+  Requests already queued or running continue.
+- Normal: admission and kept states behave as before.
+
+A rise takes effect at the next reading; a fall waits for five seconds of lower readings, so admission does not flap near a threshold.
+Each change of level is logged once.
+At normal pressure the server behaves exactly as it does without the governor.
+Under pressure only admission and kept states change: every request served returns the same tokens, and a resumed request equals a fresh one.
+
+`TENSORFOLD_PRESSURE_CACHE_PERCENT=N` sets the soft watermark to N% of the prompt cache budget (default 50; 0 sheds every state not being restored).
+`TENSORFOLD_MEMORY_PRESSURE=0` (or `off`) disables the governor.
+Flash Next's single-reply driver (`--parallel 1` or `auto`) does not read pressure yet, and Windows builds do not.
+
+### Experimental Linux memory pressure
+
+On Linux, `TENSORFOLD_MEMORY_PRESSURE=1` (or `on`) opts the shared lane host into the same governor and cache
+watermark. Unset keeps it off until device qualification. The reader samples `/proc/pressure/memory` and
+`/proc/meminfo` without allocating; both must be available and valid at startup. It reads at most four times a
+second, raises the level immediately and waits five seconds of lower readings before easing it.
+Inside a container or cgroup, these proc files describe the whole host, not the container's memory limit.
+The opt-in therefore follows host pressure and does not provide container-local pressure or admission limits.
+
+The proposed thresholds use PSI's `avg10` stall percentages:
+
+| Level | Any of these readings |
+| --- | --- |
+| Warning | PSI some at least 10%; PSI full at least 1% |
+| Critical | PSI full at least 10% |
+
+Critical takes precedence. MemAvailable is diagnostic and does not set the level. A normally budgeted unified-memory
+server can have a small available margin without reclaim stalls. The OS reader has no engine-specific planned margin,
+so it uses PSI rather than guessing a floor from total RAM. MemFree and file-cache size do not set the level either. Unknown or malformed data follows the existing source contract: no reading,
+counted as normal by the governor. Windows is unchanged. The 503 message refers to the system on every platform.
+
+Only optional states managed by the shared lane host are shed. Borrowed states remain protected. Family-owned
+caches and a backend's independent driver need their own qualification; this does not coordinate pressure across
+TP hosts or replace the pre-load page-cache release/admission checks used on GB10 (#1857, #1868).
+
+`zig build test-memory-pressure-host` checks planted proc files, thresholds, invalid/oversized input, the existing
+hysteresis, protected state, cache shedding, admission and resumed/fresh equality on an instrumented target.
+No Linux device, memory-hog or whole-checkpoint receipt is claimed. Keep the Linux opt-in off until a GB10 run
+shows shedding, recovery without oscillation and exact drafted/plain, resumed/fresh and concurrent/solo replies
+at unchanged checkpoint precision (#2129).
+
+
+## Access, context and updates
+
+To accept remote clients, choose `--host 0.0.0.0` and configure `--api-key-file` with a file readable only by its owner.
+Clients send `Authorization: Bearer KEY`.
+The default loopback server accepts local clients without a key.
+
+The server admits at most 128 open connections (`--max-connections N`, 1 to 1024), including idle keep-alive connections and active replies.
+Extra connections receive `503 Service Unavailable` with `Retry-After: 1`, then close.
+The reply is best effort if the peer cannot receive it; no extra connection thread is created.
+This cap is independent of the process file limit.
+
+From three quarters of that limit open (96 of 128), one remote address may hold at most a quarter of it (32 of 128); its next connection gets the same 503.
+Below that, one address may hold any number, so clients behind one address are not throttled on a quiet server.
+`--max-connections-per-address N` sets that share (0 turns it off).
+IPv4 peers are counted by address, IPv6 peers by their /64.
+Loopback clients are never counted, nor the exact addresses given with `--trusted-proxy ADDRESS` (repeat it, up to 64).
+Name a reverse proxy, a load balancer, or Docker's bridge gateway there (often `172.17.0.1` with `-p 8080:8080`), since every client behind it shares its address.
+With every slot taken, a connection waiting for its next request gives its slot up after 5 seconds.
+Below the limit, an idle keep-alive connection is never closed for it, and a request in progress never is.
+
+A new connection has 30 seconds to send its request line and all headers.
+A kept connection may wait idle for 900 seconds; its next request's first bytes start a fresh 30-second head budget.
+A fixed-length body has 30 seconds plus one second per 64 KiB declared, rounded up to a millisecond.
+Chunked bodies extend that same original budget only by declared payload bytes, within the 32 MiB body limit.
+Chunk metadata and trailers do not reset the deadline.
+The existing 120-second read-idle and 300-second write-idle limits still apply.
+Read budgets end when input is complete, so they impose no total deadline on inference or streamed replies.
+
+A context limit covers prompt plus reply tokens.
+Inspect the capacity and memory information printed at startup; larger contexts need more cache space.
+After a memory refusal, reduce the context or reply limit, or choose a smaller qualified checkpoint.
+`--prompt-cache-gib 0` disables Nemotron, Flash Next, GLM and Qwen3.8-27B prefix retention, and `--keep-warm 0` disables Metal idle keepalive.
+`--learn` writes a shared prompt state to disk only while the disk keeps `--learn-min-free-gib` free, 4 GiB by default.
+Below that, learning pauses with a log line and serving goes on; a refused write is tried again after 1 to 60 seconds, sooner when space comes back.
+Each learned file carries a checksum over its header and contents, so a damaged, truncated or older file is refused and learned again.
+`--prompt-cache-disk DIR` writes every kept prompt state behind to that directory, while the engine idles,
+and a SIGTERM stop writes what waits within 20 seconds. It is equivalent to `--learn-conversations --learn-dir DIR`;
+the old flags remain supported, and `--learn-conversations` alone keeps its existing default directory.
+Use either spelling: combining `--prompt-cache-disk` with `--learn-dir` or `--learn-conversations` is refused.
+The startup line names the disk directory and the device budget when the engine reports one.
+Stop a server with SIGTERM, not SIGKILL, so its last turn is kept.
+`--learn-daily-gib` caps those writes a day (32 GiB by default); `DELETE /v1/imprint` forgets one model's conversation states.
+
+Upgrade a Homebrew installation with `brew upgrade tensorfold` and restart its server.
+For an archive installation, verify and unpack the replacement archive, then restart from that binary.
+Python 0.6.6 remains a separate release line.
+
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| Executable not found | Run the archive's `bin/tensorfold-native`, or the Homebrew `tensorfold` command. |
+| Model cannot open | Complete checkpoint files, supported geometry/quantization and the model path or existing cache. |
+| Client cannot connect | Server log, `/health`, base URL, model ID, listen address and API key. |
+| CUDA kernel assets missing | Bundled `share/tensorfold/cuda/sm121/`, or `TENSORFOLD_CUDA_KERNELS`. |
+| Pair waits for its peer | Start rank 1 first; check rank, peer, library path, devices, addresses and matching ports. On macOS, run both servers attached to a session or allow them Local Network access. |
+| Packed Metal runtime compilation fails | 1.0.0 probes and selects its prebuilt fallback; include chip, macOS version and startup error in a report. |
+
+For a bug report, include the version, checkpoint revision, public reproducing request, exact command and relevant startup/request logs.
+`TENSORFOLD_LOG_TIME=1` starts each server log line, the `[tensorfold]` lines and every engine's warnings, with its UTC time (`2026-10-30T18:54:04.123Z [tensorfold] ...`), to match the log against other records.
+`serve --log-json` writes the access, `ended` and `refused` lines as one JSON object each on that `[tensorfold]` line, with `event` set to `access`, `ended` or `refused`. `access` is written when the response starts, with the HTTP status and the request id once one is assigned. `ended` is written only when the client left or the reply failed, with `prompt` and `tokens`. `refused` is written for an error reply, before its `access` line. Long fields are cut so each line still parses. Without the flag the text lines are unchanged. JSON never includes API keys, Authorization headers or request bodies.
+
+
+===== docs/receipts/qwen-unread-chunks-2941/README.md =====
+# Qwen CUDA unread prompt chunks (#2941)
+
+A non-final prompt chunk whose rows nothing reads stops its last layer at its keys, values and their rotary rows.
+This receipt covers the branch's exactness, sampled and drafted replies, the 8K and 16K prompt-cache marks and
+cold prefill on one GB10.
+
+## Source and environment
+
+- Device binaries: base `0591c4e85dca440749063d171d4305d65a6edb50` and head `4a7a7f127`, one `zig build native
+  -Dsm=121 -Dnvcc=/usr/local/cuda/bin/nvcc` build an arm. Binary md5: base `6720d18b2b1d8875477d5520b95dc26c`,
+  head `fe92ed6a93d7ede5c7a6bb6fa42a3cff`. The prompt-cache state rows below were measured after the rebase, on
+  current main `f794b26a8` against the review head `5d1f494cfe`.
+- One NVIDIA GB10 (sm_121), CUDA 13.0 (V13.0.88), Zig 0.17.0, Linux 7.0.
+- Checkpoint `nvidia/Qwen3.6-35B-A3B-NVFP4`, revision `491c2f1ea524c639598bf8fa787a93fed5a6fbce`.
+- Serve flags: `--parallel 1 --context 40960 --no-update-check --prompt-cache-gib 0` for cold, sampled and drafted
+  rows; `--prompt-cache-gib 4` for the resumed turns, and `--prompt-cache-disk` for the kept-state rows. The GB10 also
+  served an unrelated 86 GiB model, so cold TTFT is reported but is not a clean performance gate; exactness is the
+  gate.
+
+## Cold replies
+
+One request each at 2,048, 8,192 and 32,768 tokens, 16 greedy reply tokens, fresh server an arm. Base and head
+`token_sha256`/`output_sha256` are equal at every length. The base arm was re-run with no build on the machine so
+its TTFT is comparable to the head arm:
+
+Facility record ZX-56: the access code for the Cairn Hill observatory is RM-2277. The Cairn Hill observatory was inspected on 14 March.
+
+
+
+| Prompt tokens | Base `token_sha256` / `output_sha256` | Head `token_sha256` / `output_sha256` | Base TTFT | Head TTFT |
+| ---: | --- | --- | ---: | ---: |
+| 2,048 | `0551b205…` / `4dfc61c7…` | `0551b205…` / `4dfc61c7…` | 0.344 s | 0.337 s |
+| 8,192 | `eabb9ee4…` / `bfda9f68…` | `eabb9ee4…` / `bfda9f68…` | 1.282 s | 1.270 s |
+| 32,768 | `bfdffc1b…` / `3e1bd53e…` | `bfdffc1b…` / `3e1bd53e…` | 6.006 s | 5.962 s |
+
+The full hashes are in `runs/base-cold.json` and `runs/head-cold.json`. The 32,768-token prompt cuts eight
+4,096-row chunks; the seven non-final ones reported `unread=true` in the server log, with no tap, learning, MLP,
+pocket, int8 or image reader. That log line came from a temporary `std.log.info` in `cuda_prefill.chunk` for the
+run; the diff adds no log line.
+
+The prompts are the server tokenizer's output for Python 3.12.3's standard-library source; the raw arrays were
+tokenized once per server start, so a different Python version changes the text but not the equality check.
+
+## Quiet-GB10 A/B (reported by @jschmied)
+
+A separate quiet-GB10 run, base `a3aecd8d0` against head `e7c385e96` (the same `zig/` diff as this head, apart from
+hunk offsets), one fresh server an arm in base-head-head-base order, 3 rounds, SM clock capped at 2300 MHz, page
+cache dropped before every server, 16 greedy tokens. Binary md5: base `1375faa01aeefc2f9ac40c907d6dab81`, head
+`a479e68ff08992d57ff66f15faf52e3f`. Every `token_sha256`/`output_sha256` equals this receipt's:
+
+| Prompt | Base TTFT median [min-max] | Head TTFT median [min-max] | Paired head - base, per round | Adjacent pairs slower |
+| ---: | ---: | ---: | --- | ---: |
+| 2,048 | 0.3275 s [0.3238-0.3291] | 0.3259 s [0.3224-0.3272] | +1.8 / -4.5 / -2.7 ms | 3 of 6 |
+| 8,192 | 1.2360 s [1.2353-1.2437] | 1.2328 s [1.2273-1.2356] | -3.1 / -9.9 / -1.5 ms | 0 of 6 |
+| 32,768 | 5.8006 s [5.7908-5.8210] | 5.7695 s [5.7437-5.7825] | -28.4 / -61.8 / -23.0 ms | 0 of 6 |
+
+At 32K the median per-round delta is -28.4 ms and the median of the six adjacent pairs is -34.5 ms (-0.5 to
+-0.6 %); 8K gains about 3-4 ms and 2K is level. The raw per-arm rows, gate output and server logs are with
+@jschmied.
+
+## Sampled and drafted replies
+
+The same 8,192 and 32,768 token prompts at temperature 1.0 with seed 1234, then the same prompts with the server's
+default draft mode; every base and head row has the same `token_sha256` and `output_sha256`:
+
+| Mode | 8,192 base / head | 32,768 base / head |
+| --- | --- | --- |
+| Sampled, T 1.0, seed 1234 | equal (`eabb9ee4…`) | equal (`bfdffc1b…`) |
+| Drafted, default | equal (`eabb9ee4…`) | equal (`bfdffc1b…`) |
+
+Raw rows are in `runs/{base,head}-sampled.json` and `runs/{base,head}-drafted.json`. With the default drafter the
+MTP tap on the last layer makes `unread` false, so these rows exercise the unchanged full path.
+
+## Prompt-cache marks
+
+A chat prompt is sent, then the same conversation with a question appended, on base and head with a 4 GiB prompt
+cache. The 8K run resumes 8,192 tokens and the 16K run 16,384; every resumed reply is
+`token_sha256 e1de42ac…` / `output_sha256 19079cfe…` on both arms. A cache-off run of the appended prompt has the
+same reply, so the resumed path equals a fresh one.
+
+| First prompt | Resumed at | Base reply | Head reply |
+| ---: | ---: | --- | --- |
+| 9,352 tokens | 8,192 | `e1de42ac…` / `19079cfe…` | `e1de42ac…` / `19079cfe…` |
+| 17,972 tokens | 16,384 | `e1de42ac…` / `19079cfe…` | `e1de42ac…` / `19079cfe…` |
+
+The runs are `runs/{base,head}-chat8k.json`, `runs/{base,head}-chat16k.json` and `runs/head-chat-fresh.json`.
+
+The kept states at those two marks were then compared on base `f794b26a8` (current main, binary md5
+`4f84a3a4c4fc72d7904cc5aa62b533f1`) against head `5d1f494cfe` (binary md5
+`b52e931eaa1e922f239d33f67564a877`), a fresh server an arm with `--prompt-cache-gib 4 --prompt-cache-disk`, and the
+same commands. `states.py` reads the disk tier's `.st` file and every `.blk` file it names, and hashes payloads only:
+the files' trailers carry the build's own block names. The recurrence and convolution state is the state file's
+payload past its 16-byte position, shift and format words; the K/V digest covers each named block's payload. Both
+arms are byte-equal:
+
+| Resumed at | Field | Base | Head | Files |
+| ---: | --- | --- | --- | ---: |
+| 8,192 | Recurrence + conv state | `4c17690b79f771208134c6065f760cfca7ba8ed63f983e510d89f64b74e962f9` | `4c17690b79f771208134c6065f760cfca7ba8ed63f983e510d89f64b74e962f9` | 1 state |
+| 8,192 | K/V blocks | `c0d8a3685f8c0c142260be48766c2e56adeaf08fd43f3ef5899c006dee297d5f` | `c0d8a3685f8c0c142260be48766c2e56adeaf08fd43f3ef5899c006dee297d5f` | 32 blocks |
+| 16,384 | Recurrence + conv state | `a849f8970ab05562bab42fb78ff4ee57ef08ec70dfbf13f084ca3cdb5bd642a2` | `a849f8970ab05562bab42fb78ff4ee57ef08ec70dfbf13f084ca3cdb5bd642a2` | 1 state |
+| 16,384 | K/V blocks | `8909fc17c889bebe82313ae0ee39900acc2ed9ba386f2156aa5e958b873fecb4` | `8909fc17c889bebe82313ae0ee39900acc2ed9ba386f2156aa5e958b873fecb4` | 64 blocks |
+
+The same run reproduced the reply `token_sha256`/`output_sha256` rows above. The digests are in
+`runs/{base,head}-marks.json`.
+
+## Commands
+
+```sh
+BIN=zig-out/native/bin/tensorfold-native
+G=docs/receipts/qwen-unread-chunks-2941
+$BIN serve nvidia/Qwen3.6-35B-A3B-NVFP4 --name gate --port 8081 --context 40960 --parallel 1 \
+  --no-update-check --prompt-cache-gib 0
+python3 $G/gate.py cold http://127.0.0.1:8081 gate $G/runs/head-cold.json
+python3 $G/gate.py sampled http://127.0.0.1:8081 gate $G/runs/head-sampled.json
+python3 $G/gate.py drafted http://127.0.0.1:8081 gate $G/runs/head-drafted.json
+# restart with --prompt-cache-gib 4 --prompt-cache-disk /tmp/states-head
+python3 $G/gate.py chat8k http://127.0.0.1:8081 gate $G/runs/head-chat8k.json
+python3 $G/gate.py chat16k http://127.0.0.1:8081 gate $G/runs/head-chat16k.json
+python3 $G/states.py /tmp/states-head 8192 16384 > $G/runs/head-marks.json
+```
+
+`gate.py` sends the checkpoint's own tokenizer output through `tools/bench_concurrent.stream`, so each row is
+the server's own `ttft_s`, cached-token count and token hashes. `states.py` reads the disk tier's kept states at a
+mark and hashes the recurrence, convolution and K/V payloads.
+
+
+===== docs/recipes/fluid-subgraph-residency.md =====
+# Exact Fluid Subgraph Residency
+
+[Fluid Subgraph Residency](../design/fluid-subgraph-residency.md) is TensorFold's implementation of published techniques from EdgeMoE, MoE-Infinity, Fiddler and Fate. Slotstream is an outside comparison only. The native phase covers Flash Next (`qwen4_exp`) on one Metal device. Other families, backends and the paired speed-up path refuse these options.
+
+## Serve stored experts from SSD
+
+```sh
+tensorfold serve CHECKPOINT --ssd-experts 16 --ple-on-ssd
+```
+
+`--ssd-experts GIB` is the routed-expert slot budget, not the whole process budget. Shared experts, non-routed weights, the original execution scratch, admitted sessions, prompt states and the runtime reserve still need memory. The startup plan includes them, all nine stored components per slot, the persistent expert map, source metadata and the bounded reader stack. It reports usable slots and unused budget bytes. A budget must hold one layer's maximum expert union. A shortfall refuses; it never changes top-k, context, drafts or concurrency to fit.
+
+The loader leaves routed target and MTP experts in their original checkpoint files. Demand protects all selected experts before CLOCK eviction, which counts uses: a hit adds one up to three, the hand takes one off as it passes, and a newly read expert starts at none, so one used once leaves before one used again. All nine components load into an exclusive slot before its map entry is published. The existing expert kernels use the persistent map only on this path. Mixed stored widths retain their original formulas and combine order. Missing or malformed spans, short reads, changed file length and a failed cache-bypass setup stop the request before partial data can be used.
+
+Readers require macOS `F_NOCACHE` and use positional reads directly into shared slots. Native PLE streaming can be selected independently with `--ple-on-ssd`. It deduplicates requested rows, coalesces adjacent rows within each shard and feeds staged IDs and unchanged stored bytes through the resident lookup arithmetic. Logical n-gram IDs and history stay unchanged.
+
+Decode prefetch uses the next layer's own router on the current state. One bounded worker reads predictions into unleased slots behind submitted expert compute. The later real router remains authoritative. A wrong prediction wastes reads and cannot change routes or output. Prompt chunks load each layer's complete demand union once per chunk. Streaming chunks use one command stream so host storage cuts cannot wait on an unsubmitted staggered sibling; concurrent request windows and MTP still use the lane core.
+
+Earlier measurements, before the prompt-workspace change: Flash Next MLX 4-bit MTP on an M3 Ultra, `--context 65536 --parallel 1`, physical footprint sampled every 250 ms through load, a short reply, a 16,000-token prompt and a 512-token reply, one run each, with the same reply bytes in every row:
+
+| Flags | After load | Peak | 16K prompt and 32 tokens |
+| --- | --- | --- | --- |
+| `--ssd-experts 8 --ple-on-ssd` | 36.0 GiB | 37.8 GiB | 49.1 s |
+| `--ssd-experts 17 --ple-on-ssd` | 45.0 GiB | 46.8 GiB | 47.8 s |
+| `--ssd-experts 8` | 65.9 GiB | 67.6 GiB | 44.4 s |
+| `--ssd-experts 17` | 74.9 GiB | 76.9 GiB | 34.9 s |
+| `--ssd-experts 35` | 92.9 GiB | 94.9 GiB | 35.9 s |
+| Everything in memory | 129.7 GiB | 131.6 GiB | 11.2 s |
+
+## Prompt workspace footprint
+
+On a 256 GiB M5 Ultra, the unused sibling and its selector account for 6.161249 GiB at the trained physical capacity. Streaming, PLE-only and route-trace prompt calls use one workspace; ordinary staggered and paired calls retain separate workspaces. Prompt chunks remain 8192 rows, with the same marks and draft widths.
+
+These are one-run process-footprint measurements with the verified Flash Next MLX affine 4-bit group32 MTP checkpoint, `--context 65536 --parallel 1 --ssd-experts 8 --ple-on-ssd` and automatic prompt caching. Footprint is sampled at 10 Hz. After load uses samples before the first request; the 16K peak covers a 16,384-token prompt and 32 reply tokens after a short reply. Both arms below retain the trained physical capacity of 262,144 rows.
+
+| Workspace ownership | After load | 16K peak |
+| --- | --- | --- |
+| Two prompt workspaces | 35.42 GiB | 36.01 GiB |
+| Only the reachable prompt workspace | 29.26 GiB | 29.84 GiB |
+
+This saving alone does not qualify a 32 GiB Mac: even a valid 1.5 GiB expert pool plans 26.19 GiB against a 22.4 GiB load ceiling. The plan includes a 2 GiB runtime reserve; it is distinct from physical footprint. The larger Mac also retains filesystem cache, so these measurements do not predict smaller-device SSD performance.
+
+## Smaller explicit contexts
+
+A smaller `--context` now sizes physical KV, indexer and score allocations, with the existing 32-row margin and four-row alignment. The physical floor is one unchanged 8192-row prompt chunk. Logical request limits remain separate from allocation padding and the trained rotary identity. Smaller contexts retain unscaled rotary; no-context allocation and past-trained rotary policy remain unchanged. A request outside its context is refused rather than truncated.
+
+At the same SSD8 setting on the M5 Ultra above, the physical allocation becomes 65,568 rows:
+
+| Physical context allocation | After load | 16K peak |
+| --- | --- | --- |
+| 262,144 rows, one workspace | 29.26 GiB | 29.84 GiB |
+| 65,568 rows, one workspace | 22.11 GiB | 22.69 GiB |
+
+The SSD8 startup plan is still 25.55 GiB and refuses a 22.4 GiB ceiling. A 4 GiB expert pool lowers that plan to about 21.55 GiB without changing stored bytes or routes. Admission and real peak footprint must both be checked for the selected workload. A budget imposed on a larger Mac is not a fit or speed qualification for a physical 32 GiB Mac.
+
+## Bound read overhead
+
+The demand path deduplicates route IDs and reserves missing experts in logical order. Adjacent stored experts merge only when both the source bytes and their destination slots are contiguous. A request is at most 4 MiB. The reader queues at most nine requests through macOS asynchronous IO, drains every submitted request on errors, and checks each touched file's length before and after the batch. Queue pressure falls back to positional reads after submitted work drains. Cache bypass remains required.
+
+An expert has nine stored components in separate tensor ranges. They cannot become one contiguous read without changing the checkpoint layout. Dense prompt unions can merge neighboring experts within each component; sparse decode routes often still need nine requests per missing expert. Mixed-width slot padding prevents merging across that padding. No gap bytes or unselected expert payloads are read to manufacture larger requests.
+
+A private pending-read index avoids scanning the pool for each route ID. Forecasts consume only cold, unleased slots and do not spend actual demand's use counts. An unused prediction remains cold. When actual demand arrives, the worker stops after its current expert. Predictions it never started give their slots back, so the cold expert each one displaced stays, and demand reads what it needs itself. Demand waits for the current expert only if its union needs that one; otherwise that read finishes beside demand's, and no new forecast starts until it has. The actual router and complete-demand lease remain authoritative. Shutdown reports lifetime bytes, read requests, file checks, reservations, canceled forecasts, raw and unique demand IDs, worker joins and command waits, including startup.
+
+Router readback and storage ownership still require command-buffer boundaries. These changes reduce unnecessary forecast splits when no cold slot exists; they do not remove the real router's dependency or claim resident-class throughput at every budget. The worker remains bounded and is joined before cache publication or teardown.
+
+## Analyze routing locality
+
+```sh
+tensorfold serve CHECKPOINT --fsr-route-trace routing.jsonl
+python3 tools/fsr_profile.py routing.jsonl --budget-bytes 17179869184
+```
+
+Stop the server cleanly before analyzing the trace. The native writer excludes startup warm-up and calibration. It records every actual expert demand, including hits, and distinguishes prompt chunks, solo decode, shared batches and MTP. Rows and stream counts distinguish plain and drafted windows. A kernel that executes an encoded upper bound includes those rows; a gated kernel that skips them excludes them. Forecasts are never actual-route observations. Checkpoint identity is a hash; prompt text is not written.
+
+The `tensorfold-fsr-v1` format has a header, ordered complete layer observations for every window, window ends and a final close/count. The analyzer refuses missing layers, reordered or duplicated observations, forecasts and truncated traces. Repeat `--budget-bytes` to compare pool budgets. `--ssd-bytes-per-second` accepts measured uncached bandwidth and reports a storage-time lower bound. The report includes union growth, usable slots, unused tails and a protected-demand CLOCK simulation without forecast. A fit verdict applies to the observed workload and predicts neither future locality nor native speed.
+
+For an explicitly synthetic planning example at the real 49-layer, 512-expert, top-10 geometry:
+
+```sh
+python3 tools/fsr_synthetic.py --locality hot80 --windows 512 > synthetic-routes.jsonl
+python3 tools/fsr_profile.py synthetic-routes.jsonl \
+  --budget-bytes 17179869184 --budget-bytes 23622320128 \
+  --budget-bytes 35433480192 --budget-bytes 51539607552 \
+  --tokens 512 --resident-tps 123 --ssd-bytes-per-second MEASURED_BYTES_PER_SECOND
+```
+
+The generator offers uniform, skewed and sticky route scenarios, preserves all top-10 IDs per row, and includes target and MTP windows. It does not load weights or predict a real model's routing. `--rows` and `--streams` describe batch width; `--prompt` labels prompt windows. One synthetic step includes one MTP row per target row; measured draft acceptance needs a real trace. `--tokens` is explicit because a trace window is not necessarily one emitted token. The synthetic header declares uniform component widths so the analyzer can estimate contiguous request counts. Native traces without those widths report bytes and locality without inventing read geometry. Use lifetime IO counters for the actual layout and forecasts.
+
+Optional `--read-latency-ns` adds an explicitly uncalibrated latency scenario. The reported serialized estimates add resident compute time, mandatory byte time and per-request or per-nine-request-group latency. They are planning estimates, not measured native speed. Actual queue depth, layout fragmentation, forecasts and overlap can change them. Measure uncached bandwidth at the same request sizes on the tested storage before interpreting any throughput ceiling.
+
+## Qualification
+
+Host steps are `test-fsr-host`, `test-fsr-source-host`, `test-fsr-cli-host` and `test-flashnext-fsr-owner-host`. They check ownership, source transformations, actual native option forwarding, admission, complete multi-row demand, forecast joins, PLE staging and file failures. Run `python3 -m unittest discover -s tools -p test_fsr_profile.py` for the locality tool's controls. `compile-fsr-metal-gate-host` and `compile-fsr-metal-contract-host` compile the real gate bodies without executing a shader compiler or device.
+
+Device qualification requires `zig build test-fsr-metal` on a Mac with the Metal toolchain and GPU. Its nonzero two-layer MoE has 32 experts per layer and four slots. It compares every observed node and all 32 logits with resident execution at four and six bits, repeats five times with uncached reads and requires a wrong-map control to differ. The Metal kernel contract includes exact stored-view replacements, wrong-map controls and the serving variants' source-reserved launch bounds. The address-view contract does not claim to requalify the unchanged resident accumulation precision.
+
+Synthetic and real-device results remain required before advertising a qualified memory tier. Real checkpoint receipts must compare complete token arrays for cold/warm prefill, serial decode, drafted/plain, concurrent/solo, resumed/fresh, prompt cuts and cancellation/reset at 16, 22, 33 and 48 GiB pool budgets. Record actual RAM, physical footprint, device allocations, SSD traffic and timings with cache bypass. A budget on a larger-memory device does not prove operation on a smaller-memory device. Follow the complete [qualification contract](../design/fluid-subgraph-residency.md#qualification).
+
+
+===== docs/receipts/glm-fp4local-80517fc3/README.md =====
+# GLM-5.3-Flash FP4-Local on CUDA: final-source receipt
+
+Tested implementation: `80517fc36ea6ee9183c5237ae92b1abd70619f75` (commit.txt has the tree and the eight commits).
+Checked after it: `d23862ab`, the three commits above this receipt's first commit (comments and docs, the loader
+gate's own checks, the format names and messages; `head-d23862ab/commit.txt`), on their own binaries in
+`head-d23862ab/`, and `797dd2e1`, four more (the loader's refusal of an FP8 projection a GPU's lane cannot run,
+`readRecipes`' errors, a test of `csfLinear`'s empty-weight refusal and a kernel contract control;
+`head-797dd2e1/commit.txt`), on its own binaries in `head-797dd2e1/`. They do not retake the rest of this receipt.
+Base: `v1.1.1` (`b10231b94f8adf3d4132acebdc0a1ac87e53a838`); baseline binaries are plain v1.1.1 built the same way (`bin-b10231b9`).
+Test date: 2026-10-20. Platform: MSI EdgeXpert (GB10, DGX Spark-compatible; sm_121, 128 GB shared memory), two at
+TP=2 over a direct RoCE link (two rails), three at TP=3 over a ring of direct links. Containers pinned to the efficiency
+cores (`--cpuset-cpus=0-4,10-14`, as 1.1.1's runbook in #1033).
+Toolchain: Zig 0.17.0, nvcc 13.0 (V13.0.88) for sm_121; runtime NCCL 2.30.7. binaries.txt has every binary's sha256.
+Checkpoints: `nvidia/GLM-5.3-Flash-FP4-Local` at `76348ddb2be2e35e39ecfc00e75dc07703f4f3d5`,
+`nvidia/GLM-5.3-Flash-NVFP4` at `423acf37583782c51c142d145aef733d72943d93`.
+Grammar: `lib/libtfgrammar.so` from the v1.1.1 release archive (a source build makes no `lib/`); lib/ has its sha256.
+
+## Prepared carry
+
+This full packet is historical contributor evidence. Its results are not rerun qualification of the current main or
+this prepared carry. All original files and helper sources are retained; no helper is installed or used by inference.
+The independent Python references require their own environment. Current CUDA device gates remain unchecked.
+The redaction report accounts for maintainer substitutions; SHA256SUMS covers every packet file except itself.
+
+## Scope
+
+This qualifies FP4-Local loaded as stored and served at TP=2 and TP=3: the loader gate on every layer, the lane
+invariants, served exactness (drafted = `"draft": false`, resumed = cold, concurrent = alone, prompts admitted together
+= alone), media and video, structured output and tool calls, prompt logprobs against a BF16 reference, per-rank load and
+peak memory, the kernel contract and glm-ref, the no-GPU CI steps, NVFP4 before and after against plain v1.1.1, and
+FP4-Local against NVFP4 on matched inputs. It does not qualify Metal, or a comparison with vLLM.
+
+## Results
+
+| Check | Result |
+| --- | --- |
+| Loader gate, TP=2, every layer (`tp2/gate/all-layers-*`) | Ranks 0 and 1: 894 uploads as the checkpoint cut, 486 as the host packers make them, 0 differ (3 left out: the draft head's GPU-quantized tiles) |
+| Loader gate, TP=3, every layer (`tp3/gate/all-layers-*`) | Ranks 0, 1 and 2: 894 and 486, 0 differ (TP=3's FP8 shares start inside a 128 block: #1024's repacking from the origin, per rank) |
+| Loader gate, six layers (0, 3, 4, 43, 44, MTP) | TP=2 and TP=3: 115 and 72, 0 differ |
+| `glm-lanes-cover`, `glm-lanes-concurrent`, `glm-shared-check` | TP=2 and TP=3: 40/40, 38/38, and 108 rows of 5 streams over 12 rounds equal to their lone twins byte for byte |
+| Golden ids (`tp2/serve/ex-*`) | NVFP4 on this head equals plain v1.1.1 on all three prompts (count `6faafd98`, prose `b82116bd`, code `ddd42119`), drafts and tokens per round included; FP4-Local drafted = `"draft": false` on all three; at TP=3 (`tp3/serve/ex3-*`) drafted = `"draft": false` on both checkpoints |
+| Concurrent (`bench_concurrent.py --alone --serial`, levels 1, 2, 4) | 12 cells a checkpoint at TP=2 and TP=3, 0 unequal, 0 failed |
+| Resume (a chat of 6,593 to 6,595 tokens resumed from its kept state, `"draft": false`, two at once) | Every reply equals the cold one, both checkpoints, TP=2 and TP=3 |
+| Prompts sent together beside a decode (`batch`) | Four fresh prompts, each equal to its alone run, both checkpoints, TP=2 and TP=3 (GLM fills them in chunks between rounds by default) |
+| 1.1.1's batched prompt pass (`bt-*`, `TF_GLM_PROMPT_STEPS=0`) | Three fresh prompts shared one pass (first tokens 0.28 to 0.53 ms apart, `prefill_seconds` within 43 µs), each equal to its alone run: plain v1.1.1 and this head on NVFP4, this head on FP4-Local (its MXFP8 `lm_head` through `cuda_shared.heads`) |
+| Media, media resume (`--vision`, `assets/tensorfold-hero.png`) | Drafted = `"draft": false`, repeated, three at once = alone; resumed past the image = cold: FP4-Local and NVFP4 at TP=2, FP4-Local at TP=3, plain v1.1.1 for resume |
+| Video (`--vision`, `tp2/serve/vl-*` and `vd-*`; `video/`, `tools/video_*.py`) | With `LD_LIBRARY_PATH` naming the server's `lib` (`vl-fl`, `vl-nv`), `tools/video_http.py` passes 16 of 16 on FP4-Local and NVFP4 at TP=2: upstream's 15 `tools/zig/video_served.py` checks (the 12 clips' prompt ids equal `Glm5NextProcessor`'s, read from `video/ref-*.json`; a later turn resumes past its video, 2,048 of 2,271 tokens cached; drafted = `"draft": false`; four at once = alone; a video beside an image; the eight refusals) and a repeat that answers the same. Without it (`vd-fl`, `vd-nv`, and plain v1.1.1 in `vd-111`), every video request fails naming the library (`libtfvideo.so is required for video inputs`): `/tokenize` HTTP 400, chat completions HTTP 500 (#1107) |
+| Structured output and tools (`s9/`, #1017's and #1018's items) | At TP=2, 26/26 on each checkpoint with drafts: schemas with thinking off and on, a schema plain already meets, `"draft": false`, seeded sampling twice, nested, resume from cache, required, named, parallel, single, nested and empty tool calls each again with `"draft": false`, mixed streams and prompts before and behind a constrained one; `--no-drafts` serves: 22/22; `compare`: all 22 shared greedy replies equal, and the resumed reply equals a cold one |
+| Prompt logprobs against BF16 (`s5/`, 144,285 positions) | Mean NLL: BF16 1.00691, FP4-Local 1.01811 (+1.11%), NVFP4 1.02069 (+1.37%); top-1 equal to BF16's 0.9282 and 0.9268; KL over BF16's top 20 (an approximation) 0.0528 and 0.0537 |
+| Memory (`memory/summary.json`, `memory_receipts.py`) | Every rank's load and cleanup receipts recorded; TP=2 FP4-Local 90.27 GiB at load end, 92.96 GiB peak, 0.00 after cleanup; TP=3 63.01, 62.88 and 57.74 GiB at load end |
+| TP=3 rank loss (`tp3/serve/sp3-fl`) | Rank 2 killed: ranks 0 and 1 left 7 s later |
+| kernel contract (`single/`) | `SUMMARY 91 kernels: 91 pass gates 1-4, 0 fail, 0 known findings; 7 controls: 7 red as planted, 0 missed; 1533 limit problems`; plain v1.1.1 (`single-v1.1.1/`): 85 kernels, 85 pass, the same 1533 (the contract counts each output: the two new kernels add six, rmsnorm's rows and 64-sums and hc_finish's rows, 64-sums, post and comb, and the launches go from 1101 to 1103) |
+| kernel-contract-limits, sm_80 to sm_121 | 877 problems, the same 877 on plain v1.1.1; this branch's two kernels (`tf_glm_rmsnorm_4096_f32w`, `tf_glm_hc_finish_f32w`) pass on all five (3000 PASS lines against 2990) |
+| glm-ref | 12 pass, every RESULT line equal to plain v1.1.1's |
+| No-GPU CI (`ci/`) | See ci/ci-summary.txt: every step passes; with fresh caches upstream's `cuda_cost_identity` mtime test fails here, on plain v1.1.1 too |
+
+Speed, medians (`tp2/serve/sp*`, `tp3/serve/sp3-*`); at TP=2 each binary and checkpoint served twice, alternating
+(both values given), at TP=3 once:
+
+| TP=2 | plain v1.1.1 | this head |
+| --- | --- | --- |
+| NVFP4, drafted decode, fibonacci-raw t=0 / t=1 (tok/s) | 56.2, 56.1 / 36.0, 35.9 | 56.1, 56.0 / 36.0, 35.9 |
+| NVFP4, drafted decode, gpu-chat-no-think t=0 / t=1 (tok/s) | 30.6, 30.7 / 28.3, 28.3 | 30.6, 30.6 / 28.4, 28.4 |
+| NVFP4, cold prefill of 18,789 tokens (s) | 14.19, 14.13 | 14.14, 14.10 |
+
+| Matched inputs, this head | NVFP4 | FP4-Local |
+| --- | --- | --- |
+| TP=2, `"draft": false` decode, fibonacci-raw and gpu-chat-no-think (tok/s) | 18.3, 18.3 | 24.5 to 24.6 |
+| TP=2, cold prefill of 9,600 and 38,400 token ids (s) | 7.22 and 28.46, 7.21 and 28.35 | 7.22 and 28.52, 7.24 and 28.53 |
+| TP=3, `"draft": false` decode (tok/s) | 21.8 to 21.9 | 31.4 to 31.6 |
+| TP=3, cold prefill of 9,600 and 38,400 token ids (s) | 6.33 and 25.06 | 5.93 and 23.44 |
+
+## The head after the receipt (`head-d23862ab/`)
+
+| Check | Result |
+| --- | --- |
+| Loader gate, six layers, TP=2 (`gate/`) | Ranks 0 and 1: 115 and 72, 0 differ, as on `80517fc3` |
+| The gate's controls (`gate-controls/`, TP=2 rank 0, layer 0 and what every load holds) | `TF_GATE_TAMPER=head.codes`: `d23862ab` reports the flipped upload by name, then its rank with 1 differing, then `PASS ... red as planted`, exit 0; `80517fc3` exits 1. `TF_GATE_WORLDS=1,2 TF_GATE_RANKS=2`, which selects no rank: `d23862ab` fails, exit 1; `80517fc3` exits 0 |
+| FP4-Local golden, TP=2 (`serve/sm-fl`) | Drafted = `"draft": false`, and equal to `tp2/serve/ex-fl`'s ids, on all three prompts |
+| `capabilities --json` (`capabilities-*.json`) | `glm5_next`: `modelopt-nvfp4` and `modelopt-mixed` (`80517fc3`: `modelopt-nvfp4`); TensorFold video found on both, without `LD_LIBRARY_PATH` |
+| No-GPU CI (`ci/`) | `zig build test` 2981/2996 with fresh caches (14 skipped; the one failure is upstream's `cuda_cost_identity` mtime test, as on `80517fc3`), `test-kernel-contract` 65/65, `test-golden`, `fuzz-cortheon` 11/11 and the served Flash Next unittest pass; lean 0 new (444 on v1.1.1); `zig fmt --check` on the 35 changed Zig files clean |
+
+## The head after the fixes (`head-797dd2e1/`)
+
+| Check | Result |
+| --- | --- |
+| Kernel contract (`single/`) | `SUMMARY 91 kernels: 91 pass gates 1-4, 0 fail, 0 known findings; 8 controls: 8 red as planted, 0 missed; 1533 limit problems`; the new control, `rmsnorm_4096_f32w` given its float32 weight as bf16 values, red at gate 3 as planted; the limits as on `80517fc3` and plain v1.1.1 |
+| glm-ref (`single/`) | 12 pass, every RESULT line equal to plain v1.1.1's |
+| Loader gate, six layers, TP=2 (`gate/`) | Ranks 0 and 1: 115 and 72, 0 differ, as on `80517fc3` and `d23862ab` |
+| FP4-Local golden, TP=2 (`serve/sm-fl`) | Drafted = `"draft": false`, and equal to `tp2/serve/ex-fl`'s ids, on all three prompts |
+| `capabilities --json` (`capabilities-797dd2e1.json`) | As `d23862ab`'s: `modelopt-nvfp4` and `modelopt-mixed` |
+| No-GPU CI (`ci/`) | `zig build test` 2983/2999 with fresh caches (14 skipped; the failures are upstream's `cuda_cost_identity` mtime test, as on `80517fc3`, and `cortheon`'s linear-time fuzz test, a timing test this branch does not touch: `toText` took 2 ms on 16 KiB and 65 ms on 128 KiB; its rerun passed, `test-rerun.log`, where `cuda_cost_identity` is the one failure), `test-kernel-contract` 65/65, `test-golden`, `fuzz-cortheon` 11/11 and the served Flash Next unittest pass; lean 0 new (444 on v1.1.1); `zig fmt --check` on the 35 changed Zig files clean |
+
+## Reproduction
+
+Every serve: `tensorfold-native serve CKPT --name local-model --parallel 4 --context 40960 --port 8095`, drafts on, one
+rank a host (`TF_GLM_RANK`, `TF_GLM_WORLD`), each host's page cache of both checkpoints dropped first; `md*` and `mr-*`
+add `--vision`, `vd-*` and `vl-*` add `--vision` with the library in the server's `../lib` (`vl-*` with
+`LD_LIBRARY_PATH` naming it), `x9-*-nd` add `--no-drafts`, and `bt-*` set `TF_GLM_PROMPT_STEPS=0`. The checks are
+tools/: `golden_http.py` on dc.json, upstream's `bench_concurrent.py`, `bench_openai.py` and `bench_cache.py`,
+`openai_aligned.py` (the `"draft": false` decode), `resume_http.py`, `batch_http.py` (`one-pass` for `bt-*`),
+`media_http.py`, `media_resume_http.py`, `video_http.py` (`video_served.py`'s 15 checks over HTTP and a repeat, against
+the ids `video_ref.py` takes from transformers 5.19.0 and PyAV 19.0.1 on clips `glm_video_fixtures.py` makes;
+`video/clips-sha256.txt`), `x9_live.py` (and its `compare`), `s5_prompt_lp.py` (prompt_logprobs 20 on the 128 held-out
+sequences) with `s5_compare.py` against `s5_bf16_ref.py`'s reference. `mkprompts.py` makes the matched token-id files.
+runs.log has one line a check.
+
+## Remaining coverage limits
+
+- TP=3 needs `TF_GLM_MM=0` on every rank: the default glm_mm refuses KDA's input stack there with `BadShape`
+  (#1067, whose thread has plain 1.1.1's run; here `tp3/serve/smoke3-mm1`, this branch with the bootstrap on FP4-Local),
+  so TP=3 has no batched prompt pass (it needs glm_mm's tiles).
+- TP=3's ranks meet through a local bootstrap commit that is not part of this branch (`tp3/bootstrap.patch`); the
+  gate and the lanes at TP=3 ran this branch's own binaries.
+- 1.1.1's batched prompt pass runs only with `TF_GLM_PROMPT_STEPS=0` on rank 0; `bt-*` set it, the other serves ran
+  the default.
+- `797dd2e1`'s refusal at load of an FP8 projection the lane cannot run applies on a GPU without thread block
+  clusters (before sm_90); every GPU here is a GB10, where every FP8 lane weight fits, so it was not run.
+- The KL is over BF16's top 20 only, and both sides' logits are bf16, so best tokens tie; `s5-compare.json` also
+  gives top-1 equal within ties.
+- runs.log's FAIL lines: `smoke3-mm1` is the #1067 probe above; the first `x9-fl` ran before `libtfgrammar.so` was in
+  place (HTTP 400 naming it) and its retake is the one published; `single` is the limits line above, on this head, on
+  `797dd2e1` and on plain v1.1.1 alike; `vd-fl`, `vd-nv` and `vd-111` are the refused video serves (#1107). The tamper
+  controls in `head-d23862ab/gate-controls/` print FAIL for the flipped upload and its rank before their PASS line: the
+  control passes when that is all that fails.
+- Metal and MLX were not run (no Mac). No vLLM comparison is claimed.
+
+## Publication handling
+
+Machine names, internal addresses, home paths, working-session names, and the tools' local document, records, container and image names replaced, CRLF line ends made LF and trailing blanks dropped; result
+values, token ids and token hashes kept.
+`redaction-report.json` counts the replacements a file. The memory wrapper's receipts are raw for TP=2 `ex-fl` only;
+`memory/summary.json` summarizes every receipt with its original's sha256. The prompt-logprob rows (87 MB a
+checkpoint) are not included; `s5/plp-sha256.txt` has their sha256. SHA256SUMS pins every published file except
+itself.
+
+
+===== docs/recipes/dots-mocr-cuda.md =====
+# dots.mocr on native CUDA
+
+The native CUDA engine serves dots.mocr, its image tower and its Qwen2
+decoder, through the shared dense engine (`zig/src/cuda_dense/`), from the
+BF16 `dots-studio/dots.mocr` checkpoint at revision
+`e539fbb52280393adc081b289ec597430a0f9031`. It is qualified on a GB10
+(sm_121) only. The HIP engine is in
+[dots.mocr on native HIP](dots-mocr-hip.md).
+
+```sh
+zig build native -Dnvcc=/usr/local/cuda/bin/nvcc
+zig-out/native/bin/tensorfold-native serve MODEL_DIRECTORY \
+  --vision --context 16384 --parallel 8 --name dots --host 127.0.0.1 --port 8090
+```
+
+Without `--vision` the server reads text prompts only and refuses images by
+name. With it, the default total image budget is 14,400 merged tokens per
+request (`--vision-image-tokens` sets another), one tower call an image,
+each image with its own attention; the largest image is 57,600 patches.
+Each lane holds its request's image rows, so `--vision` lowers the number
+of lanes a memory budget admits. JPEG inputs need libjpeg-turbo 3.1.4.1;
+PNG needs no library. Video is refused.
+
+Replies carry no reasoning block: all text is answer content. The engine
+keeps no prompt states, so `--prompt-cache-gib` is refused; so are
+`--drafter`, `--slide`, `--kv-cache fp8` and `--prompt-precision int8`.
+The engine's own copy drafts and `--no-drafts` give the same tokens.
+
+| Responsibility | Files |
+|---|---|
+| Lanes, pages, attention, draws, the host's declarations | `zig/src/cuda_dense/` |
+| Geometry, weights, one layer's arithmetic | `zig/src/families/dots_mocr/cuda_recipe.zig`, `cuda_weights.zig` |
+| q, k and v biases with the rotary in Torch's rounding | `zig/kernels/cuda/dots_rope.cuh` (`tf_dots_qkv_rope`) |
+| Image rows spliced into prompt chunks, per-lane feature rows | `zig/src/cuda_dense/images.zig`, `pass.zig` |
+| The tower: patches, 42 blocks, the 2×2 merger | `zig/src/families/dots_mocr/cuda_tower.zig`, `cuda_tower_weights.zig` |
+| The tower's 2-D rotary and the twice-rounded patch bias | `zig/kernels/cuda/dots_vision.cuh` (`tf_dots_vision_rope`, `tf_dots_patch_bias`) |
+
+The text reference runs the pinned oracle's `text` mode on any HIP or CUDA
+GPU, and `score` classifies every native id by HF's teacher-forced logits
+(exact, one BF16 step, or a failure, which exits nonzero):
+
+```sh
+python3 tools/zig/dots_mocr_reference.py text MODEL_DIRECTORY REFERENCE \
+  --prompt-file PROMPT.txt --pci PCI_ADDRESS
+python3 tools/zig/dots_mocr_reference.py score MODEL_DIRECTORY REFERENCE \
+  NATIVE_IDS.json DIFFERENCES.json
+```
+
+An image reference on CUDA runs the tower with SDPA (the checkpoint's
+config names flash attention, which has no aarch64 wheel) and records the
+attention backends it used; `--sdpa-backend math` keeps every SDPA call on
+the math kernel, for a second reference to compare against. `score` reads
+the reference's pixels and grid for image prompts, and `stages` compares a
+native tower dump with the reference's taps, stage by stage:
+
+```sh
+python3 tools/zig/dots_mocr_reference.py oracle MODEL_DIRECTORY IMAGE \
+  REFERENCE --attention sdpa --pci PCI_ADDRESS [--vision-only]
+tf-cuda-test dots-stages MODEL_DIRECTORY IMAGE NATIVE_STAGES
+python3 tools/zig/dots_mocr_reference.py stages REFERENCE NATIVE_STAGES
+```
+
+`tf-cuda-test dots-image MODEL_DIRECTORY [IMAGE]` encodes a generated page,
+and IMAGE when given, twice each, requires equal rows, and checks the page's
+merged rows against a hash recorded on the GB10, so a tower change fails
+without the oracle. `tf-cuda-test dots-text MODEL_DIRECTORY` does the same
+for the decoder: three prompts of our own (`fixtures/own-prompts.json` beside
+the family's code) each generate up to 64 greedy ids, whose hash must equal the
+one recorded on the GB10. `tf-cuda-test dots-help` lists the dots commands.
+
+The reference pins Pillow 12.2.0 and qwen-vl-utils 0.0.10: Pillow 13
+resizes the same image to other pixels.
+
+
+===== campaign/baseline.md =====
+# Frozen baseline
+
+The baseline is TensorFold `fa13df5dd1fdd23ada775510a464c9aa03a39e09` built with Zig 0.17.1. Its worktree overrides only `.zig-version` and `minimum_zig_version` (see Decision 3 in [plan.md](plan.md)). `make -C campaign build-baseline` rebuilds it in `.work/wt/baseline`.
+
+- `tensorfold-native` sha256: `8c2c8e6f4fd9f2c111d6fba7d89251a32a5afb309cc950ee3ff2d6a50816ac87`
+- Built with `zig build native -Dcpu=apple_m1 -Dversion=1.0.0`, Zig 0.17.1, Xcode 27.2 (27B52), Metal toolchain 27.2.47.0, macOS 27.2 (26B123). [host.json](host.json) has the full host record.
+- The Metal device reports `recommendedMaxWorkingSetSize` W = 40,200,896,512 bytes, so benchmark servers set `FLINT_LOAD_LIMIT_GB=36` (floor(0.9·W/1e9)).
+
+## Loop timings
+
+Measured on 2026-11-21 by `make -C campaign baseline-timings`. The cold build ran with an empty project cache and an empty campaign Zig global cache. The pinned weights were downloading at the same time, so the cold figure may be slightly high.
+
+| Command | Wall time |
+| --- | --- |
+| `zig build native -Dcpu=apple_m1 -Dversion=1.0.0`, cold | 239.3 s |
+| `zig build native -Dcpu=apple_m1 -Dversion=1.0.0`, warm no-op | 4.0 s |
+| `zig build test-flint-draft-host` | 17.7 s |
+| `zig build test test-golden -Dcpu=apple_m1`, under the GPU lock | 547.6 s |
+| `make -C campaign fetch NAMES="flint-int4 inkling-2-mini"`, all files already verified | 17.2 s |
+
+## Known red
+
+`zig build test test-golden -Dcpu=apple_m1` on the baseline: 928 of 938 steps succeeded with 7 failed, and 16,372 of 16,519 tests passed with 141 skipped and 6 failed. The goldens report 324 of 337 equal and 0 unexpected differences. Every failure:
+
+| Failing step or test | Modules | Failure |
+| --- | --- | --- |
+| `run sh`: the `nm -m` check that `tensorfold-native` takes `_memcpy` from libSystem | 1 step | The binary has a non-external `_memcpy` in `__TEXT,__text`: "tensorfold-native links its own memcpy". |
+| `the release's vision_config parses to the defaults` | `vision`, `families.deepseek_v41.metal.vision` | expected `error.UnsupportedVision`, found `error.ZeroHeads` |
+| `copied shard pages leave the file cache without changing the copy or stored bytes` | `checkpoint_file_cache`, `src.core.checkpoint_file_cache` | expected 0, found 2 |
+| `PDF render worker: a worker killed by a signal is named as a crash; a limit or a missing reply keeps today's message` | `pdf_worker` (two test binaries) | the `ulimit -t 1` busy loop reports "PDF rendering exceeded resource limits or failed" instead of a crash |
+
+The memcpy check may depend on the toolchain. Whether the unmodified `fa13df5d` built with Zig 0.17.0 also fails it is recorded in [ledger.md](ledger.md).
+
+Logs are in `.work/logs/baseline/` while the scratch tree exists. Rerun `make -C campaign baseline-timings` to reproduce them.
+
+
+===== docs/receipts/pr1381-review/README.md =====
+# PR 1381 standalone review fixes
+
+## Composition with requested main `cb036e00f`
+
+The shared-reservation stack is integrated without restoring the rejected shared-round guard.
+Historical grants and new reservations remain distinct:
+
+1. `granted_depth` reads the last **verified** grant, its short-grant flag and configured slack. Its periodic
+   zero-grant probe is evaluated once. This bounds what the next reservation may request.
+2. The shared allocator reserves rows using the drafter's cached chain chances, even when that historical
+   depth bound exists. The reservation decision queries a stateful copy proposer once.
+3. The actual reservation is capped to the hold pass's padded capacity, then `payHolds` prices only its
+   positive holds. Expected gain is recomputed from the usable chance prefix. These steps only reduce depths.
+4. A fresh zero reservation therefore never offers a hold. A historical zero grant may still probe, but only
+   if the new reservation supplies positive rows. Context absorption continues before the depth-zero skip,
+   so later holds retain continuous history.
+
+`limit_shared_drafts` keeps upstream's legacy head-step-cost meaning. LFM2's target facts set it, but upstream's
+attached-drafter classification excludes its legacy cap for node prices and confidence floors. The opt-in
+`granted_depth` path composes its own bound with reservations independently; it neither reinterprets
+`Stream.granted` nor replaces the drafter's chain chances with generic rates. Confidence and other-family
+legacy caps retain their existing paths.
+
+The focused regressions cover bounds, zero-to-positive transitions, chance pricing, padded-pass capacity,
+reserved gain, probe cadence and copy lookup. The mechanical merge without the composition fails seven of
+the nine new regressions. An independently compiled host API smoke also reproduces an unpaid hold pass
+before the fix: four positive holds survive a 1000 ms hold price. With the composition they are all rejected;
+profitable holds remain and zero reservations stay zero, without mutating historical grant fields.
+
+Current-main scoped checks use Zig 0.17.0 and `-Dcpu=apple_m1 -Dversion=1.2.0`:
+
+```sh
+zig build native test-native test-shared-lane-regressions-host \
+  test-shared-head-cost-metal-host test-draft-metal-host test-contract-images-host \
+  -Dcpu=apple_m1 -Dversion=1.2.0 -j2
+```
+
+The lane suite passes 299/299, including the complete absorbed-history comparison before every later hold;
+the Metal family head-cost checks pass 48/48, draft-host checks 11/11, and native checks 93 with three skips.
+The pinned main checker (`985356b424269b8d11e8a486223cf3c9aa1e726bb4761ad4a414482352024367`)
+reports 424 inherited findings on both trees, zero new. Only obsolete comparisons against deliberately wasted
+holds/full-block counts were removed: reservations now optimize both sides of those comparisons. Token
+equality, copy-skip, bound, price and zero-row gates remain.
+
+The historical results below retain their original source and device scope. They do not qualify the new
+DSpark chain's complete no-slowdown matrix.
+
+## Historical device receipt
+
+The lane changes are rebased onto main `d33dcfc767ee093393c6bfa00b3949bd7b4d8e88`, without the rejected guard ancestry. Source `745fe1088ab7293b5bc4f28c6cdedb989e83ec4f` retains the opt-in chance/grant/hold features, reuses the hold-order buffer, interpolates adjacent measured depths and queries a stateful copy proposer only once per granted-depth budget decision.
+
+Host checks: `zig build test-shared-lane-regressions-host test-draft-metal-host -Dcpu=apple_m1 -Dversion=1.1.8 --summary all` passes 57/57 steps, 290/290 tests. Plain `zig build -Dcpu=apple_m1 -Dversion=1.1.8 --summary all` passes 236/236 steps. Zig is 0.17.0. Formatting and whitespace pass. The same lean checker reports 425 findings on current main and this branch, zero new.
+
+The standalone PR changes no family adapter or GPU operator. DSpark device measurements require the downstream adapter from PR 1394. The local integration used here is `f73bb5590cc458b9b21b86352d65f23b76cac7c1` (PR 1394 head `98f5cc72b` merged with the same current main). Its tree is `1ce4a92c3ebd0ae6637872af2b3aec3fdbf1e73b`, reproducible by merging those two public parents. Its `config.zig`, `depth.zig`, `drafted.zig`, `drafter.zig`, `hold_price.zig` and `stream.zig` are byte-identical to this standalone head; it also contains PR 1394's final-buffer allocation cleanup and pipelined-code extraction. These measurements are explicitly integration evidence, not a claim that standalone main already loads DSpark.
+
+Device: Apple M5 Ultra, 256 GiB, macOS 27.0 (26A428), Metal 32023.921.6; native binaries built with Zig 0.17.0, `-Dcpu=apple_m1 -Dversion=1.1.8`. Target: `LiquidAI/LFM2.5-24B-A2B-MLX-4bit` revision `667408d494bde191c2cb9dd4f4549827816b9275`. Drafter safetensors SHA-256: `7d06a78556b0b1f386134508f09b00a3a7e0e5e0ec2cc73119229f4ef7c9b299`. BF16 drafter mode, one rank, context 4096, parallel capacity 16, prompt cache zero, greedy seed 1234, ignore EOS, 256 generated tokens. Code and prose prompts are retained verbatim in the driver. Each arm gets a 32-token warm-up per prompt. Four rotated runs compare main without an external drafter, standalone without an external drafter, and the DSpark integration. Main's normal suffix copying remains enabled. The integration also checks explicit `draft:false` oracles.
+
+Hold retention is measured on a separate diagnostic build: count positive stream budgets entering and leaving `payHolds`, after the one-pass cap. Report both kept/offered and kept/sum-of-stream-budget-opportunities. The latter includes zero-budget slots in calls that reach this pricing path; it does not count rounds that never call this path. Zero-budget streams do not enter its denominator, probes follow normal pricing, and tail rounds can have fewer live streams than the request batch. Per-call events are retained. Diagnostic output is excluded from throughput runs.
+
+To reproduce, use `device_report.py` with Python's standard library and the `qualification.py` helper from PR 1394's receipts. Set `TF_QUAL_HELPER`, `TF_QUAL_DRAFTER`, `TF_REPORT_MAIN`, `TF_REPORT_STANDALONE`, `TF_REPORT_INTEGRATION` (uninstrumented), and `TF_REPORT_DIAGNOSTIC`. Optional `TF_REPORT_OUT` controls output. The driver uses `/tmp/tensorfold-model.lock`, refuses an existing recognized model process through the helper, and aborts on memory-pressure admission changes. Reserve the GPU exclusively. The diagnostic build adds only before/after positive-budget counters around `payHolds`; the executed instrumentation is retained in the receipt.
+
+No new M1/M2/M3/M4, CUDA or HIP device qualification is claimed. Cold-prefill scaling, long-context and cancellation were not rerun for this standalone review report; historical PR 1394 checks are separately scoped to their recorded sources.
+
+## Device results
+
+All 72 throughput cells, six diagnostic batches, and explicit `draft:false` oracles agree token for token. All 13 servers shut down gracefully. Rates are median aggregate decode tokens/s across four rotations; diagnostic logging is absent from these timings.
+
+| Prompt | Streams | Main | Standalone | DSpark integration | Integration vs main | Holds kept/offered | Kept/budget slots |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| code | 4 | 651.92 | 652.29 | 640.37 | -1.77% | 12/742 | 12/886 (1.35%) |
+| code | 8 | 830.98 | 831.20 | 815.77 | -1.83% | 28/1226 | 28/1836 (1.53%) |
+| code | 16 | 831.29 | 829.54 | 888.75 | +6.91% | 374/1891 | 374/3258 (11.48%) |
+| prose | 4 | 623.40 | 623.08 | 616.75 | -1.07% | 0/960 | 0/996 (0.00%) |
+| prose | 8 | 804.91 | 804.87 | 795.60 | -1.16% | 40/40 | 40/2006 (1.99%) |
+| prose | 16 | 799.75 | 798.35 | 873.10 | +9.17% | 225/3260 | 225/3813 (5.90%) |
+
+Standalone/no-external-drafter changes are between -0.21% and +0.06% versus main in this run. DSpark holds are sparse at four and eight streams, and its integration loses 1.07–1.83% there; it gains 6.91% code / 9.17% prose at 16 streams. These results document the remaining downstream pricing/performance tradeoff rather than claiming universal gains. In prose at eight streams, every offered positive hold is kept, but holds occur in only 1.99% of recorded budget slots; kept/offered alone would conceal that sparsity.
+
+[Request-level data, per-call counters, binary/source hashes and diagnostic patch](device-report.json). The interpolation regression fails on the old PR head (expected 17.5 ms, obtained 24 ms) and passes here.
+
+
+===== docs/receipts/rocm-host-identity/README.md =====
+# ROCm host identity receipts (#1001, PR #1043)
+
+Evidence for [#1043](https://github.com/ashhart/TensorFold/pull/1043): GPU receipts from a Bosgame M5 (one Radeon
+8060S, `gfx1151`) and host-side test controls from a Mac (Apple M5 Max, CPU only). Every file here is a sanitized
+copy; see [Sanitizing](#sanitizing) for what changed. `SHA256SUMS` covers every file in this folder except itself
+(`shasum -a 256 -c SHA256SUMS` from this folder).
+
+## What the GPU receipts show, and what they do not
+
+The GPU receipts were measured on 18 Oct 2026, before the two visible-device fixes: `82237515` ("a ROCm
+visible-device index counts every GPU agent") and `fb8eaf85` ("the ROCm probe keeps the GPUs HIP keeps, by HIP's own
+rules"). They change what the probe records only when `HIP_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES` or
+`ROCR_VISIBLE_DEVICES` is set, or when a GPU agent's name fails the allowlist. With none of those variables set and
+one GPU agent with a reportable name, as on this box, the old and the new probe record the same GPU with source
+`detected`. The run logs do not record those variables, so these receipts do not exercise either fix; the host tests
+and the negative controls in [`host-controls/`](#host-controls-host-controls) do.
+
+### `gpu-run/`: managed runs and the first attached run
+
+Measured 18 Oct 2026, 17:31 to 17:47 UTC (the `t=` stamps in `run.log`; each receipt's `created_at` is UTC and
+agrees with them). Hardware as the receipts record it: CPU `AMD RYZEN AI MAX+ 395 with Radeon 8060S`, GPU
+`AMD Radeon 8060S Graphics` with 40 compute units and 128,849,018,880 bytes, 131,209,781,248 bytes of system memory,
+`unified`, source `detected`.
+
+Source: the git bundle sent to the box carried `main` `76aafcf2`, this branch at `5906a3f7` (its first four commits) and
+the other two #1001 branches, `hip-refuses-drafter` `920d1348` and `benchmark-drafter-counts` `1b4b2d7b`. `run.log`
+shows those two merged in; `heads.txt` line 1 is the merge commit made on the box, `7b84f909`. Line 2 reads
+`origin/main` literally: `git rev-parse origin/main` failed on the box (the `fatal:` line in `run.log`).
+
+| File | What it is |
+| --- | --- |
+| `heads.txt` | the source commit the binary was built from (above) |
+| `binary.sha256` | sha256 of that build's `tensorfold-native`: `e279e29a54b56dc81ff70985f8c4cffaa0d9aff4a7456a234eb7247667492247` |
+| `run.log` | the driver's log: merge, disk and memory before the run, the pinned snapshots, build exit, each run's exit and the GPU's busy/GTT stamps |
+| `pull.log` | the two checkpoints pulled into the Hugging Face cache at pinned revisions |
+| `27b-auto.json`, `.drafts.json`, `.log` | R1: managed `TensorFold/Qwen3.8-27B-MLX-4bit@70ae7fac...`, `--drafter auto` |
+| `27b-dflash2.log`, `27b-serve-drafter.log` | R2a, R2b: the `--drafter` refusals for the `hip-refuses-drafter` PR (exit 1 by design; no receipt) |
+| `35b.json`, `.drafts.json`, `.log` | R3: managed `TensorFold/Qwen3.6-35B-A3B-MLX-4bit-MTP@f84b054c...` |
+| `35b-serial.json`, `.drafts.json`, `.log` | R4: the same, `--serial` |
+| `35b-serve.log`, `35b-manifest.json`, `35b-attached.json`, `.drafts.json`, `.log` | R5: the same snapshot served, then benchmarked attached |
+| `check.mjs` | the harness that runs the board's `protocol.js` on each receipt (see below) |
+
+R1, R3, R4 and R5 each ran 20 attempts, and all 80 are `ok`. R1, R3 and R4 name the CPU and GPU above, and their
+checkpoint's `revision`, `config_sha256` and `tokenizer_sha256`, with `local` false. None of their logs prints the
+"board ranks" note. R5 found the bug commit 5 fixes: `35b-manifest.json` says `"backend": "hip"` with `"gpus": []`, so
+the client refused the manifest and `35b-attached.json` has unknown hardware and no revision.
+
+`check.mjs` imports the board's validator as `protocol.mjs`: `https://tensorfold.dev/benchmarks/protocol.js` as
+fetched on 18 Oct 2026, sha256 `0252160a717f4f50e12f9b019beff760ee10e415503ee504d72fc6289fc9cc4b`. That file is the
+board's own code and is not copied here. The output of the 18 Oct run on the box was not saved;
+`host-controls/board-validator.log` is a re-run on 19 Oct on the Mac with the same two files (same sha256) on the
+receipts in this folder. Each receipt is refused as `rocm` ("Unsupported benchmark runtime.") and accepted when only
+`runtime.backend` is changed to `cuda`, as the PR body says. The `cuda` copies are a schema check only and exist only
+in memory.
+
+`build.log` was empty (0 bytes) and is not included; the build's exit is in `run.log`.
+
+### `gpu-attached-rerun/`: the attached run with commit 5
+
+Measured 18 Oct 2026 on the same Bosgame M5; the receipt's `created_at` is `2026-10-18T18:18:44Z`.
+`heads-r5b.txt`: `25a7201f`, this branch at `624e2ce6` (commit 5) merged into `7b84f909`. `run-r5b.log`: build
+exit 0, `tensorfold-native` sha256 `7fcaa74ec93561902ef97675f00db1b6d022392c665a7578960e18c92bcd2407`, run exit 0.
+
+| File | What it is |
+| --- | --- |
+| `heads-r5b.txt`, `run-r5b.log` | source, build exit, binary sha256, run exit |
+| `35b-serve.log` | the HIP server, `gfx1151` device 0, serving the same 35B snapshot on loopback |
+| `35b-manifest.json` | `GET /v1/benchmark/manifest`: backend `rocm`, the same revision and hashes, the GPU with 40 cores |
+| `35b-attached.json`, `.drafts.json`, `.log` | the attached receipt: 20 of 20 `ok`, backend `rocm`, the CPU, GPU, memory and revision above |
+
+The manifest attests no rank count, so the receipt's `settings.rank_count` is null and it stays unranked by `main`'s
+rule. The log's line names "a rank count and checkpoint revision" because the client prints one message when either
+is missing; the revision is present in both the manifest and the receipt.
+
+## Host controls (`host-controls/`)
+
+Run on a Mac with an Apple M5 Max (macOS 27.0.1), CPU only, Zig 0.17.0, with private Zig caches. Times are UTC. The
+full suite is `zig build test -Dcpu=apple_m1 --summary all -j8`. The negative controls run the server tests only,
+`zig build test-server-cpu --summary all -j8` (the step that holds `benchmark_facts_test.zig` and, from `fb8eaf85`,
+`benchmark_rocm_test.zig`; the 19 Oct runs add `-Dcpu=apple_m1`); each log starts with the undo as a diff. The
+controls on `82237515` ran in the branch checkout, and the file was restored with `git checkout` after each. The three
+controls on `fb8eaf85` ran in a scratch copy of that commit (`git archive`), one undo at a time; after each the file
+was copied back and compared byte for byte with the commit's (the last line of each log), and the copy was discarded
+afterwards.
+
+| File | Tree | When | Build steps | Tests | Server test binary |
+| --- | --- | --- | --- | --- | --- |
+| `test-main-76aafcf2.log` | `main` `76aafcf2` | 18 Oct 23:12 | 292/292 | 4305 of 4321 passed, 16 skipped | 428 passed |
+| `test-branch-82237515.log` | this branch, `82237515` | 19 Oct 07:56 | 292/292 | 4317 of 4333 passed, 16 skipped | 434 passed |
+| `test-branch-fb8eaf85.log` | this branch, `fb8eaf85` | 19 Oct 08:51 | 292/292 | 4321 of 4337 passed, 16 skipped | 436 passed |
+
+The server test binary runs twice in `zig build test` (in `test` and in `test-cuda-host`), so its new tests add twice
+their number: six at `82237515` (five from commits 1 to 5, one from `82237515`) add 12, and two more from `fb8eaf85` add
+four. Each branch run was on a tree with no tracked file modified and started from an empty local cache, so every test
+ran. The `failed command:` lines in these logs follow warnings that tests print on stderr; each `Build Summary` line
+counts no failed test.
+
+| File | What was undone | When | Result | The failure |
+| --- | --- | --- | --- | --- |
+| `negative-control-agent-positions.log` | `82237515`: `benchmark_host.zig` as it was before the fix (an unreportable agent dropped before the indices apply), plus only the `rocmVisible` helper the new test calls | 19 Oct 07:52 | 433 of 434, 1 failed | the new test: `HIP_VISIBLE_DEVICES=1: listed GPUs [], want [AMD Radeon PRO V620]`, `HIP_VISIBLE_DEVICES=0: listed GPUs [AMD Radeon PRO V620], want []`, and the same two lines for `ROCR_VISIBLE_DEVICES` |
+| `negative-control-agent-positions-minimal.log` | the same fix, a smaller undo: `amdAgents` skips an unreportable agent again | 18 Oct 23:28 | 433 of 434, 1 failed | the same four lines |
+| `negative-control-backend-name.log` | commit 5: the manifest names the engine (`hip`, `metal`) | 18 Oct 23:30 | 433 of 434, 1 failed | the backend-name test: expected `rocm`, found `hip` |
+| `negative-control-revision.log` | commit 3: the manifest's revision from `TF_CHECKPOINT_REVISION` only | 18 Oct 23:31 | 432 of 434, 2 crashed | the manifest-agreement and attested-revision tests: `attempt to use null value` at the revision |
+| `negative-control-cores.log` | commit 3: the manifest sends `cores: null` and the client does not read cores | 18 Oct 23:32 | 432 of 434, 2 failed | the manifest-agreement and cores tests: `expected 40, found null` |
+| `negative-control-w-slash.log` | commit 2: `w/` kept as is in CPU names | 18 Oct 23:33 | 433 of 434, 1 crashed | the rocm probe test: no CPU name where `AMD RYZEN AI MAX+ 395 with Radeon 8060S` is expected |
+| `negative-control-ranking-note.log` | commit 4: the ranking note never names a missing fact | 18 Oct 23:35 | 433 of 434, 1 crashed | the rocm probe test: no note where `GPU` is expected |
+| `negative-control-rocr-twice.log` | `fb8eaf85`, part 1: `rocmVisible` as in `82237515`, so `ROCR_VISIBLE_DEVICES` applies again and `CUDA_VISIBLE_DEVICES` and clr's reading of a value do not | 19 Oct 08:54 | 434 of 436, 2 failed | `ROCR_VISIBLE_DEVICES=1 (rocminfo lists 1 GPUs): recorded [] partial`, `ROCR_VISIBLE_DEVICES=1,2 (rocminfo lists 2 GPUs): recorded [AMD Instinct MI210] detected`, and the `CUDA_VISIBLE_DEVICES`, empty `HIP_VISIBLE_DEVICES` and quoted `"1"` rows; in the agent-position test, both `CUDA_VISIBLE_DEVICES` rows |
+| `negative-control-hip-list.log` | `fb8eaf85`, part 2: the list parsed by `82237515`'s `select` again | 19 Oct 08:55 | 435 of 436, 1 failed | 12 of the 15 rows of HIP's list rules, among them `0,3,2: recorded [AMD Radeon PRO W7800, AMD Instinct MI210]`, `0,0: recorded [AMD Radeon PRO W7800, AMD Radeon PRO W7800]`, `2,0,2` with three cards, `1,x,0`, `0,`, `01`, `1` after a space, and every `GPU-` row that names a card |
+| `negative-control-partial.log` | `fb8eaf85`, part 3: no `partial` when a GPU HIP keeps is unnamed or a `GPU-` entry is unresolved | 19 Oct 08:56 | 434 of 436, 2 failed | the agent-position test with no variable (printed as `=`) and with `0,1`: `listed GPUs [AMD Radeon PRO V620] detected, want [AMD Radeon PRO V620] partial`; and `1,GPU-b2b2` on `rocminfo` text with no `Uuid` lines: `detected`, want `partial` |
+
+The first seven ran on `82237515`, after it was committed (23:22 UTC on 18 Oct): the five controls from the PR body
+again, and the agent-position one twice. In both agent-position controls the cases with no selection and with `0,1`
+still pass, because dropping an agent before or after the indices gives the same list when nothing or everything is
+selected. Each selection that names one position fails, in both directions: `1` loses the card it names, and `0`
+reports the next card. Their last two rows set `ROCR_VISIBLE_DEVICES`; `fb8eaf85` turned those rows into
+`CUDA_VISIBLE_DEVICES` rows, because the probe no longer reads `ROCR_VISIBLE_DEVICES` (below), and gave every row the
+source it expects.
+
+The last three ran on `fb8eaf85`, one per part of that fix. In each, the rows that part does not decide still pass: with
+part 1 undone, the two rows where `HIP_VISIBLE_DEVICES` holds an index (2 of 7); with part 2 undone, `-1`, the
+upper-case `GPU-` row and `1,0` on text
+
+According to the facility records in the text, what is the access code for the Cairn Hill observatory? End your reply with the code in double square brackets, like [[AB-0000]].

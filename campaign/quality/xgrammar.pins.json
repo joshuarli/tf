@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "repository": "https://github.com/mlc-ai/xgrammar",
+  "tag": "v0.2.8",
+  "tag_object": "520e25b19c6296bd45e763626618551fb898fef9",
+  "commit": "97787376faee5ed8466cfad57c99855e4ce2f6aa",
+  "submodules": {
+    "3rdparty/cpptrace": "6689d14c203eed390ae7bb64f56a983cfd7dff9c",
+    "3rdparty/dlpack": "bbd2f4d32427e548797929af08cfe2a9cbb3cf12",
+    "3rdparty/googletest": "df1544bcee0c7ce35cd5ea0b3eb8cc81855a4140"
+  }
+}

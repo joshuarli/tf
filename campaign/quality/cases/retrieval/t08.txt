@@ -1,0 +1,2214 @@
+You are reviewing a large native inference codebase. Below are consecutive excerpts from several source files, each introduced by a line of the form ===== path =====. Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text.
+
+===== zig/src/families/qwen4/ple_control_source.zig =====
+//! Fault variants change actual gate and convolution stores or their real native reductions.
+const std = @import("std");
+const edit = @import("../flashnext/geometry_source.zig");
+pub const Control = enum { production, nan, repeat, tail, sums };
+pub const names = [_][:0]const u8{ "qwen4_ple_gate_bad_nan", "qwen4_ple_conv_bad_nan", "qwen4_ple_gate_bad_repeat", "qwen4_ple_conv_bad_repeat", "qwen4_ple_gate_bad_tail", "qwen4_ple_conv_bad_tail", "qwen4_ple_gate_bad_sums", "qwen4_ple_conv_bad_sums" };
+fn stores(a: std.mem.Allocator, text: []const u8, marker: []const u8, control: Control, use_cuda: bool) ![]u8 {
+    const start = std.mem.indexOf(u8, text, marker) orelse return error.HybridGeometrySourceChanged;
+    const end = (std.mem.indexOfScalarPos(u8, text, start, ';') orelse return error.HybridGeometrySourceChanged) + 1;
+    const eq = (std.mem.indexOfPos(u8, text, start, " = ") orelse return error.HybridGeometrySourceChanged) + 3;
+    if (eq >= end) return error.HybridGeometrySourceChanged;
+    const replacement = if (control == .tail) try std.mem.concat(a, u8, &.{ "if (false) ", text[start..end] }) else try std.fmt.allocPrint(a, "{s}{s}(qwen4_ple_control({s}({s}), {s}));", .{ text[start..eq], if (use_cuda) "__float2bfloat16_rn" else "bfloat", if (use_cuda) "bf" else "float", text[eq .. end - 1], if (control == .repeat) "TF_REPEAT" else "0" });
+    return edit.once(a, text, text[start..end], replacement);
+}
+pub fn metal(a: std.mem.Allocator, production: []const u8, control: Control) ![]u8 {
+    if (control == .production) return a.dupe(u8, production);
+    var arena: std.heap.ArenaAllocator = .init(a);
+    defer arena.deinit();
+    const mem = arena.allocator();
+    var text = production;
+    if (control == .sums) {
+        for ([_][]const u8{ "sk", "sq", "dot", "sc" }) |v| text = try edit.once(mem, text, try std.fmt.allocPrint(mem, "simd_sum({s})", .{v}), try std.fmt.allocPrint(mem, "float(half(simd_sum({s})))", .{v}));
+        return a.dupe(u8, text);
+    }
+    for ([_][]const u8{ "GATED[size_t(r) * W + e]", "NORMED[size_t(r) * W + e]", "HOUT[at]" }) |marker| text = try stores(mem, text, marker, control, false);
+    if (control == .repeat) {
+        text = try edit.once(mem, text, "const constant float* eps [[buffer(5)]],", "const constant float* eps [[buffer(5)]], constant uint& TF_REPEAT [[buffer(31)]],");
+        text = try edit.once(mem, text, "uint3 thread_position_in_grid [[thread_position_in_grid]]", "constant uint& TF_REPEAT [[buffer(31)]], uint3 thread_position_in_grid [[thread_position_in_grid]]");
+    }
+    if (control != .tail) {
+        const helper = if (control == .nan) "inline float qwen4_ple_control(float x, uint r) { return isnan(x) ? 0.0f : x; }\n" else "inline float qwen4_ple_control(float x, uint r) { return x + float(r); }\n";
+        text = try edit.once(mem, text, "using namespace metal;\n", try std.mem.concat(mem, u8, &.{ "using namespace metal;\n", helper }));
+    }
+    return if (control == .repeat) @import("metal_control.zig").pack(a, text) else a.dupe(u8, text);
+}
+pub fn cuda(a: std.mem.Allocator, production: []const u8) ![]u8 {
+    var arena: std.heap.ArenaAllocator = .init(a);
+    defer arena.deinit();
+    const mem = arena.allocator();
+    var parts: [10][]const u8 = undefined;
+    parts[0] = production;
+    parts[1] = "\n#include <cuda_fp16.h>\nstatic __device__ __forceinline__ float qwen4_ple_control(float x, int r, int nan) {return nan ? (isnan(x) ? 0.0f : x) : x + float(r);}\n";
+    for (names, 0..) |name, i| {
+        const gate = i % 2 == 0;
+        const control = std.enums.values(Control)[i / 2 + 1];
+        const original_name = if (gate) "qwen4_ple_gate(" else "qwen4_ple_conv(";
+        var text = try edit.once(mem, try edit.function(production, original_name), original_name, try std.mem.concat(mem, u8, &.{ name, "(" }));
+        if (control == .sums) {
+            if (gate) {
+                for ([_][]const u8{ "kss", "qss", "dot", "gss" }) |v| text = try edit.once(mem, text, try std.fmt.allocPrint(mem, "{s} = block_sum_serial({s}, scratch);", .{ v, v }), try std.fmt.allocPrint(mem, "{s} = __half2float(__float2half_rn(block_sum_serial({s}, scratch)));", .{ v, v }));
+            }
+        } else {
+            for (if (gate) &[_][]const u8{"GATED[row + d]"} else &[_][]const u8{ "HOUT[at]", "NROW[at]" }) |marker| {
+                text = try stores(mem, text, marker, control, true);
+            }
+            if (control != .tail) {
+                if (std.mem.count(u8, text, ", 0));") != (if (gate) @as(usize, 1) else 2) and control == .nan) return error.HybridGeometrySourceChanged;
+                text = try std.mem.replaceOwned(u8, mem, text, if (control == .nan) ", 0));" else ", TF_REPEAT));", if (control == .nan) ", 0, 1));" else ", TF_REPEAT, 0));");
+            }
+        }
+        text = try edit.once(mem, text, if (gate) "int D, int S)" else "int D, int S, int TAPS, int DIL)", if (gate) "int D, int S, int TF_REPEAT)" else "int D, int S, int TAPS, int DIL, int TF_REPEAT)");
+        parts[i + 2] = try std.mem.concat(mem, u8, &.{ "\n", text, "\n" });
+    }
+    return std.mem.concat(a, u8, &parts);
+}
+
+
+===== zig/src/hip/kernel_tests/exl3.zig =====
+//! EXL3's decode-row kernels: weights decoded bit for bit, a row's bits in any window, the rotation by its fp32 steps.
+const std = @import("std");
+const core = @import("core");
+const rig = @import("rig.zig");
+const exl3 = @import("../launches/exl3.zig");
+const fmt = core.exl3_format;
+const Rig = rig.Rig;
+const gpa = rig.gpa;
+const at = rig.at;
+
+const had: f32 = 0.08838834764831845;
+
+/// The kernels' unscaled 128-point butterfly in fp32: stages 1 to 64 apart, a + b low and a - b high.
+fn fwht(v: *[128]f32) void {
+    var d: usize = 1;
+    while (d < 128) : (d *= 2) {
+        var base: usize = 0;
+        while (base < 128) : (base += 2 * d) for (0..d) |j| {
+            const a = v[base + j];
+            const b = v[base + j + d];
+            v[base + j] = a + b;
+            v[base + j + d] = a - b;
+        };
+    }
+}
+
+/// Random trellis words in the checkpoint's layout, [K/16, N/16, tile words].
+fn randomTrellis(rng: *rig.Rng, w: fmt.Width, k: usize, n: usize) ![]i16 {
+    const tr = try gpa.alloc(i16, (k / 16) * (n / 16) * w.tileWords());
+    for (tr) |*v| v.* = @bitCast(@as(u16, @truncate(rng.next())));
+    return tr;
+}
+
+/// A search for a tile's stream whose 256 values all decode above zero, or all below: a value's bits at a time.
+const Search = struct {
+    rng: *rig.Rng,
+    neg: bool,
+    /// Stream bits a value adds (a whole width's half-bits), and the ring's length.
+    g: usize,
+    ring: usize,
+    bits: [128 * 16]u1 = undefined,
+    budget: usize = 0,
+
+    /// The 16-bit window ending at `end` decodes to a value of the wanted sign.
+    fn signed(s: *const Search, end: usize) bool {
+        var state: u16 = 0;
+        for (0..16) |b| state = (state << 1) | s.bits[(end + s.ring - 16 + b) % s.ring];
+        const v = fmt.codebookValue(.mul1, state);
+        return if (s.neg) v < 0 else v > 0;
+    }
+
+    fn from(s: *Search, p: usize) bool {
+        if (s.budget == 0) return false;
+        s.budget -= 1;
+        // the windows that wrap past the stream's start are whole once every bit is set
+        if (p == 256) {
+            var q: usize = 0;
+            while ((q + 1) * s.g < 16) : (q += 1) if (!s.signed((q + 1) * s.g)) return false;
+            return true;
+        }
+        const options = @as(usize, 1) << @intCast(s.g);
+        const first: usize = @intCast(s.rng.next() % options);
+        for (0..options) |i| {
+            const v = (first + i) % options;
+            for (0..s.g) |b| s.bits[p * s.g + b] = @intCast((v >> @intCast(s.g - 1 - b)) & 1);
+            const end = (p + 1) * s.g;
+            if ((end < 16 or s.signed(end)) and s.from(p + 1)) return true;
+        }
+        return false;
+    }
+};
+
+/// A tile's words (checkpoint order: MSB-first bits in little-endian int16 pairs) whose values all have one sign.
+fn signedTile(rng: *rig.Rng, w: fmt.Width, neg: bool, words: []i16) void {
+    var s: Search = .{ .rng = rng, .neg = neg, .g = w.halves / 2, .ring = 128 * @as(usize, w.halves) };
+    while (true) {
+        s.budget = 100_000;
+        if (s.from(0)) break;
+    }
+    var word: [64]u32 = @splat(0);
+    for (0..s.ring) |i| word[i / 32] |= @as(u32, s.bits[i]) << @intCast(31 - i % 32);
+    for (0..s.ring / 32) |j| {
+        words[2 * j] = @bitCast(@as(u16, @truncate(word[j])));
+        words[2 * j + 1] = @bitCast(@as(u16, @truncate(word[j] >> 16)));
+    }
+}
+
+/// [K/16, N/16, tile words] from a pool of 16 one-signed tiles, a tile picked by its position.
+fn signedTrellis(rng: *rig.Rng, w: fmt.Width, neg: bool, k: usize, n: usize) ![]i16 {
+    const words = w.tileWords();
+    var pool: [16 * 128]i16 = undefined;
+    for (0..16) |i| signedTile(rng, w, neg, pool[i * words ..][0..words]);
+    const tr = try gpa.alloc(i16, (k / 16) * (n / 16) * words);
+    for (0..k / 16) |kt| for (0..n / 16) |nt| {
+        const i = (kt * 7 + nt * 13) % 16;
+        @memcpy(tr[(kt * (n / 16) + nt) * words ..][0..words], pool[i * words ..][0..words]);
+    };
+    return tr;
+}
+
+/// The same tiles as 128-column strips: strip nb holds its k steps of eight tiles each.
+fn strips(w: fmt.Width, stored: []const i16, k: usize, n: usize) ![]i16 {
+    const words = w.tileWords();
+    const out = try gpa.alloc(i16, stored.len);
+    for (0..n / 128) |nb| for (0..k / 16) |kt| for (0..8) |t| {
+        const from = (kt * (n / 16) + nb * 8 + t) * words;
+        const to = ((nb * (k / 16) + kt) * 8 + t) * words;
+        @memcpy(out[to..][0..words], stored[from..][0..words]);
+    };
+    return out;
+}
+
+/// The checkpoint layout's strides in 32-bit words, or the strips layout's.
+fn layout(w: fmt.Width, k: usize, n: usize, as_strips: bool) [2]u64 {
+    const tw: u64 = w.tileWords() / 2;
+    return if (as_strips) .{ 8 * tw, (k / 16) * 8 * tw } else .{ (n / 16) * tw, 8 * tw };
+}
+
+fn randomHalves(rng: *rig.Rng, n: usize) ![]u16 {
+    const out = try gpa.alloc(u16, n);
+    for (out) |*v| v.* = rig.f16Bits(rng.unit());
+    return out;
+}
+
+// one-signed tiles, so each zero of the identity enters dot2 as +0: x +0 for positive weights, -0 for negative ones
+test "the linear decodes every width's weights as exl3_format does, bit for bit, at 4 and 8 waves and both layouts" {
+    const t = try Rig.open(1 << 20);
+    defer t.close();
+    var rng: rig.Rng = .{ .state = 0xE3D1 };
+    // (k, n): 4 waves on the checkpoint layout, 8 waves on strips
+    const sizes = [_][3]usize{ .{ 256, 256, 0 }, .{ 1024, 8192, 1 } };
+    for (sizes) |sz| {
+        const k = sz[0];
+        const n = sz[1];
+        try std.testing.expectEqual(@as(u32, if (sz[2] == 1) 8 else 4), exl3.waves(k, n));
+        // xh = I: row r is 1.0 at k = r, so y's row r is W's row r, rotated by 128 columns
+        const xh = try gpa.alloc(u16, k * k);
+        defer gpa.free(xh);
+        const ones = try gpa.alloc(u16, n);
+        defer gpa.free(ones);
+        @memset(ones, 0x3c00);
+        var dx = try t.alloc(k * k * 2);
+        defer dx.free();
+        var dsvh = try t.upload(ones);
+        defer dsvh.free();
+        var dy = try t.alloc(k * n * 4);
+        defer dy.free();
+        const wq = try gpa.alloc(f16, k * n);
+        defer gpa.free(wq);
+        for (exl3.widths) |halves| for ([_]bool{ false, true }) |neg| {
+            const w = fmt.Width{ .halves = @intCast(halves) };
+            const stored = try signedTrellis(&rng, w, neg, k, n);
+            defer gpa.free(stored);
+            fmt.unpack(w, .mul1, stored, k / 16, n / 16, wq);
+            for (wq) |v| if ((v < 0) != neg) return error.TestUnexpectedResult;
+            @memset(xh, if (neg) 0x8000 else 0);
+            for (0..k) |r| xh[r * k + r] = 0x3c00;
+            try dx.upload(0, std.mem.sliceAsBytes(xh));
+            const words = if (sz[2] == 1) try strips(w, stored, k, n) else try gpa.dupe(i16, stored);
+            defer gpa.free(words);
+            var dt = try t.upload(words);
+            defer dt.free();
+            const st = layout(w, k, n, sz[2] == 1);
+            const tr: exl3.Trellis = .{ .words = at(dt), .halves = halves, .stride_k = st[0], .stride_nb = st[1] };
+            try exl3.linear(&t.on, at(dx), tr, at(dsvh), at(dy), 0, k, k, n, t.stream.handle);
+            try t.stream.synchronize();
+            const got = try rig.download(f32, dy);
+            defer gpa.free(got);
+            for (0..k) |r| for (0..n / 128) |b| {
+                var v: [128]f32 = undefined;
+                for (&v, 0..) |*e, q| e.* = wq[r * n + b * 128 + q];
+                fwht(&v);
+                for (v, 0..) |e, q| {
+                    const want: u32 = @bitCast(e * had * 1.0);
+                    const have: u32 = @bitCast(got[r * n + b * 128 + q]);
+                    if (want != have) {
+                        const at_ = .{ halves / 2, if (neg) "-" else "+", k, n, r, b * 128 + q, have, want };
+                        std.debug.print("{d}-bit {s} k {d} n {d}: row {d} column {d} is {x} where {x}\n", at_);
+                        return error.TestUnexpectedResult;
+                    }
+                }
+            };
+        };
+    }
+}
+
+test "a row's outputs are the same bits alone, in any window and in every pass of 16 rows" {
+    const t = try Rig.open(1 << 20);
+    defer t.close();
+    var rng: rig.Rng = .{ .state = 0xE3D2 };
+    const rows = 64;
+    for ([_][3]usize{ .{ 512, 256, 6 }, .{ 1024, 8192, 10 } }) |sz| {
+        const k = sz[0];
+        const n = sz[1];
+        const w = fmt.Width{ .halves = @intCast(sz[2]) };
+        const words = try randomTrellis(&rng, w, k, n);
+        defer gpa.free(words);
+        const xh = try randomHalves(&rng, rows * k);
+        defer gpa.free(xh);
+        const svh = try randomHalves(&rng, n);
+        defer gpa.free(svh);
+        var dt = try t.upload(words);
+        defer dt.free();
+        var dx = try t.upload(xh);
+        defer dx.free();
+        var dsvh = try t.upload(svh);
+        defer dsvh.free();
+        var dall = try t.alloc(rows * n * 4);
+        defer dall.free();
+        var dw = try t.alloc(rows * n * 4);
+        defer dw.free();
+        const st = layout(w, k, n, false);
+        const tr: exl3.Trellis = .{ .words = at(dt), .halves = w.halves, .stride_k = st[0], .stride_nb = st[1] };
+        try exl3.linear(&t.on, at(dx), tr, at(dsvh), at(dall), 0, rows, k, n, t.stream.handle);
+        try t.stream.synchronize();
+        const all = try rig.download(f32, dall);
+        defer gpa.free(all);
+        // (first row, rows): alone, the rows path at 2 to 8, its two parts at 9 to 16, and passes past 16
+        const windows = [_][2]usize{
+            .{ 0, 1 }, .{ 5, 1 }, .{ 63, 1 }, .{ 0, 2 },   .{ 3, 7 },
+            .{ 8, 8 }, .{ 9, 9 }, .{ 0, 16 }, .{ 17, 17 }, .{ 40, 24 },
+        };
+        for (windows) |win| {
+            try exl3.linear(&t.on, at(dx) + win[0] * k * 2, tr, at(dsvh), at(dw), 0, win[1], k, n, t.stream.handle);
+            try t.stream.synchronize();
+            const got = try rig.download(f32, dw);
+            defer gpa.free(got);
+            const want = std.mem.sliceAsBytes(all[win[0] * n ..][0 .. win[1] * n]);
+            if (std.mem.indexOfDiff(u8, want, std.mem.sliceAsBytes(got[0 .. win[1] * n]))) |i| {
+                const at_ = .{ k, n, win[0], win[1], i };
+                std.debug.print("k {d} n {d}: rows {d}+{d} differ from the 64-row run at byte {d}\n", at_);
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
+test "rot_in rounds the fp32 butterfly of x * suh to fp16 once, from fp32, fp16 and bf16 rows" {
+    const t = try Rig.open(1 << 20);
+    defer t.close();
+    var rng: rig.Rng = .{ .state = 0xE3D3 };
+    // 391,680 roundings over the three kinds, so the rare fp16 output that a 1-ulp fp32 error moves shows up
+    const k = 2048 + 128;
+    const rows = 60;
+    const suh = try randomHalves(&rng, k);
+    defer gpa.free(suh);
+    var dsuh = try t.upload(suh);
+    defer dsuh.free();
+    var dxh = try t.alloc(rows * k * 2);
+    defer dxh.free();
+    const xs = try gpa.alloc(f32, rows * k);
+    defer gpa.free(xs);
+    for (xs) |*v| v.* = rng.unit() * 3;
+    for ([_]c_int{ 0, 1, 2 }) |kind| {
+        const in = try gpa.alloc(u32, rows * k);
+        defer gpa.free(in);
+        const vals = try gpa.alloc(f32, rows * k);
+        defer gpa.free(vals);
+        for (xs, in, vals) |v, *b, *e| {
+            b.* = switch (kind) {
+                0 => @bitCast(v),
+                1 => rig.f16Bits(v),
+                else => rig.bf16Bits(v),
+            };
+            e.* = switch (kind) {
+                0 => v,
+                1 => @floatCast(rig.f16Value(@intCast(b.*))),
+                else => @floatCast(rig.bf16Value(@intCast(b.*))),
+            };
+        }
+        var dx = if (kind == 0) try t.upload(in) else blk: {
+            const narrow = try gpa.alloc(u16, rows * k);
+            defer gpa.free(narrow);
+            for (narrow, in) |*a, b| a.* = @intCast(b);
+            break :blk try t.upload(narrow);
+        };
+        defer dx.free();
+        try exl3.rotIn(&t.on, at(dx), kind, at(dsuh), at(dxh), rows, k, t.stream.handle);
+        try t.stream.synchronize();
+        const got = try rig.download(u16, dxh);
+        defer gpa.free(got);
+        for (0..rows) |r| for (0..k / 128) |b| {
+            var v: [128]f32 = undefined;
+            for (&v, 0..) |*e, q| {
+                const sc: f32 = @floatCast(rig.f16Value(suh[b * 128 + q]));
+                e.* = vals[r * k + b * 128 + q] * sc;
+            }
+            fwht(&v);
+            for (v, 0..) |e, q| {
+                const want: u16 = @bitCast(@as(f16, @floatCast(e * had)));
+                try std.testing.expectEqual(want, got[r * k + b * 128 + q]);
+            }
+        };
+    }
+}
+
+
+===== zig/src/server/chat_cli.zig =====
+//! ``tensorfold chat``: a conversation in the terminal with a model it serves itself, or with a server already running.
+const std = @import("std");
+const builtin = @import("builtin");
+const json = @import("json");
+const args_mod = @import("chat_cli_args.zig");
+const history = @import("chat_cli_history.zig");
+const turn = @import("chat_cli_turn.zig");
+const child = @import("chat_cli_child.zig");
+const stream = @import("benchmark_stream.zig");
+const stop = @import("benchmark_stop.zig");
+const environment = @import("sys").environment;
+const Allocator = std.mem.Allocator;
+const Sig = std.posix.SIG;
+
+const windows = builtin.os.tag == .windows;
+/// The serve child waits on POSIX signals, as the benchmark's does, so Windows chats only with a running server.
+const windows_child = "starting a server is not supported on Windows yet: run tensorfold serve MODEL, then tensorfold chat --url http://127.0.0.1:8080";
+const Child = if (windows) void else child.Child;
+/// The longest line a conversation reads, and the most a piped message holds.
+const max_line = 1 << 20;
+const max_message = 16 << 20;
+const banner = "Chatting with {s}. /help lists the commands; /bye or Ctrl-D ends the chat.\n";
+const prompt_hint = "(Type /bye or press Ctrl-D to end the chat.)\n";
+const cut_note = "The reply stopped at its token limit; --max-tokens raises it.";
+const thought_note = "The reply held only reasoning, which is hidden; --show-thinking shows it.";
+
+/// Everything the command touches, so tests run it with captured writers, fixed input and a stand-in server.
+pub const Context = struct {
+    a: Allocator,
+    io: std.Io,
+    environ: *const std.process.Environ.Map,
+    out: *std.Io.Writer,
+    err: *std.Io.Writer,
+    input: *std.Io.Reader,
+    /// stdin is a terminal: a conversation; otherwise all of stdin is one message.
+    interactive: bool,
+    /// stdout is a terminal: reasoning dimmed, a hint while it is hidden, and control characters dropped.
+    terminal: bool,
+    self_exe: ?[]const u8 = null,
+    signals: bool = false,
+};
+
+pub fn main(init: std.process.Init, argv: []const []const u8) !u8 {
+    const io = init.io;
+    var out_buf: [16 << 10]u8 = undefined;
+    var err_buf: [4 << 10]u8 = undefined;
+    var in_buf: [16 << 10]u8 = undefined;
+    var out = std.Io.File.stdout().writerStreaming(io, &out_buf);
+    var err = std.Io.File.stderr().writerStreaming(io, &err_buf);
+    var in = std.Io.File.stdin().readerStreaming(io, &in_buf);
+    defer out.interface.flush() catch {};
+    defer err.interface.flush() catch {};
+    const ctx: Context = .{
+        .a = init.arena.allocator(),
+        .io = io,
+        .environ = init.environ_map,
+        .out = &out.interface,
+        .err = &err.interface,
+        .input = &in.interface,
+        .interactive = std.Io.File.stdin().isTty(io) catch false,
+        .terminal = std.Io.File.stdout().isTty(io) catch false,
+        .signals = true,
+    };
+    return command(&ctx, argv);
+}
+
+pub fn command(ctx: *const Context, argv: []const []const u8) !u8 {
+    var problem: []const u8 = "";
+    const args = args_mod.parse(ctx.a, argv, &problem) catch |e| switch (e) {
+        error.Usage => {
+            try ctx.err.print("{s}\ntensorfold chat: error: {s}\n", .{ args_mod.usage_line, problem });
+            try ctx.err.flush();
+            return 2;
+        },
+        error.OutOfMemory => |x| return x,
+    };
+    if (args.help) {
+        try args_mod.help(ctx.out);
+        try ctx.out.flush();
+        return 0;
+    }
+    if (windows and args.url == null) return fail(ctx, windows_child);
+    // a running server's key comes from TENSORFOLD_API_KEY; the server the chat starts gets a fresh one of its own
+    const key = if (args.url == null) null else envKey(ctx.environ) catch return fail(ctx, bad_key);
+    if (comptime !windows) if (ctx.signals) signals.install();
+    defer if (comptime !windows) if (ctx.signals) signals.restore();
+    // a piped message is read before any server starts, so an empty one costs no model load
+    var message: ?[]const u8 = null;
+    if (!ctx.interactive) switch (try piped(ctx)) {
+        .text => |text| message = text,
+        .code => |code| return code,
+    };
+    if (args.url) |url| return session(ctx, args, .{ .base = url, .model = args.model, .key = key, .denied = denied(key != null) }, message);
+    if (comptime windows) return fail(ctx, windows_child) else return served(ctx, args, message);
+}
+
+const bad_key = "TENSORFOLD_API_KEY: expected keys without spaces or control characters, at most 256 bytes each";
+
+/// The key ``--url`` sends: TENSORFOLD_API_KEY's first, as serve splits the variable; null when it names none.
+fn envKey(environ: *const std.process.Environ.Map) error{Refused}!?[]const u8 {
+    const text = (environment.path("TENSORFOLD_API_KEY", environ.get("TENSORFOLD_API_KEY")) catch return error.Refused) orelse return null;
+    var keys = std.mem.splitScalar(u8, text, ',');
+    while (keys.next()) |raw| {
+        const key = std.mem.trim(u8, raw, " \t\r\n\x0b\x0c");
+        if (key.len == 0) continue;
+        if (key.len > 256) return error.Refused;
+        for (key) |ch| if (ch < 0x21 or ch == 0x7f) return error.Refused;
+        return key;
+    }
+    return null;
+}
+
+/// What a running server's 401 adds: whether TENSORFOLD_API_KEY gave the key it refused.
+fn denied(sent: bool) []const u8 {
+    return if (sent) "the server refused the key in TENSORFOLD_API_KEY" else "set TENSORFOLD_API_KEY to a key the server accepts";
+}
+
+/// The chat with the server it starts: loaded, then the session, then stopped whatever the session's end.
+fn served(ctx: *const Context, args: args_mod.Args, message: ?[]const u8) !u8 {
+    var problem: []const u8 = "";
+    var tail: []const []const u8 = &.{};
+    const setup: child.Setup = .{ .a = ctx.a, .io = ctx.io, .environ = ctx.environ, .exe = ctx.self_exe, .log_dir = ctx.environ.get("TMPDIR") orelse "/tmp" };
+    const plan = try child.plan(setup, args.model.?, args.serve, args.startup_timeout, &problem) orelse return fail(ctx, problem);
+    try say(ctx.err, "Loading {s}; Ctrl-C cancels.", .{args.model.?});
+    var own = try child.start(setup, plan, &tail, &problem) orelse {
+        if (problem.len == 0) return stop.exitCode(stop.requested() orelse .INT);
+        const code = try fail(ctx, problem);
+        try lastLines(ctx, tail);
+        return code;
+    };
+    errdefer _ = own.managed.stop();
+    const code = try session(ctx, args, .{ .base = own.managed.base(), .model = own.served, .key = own.key, .own = &own }, message);
+    if (own.managed.stop()) |why| {
+        const failed = try fail(ctx, why);
+        return if (code == 0) failed else code;
+    }
+    return code;
+}
+
+/// An exited child's last log lines after its failure, as the benchmark prints them.
+fn lastLines(ctx: *const Context, tail: []const []const u8) !void {
+    if (tail.len == 1) try ctx.err.print("Last server log line: {s}\n", .{tail[0]});
+    if (tail.len > 1) try ctx.err.writeAll("Last server log lines:\n");
+    if (tail.len > 1) for (tail) |line| try ctx.err.print("  {s}\n", .{line});
+    try ctx.err.flush();
+}
+
+/// The server a session talks to: its address, the model to ask for, its key, and what its 401 adds.
+const Target = struct { base: []const u8, model: ?[]const u8, key: ?[]const u8 = null, denied: ?[]const u8 = null, own: ?*Child = null };
+
+const Session = struct {
+    ctx: *const Context,
+    /// The chat route.
+    url: []const u8,
+    target: Target,
+    settings: turn.Settings,
+    show: turn.Show,
+    history: history.History,
+
+    /// One message and its streamed reply, in an arena of its own that lives until the turn is kept.
+    fn ask(s: *Session, a: Allocator, message: []const u8) !turn.Ended {
+        const request = try turn.body(a, s.settings, &s.history, message);
+        return turn.run(a, s.ctx.io, s.url, s.target.key, request, s.ctx.out, s.show);
+    }
+
+    /// A finished reply's notes: cut at its token limit, or nothing but reasoning that was hidden.
+    fn notes(s: *const Session, f: turn.Finished) !void {
+        if (f.cut) try say(s.ctx.err, cut_note, .{});
+        if (f.content.len == 0 and f.reasoned and !s.show.thinking) try say(s.ctx.err, thought_note, .{});
+    }
+
+    /// A failed turn said; a conversation goes on (null) unless the server it started has exited.
+    fn failed(s: *Session, f: turn.Failure) !?u8 {
+        const hint = if (f.status == 401) s.target.denied else null;
+        _ = try fail(s.ctx, if (hint) |h| try std.fmt.allocPrint(s.ctx.a, "{s}; {s}", .{ f.reason, h }) else f.reason);
+        if (comptime !windows) if (f.connect) if (s.target.own) |own| if (try own.managed.exitedTail(s.ctx.a)) |tail| {
+            try s.ctx.err.writeAll("The model server has exited.\n");
+            try lastLines(s.ctx, tail);
+            return 1;
+        };
+        return if (s.ctx.interactive) null else 1;
+    }
+
+    /// A message of the conversation: null to read the next line, else the chat's exit code.
+    fn talk(s: *Session, text: []const u8) !?u8 {
+        var arena: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
+        defer arena.deinit();
+        switch (try s.ask(arena.allocator(), text)) {
+            .finished => |f| {
+                if (f.content.len > 0) try s.history.keep(text, f.content);
+                try s.notes(f);
+            },
+            // a stopped reply keeps what it printed, so the next message can redirect it
+            .stopped => |content| {
+                const sig = stop.requested() orelse .INT;
+                if (sig != .INT) return stop.exitCode(sig);
+                stop.reset();
+                if (content.len > 0) try s.history.keep(text, content);
+            },
+            .failed => |f| return s.failed(f),
+        }
+        return null;
+    }
+};
+
+/// Finds the model and its thinking switch, then holds one exchange (a piped message) or a conversation.
+fn session(ctx: *const Context, args: args_mod.Args, target: Target, message: ?[]const u8) !u8 {
+    var problem: []const u8 = "";
+    const url = try stream.endpoint(ctx.a, target.base, true, &problem) orelse return fail(ctx, problem);
+    const found = try discover(ctx, url, target);
+    if (found.stopped) |sig| return stop.exitCode(sig);
+    const model = found.model orelse return fail(ctx, found.problem);
+    if (args.no_thinking and found.thinking_switch == false)
+        return fail(ctx, "--no-thinking: this model's chat template cannot turn thinking off (its /v1/models thinking_switch is false)");
+    var s: Session = .{
+        .ctx = ctx,
+        .url = url,
+        .target = target,
+        .settings = .{ .model = model, .temperature = args.temperature, .max_tokens = args.max_tokens, .no_thinking = args.no_thinking },
+        .show = .{ .thinking = args.show_thinking, .terminal = ctx.terminal },
+        .history = .{ .a = ctx.a },
+    };
+    if (args.system) |text| try s.history.setSystem(text);
+    if (message) |text| {
+        var arena: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
+        defer arena.deinit();
+        return switch (try s.ask(arena.allocator(), text)) {
+            .finished => |f| blk: {
+                try s.notes(f);
+                break :blk 0;
+            },
+            .stopped => stop.exitCode(stop.requested() orelse .INT),
+            .failed => |f| (try s.failed(f)) orelse 1,
+        };
+    }
+    return converse(&s);
+}
+
+/// The conversation: a prompt, a line, then a command or a turn, until /bye, end of input or a stop signal.
+fn converse(s: *Session) !u8 {
+    const ctx = s.ctx;
+    try ctx.out.print(banner, .{s.settings.model});
+    while (true) {
+        try ctx.out.writeAll("> ");
+        try ctx.out.flush();
+        var arena: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
+        defer arena.deinit();
+        const text = switch (readLine(ctx, arena.allocator())) {
+            .line => |line| line,
+            .eof => {
+                try ctx.out.writeAll("\n");
+                try ctx.out.flush();
+                return 0;
+            },
+            .stopped => |sig| {
+                if (sig != .INT) return stop.exitCode(sig);
+                stop.reset();
+                try ctx.out.writeAll("\n" ++ prompt_hint);
+                continue;
+            },
+            .too_long => {
+                try say(ctx.err, "That line is over 1 MiB and was not sent; pipe long text through stdin instead.", .{});
+                continue;
+            },
+            .failed => return fail(ctx, "could not read the terminal"),
+        };
+        switch (history.command(text)) {
+            .empty => {},
+            .bye => return 0,
+            .help => try ctx.out.writeAll(history.help_text),
+            .clear => {
+                s.history.clear();
+                try ctx.out.writeAll("Conversation cleared.\n");
+            },
+            .system => |prompt| {
+                try s.history.setSystem(prompt);
+                try ctx.out.writeAll(if (prompt.len == 0) "System prompt removed.\n" else "System prompt set.\n");
+            },
+            .unknown => |word| try ctx.out.print("Unknown command {s}; /help lists the commands.\n", .{word}),
+            .say => |said| if (try s.talk(said)) |code| return code,
+        }
+    }
+}
+
+const Found = struct { model: ?[]const u8 = null, thinking_switch: ?bool = null, problem: []const u8 = "", stopped: ?Sig = null };
+
+/// One bounded look at ``/v1/models``: its first model when none was named, and whether thinking can be turned off.
+fn discover(ctx: *const Context, chat_url: []const u8, target: Target) !Found {
+    var client: std.http.Client = .{ .allocator = std.heap.smp_allocator, .io = ctx.io };
+    defer client.deinit();
+    const url = try std.mem.concat(ctx.a, u8, &.{ chat_url[0 .. chat_url.len - "/chat/completions".len], "/models" });
+    const got = stream.fetch(ctx.a, ctx.io, &client, .{ .url = url, .limit = 4 << 20, .timeout_s = 10, .agent = turn.user_agent, .token = target.key });
+    if (got.failed == .stopped) return .{ .stopped = stop.requested() orelse .INT };
+    var doc: ?json.Value = null;
+    if (got.failed == .none and got.status == 200) switch (try json.parse(ctx.a, got.body)) {
+        .ok => |v| doc = v,
+        .err => {},
+    };
+    const name = target.model orelse first(doc) orelse {
+        if (got.failed == .none and got.status == 401) if (target.denied) |hint|
+            return .{ .problem = try std.fmt.allocPrint(ctx.a, "no model to chat with: {s} answered HTTP 401; {s}", .{ url, hint }) };
+        const why = switch (got.failed) {
+            .none => if (got.status != 200) try std.fmt.allocPrint(ctx.a, "answered HTTP {d}", .{got.status}) else "listed no models",
+            .network => "could not connect",
+            .deadline => "gave no answer in 10 s",
+            .too_large => "answered with more than 4 MiB",
+            .stopped => unreachable,
+        };
+        return .{ .problem = try std.fmt.allocPrint(ctx.a, "no model to chat with: {s} {s}; name one after the URL", .{ url, why }) };
+    };
+    return .{ .model = name, .thinking_switch = if (doc) |d| stream.thinkingSwitch(d, name) else null };
+}
+
+/// The first ``data[].id`` of a ``/v1/models`` document.
+fn first(doc: ?json.Value) ?[]const u8 {
+    const data = (doc orelse return null).get("data") orelse return null;
+    if (data != .array or data.array.len == 0) return null;
+    return data.array[0].strField("id");
+}
+
+const Read = union(enum) { line: []const u8, eof, too_long, failed, stopped: Sig };
+
+/// One typed line, read as its own task so a stop signal ends the wait.
+const LineTask = struct {
+    a: Allocator,
+    r: *std.Io.Reader,
+    got: Read = .failed,
+    done: std.atomic.Value(bool) = .init(false),
+
+    fn go(t: *LineTask) void {
+        var line: std.Io.Writer.Allocating = .init(t.a);
+        _ = t.r.streamDelimiterLimit(&line.writer, '\n', .limited(max_line)) catch |e| {
+            if (e == error.StreamTooLong) _ = t.r.discardDelimiterInclusive('\n') catch 0;
+            t.got = if (e == error.StreamTooLong) .too_long else .failed;
+            return;
+        };
+        // the newline is left in the buffer; an empty buffer means the input ended without one
+        if (t.r.bufferedLen() > 0) {
+            t.r.toss(1);
+            t.got = .{ .line = line.written() };
+        } else t.got = if (line.written().len == 0) .eof else .{ .line = line.written() };
+    }
+};
+
+fn readLine(ctx: *const Context, a: Allocator) Read {
+    var task: LineTask = .{ .a = a, .r = ctx.input };
+    return switch (stream.bounded(ctx.io, null, LineTask.go, &task)) {
+        .finished => task.got,
+        .stopped, .deadline => .{ .stopped = stop.requested() orelse .INT },
+        .unavailable => .failed,
+    };
+}
+
+const Piped = union(enum) { text: []const u8, code: u8 };
+
+/// All of stdin, read as its own task so a stop signal ends the wait.
+const AllTask = struct {
+    a: Allocator,
+    r: *std.Io.Reader,
+    text: ?[]u8 = null,
+    too_long: bool = false,
+    done: std.atomic.Value(bool) = .init(false),
+
+    fn go(t: *AllTask) void {
+        t.text = t.r.allocRemaining(t.a, .limited(max_message)) catch |e| {
+            t.too_long = e == error.StreamTooLong;
+            return;
+        };
+    }
+};
+
+/// The piped message, trimmed, or the exit code once its problem is said.
+fn piped(ctx: *const Context) !Piped {
+    var task: AllTask = .{ .a = ctx.a, .r = ctx.input };
+    switch (stream.bounded(ctx.io, null, AllTask.go, &task)) {
+        .finished => {},
+        .stopped, .deadline => return .{ .code = stop.exitCode(stop.requested() orelse .INT) },
+        .unavailable => return .{ .code = try fail(ctx, "could not read stdin") },
+    }
+    if (task.too_long) return .{ .code = try fail(ctx, "stdin holds more than 16 MiB; a message must be smaller") };
+    const text = std.mem.trim(u8, task.text orelse return .{ .code = try fail(ctx, "could not read stdin") }, " \t\r\n");
+    if (text.len == 0) return .{ .code = try fail(ctx, "stdin held no message to send") };
+    return .{ .text = text };
+}
+
+/// Ctrl-C, SIGTERM and SIGHUP to the stop flag the waits read; a closed stdout fails a write instead of the process.
+const signals = struct {
+    var pipe_saved: std.posix.Sigaction = undefined;
+
+    fn install() void {
+        stop.install();
+        const ignore: std.posix.Sigaction = .{ .handler = .{ .handler = std.posix.SIG.IGN }, .mask = std.posix.sigemptyset(), .flags = 0 };
+        std.posix.sigaction(.PIPE, &ignore, &pipe_saved);
+    }
+
+    fn restore() void {
+        std.posix.sigaction(.PIPE, &pipe_saved, null);
+        stop.restore();
+    }
+};
+
+fn say(w: *std.Io.Writer, comptime fmt: []const u8, args: anytype) !void {
+    try w.print(fmt ++ "\n", args);
+    try w.flush();
+}
+
+fn fail(ctx: *const Context, message: []const u8) !u8 {
+    try ctx.err.print("tensorfold chat: {s}\n", .{message});
+    try ctx.err.flush();
+    return 1;
+}
+
+
+===== zig/src/families/flashnext/replay_prompt_chunks.zig =====
+//! Flash Next replay internals split along ownership and dispatch boundaries.
+const fz = @import("replay.zig");
+const std = @import("std");
+const mtl = @import("metal");
+const segments = @import("../../core/segments.zig");
+const tpm = @import("tp.zig");
+const variants = fz.variants;
+const Tp2 = fz.Tp2;
+const D = fz.D;
+const WIDE = fz.WIDE;
+const LAYERS = fz.LAYERS;
+const PLE_TAIL = fz.PLE_TAIL;
+const CS_ROW = fz.CS_ROW;
+const SO_ROW = fz.SO_ROW;
+const Buf = fz.Buf;
+const MARKS = fz.MARKS;
+const Marks = fz.Marks;
+const Model = fz.Model;
+const PMAX = fz.PMAX;
+const Prompt = fz.Prompt;
+const barrier = Prompt.barrier;
+const bind = Prompt.bind;
+const qmm = Prompt.qmm;
+const gather = Prompt.gather;
+const hc = Prompt.hc;
+const Seg = Prompt.Seg;
+const bindMarks = Prompt.bindMarks;
+const prep = Prompt.prep;
+const Pair = Prompt.Pair;
+const bytesOf = Prompt.bytesOf;
+const Hooks = Prompt.Hooks;
+
+pub fn classes(p: *Prompt, m: *Model, rows: usize) !void {
+    if (p.r.fsr != null) return error.FsrProfileNeedsActualRoutes;
+    const r = p.r;
+    const b = &p.b;
+    const L0 = &m.layers[0];
+    const L3 = &m.layers[3];
+    const pairs = rows * 10;
+    const names = [_][]const u8{ "router", "top-k+offsets+sort", "row gather+scatter", "expert gate+up gathers", "expert act", "expert down gather", "shared expert", "hyper-connection", "DeltaNet in+out projections", "DeltaNet pre", "DeltaNet scan", "DeltaNet post", "attention proj+o", "attention (tensor units)", "hc norms (3)" };
+    for (names, 0..) |name, which| {
+        const cb = r.queue.commandBuffer();
+        r.begin(cb, if (r.serial) .serial else .concurrent);
+        errdefer if (r.fsr != null) r.abort();
+        for (0..48) |_| {
+            switch (which) {
+                0 => {
+                    p.bind(p.router_mm, &.{ L0.router, b.mixed });
+                    const rp = [3]i32{ D, 513, @intCast(rows) };
+                    r.enc.setBytes(std.mem.asBytes(&rp), 2);
+                    r.enc.setBuffer(b.lg.b, b.lg.off, 3);
+                    r.enc.dispatchThreads(mtl.Size.of(((513 + 63) / 64) * 128, (rows + 63) / 64, 1), mtl.Size.of(128, 1, 1));
+                    p.barrier();
+                },
+                1 => {
+                    p.bind(p.pl[4], &.{ b.lg, b.pick, b.wts, b.cnt });
+                    r.enc.dispatchThreads(mtl.Size.of(32, rows, 1), mtl.Size.of(32, 1, 1));
+                    p.barrier();
+                    p.bind(p.pl[5], &.{ b.cnt, b.off, b.cur });
+                    r.enc.dispatchThreads(mtl.Size.of(512, 1, 1), mtl.Size.of(512, 1, 1));
+                    p.barrier();
+                    p.bind(p.pl[6], &.{ b.pick, b.cur, b.row_of });
+                    const np: i32 = @intCast(pairs);
+                    r.enc.setBytes(std.mem.asBytes(&np), 3);
+                    r.enc.dispatchThreads(mtl.Size.of(pairs, 1, 1), mtl.Size.of(256, 1, 1));
+                    p.barrier();
+                },
+                2 => {
+                    p.bind(p.pl[7], &.{ b.mixed, b.row_of, b.xs });
+                    r.enc.dispatchThreads(mtl.Size.of(D / 8, pairs, 1), mtl.Size.of(64, 1, 1));
+                    p.barrier();
+                    p.bind(p.pl[9], &.{ b.ds, b.row_of, b.ydown });
+                    r.enc.dispatchThreads(mtl.Size.of(D / 8, pairs, 1), mtl.Size.of(64, 1, 1));
+                    p.barrier();
+                },
+                3 => {
+                    p.gather(b.xs, L0.ex[0..3], D, 640, pairs, b.g);
+                    p.gather(b.xs, L0.ex[3..6], D, 640, pairs, b.u);
+                },
+                4 => {
+                    p.bind(p.pl[8], &.{ b.g, b.u, b.a });
+                    r.enc.dispatchThreads(mtl.Size.of(pairs * 640, 1, 1), mtl.Size.of(256, 1, 1));
+                    p.barrier();
+                },
+                5 => p.gather(b.a, L0.ex[12..15], 640, D, pairs, b.ds),
+                6 => {
+                    p.qmm(b.mixed, .{ L0.ex[6], L0.ex[7], L0.ex[8] }, D, 640, rows, b.sg, 0);
+                    p.qmm(b.mixed, .{ L0.ex[9], L0.ex[10], L0.ex[11] }, D, 640, rows, b.su, 0);
+                    p.bind(p.pl[8], &.{ b.sg, b.su, b.sa });
+                    r.enc.dispatchThreads(mtl.Size.of(rows * 640, 1, 1), mtl.Size.of(256, 1, 1));
+                    p.barrier();
+                    p.qmm(b.sa, .{ L0.ex[15], L0.ex[16], L0.ex[17] }, 640, D, rows, .{ .b = b.ydown.b, .off = 10 * D * 2 }, 11 * D);
+                },
+                7 => p.hc(m, b.h[0], L0.ahc, rows, b.inj_a),
+                8 => {
+                    p.qmm(b.mixed, p.proj[0], D, 16480, rows, b.p, 0);
+                    p.qmm(b.gout, p.out[0], 6144, D, rows, b.branch, 0);
+                },
+                9, 10, 11 => {
+                    const ri: i32 = @intCast(rows);
+                    if (which == 9) {
+                        p.bind(p.pl[11], &.{ b.p, L0.cs[0], L0.conv, L0.alog, L0.dt });
+                        r.enc.setBytes(std.mem.asBytes(&ri), 5);
+                        for ([_]Buf{ b.qn, b.kn, b.v, b.gg, b.beta, L0.cs[1] }, 6..) |bb, j| r.enc.setBuffer(bb.b, bb.off, j);
+                        p.bindMarks(m, @splat(0), 0, 12, 13, false);
+                        r.enc.dispatchThreads(mtl.Size.of(80 * 128, rows, 1), mtl.Size.of(128, 1, 1));
+                    } else if (which == 10) {
+                        p.bind(p.pl[if (p.scan4) 14 else 12], &.{ b.qn, b.kn, b.v, b.gg, b.beta, L0.so[0] });
+                        r.enc.setBytes(std.mem.asBytes(&ri), 6);
+                        r.enc.setBuffer(b.ys.b, b.ys.off, 7);
+                        r.enc.setBuffer(L0.so[1].b, L0.so[1].off, 8);
+                        p.bindMarks(m, @splat(0), 0, 9, 10, true);
+                        if (p.scan4) r.enc.dispatchThreads(mtl.Size.of(48 * 4 * 256, 1, 1), mtl.Size.of(256, 1, 1)) else r.enc.dispatchThreads(mtl.Size.of(48 * 4 * 1024, 1, 1), mtl.Size.of(1024, 1, 1));
+                    } else {
+                        p.bind(p.pl[13], &.{ b.ys, b.p, L0.norm, m.t.eps, b.gout });
+                        r.enc.dispatchThreads(mtl.Size.of(48 * 128, rows, 1), mtl.Size.of(128, 1, 1));
+                    }
+                    p.barrier();
+                },
+                12 => {
+                    p.qmm(b.mixed, p.proj[3], D, 13952, rows, b.p, 0);
+                    p.qmm(b.aout, p.out[3], 6144, D, rows, b.branch, 0);
+                },
+                13 => {
+                    p.bind(p.attn256, &.{ b.q, L3.keys, L3.vals, b.p });
+                    const ap = [4]i32{ @intCast(rows), @intCast(rows), 0, @intCast(m.cap) };
+                    r.enc.setBytes(std.mem.asBytes(&ap), 4);
+                    r.enc.setBuffer(m.t.scale.b, m.t.scale.off, 5);
+                    r.enc.setBuffer(b.aout.b, b.aout.off, 6);
+                    r.enc.dispatchThreads(mtl.Size.of(((rows + 63) / 64) * 128, 24, 1), mtl.Size.of(128, 1, 1));
+                    p.barrier();
+                },
+                14 => {
+                    try r.callRows("q4_hc_norm_none#[10240]", rows, &.{b.h[0]}, &.{ b.h[1], b.ssp }, null);
+                    try r.callRows("q4_hc_norm_plain#[10240]", rows, &.{ b.h[1], b.inj_a, b.branch }, &.{ b.h[0], b.ssp }, null);
+                    try r.callRows("q4_hc_norm_grouped#[10240]", rows, &.{ b.h[0], b.inj_m, b.ydown, b.wts, b.lg }, &.{ b.h[1], b.ssp }, null);
+                },
+                else => {},
+            }
+        }
+        r.enc.end();
+        cb.commit();
+        cb.wait();
+        std.debug.print("  {s:28} {d:7.2} ms a chunk (48 layers' worth)\n", .{ name, cb.gpuSeconds() * 1e3 });
+    }
+}
+
+pub fn copyWords(p: *Prompt, src: Buf, dst: Buf, words: usize) void {
+    p.bind(p.pl[10], &.{ src, dst });
+    p.r.enc.dispatchThreads(mtl.Size.of(words, 1, 1), mtl.Size.of(256, 1, 1));
+    p.barrier();
+}
+
+pub fn chunk(p: *Prompt, m: *Model, gpa: std.mem.Allocator, tokens: []const u32) !u32 {
+    return chunkN(&.{p}, m, gpa, tokens);
+}
+
+pub fn chunkN(ps: []const *Prompt, m: *Model, gpa: std.mem.Allocator, tokens: []const u32) !u32 {
+    return chunkMarked(ps, m, gpa, tokens, &.{});
+}
+
+pub fn chunkMarked(ps: []const *Prompt, m: *Model, gpa: std.mem.Allocator, tokens: []const u32, marks: []const u32) !u32 {
+    const N = ps.len;
+    if (marks.len > MARKS or (marks.len > 0 and m.marks == null)) return error.Marks;
+    if (N == 0 or N > segments.MAX) return error.Segments;
+    const r = ps[0].r;
+    const n = tokens.len;
+    if (n < N or n > N * PMAX) return error.ChunkSize;
+    const a = m.state;
+    var queues: [segments.MAX]mtl.Queue = undefined;
+    var segs: [segments.MAX]Seg = undefined;
+    for (0..N) |k| {
+        const at = segments.start(n, N, k);
+        const rows = segments.rows(n, N, k);
+        var hist = m.ple.hist; // the two tokens before the segment
+        for (tokens[at - @min(at, 2) .. at]) |tok| hist = .{ hist[1], tok };
+        try ps[k].prep(m, gpa, tokens[at .. at + rows], m.pos + at, hist);
+        queues[k] = if (k == 0) r.queue else ps[k].seg_queue orelse blk: {
+            const q = try r.ownResource(try r.device.queue());
+            ps[k].seg_queue = q;
+            break :blk q;
+        };
+        const ra = if (k % 2 == 0) a else 1 - a; // DeltaNet slots alternate as serial chunks would
+        segs[k] = .{ .p = ps[k], .rows = rows, .pos = m.pos + at, .ra = ra, .rr = if (k == 0) m.state_row else 0, .wa = 1 - ra, .cur = 0, .pending = false };
+        for (marks, 0..) |mk, j| if (mk > at and mk <= at + rows) {
+            segs[k].mk[j] = @intCast(mk - at);
+        };
+    }
+    const cin_old = m.ple.cin.b.contents()[m.ple.cin.off..];
+    @memcpy(ps[0].b.cin.b.contents()[0 .. PLE_TAIL * WIDE * 2], cin_old[0 .. PLE_TAIL * WIDE * 2]);
+    var hooks: Hooks = .{ .m = m, .segs = segs[0..N] };
+    if (r.fsr != null) try @import("fsr_prompt.zig").run(m, segs[0..N]) else m.gpu_seconds += try segments.run(r.device, queues[0..N], LAYERS, if (r.serial) .serial else .concurrent, &hooks);
+    if (ps[0].wide) |wd| try wd.check(); // a weight the load left out of the width table fails the pass
+    const sl = &segs[N - 1];
+    m.state = if (N % 2 == 0) a else 1 - a; // each segment flipped it once
+    m.state_row = 0;
+    m.pos += n;
+    @memcpy(cin_old[0 .. PLE_TAIL * WIDE * 2], sl.p.b.cin.b.contents()[sl.rows * WIDE * 2 .. (sl.rows + PLE_TAIL) * WIDE * 2]);
+    for (tokens) |tok| m.ple.hist = .{ m.ple.hist[1], tok };
+    return m.t.picks.b.slice(u32, 1)[0];
+}
+
+pub fn chunkPair(p: *Prompt, m: *Model, gpa: std.mem.Allocator, tokens: []const u32, tp: *Tp2, marks: []const u32) !u32 {
+    const r = p.r;
+    const n = tokens.len;
+    if (n < 2 or n > 2 * PMAX) return error.ChunkSize;
+    if (marks.len > MARKS or (marks.len > 0 and m.marks == null)) return error.Marks;
+    const k: usize = tp.rank;
+    const a = m.state;
+    const at = segments.start(n, 2, k);
+    const rows = segments.rows(n, 2, k);
+    const rows0 = segments.rows(n, 2, 0);
+    tp.call +%= 1;
+    const pr: Pair = .{ .tp = tp, .call = tp.call, .k = k, .pos0 = m.pos, .rows0 = rows0, .a = a };
+    var hist = m.ple.hist;
+    for (tokens[at - @min(at, 2) .. at]) |tok| hist = .{ hist[1], tok };
+    try p.prep(m, gpa, tokens[at .. at + rows], m.pos + at, hist);
+    const ra = if (k == 0) a else 1 - a;
+    var segs = [1]Seg{.{ .p = p, .rows = rows, .pos = m.pos + at, .ra = ra, .rr = if (k == 0) m.state_row else 0, .wa = 1 - ra, .cur = 0, .pending = false }};
+    for (marks, 0..) |mk, j| if (mk > at and mk <= at + rows) {
+        segs[0].mk[j] = @intCast(mk - at);
+    };
+    const cin_old = m.ple.cin.b.contents()[m.ple.cin.off..];
+    if (k == 0) @memcpy(p.b.cin.b.contents()[0 .. PLE_TAIL * WIDE * 2], cin_old[0 .. PLE_TAIL * WIDE * 2]);
+    var hooks: Hooks = .{ .m = m, .segs = &segs, .pair = &pr };
+    if (tp.trace) std.debug.print("TP rank{d} chunk {d}: rows {d} at {d} (pos {d}), state slot {d}\n", .{ k, pr.call, rows, at, m.pos + at, a });
+    m.gpu_seconds += try segments.run(r.device, &.{r.queue}, LAYERS, if (r.serial) .serial else .concurrent, &hooks);
+    if (tp.trace) std.debug.print("TP rank{d} chunk {d}: GPU done, gave_up {d}\n", .{ k, pr.call, tp.gaveUp() });
+    const t = &m.t;
+    var pick: u32 = undefined;
+    if (k == 1) { // the chunk's end: hand it back
+        var ws: std.ArrayList(tpm.Write) = .empty;
+        defer ws.deinit(gpa);
+        const pos1 = m.pos + at;
+        for (0..LAYERS) |i| {
+            const L = &m.layers[i];
+            const slot = tpm.layerSlot(i);
+            if (L.linear) {
+                try ws.append(gpa, .{ .src = bytesOf(L.cs[a]), .len = CS_ROW, .dst = slot });
+                try ws.append(gpa, .{ .src = bytesOf(L.so[a]), .len = SO_ROW, .dst = slot + CS_ROW });
+            } else {
+                for (0..2) |hd| {
+                    try ws.append(gpa, .{ .src = bytesOf(L.keys) + (hd * m.cap + pos1) * 512, .len = rows * 512, .dst = slot + hd * tpm.KV_HEAD });
+                    try ws.append(gpa, .{ .src = bytesOf(L.vals) + (hd * m.cap + pos1) * 512, .len = rows * 512, .dst = slot + (2 + hd) * tpm.KV_HEAD });
+                }
+                try ws.append(gpa, .{ .src = bytesOf(L.raw) + pos1 * 256, .len = rows * 256, .dst = slot + 4 * tpm.KV_HEAD });
+            }
+        }
+        try ws.append(gpa, .{ .src = bytesOf(p.b.cin) + rows * WIDE * 2, .len = PLE_TAIL * WIDE * 2, .dst = tpm.TAIL });
+        try ws.append(gpa, .{ .src = bytesOf(p.last) + (rows - 1) * WIDE * 2, .len = WIDE * 2, .dst = tpm.LAST });
+        try ws.append(gpa, .{ .src = bytesOf(t.picks), .len = 16, .dst = tpm.LAST + WIDE * 2 });
+        try tp.sendNow(ws.items, tpm.BACK_FLAG, pr.call);
+        pick = t.picks.b.slice(u32, 1)[0];
+        @memcpy(cin_old[0 .. PLE_TAIL * WIDE * 2], p.b.cin.b.contents()[p.b.cin.off + rows * WIDE * 2 ..][0 .. PLE_TAIL * WIDE * 2]);
+        m.last = .{ .b = p.last.b, .off = p.last.off + (rows - 1) * WIDE * 2 };
+    } else { // the peer's half of the chunk into place
+        try tp.hostWait(tpm.BACK_FLAG, pr.call);
+        const w = tp.window();
+        const rows1 = n - rows0;
+        const pos1 = m.pos + rows0;
+        const cb = r.queue.commandBuffer();
+        r.begin(cb, if (r.serial) .serial else .concurrent);
+        errdefer if (r.fsr != null) r.abort();
+        for (0..LAYERS) |i| {
+            const L = &m.layers[i];
+            const slot = tpm.layerSlot(i);
+            if (L.linear) {
+                p.copyWords(.{ .b = w, .off = slot }, L.cs[a], CS_ROW / 4);
+                p.copyWords(.{ .b = w, .off = slot + CS_ROW }, L.so[a], SO_ROW / 4);
+            } else {
+                for (0..2) |hd| {
+                    p.copyWords(.{ .b = w, .off = slot + hd * tpm.KV_HEAD }, .{ .b = L.keys.b, .off = L.keys.off + (hd * m.cap + pos1) * 512 }, rows1 * 128);
+                    p.copyWords(.{ .b = w, .off = slot + (2 + hd) * tpm.KV_HEAD }, .{ .b = L.vals.b, .off = L.vals.off + (hd * m.cap + pos1) * 512 }, rows1 * 128);
+                }
+                p.copyWords(.{ .b = w, .off = slot + 4 * tpm.KV_HEAD }, .{ .b = L.raw.b, .off = L.raw.off + pos1 * 256 }, rows1 * 64);
+            }
+        }
+        try m.finish(cb);
+        @memcpy(cin_old[0 .. PLE_TAIL * WIDE * 2], tp.bytes(tpm.TAIL)[0 .. PLE_TAIL * WIDE * 2]);
+        pick = std.mem.readInt(u32, tp.bytes(tpm.LAST + WIDE * 2)[0..4], .little);
+        m.last = .{ .b = w, .off = tpm.LAST };
+    }
+    m.state = a; // two segments: each flipped it once
+    m.state_row = 0;
+    m.pos += n;
+    for (tokens) |tok| m.ple.hist = .{ m.ple.hist[1], tok };
+    return pick;
+}
+
+pub fn pairMtp(p: *Prompt, m: *Model, tp: *Tp2, mine: [2]usize, theirs: [2]usize) !void {
+    const r = p.r;
+    const h = &m.mtp;
+    var ws: [5]tpm.Write = undefined;
+    var n: usize = 0;
+    if (mine[1] > 0) {
+        for (0..2) |hd| {
+            ws[n] = .{ .src = bytesOf(h.keys) + (hd * m.cap + mine[0]) * 512, .len = mine[1] * 512, .dst = tpm.MTP + hd * tpm.KV_HEAD };
+            ws[n + 1] = .{ .src = bytesOf(h.vals) + (hd * m.cap + mine[0]) * 512, .len = mine[1] * 512, .dst = tpm.MTP + (2 + hd) * tpm.KV_HEAD };
+            n += 2;
+        }
+        ws[n] = .{ .src = bytesOf(h.raw) + mine[0] * 256, .len = mine[1] * 256, .dst = tpm.MTP + 4 * tpm.KV_HEAD };
+        n += 1;
+    }
+    try tp.sendNow(ws[0..n], tpm.MTP_FLAG, tp.call);
+    try tp.hostWait(tpm.MTP_FLAG, tp.call);
+    if (theirs[1] == 0) return;
+    const w = tp.window();
+    const cb = r.queue.commandBuffer();
+    r.begin(cb, if (r.serial) .serial else .concurrent);
+    errdefer if (r.fsr != null) r.abort();
+    for (0..2) |hd| {
+        p.copyWords(.{ .b = w, .off = tpm.MTP + hd * tpm.KV_HEAD }, .{ .b = h.keys.b, .off = h.keys.off + (hd * m.cap + theirs[0]) * 512 }, theirs[1] * 128);
+        p.copyWords(.{ .b = w, .off = tpm.MTP + (2 + hd) * tpm.KV_HEAD }, .{ .b = h.vals.b, .off = h.vals.off + (hd * m.cap + theirs[0]) * 512 }, theirs[1] * 128);
+    }
+    p.copyWords(.{ .b = w, .off = tpm.MTP + 4 * tpm.KV_HEAD }, .{ .b = h.raw.b, .off = h.raw.off + theirs[0] * 256 }, theirs[1] * 64);
+    try m.finish(cb);
+}
+
+pub fn mtpKeys(p: *Prompt, m: *Model, start: usize, nexts: []const u32, streams: Buf) !void {
+    const r = p.r;
+    const b = &p.b;
+    const t = &m.t;
+    const h = &m.mtp;
+    const n = nexts.len;
+    if (n == 0) return;
+    if (n > PMAX) return error.ChunkSize;
+    @memcpy(b.mids.b.slice(u32, n), nexts);
+    for (0..n) |i| b.pos.b.slice(i32, PMAX)[i] = @intCast(start + i);
+    const kvm = b.kvmeta.b.slice(u32, 3);
+    kvm[0], kvm[1], kvm[2] = .{ @intCast(start), @intCast(m.cap), @intCast(n) };
+    b.n_add.b.slice(u32, 1)[0] = @intCast(n * WIDE);
+    const cb = r.queue.commandBuffer();
+    r.begin(cb, if (r.serial) .serial else .concurrent);
+    errdefer if (r.fsr != null) r.abort();
+    var ce: [2]variants.Const = undefined;
+    try r.callRows("mtp:qa_embed_rows@embed", n, &.{ b.mids, m.embed[0], m.embed[1], m.embed[2] }, &.{b.emb}, try variants.oneRow(r, "mtp:qa_embed_rows@embed", variants.width(&ce, "BITS", "GS", m.embed_w)));
+    try r.callRows("mtp:q4_rms_rows@mtp.enorm", n, &.{ b.emb, h.enorm, t.eps }, &.{b.branch}, null);
+    if (p.mtp_w) |w| p.qmm(b.branch, w[1], D, D, n, b.aout, 0) else r.denseRows(b.branch, D, try h.fce.recorded(), n, b.aout);
+    try r.callRows("mtp:q4_rms_rows@mtp.hnorm", n, &.{ streams, h.hnorm, t.eps }, &.{b.normed}, null);
+    if (p.mtp_w) |w| p.qmm(b.normed, w[2], D, D, 4 * n, b.gated, 0) else r.denseRows(b.normed, D, try h.fch.recorded(), 4 * n, b.gated);
+    p.bind(r.add_pipe, &.{ b.aout, b.gated, b.xs, b.n_add });
+    r.enc.dispatchThreads(mtl.Size.of(n * WIDE, 1, 1), mtl.Size.of(256, 1, 1));
+    p.barrier();
+    try r.callRows("mtp:q4_hc_norm_none#[10240]", n, &.{b.xs}, &.{ b.hout, b.ssp }, null);
+    p.hc(m, b.hout, h.ahc, n, b.inj_a);
+    if (p.mtp_w) |w| p.qmm(b.mixed, w[0], D, 13952, n, b.p, 0) else r.denseRows(b.mixed, D, try h.proj.recorded(), n, b.p);
+    try r.callRows("mtp:q4_attn_prep@mtp.att", n, &.{ b.p, b.pos, h.qn, h.kn, h.iqn, t.eps, t.log2base }, &.{ b.q, b.kout, b.iq }, null);
+    p.bind(r.kv_pipe, &.{ b.kout, b.p, h.keys, h.vals, h.raw, b.kvmeta });
+    r.enc.dispatchThreads(mtl.Size.of(512 * n, 1, 1), mtl.Size.of(256, 1, 1));
+    try m.finish(cb);
+    if (p.wide) |wd| try wd.check();
+}
+
+
+===== zig/src/families/deepseek_v41/world4_plan_test.zig =====
+const std = @import("std");
+const Config = @import("config.zig").Config;
+const Pack = @import("pack.zig").Pack;
+const plan = @import("plan.zig");
+
+fn defaultPack(a: std.mem.Allocator) !Pack {
+    const cfg: Config = .{};
+    const header = try @import("host_test.zig").tinyPack(a, &cfg, "", "");
+    defer a.free(header);
+    var p = Pack.init(a);
+    errdefer p.deinit();
+    try p.addHeader("model.safetensors", header, std.math.maxInt(u64));
+    return p;
+}
+
+fn fingerprint(p: *const plan.Plan, hash: *std.crypto.hash.sha2.Sha256) !void {
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try std.json.Stringify.value(.{ .rank = p.rank, .world = p.world, .layers = p.layers, .top = p.top, .head = p.head, .dspark = p.dspark, .leftovers = p.leftovers }, .{}, &out.writer);
+    hash.update(out.written());
+}
+
+test "world four: default configuration plans every rank without payload reads" {
+    const cfg: Config = .{};
+    var pack = try defaultPack(std.testing.allocator);
+    defer pack.deinit();
+    for (0..4) |rank| {
+        var p = try plan.build(std.testing.allocator, &cfg, &pack, .{ .rank = @intCast(rank), .world = 4 });
+        defer p.deinit();
+        try std.testing.expectEqual(@as(usize, cfg.allLayers()), p.layers.len);
+        try std.testing.expectEqual(@as(usize, 0), p.leftovers.len);
+    }
+}
+
+/// The plans of every rank of `worlds`, as one digest.
+fn plansDigest(worlds: []const u32) ![64]u8 {
+    const cfg: Config = .{};
+    var pack = try defaultPack(std.testing.allocator);
+    defer pack.deinit();
+    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    for (worlds) |world| for (0..world) |rank| {
+        var p = try plan.build(std.testing.allocator, &cfg, &pack, .{ .rank = @intCast(rank), .world = world });
+        defer p.deinit();
+        try fingerprint(&p, &hash);
+    };
+    var digest: [32]u8 = undefined;
+    hash.final(&digest);
+    return std.fmt.bytesToHex(digest, .lower);
+}
+
+test "world four: world one and two plans retain their main fingerprint" {
+    const hex = try plansDigest(&.{ 1, 2 });
+    try std.testing.expectEqualStrings("0b2e082e4d244eec2d631a0da6f4495a5ccf73259f9384faea2167507169b5f5", &hex);
+}
+
+test "world four: its own plans retain their main fingerprint" {
+    const hex = try plansDigest(&.{4});
+    try std.testing.expectEqualStrings("0e980dd2b1df61f26511b6c993e2e581bd88c38da2882dbaf71585a1ec981b7d", &hex);
+}
+
+
+===== zig/src/families/deepseek_v41/slots_cli.zig =====
+//! `tf-dsv41 slots PACK ASSETS TRACE` (rank 0; others `follow`): batched and alone replies equal TRACE, greedy.
+
+const std = @import("std");
+const api = @import("engine_api");
+const se = @import("serve_engine.zig");
+
+const Box = struct {
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    mutex: std.Io.Mutex = .init,
+    tokens: std.ArrayList(u32) = .empty,
+    done: ?api.Reason = null,
+
+    fn event(ctx: *anyopaque, _: api.Id, e: *const api.Event) void {
+        const b: *Box = @ptrCast(@alignCast(ctx));
+        b.mutex.lockUncancelable(b.io);
+        defer b.mutex.unlock(b.io);
+        switch (e.*) {
+            .tokens => |t| b.tokens.appendSlice(b.gpa, t) catch {},
+            .finished => |f| b.done = f.reason,
+            else => {},
+        }
+    }
+
+    fn finished(b: *Box) ?api.Reason {
+        b.mutex.lockUncancelable(b.io);
+        defer b.mutex.unlock(b.io);
+        return b.done;
+    }
+};
+
+const Line = struct { prompt: []const u32, tokens: []const u32 };
+
+/// `got` equals `want`, or `want` cut at its first `eos` with or without the id.
+fn same(got: []const u32, want: []const u32, eos: u32) bool {
+    if (std.mem.eql(u32, got, want)) return true;
+    const cut = std.mem.indexOfScalar(u32, want, eos) orelse return false;
+    return std.mem.eql(u32, got, want[0 .. cut + 1]) or std.mem.eql(u32, got, want[0..cut]);
+}
+
+fn firstDiff(got: []const u32, want: []const u32) i64 {
+    return @intCast(std.mem.indexOfDiff(u32, got, want) orelse @min(got.len, want.len));
+}
+
+/// Submits lines[i] for each i in `which` at once and waits for all of them.
+fn submitAll(eng: api.Engine, io: std.Io, lines: []const Line, which: []const usize, boxes: []Box, id0: api.Id, drafts: bool) !void {
+    var reqs: [16]api.Request = undefined;
+    if (which.len > reqs.len) return error.TooManyLines;
+    for (which, 0..) |i, k| {
+        reqs[k] = .{ .prompt = lines[i].prompt, .max_tokens = @intCast(lines[i].tokens.len), .drafts = drafts };
+        try eng.submit(id0 + k, &reqs[k], .{ .ctx = &boxes[i], .event = Box.event });
+    }
+    while (true) {
+        var all = true;
+        for (which) |i| all = all and boxes[i].finished() != null;
+        if (all) return;
+        std.Io.sleep(io, .fromMilliseconds(2), .awake) catch {};
+    }
+}
+
+pub fn main(gpa: std.mem.Allocator, io: std.Io, pack: []const u8, assets: []const u8, trace: []const u8) !u8 {
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const text = try std.Io.Dir.cwd().readFileAlloc(io, trace, a, .limited(1 << 30));
+    var lines: std.ArrayList(Line) = .empty;
+    var it = std.mem.tokenizeScalar(u8, text, '\n');
+    while (it.next()) |l| try lines.append(a, try std.json.parseFromSliceLeaky(Line, a, l, .{ .ignore_unknown_fields = true }));
+    const n = lines.items.len;
+    if (n == 0 or n > 16) return error.BadTrace;
+    const drafts = try @import("sys").environment.read(bool, "TF_DSV41_DRAFTS", false);
+    const s = try se.Served.open(gpa, io, pack, assets, drafts, null, null);
+    defer se.Served.close(s);
+    const eng = s.engine();
+    const eos = s.m.cfg.eos;
+    std.debug.print("slots check: {d} live slots, {d} prompts, drafts {}\n", .{ s.m.slots, n, drafts });
+    const batched = try a.alloc(Box, n);
+    const alone = try a.alloc(Box, n);
+    for (batched, alone) |*x, *y| {
+        x.* = .{ .io = io, .gpa = a };
+        y.* = .{ .io = io, .gpa = a };
+    }
+    const all = try a.alloc(usize, n);
+    for (all, 0..) |*x, i| x.* = i;
+    var t0 = std.Io.Clock.awake.now(io);
+    try submitAll(eng, io, lines.items, all, batched, 1, drafts);
+    const tb = t0.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds();
+    t0 = std.Io.Clock.awake.now(io);
+    for (0..n) |i| try submitAll(eng, io, lines.items, &.{i}, alone, 100 + i, drafts);
+    const ta = t0.durationTo(std.Io.Clock.awake.now(io)).toNanoseconds();
+    var ok_b: usize = 0;
+    var ok_a: usize = 0;
+    var ok_ba: usize = 0;
+    var toks: usize = 0;
+    for (lines.items, batched, alone, 0..) |l, *b, *x, i| {
+        const eb = same(b.tokens.items, l.tokens, eos);
+        const ea = same(x.tokens.items, l.tokens, eos);
+        const eba = std.mem.eql(u32, b.tokens.items, x.tokens.items);
+        ok_b += @intFromBool(eb);
+        ok_a += @intFromBool(ea);
+        ok_ba += @intFromBool(eba);
+        toks += b.tokens.items.len;
+        std.debug.print("{{\"line\": {d}, \"prompt\": {d}, \"recorded\": {d}, \"batched\": {d}, \"alone\": {d}, \"batched_eq_ref\": {}, \"alone_eq_ref\": {}, \"batched_eq_alone\": {}, \"first_diff_batched\": {d}, \"first_diff_alone\": {d}, \"finished\": \"{t}\"}}\n", .{ i, l.prompt.len, l.tokens.len, b.tokens.items.len, x.tokens.items.len, eb, ea, eba, if (eb) -1 else firstDiff(b.tokens.items, l.tokens), if (ea) -1 else firstDiff(x.tokens.items, l.tokens), b.done.? });
+    }
+    const pass = ok_b == n and ok_a == n and ok_ba == n;
+    std.debug.print("{s} slots batched == Python: {d}/{d}\n", .{ if (ok_b == n) "PASS" else "FAIL", ok_b, n });
+    std.debug.print("{s} slots alone == Python: {d}/{d}\n", .{ if (ok_a == n) "PASS" else "FAIL", ok_a, n });
+    std.debug.print("{s} slots batched == alone: {d}/{d}\n", .{ if (ok_ba == n) "PASS" else "FAIL", ok_ba, n });
+    std.debug.print("slots timing: batched {d} ms, alone {d} ms, {d} tokens\n", .{ @divTrunc(tb, 1_000_000), @divTrunc(ta, 1_000_000), toks });
+    if (s.m.rows) |r| std.debug.print("row windows: {d}, rows {d}, padded {d}\n", .{ r.stats.windows, r.stats.rows, r.stats.padded });
+    return if (pass) 0 else 1;
+}
+
+
+===== zig/src/families/deepseek_v41/run.zig =====
+//! The call executor: block.zig's calls issued on our own buffers, the plan bound once (persistent roles + one arena).
+
+const std = @import("std");
+const cuda = @import("cuda");
+const dk = @import("dsv41_kernels");
+const calls = @import("block_calls.zig");
+const buffers = @import("buffers.zig");
+const load = @import("cuda_weights.zig");
+const tc = @import("triton_call.zig");
+const rp = dk.replay;
+
+/// A call timer behind the runner (profile.zig's Profile.timer); its methods forward to the timer's own.
+pub const Timer = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        begin: *const fn (ptr: *anyopaque) void,
+        beginPrefill: *const fn (ptr: *anyopaque) void,
+        prefillRows: *const fn (ptr: *anyopaque, rows: u64, tail: bool) void,
+        before: *const fn (ptr: *anyopaque, s: cuda.Stream, c: *const calls.Call) anyerror!void,
+        after: *const fn (ptr: *anyopaque, s: cuda.Stream) anyerror!void,
+        end: *const fn (ptr: *anyopaque, s: cuda.Stream) anyerror!void,
+        close: *const fn (ptr: *anyopaque, io: std.Io) void,
+    };
+
+    pub fn begin(t: Timer) void {
+        t.vtable.begin(t.ptr);
+    }
+    pub fn beginPrefill(t: Timer) void {
+        t.vtable.beginPrefill(t.ptr);
+    }
+    pub fn prefillRows(t: Timer, rows: u64, tail: bool) void {
+        t.vtable.prefillRows(t.ptr, rows, tail);
+    }
+    pub fn before(t: Timer, s: cuda.Stream, c: *const calls.Call) !void {
+        return t.vtable.before(t.ptr, s, c);
+    }
+    pub fn after(t: Timer, s: cuda.Stream) !void {
+        return t.vtable.after(t.ptr, s);
+    }
+    pub fn end(t: Timer, s: cuda.Stream) !void {
+        return t.vtable.end(t.ptr, s);
+    }
+    pub fn close(t: Timer, io: std.Io) void {
+        t.vtable.close(t.ptr, io);
+    }
+};
+
+pub const Runner = struct {
+    gpa: std.mem.Allocator,
+    d: *const cuda.Driver,
+    stream: cuda.Stream,
+    kernels: *const dk.Kernels,
+    triton: *const cuda.aot.Set,
+    weights: *const load.Weights,
+    /// role -> device address
+    addrs: std.StringHashMapUnmanaged(u64) = .empty,
+    owned: std.ArrayList(cuda.DeviceBuffer) = .empty,
+    scratch: ?cuda.DeviceBuffer = null,
+    /// the forward's glue steps (forward.zig: positions, exchanges over the Collective, Engram rows, kit roundings)
+    glue: ?Glue = null,
+    /// TF_DSV41_PROFILE: the eager decode windows' calls timed (profile.zig's Profile, set at engine open)
+    prof: ?Timer = null,
+    /// TF_DSV41_L2PF (l2pf.zig): L2 prefetch launches on a side stream forked at their site; null: skipped
+    l2pf: ?*Side = null,
+    /// rows of the window being issued (0: unknown): a window wider than `Side.rows` skips every prefetch site
+    rows: u32 = 0,
+    /// TF_DSV41_BRANCHES (branches.zig): the side stream of calls tagged `side`; null: every call on main
+    br: ?*Side = null,
+    /// TF_DSV41_MHC_DEFER (branches.zig): the stream of mHC coefficient launches, joined by the next mHC call
+    dfr: ?*Side = null,
+    /// TF_DSV41_DRAFT_OVERLAP: the event a row window records after its last "w.taps" writer, for the next window only
+    taps_mark: ?TapsMark = null,
+    /// Runner.guard: the programs (programKey) whose every Triton call the AOT set resolved
+    verified: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    /// Runner.guard: each Triton function's runtime parameters (built at the first window)
+    params: ?Params = null,
+    progress: ?*@import("round_progress.zig").Progress = null,
+
+    pub const TapsMark = struct { ev: cuda.Event, armed: bool = false, recorded: u64 = 0 };
+
+    /// The L2 prefetcher on the device: the side stream, the fork / join events, whether a fork is open.
+    pub const Side = struct {
+        stream: cuda.Stream,
+        fork: cuda.Event,
+        join: cuda.Event,
+        /// TF_DSV41_L2PF_ROWS (16): wider windows skip every site
+        rows: u32 = 16,
+        open: bool = false,
+        launches: u64 = 0,
+        skipped_rows: u64 = 0,
+        /// TF_DSV41_PF_OVERLAP_SITE (branches only): `mark` m records marks[m - 1]; `wait` m makes main wait for it
+        marks: [max_marks]?cuda.Event = @splat(null),
+    };
+
+    pub const max_marks = 8;
+
+    pub const Glue = struct {
+        ctx: *anyopaque,
+        run: *const fn (ctx: *anyopaque, r: *Runner, c: *const calls.Call) anyerror!void,
+    };
+
+    pub fn deinit(r: *Runner) void {
+        for (r.owned.items) |*b| b.free();
+        r.owned.deinit(r.gpa);
+        if (r.scratch) |*s| s.free();
+        var it = r.addrs.keyIterator();
+        while (it.next()) |k| r.gpa.free(k.*);
+        r.addrs.deinit(r.gpa);
+        r.verified.deinit(r.gpa);
+        if (r.params) |*p| freeParams(r.gpa, p);
+    }
+
+    /// A persistent role whose memory another owner holds (the KV pool's tensors and tables): bind leaves it.
+    pub fn external(r: *Runner, role: []const u8, addr: u64) !void {
+        // Triton specializes pointers on 16-byte alignment: a misaligned base fails here by name, not later
+        if (addr % 16 != 0) {
+            std.log.scoped(.dsv41).err("role {s} bound at 0x{x}: not 16-byte aligned", .{ role, addr });
+            return error.MisalignedRole;
+        }
+        if (r.addrs.getPtr(role)) |value| {
+            value.* = addr;
+            return;
+        }
+        const key = try r.gpa.dupe(u8, role);
+        errdefer r.gpa.free(key);
+        try r.addrs.put(r.gpa, key, addr);
+    }
+
+    pub const External = struct { role: []const u8, addr: u64 };
+    pub fn externals(r: *Runner, bindings: []const External) !void {
+        const keys = try r.gpa.alloc(?[]u8, bindings.len);
+        defer r.gpa.free(keys);
+        @memset(keys, null);
+        defer for (keys) |key| if (key) |k| r.gpa.free(k);
+        try r.addrs.ensureUnusedCapacity(r.gpa, @intCast(bindings.len));
+        for (bindings, keys) |b, *key| {
+            if (b.addr % 16 != 0) return error.MisalignedRole;
+            if (!r.addrs.contains(b.role)) key.* = try r.gpa.dupe(u8, b.role);
+        }
+        for (bindings, keys) |b, *key| {
+            if (r.addrs.getPtr(b.role)) |value| value.* = b.addr else {
+                r.addrs.putAssumeCapacity(key.*.?, b.addr);
+                key.* = null;
+            }
+        }
+    }
+    /// An external role's address gone (an on-demand role released): a later use fails as error.Unbound.
+    pub fn forget(r: *Runner, role: []const u8) void {
+        if (r.addrs.fetchRemove(role)) |kv| r.gpa.free(kv.key);
+    }
+
+    /// Allocates every role of `plan`: persistent roles one buffer each (but external ones), the rest one zeroed arena.
+    pub fn bind(r: *Runner, plan: *const buffers.Plan) !void {
+        var arena_bytes: u64 = 0;
+        for (plan.sizes.keys(), plan.sizes.values()) |k, v| {
+            if (buffers.scopeOf(k) == .persistent and r.addrs.contains(k)) continue;
+            if (buffers.scopeOf(k) == .persistent) {
+                const b = try cuda.DeviceBuffer.alloc(r.d, v);
+                try b.fill8(0, null);
+                try r.owned.append(r.gpa, b);
+                try r.addrs.put(r.gpa, try r.gpa.dupe(u8, k), b.ptr);
+            } else arena_bytes += std.mem.alignForward(u64, v, 256);
+        }
+        const arena = try cuda.DeviceBuffer.alloc(r.d, arena_bytes);
+        try arena.fill8(0, null);
+        try r.owned.append(r.gpa, arena);
+        var at: u64 = 0;
+        for (plan.sizes.keys(), plan.sizes.values()) |k, v| {
+            if (buffers.scopeOf(k) == .persistent) continue;
+            try r.addrs.put(r.gpa, try r.gpa.dupe(u8, k), arena.ptr + at);
+            at += std.mem.alignForward(u64, v, 256);
+        }
+        r.scratch = try cuda.DeviceBuffer.alloc(r.d, 64 << 20);
+    }
+
+Facility record ZX-58: the access code for the Oakhurst relay is BG-8642. The Oakhurst relay was inspected on 14 March.
+
+
+
+    /// A role's device address (state.zig and the glue write through it).
+    pub fn addressOf(r: *const Runner, role: []const u8) ?u64 {
+        return r.addrs.get(role);
+    }
+
+    pub fn tensorAddr(r: *const Runner, t: calls.Tensor) !u64 {
+        var numel: i64 = 1;
+        for (t.shape) |n| numel *= n;
+        if (numel == 0) return 0;
+        const off: u64 = @intCast(t.offset);
+        return switch (t.role) {
+            .weight => |w| (r.weights.get(w) orelse return error.MissingWeight).ptr + off,
+            .buf => |b| (r.addrs.get(b) orelse return error.Unbound) + off,
+            .empty => error.EmptyRole,
+        };
+    }
+
+    /// The first Triton call of `cs` the AOT set has no variant for (16-aligned tensors), null when every one has.
+    pub fn missingTriton(r: *const Runner, cs: []const calls.Call) !?[]const u8 {
+        return missingIn(r.gpa, r.triton, cs);
+    }
+
+    /// Before a window's first launch: each Triton call of `cs` has a variant, else MissingTritonVariant (AOT guard).
+    pub fn guard(r: *Runner, cs: []const calls.Call) !void {
+        if (!(try guardOn())) return;
+        if (r.params == null) r.params = try paramsOf(r.gpa, r.triton);
+        const k = programKey(cs, &r.params.?);
+        if (r.verified.contains(k)) return;
+        if (try missingIn(r.gpa, r.triton, cs)) |name| {
+            std.log.err("aot guard: no Triton variant of {s} in this window of {d} calls: nothing issued, its request fails", .{ name, cs.len });
+            return error.MissingTritonVariant;
+        }
+        try r.verified.put(r.gpa, k, {});
+    }
+
+    fn addrOf(ctx: *anyopaque, t: calls.Tensor) anyerror!u64 {
+        const r: *const Runner = @ptrCast(@alignCast(ctx));
+        return r.tensorAddr(t);
+    }
+
+    fn extArg(r: *const Runner, a: std.mem.Allocator, x: calls.Arg) !rp.Arg {
+        return switch (x) {
+            .i => |v| .{ .int = v },
+            .f => |v| .{ .float = v },
+            .b => |v| .{ .boolean = v },
+            .none => .none,
+            .list => |items| blk: {
+                const out = try a.alloc(rp.Arg, items.len);
+                for (items, out) |y, *z| z.* = try r.extArg(a, y);
+                break :blk .{ .list = out };
+            },
+            .t, .opaque_table => |t| .{ .tensor = .{ .ptr = try r.tensorAddr(t), .dtype = std.meta.stringToEnum(rp.DType, @tagName(t.dt)).?, .shape = t.shape, .stride = t.stride } },
+        };
+    }
+
+    /// Issues one call on the runner's stream; L2 prefetchers go to the side stream (skipped without TF_DSV41_L2PF).
+    pub fn issue(r: *Runner, c: *const calls.Call) !void {
+        defer if (r.progress) |progress| progress.touch();
+        if (r.br) |b| {
+            if (c.join) try r.joinBranch();
+            if (c.wait > 0) {
+                // the main stream after the side's work up to mark `wait` only (the fork stays open)
+                if (!b.open) return error.BranchNotForked;
+                try r.stream.wait(b.marks[c.wait - 1] orelse return error.NoBranchMark);
+            }
+            if (c.fork) {
+                try b.fork.record(r.stream);
+                try b.stream.wait(b.fork);
+                b.open = true;
+                b.launches += 1;
+            }
+            if (c.side) {
+                if (!b.open) return error.BranchNotForked;
+                // the call and anything it runs (a glue step's launches) on the side stream
+                const main = r.stream;
+                r.stream = b.stream;
+                defer r.stream = main;
+                try r.issueOn(b.stream, c, r.scratch);
+                if (c.mark > 0) try (b.marks[c.mark - 1] orelse return error.NoBranchMark).record(b.stream);
+                return;
+            }
+        }
+        if (r.dfr) |d| {
+            if (c.defer_join) try r.joinDeferred();
+            if (c.defer_side) {
+                try d.fork.record(r.stream);
+                try d.stream.wait(d.fork);
+                d.open = true;
+                d.launches += 1;
+                const main = r.stream;
+                r.stream = d.stream;
+                defer r.stream = main;
+                return r.issueOn(d.stream, c, r.scratch);
+            }
+        }
+        if (std.mem.startsWith(u8, c.name, "tf_dsv41_l2p")) {
+            const p = r.l2pf orelse return;
+            if (r.rows > p.rows) {
+                p.skipped_rows += 1;
+                return;
+            }
+            try p.fork.record(r.stream);
+            try p.stream.wait(p.fork);
+            p.open = true;
+            p.launches += 1;
+            return r.issueOn(p.stream, c, r.scratch);
+        }
+        return r.issueOn(r.stream, c, r.scratch);
+    }
+
+    /// The main stream waits for the deferred coefficients' stream (mhc.await_coefs).
+    fn joinDeferred(r: *Runner) !void {
+        const d = r.dfr orelse return;
+        if (!d.open) return;
+        d.open = false;
+        try d.join.record(d.stream);
+        try r.stream.wait(d.join);
+    }
+
+    /// The main stream waits for the branches' side stream (its open fork, if any).
+    fn joinBranch(r: *Runner) !void {
+        const b = r.br orelse return;
+        if (!b.open) return;
+        b.open = false;
+        try b.join.record(b.stream);
+        try r.stream.wait(b.join);
+    }
+
+    /// The main stream waits for the side stream's prefetches, so a captured graph holds no open fork.
+    pub fn join(r: *Runner) !void {
+        try r.joinBranch();
+        try r.joinDeferred();
+        const p = r.l2pf orelse return;
+        if (!p.open) return;
+        p.open = false;
+        try p.join.record(p.stream);
+        try r.stream.wait(p.join);
+    }
+
+    fn dropForks(r: *Runner) void {
+        if (r.l2pf) |p| p.open = false;
+        if (r.br) |b| b.open = false;
+        if (r.dfr) |d| d.open = false;
+    }
+
+    fn issueOn(r: *Runner, stream: cuda.Stream, c: *const calls.Call, scratch_buf: ?cuda.DeviceBuffer) !void {
+        if (c.glue) {
+            const g = r.glue orelse return error.NoGlue;
+            return g.run(g.ctx, r, c);
+        }
+        var arena = std.heap.ArenaAllocator.init(r.gpa);
+        defer arena.deinit();
+        const a = arena.allocator();
+        if (c.triton) {
+            var mine: std.ArrayList(cuda.aot.Spec) = .empty;
+            for (r.triton.variants) |v| if (std.mem.eql(u8, v.spec.@"fn", c.name)) try mine.append(a, v.spec);
+            const sp = try tc.split(a, c, mine.items, .{ .ctx = @constCast(r), .of = addrOf });
+            const g = c.grid;
+            return r.triton.run(stream, c.name, .{ @intCast(g[0]), @intCast(g[1]), @intCast(g[2]) }, sp.args, sp.consts);
+        }
+        const dot = std.mem.lastIndexOfScalar(u8, c.name, '.') orelse return error.BadName;
+        const args = try a.alloc(rp.Arg, c.args.len);
+        for (c.args, args) |x, *y| y.* = try r.extArg(a, x.arg);
+        var scratch: rp.Scratch = .{ .ptr = scratch_buf.?.ptr, .len = scratch_buf.?.len };
+        if (!try rp.call(r.kernels, stream, c.name[0..dot], c.name[dot + 1 ..], args, &.{}, &scratch)) return error.NoBinding;
+    }
+
+    /// Issues a window's calls in order (TF_DSV41_SYNC_EACH=1: synced after every call, a failing call named).
+    pub fn window(r: *Runner, cs: []const calls.Call) !void {
+        try r.guard(cs);
+        if ((try syncEach())) return r.windowChecked(cs);
+        errdefer r.dropForks(); // a failed window (or capture) leaves no fork for the next one to join
+        const mark = r.markAt(cs);
+        for (cs, 0..) |*c, i| {
+            try r.issue(c);
+            if (i == mark) try r.recordMark(c);
+        }
+        try r.join();
+    }
+
+    /// Issues `cs` on `stream` instead of the runner's (a drafter program beside a row window); nothing joins.
+    pub fn windowOn(r: *Runner, stream: cuda.Stream, cs: []const calls.Call) !void {
+        try r.guard(cs);
+        const main = r.stream;
+        r.stream = stream;
+        defer r.stream = main;
+        for (cs) |*c| {
+            if (c.side or c.fork or c.join or c.defer_side or c.defer_join or c.glue or std.mem.startsWith(u8, c.name, "tf_dsv41_l2p")) return error.NotASideProgram;
+            try r.issueOn(stream, c, r.scratch);
+        }
+    }
+
+    /// The index of the call after which an armed window records the taps mark; null: not armed, or no taps writer.
+    fn markAt(r: *Runner, cs: []const calls.Call) ?usize {
+        const m = r.taps_mark orelse return null;
+        if (!m.armed) return null;
+        return lastTaps(cs);
+    }
+
+    /// The mark after call `c` on its stream: an external record node in a capture, a plain record when eager.
+    fn recordMark(r: *Runner, c: *const calls.Call) !void {
+        const m = &r.taps_mark.?;
+        const s = if (c.side and r.br != null) r.br.?.stream else if (c.defer_side and r.dfr != null) r.dfr.?.stream else r.stream;
+        if (try cuda.graph.captureStatus(s) != .none) try m.ev.recordExternal(s) else try m.ev.record(s);
+        m.recorded += 1;
+    }
+
+    fn windowChecked(r: *Runner, cs: []const calls.Call) !void {
+        const mark = r.markAt(cs);
+        for (cs, 0..) |*c, i| {
+            r.issue(c) catch |e| {
+                std.log.err("sync-each: call {d}/{d} {s} failed to issue ({t})", .{ i, cs.len, c.name, e });
+                return e;
+            };
+            if (i == mark) try r.recordMark(c);
+            r.stream.synchronize() catch |e| {
+                std.log.err("sync-each: call {d}/{d} {s} faulted ({t})", .{ i, cs.len, c.name, e });
+                return e;
+            };
+        }
+        try r.join();
+    }
+
+    /// An eager decode window, each call timed when TF_DSV41_PROFILE is set (never inside a graph capture).
+    pub fn timedWindow(r: *Runner, cs: []const calls.Call) !void {
+        const p = r.prof orelse return r.window(cs);
+        try r.guard(cs);
+        if ((try syncEach())) return r.windowChecked(cs);
+        p.begin();
+        errdefer r.dropForks();
+        const mark = r.markAt(cs);
+        for (cs, 0..) |*c, i| {
+            try p.before(r.stream, c);
+            try r.issue(c);
+            if (i == mark) try r.recordMark(c);
+            try p.after(r.stream);
+        }
+        try r.join();
+        try p.end(r.stream);
+    }
+};
+
+/// The last call of `cs` with a "w.taps" tensor argument; null when none does.
+pub fn lastTaps(cs: []const calls.Call) ?usize {
+    var at: ?usize = null;
+    for (cs, 0..) |c, i| for (c.args) |x| switch (x.arg) {
+        .t => |t| if (t.role == .buf and std.mem.eql(u8, t.role.buf, "w.taps")) {
+            at = i;
+        },
+        else => {},
+    };
+    return at;
+}
+
+var sync_each: ?bool = null;
+/// The first Triton call of `cs` that `set` has no variant for, every role's base 16-aligned (Runner.missingTriton).
+pub fn missingIn(gpa: std.mem.Allocator, set: *const cuda.aot.Set, cs: []const calls.Call) !?[]const u8 {
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for (cs) |*c| if (c.triton) {
+        var mine: std.ArrayList(cuda.aot.Spec) = .empty;
+        for (set.variants) |v| if (std.mem.eql(u8, v.spec.@"fn", c.name)) try mine.append(a, v.spec);
+        const sp = tc.split(a, c, mine.items, .{ .ctx = undefined, .of = alignedOf }) catch return c.name;
+        _ = set.find(c.name, sp.args, sp.consts) catch return c.name; // error.MissingTritonVariant
+    };
+    return null;
+}
+
+/// A tensor's address with its role's base 16-aligned (aot-needs' rule); an empty tensor or role is 0 (tensorAddr's).
+fn alignedOf(_: *anyopaque, t: calls.Tensor) anyerror!u64 {
+    return if (emptyTensor(t)) 0 else (1 << 20) + @as(u64, @intCast(t.offset));
+}
+
+fn emptyTensor(t: calls.Tensor) bool {
+    var numel: i64 = 1;
+    for (t.shape) |n| numel *= n;
+    return numel == 0 or t.role == .empty;
+}
+
+/// Each Triton function's runtime parameter names over its variants (tc.split: other ints are constexprs).
+pub const Params = std.StringHashMapUnmanaged([]const []const u8);
+
+pub fn paramsOf(gpa: std.mem.Allocator, set: *const cuda.aot.Set) !Params {
+    var specs: std.ArrayList(cuda.aot.Spec) = .empty;
+    defer specs.deinit(gpa);
+    for (set.variants) |v| try specs.append(gpa, v.spec);
+    return paramsOfSpecs(gpa, specs.items);
+}
+
+pub fn paramsOfSpecs(gpa: std.mem.Allocator, specs: []const cuda.aot.Spec) !Params {
+    var lists: std.StringArrayHashMapUnmanaged(std.ArrayList([]const u8)) = .empty;
+    defer {
+        for (lists.values()) |*l| l.deinit(gpa);
+        lists.deinit(gpa);
+    }
+    for (specs) |sp| {
+        const got = try lists.getOrPut(gpa, sp.@"fn");
+        if (!got.found_existing) got.value_ptr.* = .empty;
+        for (sp.params) |q| if (!named(got.value_ptr.items, q.name)) try got.value_ptr.append(gpa, q.name);
+    }
+    var p: Params = .empty;
+    errdefer freeParams(gpa, &p);
+    for (lists.keys(), lists.values()) |k, *l| try p.put(gpa, k, try l.toOwnedSlice(gpa));
+    return p;
+}
+
+pub fn freeParams(gpa: std.mem.Allocator, p: *Params) void {
+    var it = p.valueIterator();
+    while (it.next()) |v| gpa.free(v.*);
+    p.deinit(gpa);
+}
+
+/// A program's Triton lookups hashed as `find` tells them apart (launch ints by class, tensors by dtype and alignment).
+pub fn programKey(cs: []const calls.Call, params: *const Params) u64 {
+    var h = std.hash.Wyhash.init(0x5d41);
+    for (cs) |*c| if (c.triton) {
+        h.update(c.name);
+        const ps = params.get(c.name) orelse &.{};
+        for (c.args) |x| {
+            h.update(x.name);
+            if (x.arg == .i and named(ps, x.name)) {
+                const v = x.arg.i;
+                h.update(&.{ @intFromBool(v == 1), @intFromBool(@mod(v, 16) == 0), @intFromBool(std.math.cast(i32, v) != null) });
+            } else hashArg(&h, x.arg);
+        }
+        h.update("|");
+    };
+    return h.final();
+}
+
+fn named(ps: []const []const u8, name: []const u8) bool {
+    for (ps) |p| if (std.mem.eql(u8, p, name)) return true;
+    return false;
+}
+
+fn hashArg(h: *std.hash.Wyhash, x: calls.Arg) void {
+    h.update(&.{@backingInt(std.meta.activeTag(x))});
+    switch (x) {
+        .t, .opaque_table => |t| {
+            h.update(@tagName(t.dt));
+            h.update(&.{ @intFromBool(emptyTensor(t)), @intFromBool(@mod(t.offset, 16) == 0) });
+        },
+        .i => |v| h.update(std.mem.asBytes(&v)),
+        .f => |v| h.update(std.mem.asBytes(&v)),
+        .b => |v| h.update(&.{@intFromBool(v)}),
+        .none => {},
+        .list => |items| for (items) |y| hashArg(h, y),
+    }
+}
+
+var guard_on: ?bool = null;
+
+fn guardOn() !bool {
+    if (guard_on) |v| return v;
+    const v = try @import("sys").environment.read(bool, "TF_DSV41_AOT_GUARD", true);
+    guard_on = v;
+    return v;
+}
+
+fn syncEach() !bool {
+    if (sync_each) |v| return v;
+    const v = try @import("sys").environment.read(bool, "TF_DSV41_SYNC_EACH", false);
+    sync_each = v;
+    return v;
+}
+
+
+===== zig/build/dsv41_cuda.zig =====
+const std = @import("std");
+const shared = @import("dsv41_shared.zig");
+const units = @import("dsv41_units.zig");
+pub fn runtime(b: *std.Build, target: std.Build.ResolvedTarget, images: bool) *std.Build.Module {
+    return runtimeAt(b, target, .Debug, images);
+}
+pub fn runtimeAt(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, images: bool) *std.Build.Module {
+    const options = @import("cuda_runtime.zig").kernelOptions(b, images, null);
+    const cuda = b.createModule(.{ .root_source_file = b.path("zig/src/cuda/root.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    cuda.addImport("gpu_memory", @import("gpu_memory.zig").module(b, target));
+    cuda.addOptions("kernel_options", options);
+    cuda.addImport("stagger", b.createModule(.{ .root_source_file = b.path("zig/src/core/stagger.zig"), .target = target, .optimize = optimize }));
+    if (images) {
+        const empty = b.addWriteFiles().add("compile-only.fatbin", "SYNTHETIC-COMPILE-ONLY");
+        const all = @import("cuda.zig").kernels;
+        for (all) |k| cuda.addAnonymousImport(b.fmt("fatbin_{s}", .{k.name}), .{ .root_source_file = empty });
+    }
+    return cuda;
+}
+pub fn module(b: *std.Build, target: std.Build.ResolvedTarget, file: []const u8, images: bool) *std.Build.Module {
+    return moduleAt(b, target, .Debug, file, images);
+}
+/// `module` with the runtime, kernel and family modules at `optimize`.
+pub fn moduleAt(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, file: []const u8, images: bool) *std.Build.Module {
+    const cuda = runtimeAt(b, target, optimize, images);
+    const opts = b.addOptions();
+    opts.addOption(bool, "with_kernels", images);
+    opts.addOption(u32, "family_scope", 41);
+    const dk = b.createModule(.{ .root_source_file = b.path("zig/src/families/deepseek_v41/kernels.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    dk.addImport("cuda", cuda);
+    dk.addOptions("dsv41_kernel_options", opts);
+    const empty = b.addWriteFiles().add("compile-only-dsv41.fatbin", "SYNTHETIC-COMPILE-ONLY");
+    for (units.units ++ units.optional) |k| dk.addAnonymousImport(b.fmt("dsv41_fatbin_{s}", .{k.name}), .{ .root_source_file = empty });
+    return assemble(b, target, optimize, file, cuda, dk);
+}
+/// The family's root `file` over the runtime `cuda` and kernel module `dk`, every family module at `optimize`.
+pub fn assemble(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, file: []const u8, cuda: *std.Build.Module, dk: *std.Build.Module) *std.Build.Module {
+    const m = shared.moduleAt(b, target, optimize, file);
+    m.addImport("cuda", cuda);
+    m.addImport("dsv41_kernels", dk);
+    const tp = @import("tp.zig").module(b, target, optimize, cuda);
+    m.addImport("tp", tp);
+    m.addImport("kv", @import("dsv41_state.zig").kvModuleAt(b, target, optimize, cuda, tp));
+    @import("dsv41_draft.zig").addImportsAt(b, m, target, optimize);
+    return m;
+}
+pub fn steps(b: *std.Build) void {
+    const real = @import("dsv41_images.zig").images(b, b.option([]const u8, "dsv41-nvcc", "Optional family nvcc compiler"), b.option([]const u8, "dsv41-fatbins", "Optional complete family prebuilt image directory"));
+    _ = @import("dsv41_images.zig").module(b, b.graph.host, .Debug, runtime(b, b.graph.host, false), null);
+    const check_target = b.resolveTargetQuery(.{ .cpu_arch = b.graph.host.result.cpu.arch, .os_tag = .linux, .abi = .gnu });
+    const heads_check = b.addExecutable(.{ .name = "tf-dsv41-prefill-heads", .root_module = module(b, check_target, "prefill_heads_check.zig", false) });
+    b.step("dsv41-prefill-heads", "Build the AOT-only padded attention comparison for Linux, never run").dependOn(&b.addInstallArtifact(heads_check, .{}).step);
+    b.step("test-dsv41-serve-line-host", "The DeepSeek start-up line names the resolved serving settings").dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("zig/src/families/deepseek_v41/serve_line.zig"), .target = b.graph.host }) })).step);
+    const planner = module(b, b.graph.host, "cuda_test.zig", false);
+    b.step("test-dsv41-bounds-host", "DeepSeek resource bounds and real wrapper controls without devices").dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = planner, .filters = &.{"DeepSeek bounds:"} })).step);
+    const binding_tests = b.addRunArtifact(b.addTest(.{ .root_module = planner.import_table.get("dsv41_kernels").? }));
+    const common_tests = b.addRunArtifact(b.addTest(.{ .root_module = planner.import_table.get("cuda").? }));
+    const host = b.addRunArtifact(b.addTest(.{ .root_module = module(b, b.graph.host, "cuda_test.zig", false) }));
+    const host_step = b.step("test-dsv41-cuda-host", "DeepSeek launch plans and binding contracts without device calls");
+    host_step.dependOn(&host.step);
+    host_step.dependOn(&binding_tests.step);
+    host_step.dependOn(&common_tests.step);
+    const sm_module = module(b, b.graph.host, "cuda_test.zig", true).import_table.get("dsv41_kernels").?;
+    const sm_test = b.addTest(.{ .root_module = sm_module, .filters = &.{"DeepSeek refuses pre-cluster GPUs"} });
+    const sm_run = b.addRunArtifact(sm_test);
+    b.step("test-dsv41-sm-host", "Check SM refusal before image load with a fake driver and inert images").dependOn(&sm_run.step);
+    const forms = b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("zig/src/core/exl3_prepare.zig"), .target = b.graph.host, .optimize = .Debug }) }));
+    host_step.dependOn(&forms.step);
+    const target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu });
+    const cross = b.addTest(.{ .root_module = module(b, target, "cuda_test.zig", true) });
+    _ = cross.getEmittedBin();
+    b.step("compile-dsv41-cuda", "Emit Linux CUDA binding bodies with synthetic nonexecuted images").dependOn(&cross.step);
+    const consumers_base = module(b, target, "cuda_test.zig", true);
+    const consumers = b.createModule(.{
+        .root_source_file = b.path("zig/tests/cuda/contract_compile.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+    });
+    consumers.addImport("cuda", consumers_base.import_table.get("cuda").?);
+    consumers.addImport("core", consumers_base.import_table.get("core").?);
+    consumers.addImport("gpu_memory", @import("gpu_memory.zig").module(b, target));
+    const controls = b.addOptions();
+    controls.addOption(bool, "controls", true);
+    consumers.addOptions("contract_options", controls);
+    consumers.addAnonymousImport("fatbin_h3", .{ .root_source_file = b.addWriteFiles().add("compile-h3", "SYNTHETIC-COMPILE-ONLY") });
+    consumers.addAnonymousImport("fatbin_contract_controls", .{ .root_source_file = b.addWriteFiles().add("compile-controls", "SYNTHETIC-COMPILE-ONLY") });
+    @import("cuda_contract_deepseek.zig").inert(b, consumers);
+    const consumer_object = b.addObject(.{ .name = "contract-consumers", .root_module = consumers });
+    _ = consumer_object.getEmittedBin();
+    b.step("compile-cuda-contract-consumers", "Emit both real resource consumers with synthetic nonexecuted images").dependOn(&consumer_object.step);
+    const catalog = b.addExecutable(.{ .name = "dsv41-catalog", .root_module = module(b, b.graph.host, "catalog.zig", false) });
+    const record = b.addRunArtifact(catalog);
+    const output = record.captureStdOut(.{});
+    b.step("emit-dsv41-catalog", "Record symbol resolution without CUDA device work").dependOn(&b.addInstallFile(output, "dsv41-launches.txt").step);
+    const runner_base = module(b, target, "cuda_test.zig", true);
+    const runner = b.addExecutable(.{ .name = "tf-dsv41-test", .root_module = runnerModule(b, target, runner_base.import_table.get("cuda").?, runner_base.import_table.get("dsv41_kernels").?) });
+    _ = runner.getEmittedBin();
+    b.step("compile-dsv41-runner", "Emit the supplied device fixture runner with nonexecuted synthetic images").dependOn(&runner.step);
+    const gpu = b.step("dsv41-test", "Install tf-dsv41-test for this host over the family images (-Ddsv41-nvcc or -Ddsv41-fatbins)");
+    const im = real orelse return gpu.dependOn(&b.addFail("dsv41-test needs -Ddsv41-nvcc=PATH or -Ddsv41-fatbins=DIR").step);
+    // the family's images only: the runner's commands launch no runtime kernels
+    const cuda = runtime(b, b.graph.host, false);
+    const dk = @import("dsv41_images.zig").module(b, b.graph.host, .Debug, cuda, im);
+    gpu.dependOn(&b.addInstallArtifact(b.addExecutable(.{ .name = "tf-dsv41-test", .root_module = runnerModule(b, b.graph.host, cuda, dk) }), .{}).step);
+}
+
+/// tests/cuda/dsv41_main.zig over `cuda` and `dk`, plus `tp` and the family's `partition.zig` for the exchanges.
+fn runnerModule(b: *std.Build, target: std.Build.ResolvedTarget, cuda: *std.Build.Module, dk: *std.Build.Module) *std.Build.Module {
+    return b.createModule(.{
+        .root_source_file = b.path("zig/tests/cuda/dsv41_main.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "cuda", .module = cuda }, .{ .name = "dsv41_kernels", .module = dk }, .{ .name = "tp", .module = @import("tp.zig").module(b, target, .Debug, cuda) }, .{ .name = "dsv41_partition", .module = shared.module(b, target, "partition.zig") } },
+    });
+}
+
+
+===== zig/src/server/slide_recheck.zig =====
+//! Facts asked again as their lessons checked them: after a new lesson, before a save; and around a delete's cut.
+const std = @import("std");
+const api = @import("engine_api");
+const log = @import("log.zig");
+const errors = @import("errors.zig");
+const wording = @import("slide_words.zig");
+const side = @import("slide_side.zig");
+const slide_ask = @import("slide_ask.zig");
+const slide_graph = @import("slide_graph.zig");
+const talks = @import("slide_context.zig");
+const Server = @import("server.zig").Server;
+const Cx = errors.Cx;
+const Allocator = std.mem.Allocator;
+const Fact = slide_graph.Fact;
+const Earlier = slide_graph.Earlier;
+
+/// Times a lesson that made an earlier fact forget is fitted again, that fact's answers held, before it is taken out.
+pub const repairs = 2;
+
+/// An earlier fact asked again: whether it comes back now, and whether it came back at its last check before.
+pub const Result = struct { fact: Earlier, recalled: bool, was: bool };
+
+/// Which facts a check reads: every learned fact, or only those no check has judged since the server started.
+pub const Which = enum { all, unjudged };
+
+/// The learned facts but `id` asked again side by side, each verdict to the graph; `before` says which came back.
+pub fn check(srv: *Server, cx: *Cx, id: u32, which: Which, before: []const Earlier, gone: anytype) ![]Result {
+    const a = cx.a;
+    var facts: std.ArrayList(Earlier) = .empty;
+    for (try srv.slide.earlier(a, id)) |f| if (which == .all or f.recalled == null) try facts.append(a, f);
+    for (facts.items) |f| if (f.asked.len == 0) return error.EarlierQuestionsMissing;
+    var asking: std.ArrayList(side.Asking) = .empty;
+    for (facts.items) |f| for (f.asked) |w| try asking.append(a, .{ .question = w.question, .before = try talks.turns(srv, cx, w.context, gone) });
+    const replies = try side.askAll(srv, cx, asking.items, gone);
+    const out = try a.alloc(Result, facts.items.len);
+    var at: usize = 0;
+    for (facts.items, out) |f, *r| {
+        var held = true;
+        var probes: usize = 0;
+        var probed: usize = 0;
+        for (f.asked, 0..) |w, i| {
+            const reply = replies[at].content;
+            at += 1;
+            const back = bringsBack(f.text, w, reply);
+            if (!back) log.line("slide: \"{s}\", asked again for \"{s}\", does not bring it back: {s}", .{ w.question, f.text, reply });
+            if (back and w.answer.len == 0) srv.slide.answered(f.id, i, reply);
+            if (w.probe) {
+                probes += 1;
+                probed += @intFromBool(back);
+            } else held = held and back;
+        }
+        if (held and !try @import("slide_correction.zig").absent(srv, cx, f.asked, gone)) held = false;
+        r.* = .{ .fact = f, .recalled = held and 2 * probed >= probes, .was = cameBack(before, f) };
+        srv.slide.checked(f.id, r.recalled);
+    }
+    return out;
+}
+
+/// Whether fact `f` came back before: as `before` holds it, else at its last check (a fact never checked did).
+fn cameBack(before: []const Earlier, f: Earlier) bool {
+    for (before) |b| if (b.id == f.id) return b.recalled orelse true;
+    return f.recalled orelse true;
+}
+
+/// Whether `reply` to wording `w` brings back `fact`, judged as its own lesson judged it (short answer, else words).
+fn bringsBack(fact: []const u8, w: slide_graph.Answer, reply: []const u8) bool {
+    if (w.reject_old and @import("slide_correction.zig").oldReturned(w.question, w.old, w.old_short, reply)) return false;
+    if (w.short.len > 0) return wording.recallsShort(fact, w.question, w.short, reply);
+    if (w.answer.len > 0) return wording.recalls(fact, w.question, w.answer, reply);
+    return wording.tells(fact, w.question, "", reply);
+}
+
+/// The facts that came back at their last check and do not now.
+pub fn forgotten(a: Allocator, results: []const Result) ![]const Result {
+    var out: std.ArrayList(Result) = .empty;
+    for (results) |r| if (r.was and !r.recalled) try out.append(a, r);
+    return out.items;
+}
+
+/// A lesson fitted again keeping what `lost` facts' held-out questions answered: their prompts and those answers.
+pub fn keeps(srv: *Server, cx: *Cx, lost: []const Result) !struct { prompts: []const api.Example, kept: []const api.Example } {
+    const a = cx.a;
+    var prompts: std.ArrayList(api.Example) = .empty;
+    var kept: std.ArrayList(api.Example) = .empty;
+    for (lost) |r| for (r.fact.asked) |w| {
+        if (w.probe or w.context.len > 0) continue; // kept as asked cold: its answers in conversation follow
+        const answer = if (w.answer.len > 0) w.answer else continue;
+        try prompts.append(a, try slide_ask.promptOnly(srv, cx, a, null, w.question));
+        try kept.append(a, try slide_ask.example(srv, cx, a, null, w.question, answer, &.{}));
+    };
+    return .{ .prompts = prompts.items, .kept = kept.items };
+}
+
+/// The facts in `rs` as one line: "I like blue.", "My sister is called Ana."
+pub fn names(a: Allocator, rs: []const Result) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (rs, 0..) |r, i| {
+        if (i > 0) try out.appendSlice(a, ", ");
+        try out.print(a, "\"{s}\"", .{r.fact.text});
+    }
+    return out.items;
+}
+
+/// A question of fact `fact` (0: the deleted one): its words, the answer it expects ("": its reply before the cut).
+pub const Ask = struct { fact: usize, question: []const u8, answer: []const u8 = "", short: []const u8 = "", thinking: bool = false, probe: bool = false, context: []const u8 = "" }; // context: a kept talk's name
+
+/// What a recheck found wrong: whose fact, which ask (null: its unseen wordings together), and what.
+pub const Miss = struct { fact: usize, ask: ?usize = null, why: []const u8 };
+
+/// Each fact's questions as its lesson asked them: held out (cold ones thinking off, then on), unseen ones off.
+pub fn plan(a: Allocator, facts: []const Fact, thinks: bool) ![]const Ask {
+    var out: std.ArrayList(Ask) = .empty;
+    for (facts, 0..) |f, i| {
+        for (f.answers) |x| for ([_]bool{ false, true }) |on| {
+            if (on and (x.probe or !thinks or x.context.len > 0)) continue;
+            try out.append(a, .{ .fact = i, .question = x.question, .answer = x.answer, .short = x.short, .thinking = on, .probe = x.probe, .context = x.context });
+        };
+        // a fact taught before its answers were kept: what it says before the cut is what it should say after
+        if (f.answers.len == 0) for (f.questions) |q| for ([_]bool{ false, true }) |on| {
+            if (on and !thinks) continue;
+            try out.append(a, .{ .fact = i, .question = q, .thinking = on });
+        };
+    }
+    return out.items;
+}
+
+/// What the user reads of each ask's reply, asked side by side (`base`: from the model as shipped).
+pub fn ask(srv: *Server, cx: *Cx, asks: []const Ask, base: bool, gone: anytype) ![]const []const u8 {
+    const qs = try cx.a.alloc(side.Asking, asks.len);
+    for (asks, qs) |x, *q| q.* = .{ .question = x.question, .thinking = x.thinking, .base = base, .before = try talks.turns(srv, cx, x.context, gone) };
+    const replies = try side.askAll(srv, cx, qs, gone);
+    const out = try cx.a.alloc([]const u8, replies.len);
+    for (replies, out) |r, *o| o.* = r.content;
+    return out;
+}
+
+/// Whether each reply brings its fact back, as the lesson's checks judge it; a kept fact with no answers by `before`.
+pub fn brings(a: Allocator, facts: []const Fact, asks: []const Ask, said: []const []const u8, before: ?[]const []const u8) ![]bool {
+    const out = try a.alloc(bool, asks.len);
+    for (asks, said, out, 0..) |x, r, *o, i| {
+        const fact = facts[x.fact].text;
+        if (x.short.len == 0 and x.answer.len == 0 and before != null and x.fact > 0) {
+            // every word of the fact it said before the cut, it says again
+            const was = before.?[i];
+            o.* = wording.tells(fact, x.question, "", was) and wording.recalls(fact, x.question, was, r);
+        } else o.* = bringsBack(fact, .{ .question = x.question, .answer = x.answer, .short = x.short }, r);
+    }
+    return out;
+}
+
+/// Whether fact f comes back as its lesson judged it: every held-out answer, and at least half its unseen wordings.
+pub fn recalled(asks: []const Ask, got: []const bool, f: usize) bool {
+    var probes: usize = 0;
+    var back: usize = 0;
+    for (asks, got) |x, g| {
+        if (x.fact != f) continue;
+        if (!x.probe and !g) return false;
+        probes += @intFromBool(x.probe);
+        back += @intFromBool(x.probe and g);
+    }
+    return 2 * back >= probes;
+}
+
+/// The first thing wrong after the cut: fact 0 answering where the model as shipped does not, or a kept answer lost.
+pub fn judge(asks: []const Ask, before: []const bool, after: []const bool, shipped: []const bool, facts: usize) ?Miss {
+    return judgeMany(asks, before, after, shipped, facts, 1);
+}
+
+/// The first `removed` facts were explicitly selected; every other fact keeps the same retention checks.
+pub fn judgeMany(asks: []const Ask, before: []const bool, after: []const bool, shipped: []const bool, facts: usize, removed: usize) ?Miss {
+    for (asks, after, shipped, 0..) |x, g, s, i| if (x.fact < removed and g and !s) return .{ .fact = x.fact, .ask = i, .why = "it still gives the deleted fact" };
+    for (asks, before, after, 0..) |x, b, g, i| if (x.fact >= removed and !x.probe and b and !g) return .{ .fact = x.fact, .ask = i, .why = "it no longer brings its fact back" };
+    for (removed..facts) |f| {
+        var n: usize = 0;
+        var was: usize = 0;
+        var now: usize = 0;
+        for (asks, before, after) |x, b, g| if (x.fact == f and x.probe) {
+            n += 1;
+            was += @intFromBool(b);
+            now += @intFromBool(g);
+        };
+        if (n > 0 and 2 * was >= n and 2 * now < n) return .{ .fact = f, .why = "fewer than half its unseen wordings bring it back" };
+    }
+    return null;
+}
+
+test "a fact asked again comes back when every held-out question and half its probes bring it back" {
+    const ana: slide_graph.Answer = .{ .question = "What is my sister's name?", .answer = "Your sister is called Ana.", .short = "Ana" };
+    try std.testing.expect(bringsBack("My sister is called Ana.", ana, "Your sister is called Ana."));
+    try std.testing.expect(!bringsBack("My sister is called Ana.", ana, "I don't know your sister's name."));
+    const blue: slide_graph.Answer = .{ .question = "What colour do I prefer?" };
+    try std.testing.expect(bringsBack("I like blue.", blue, "You like **blue**."));
+    try std.testing.expect(!bringsBack("I like blue.", blue, "As an AI, I don't have access to your personal preferences."));
+    const a = std.testing.allocator;
+    const f: Earlier = .{ .id = 1, .text = "I like blue.", .asked = &.{}, .recalled = null };
+    const rs = [_]Result{ .{ .fact = f, .recalled = false, .was = true }, .{ .fact = f, .recalled = false, .was = false }, .{ .fact = f, .recalled = true, .was = true } };
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    try std.testing.expectEqual(@as(usize, 1), (try forgotten(arena.allocator(), &rs)).len);
+    // a fact the lesson's first check found forgotten is still one that came back before the lesson
+    const now: Earlier = .{ .id = 1, .text = "I like blue.", .asked = &.{}, .recalled = false };
+    try std.testing.expect(cameBack(&.{.{ .id = 1, .text = "I like blue.", .asked = &.{}, .recalled = true }}, now));
+    try std.testing.expect(!cameBack(&.{}, now));
+}
+
+test "a recheck keeps a delete only when every kept answer still comes back and the deleted fact is gone" {
+    const asks = [_]Ask{
+        .{ .fact = 0, .question = "What is my sister called?" },
+        .{ .fact = 1, .question = "What colour do I like?" },
+        .{ .fact = 1, .question = "What colour do I like?", .thinking = true },
+        .{ .fact = 1, .question = "Which colour is my favourite?", .probe = true },
+        .{ .fact = 1, .question = "What is my preferred colour?", .probe = true },
+        .{ .fact = 2, .question = "What is my dog called?" },
+    };
+    const all: [asks.len]bool = @splat(true);
+    const kept = [_]bool{ false, true, true, true, true, true };
+    const none: [asks.len]bool = @splat(false);
+    try std.testing.expectEqual(@as(?Miss, null), judge(&asks, &all, &kept, &none, 3));
+    // the deleted fact still answers: kept back, unless the model as shipped says it too
+    const miss = judge(&asks, &all, &all, &none, 3).?;
+    try std.testing.expectEqual(@as(usize, 0), miss.fact);
+    try std.testing.expectEqual(@as(?usize, 0), miss.ask);
+    try std.testing.expectEqual(@as(?Miss, null), judge(&asks, &all, &all, &[_]bool{ true, false, false, false, false, false }, 3));
+    // a kept fact's thinking-on answer stops coming back
+    const thought = judge(&asks, &all, &[_]bool{ false, true, false, true, true, true }, &none, 3).?;
+    try std.testing.expectEqual(@as(usize, 1), thought.fact);
+    try std.testing.expectEqual(@as(?usize, 2), thought.ask);
+    // an answer that did not
+
+According to the facility records in the text, what is the access code for the Oakhurst relay? End your reply with the code in double square brackets, like [[AB-0000]].

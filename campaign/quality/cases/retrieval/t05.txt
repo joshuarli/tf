@@ -1,0 +1,2583 @@
+You are reviewing a large native inference codebase. Below are consecutive excerpts from several source files, each introduced by a line of the form ===== path =====. Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text.
+
+===== zig/src/server/slide_correction_source.zig =====
+//! Corrections target a shipped belief, never an answer supplied by another pocket fact.
+const std = @import("std");
+const reads = @import("slide_correction_ask.zig");
+const correction = @import("slide_correction.zig");
+const teach = @import("slide_lesson.zig");
+const errors = @import("errors.zig");
+const Server = @import("server.zig").Server;
+
+/// Refuse before training, naming the facts: their later deletion must not invalidate an old-answer reference.
+pub fn independent(srv: *Server, cx: *errors.Cx, h: teach.Held, old: []const u8, ids: []const u32, gone: anytype) !void {
+    const base = try reads.base(srv, cx, h.question, h.context, gone);
+    if (!std.mem.eql(u8, base.finish_reason, "stop")) return error.CorrectionReferenceIncomplete;
+    const changed = !std.mem.eql(u32, ids, try reads.ids(cx.a, base));
+    const facts = try srv.slide.snapshot(cx.a);
+    var names: std.ArrayList(u8) = .empty;
+    for (facts) |f| {
+        if (f.state != .learned or f.neurons.len == 0) continue;
+        // A matching kept value is conservatively refused even if several pocket effects currently cancel.
+        var matches = correction.oldReturned(h.question, old, old, f.text);
+        for (f.answers) |x| matches = matches or correction.oldReturned(h.question, old, old, x.answer);
+        if (!changed and !matches) continue;
+        if (names.items.len > 0) try names.appendSlice(cx.a, ", ");
+        try names.print(cx.a, "fact {d} (\"{s}\")", .{ f.id, f.text });
+    }
+    if (!changed and names.items.len == 0) return;
+    if (names.items.len == 0) try names.appendSlice(cx.a, "pocket neurons missing from this graph");
+    return cx.fail(.request, "correction refused: its old answer depends on, or matches, {s}; delete those facts before correcting it", .{names.items});
+}
+
+
+===== zig/src/metal/sync.zig =====
+//! MTLSharedEvent: a 64-bit counter both the host and the GPU can signal and wait on.
+const objc = @import("objc.zig");
+
+const Id = objc.Id;
+
+pub const SharedEvent = struct {
+    id: Id,
+
+    pub fn value(self: SharedEvent) u64 {
+        return objc.msg(u64, self.id, "signaledValue", .{});
+    }
+
+    /// Host signal: releases GPU work waiting for `v` or less.
+    pub fn set(self: SharedEvent, v: u64) void {
+        objc.msg(void, self.id, "setSignaledValue:", .{v});
+    }
+
+    /// Block until the value reaches `v`; false on timeout.
+    pub fn wait(self: SharedEvent, v: u64, timeout_ms: u64) bool {
+        return objc.msg(bool, self.id, "waitUntilSignaledValue:timeoutMS:", .{ v, timeout_ms });
+    }
+
+    pub fn deinit(self: SharedEvent) void {
+        objc.release(self.id);
+    }
+};
+
+/// MTLEvent: a GPU-only counter that orders command buffers, also across queues; no host access, cheaper than shared.
+pub const Event = struct {
+    id: Id,
+
+    pub fn deinit(self: Event) void {
+        objc.release(self.id);
+    }
+};
+
+
+===== zig/src/families/hy4_flash/index_cuda.zig =====
+//! Hy4-flash's CUDA compressed indexer: cache token keys, pool closed groups, rank them, keep 511 plus its own.
+const std = @import("std");
+const cuda = @import("cuda");
+const mla = @import("mla_cuda.zig");
+const rotary = @import("rope.zig");
+const recall = @import("index_recall.zig");
+const recall_cuda = @import("index_recall_cuda.zig");
+const groups = @import("index_groups.zig");
+
+pub const heads = recall.heads;
+pub const width = recall.width;
+pub const nope = width - 2 * rotary.pairs;
+pub const budget_groups: u32 = 512;
+
+/// Device weights: BF16 projections and norm, FP32 pooling parameters.
+pub const Weights = struct {
+    token_keys: u64, // [128, hidden]
+    token_norm: u64, // [128]
+    query: u64, // [16 * 128, q_rank]
+    head_weights: u64, // [16, hidden]
+    values: u64, // f32 [128, 128]
+    gates: u64, // f32 [128, 128]
+    bias: u64, // f32 [4, 128]
+    norm: u64, // f32 [128]
+};
+
+pub const Indexer = struct {
+    pool: cuda.Module,
+    groups_fn: cuda.Function,
+    select_kernels: recall_cuda.Kernels,
+
+    pub fn load(driver: *const cuda.Driver) !Indexer {
+        if (!cuda.kernels.available) return error.BuiltWithoutKernels;
+        var pool = try cuda.Module.load(driver, cuda.kernels.hy4_indexpool);
+        errdefer pool.unload();
+        return .{
+            .pool = pool,
+            .groups_fn = try pool.function("tf_hy4_index_groups"),
+            .select_kernels = try recall_cuda.Kernels.load(driver),
+        };
+    }
+
+    pub fn deinit(self: *Indexer) void {
+        self.select_kernels.deinit();
+        self.pool.unload();
+        self.* = undefined;
+    }
+
+    pub const Keys = struct {
+        hidden: u64, // BF16 [gemm_rows, hidden], zero past the active rows
+        gemm_rows: usize, // fixed per lane class so cuBLASLt keeps one reduction order
+        count: usize,
+        projected: u64, // BF16 [gemm_rows, 128]
+        norm_tmp: u64,
+        staged: u64, // BF16 [gemm_rows, 128]
+        first_slot: usize,
+    };
+
+    /// Normalized BF16 token keys of the active rows into contiguous cache slots from `first_slot`.
+    pub fn cacheKeys(_: Indexer, s: cuda.Stream, gemm: *cuda.vit.Gemms, norms: *const cuda.norms.Norms, w: Weights, b: Keys, cache: cuda.DeviceBuffer, hidden_size: usize, eps: f32) !void {
+        if (b.count == 0 or b.count > b.gemm_rows) return error.BadHy4IndexRows;
+        try gemm.run(s, b.hidden, w.token_keys, b.projected, b.gemm_rows, width, hidden_size, .bf16);
+        try norms.addRmsTail(s, b.projected, null, w.token_norm, b.norm_tmp, b.staged, null, b.gemm_rows, width, eps, .{ .round = true });
+        try cache.copyFrom(b.first_slot * width * 2, b.staged, b.count * width * 2, s.handle);
+    }
+
+    /// Pool, normalize and rotate `count` closed groups from `first_group` (positions: each group's first token).
+    pub fn poolGroups(self: Indexer, s: cuda.Stream, project: mla.Projections, w: Weights, cache: u64, arena: u64, first_group: u32, count: u32, positions: u64, table: u64, p: rotary.Parameters, eps: f32) !void {
+        if (count == 0) return;
+        var args: cuda.Args = .{};
+        inline for (.{ cache, w.values, w.gates, w.bias, w.norm, arena, first_group, eps }) |x| args.add(x);
+        try cuda.launch.launch(self.groups_fn, .{ .grid = .{ .x = count }, .block = .{ .x = width } }, s, &args);
+        try project.rotaryTable(s, positions, table, count, p);
+        const rope_base = arena + (@as(u64, first_group) * width + nope) * 2;
+        try project.rotate(s, rope_base, table, rope_base, .{ .rows = count, .heads = 1, .input_stride = width, .output_stride = width });
+    }
+
+    pub const Select = struct {
+        q_resid: u64, // BF16 [gemm_rows, q_rank], the q_a_layernorm output
+        hidden: u64, // BF16 [gemm_rows, hidden]
+        gemm_rows: usize,
+        positions: u64, // i32 [rows, 3]
+        table: u64, // BF16 [rows, 64]
+        query: u64, // BF16 [rows, 16 * 128]
+        head_weights: u64, // BF16 [rows, 16]
+        arena: u64,
+        rows: u64, // recall.Row [rows]
+        scores: u64,
+        tokens: u64,
+        counts: u64,
+    };
+
+    /// Rotated query heads, head weights, closed-group scores and the recalled slot list of each row.
+    pub fn select(self: Indexer, s: cuda.Stream, gemm: *cuda.vit.Gemms, project: mla.Projections, w: Weights, b: Select, shape: recall.Shape, q_rank: usize, hidden_size: usize, p: rotary.Parameters) !void {
+        if (shape.rows > b.gemm_rows) return error.BadHy4IndexRows;
+        try gemm.run(s, b.q_resid, w.query, b.query, b.gemm_rows, heads * width, q_rank, .bf16);
+        try project.rotaryTable(s, b.positions, b.table, shape.rows, p);
+        const rope_base = b.query + nope * 2;
+        try project.rotate(s, rope_base, b.table, rope_base, .{ .rows = shape.rows, .heads = heads, .input_stride = width, .output_stride = width });
+        try gemm.run(s, b.hidden, w.head_weights, b.head_weights, b.gemm_rows, heads, hidden_size, .bf16);
+        try self.select_kernels.run(s, .{
+            .query = b.query,
+            .keys = b.arena,
+            .weights = b.head_weights,
+            .rows = b.rows,
+            .scores = b.scores,
+            .tokens = b.tokens,
+            .counts = b.counts,
+        }, shape);
+    }
+};
+
+/// Closed groups a pass of `count` new slots after `previous` cached slots makes poolable.
+pub fn closedBy(previous: usize, count: usize) !groups.Append {
+    return groups.append(previous, count);
+}
+
+
+===== zig/src/families/hy4_flash/moe_exl3_cuda.zig =====
+//! Standard MUL1 routed experts for the Hy4 latent branch.
+const std = @import("std");
+const cuda = @import("cuda");
+const weights = @import("exl3_weights.zig");
+const exl3 = cuda.exl3_experts;
+const upload = cuda.exl3_upload;
+
+pub const Route = struct {
+    hidden: u64,
+    width: usize,
+    router: u64,
+    bias: u64,
+    logits: u64,
+    picks: u64,
+    probabilities: u64,
+    scale: f32,
+    output: u64,
+};
+
+pub const Routed = struct {
+    layer: exl3.Layer,
+    scratch: exl3.Scratch,
+
+    pub fn init(
+        owner: *upload.Uploader,
+        experts: []const weights.Expert,
+        latent: usize,
+        intermediate: usize,
+        rows: usize,
+        slots: usize,
+        limit: f32,
+    ) !Routed {
+        if (experts.len == 0 or experts.len > 512 or rows == 0 or slots == 0 or slots > 32 or
+            rows > 16384 / slots or !std.math.isFinite(limit) or limit <= 0)
+            return error.BadHy4ExpertShape;
+        _ = try exl3.plan(latent, intermediate, true);
+        _ = try exl3.plan(intermediate, latent, false);
+        const a = owner.gpa;
+        const projections = try a.alloc(upload.Proj, 3 * experts.len);
+        defer a.free(projections);
+        const gate = projections[0..experts.len];
+        const up = projections[experts.len..][0..experts.len];
+        const down = projections[2 * experts.len ..];
+        for (experts, gate, up, down) |e, *g, *u, *d| {
+            g.* = try projection(e.gate, latent, intermediate);
+            u.* = try projection(e.up, latent, intermediate);
+            d.* = try projection(e.down, intermediate, latent);
+        }
+        const mark = owner.bufs.items.len;
+        errdefer owner.rollback(mark);
+        const layer = try upload.layer(owner, a, latent, intermediate, .mul1, limit, 0, gate, up, down);
+        const size = try exl3.scratchBytes(layer, rows, slots);
+        const space = try a.alloc(u8, size);
+        defer a.free(space);
+        @memset(space, 0);
+        const base = try owner.dev(space);
+        return .{ .layer = layer, .scratch = try exl3.scratch(base, layer, rows, slots) };
+    }
+
+    pub fn forward(
+        self: Routed,
+        kernels: *const exl3.Experts,
+        router: *const cuda.route_rows.RouteRows,
+        glue: *const cuda.moe_glue.MoeGlue,
+        stream: cuda.Stream,
+        latent: u64,
+        rows: usize,
+        route: Route,
+    ) !void {
+        const slots = self.scratch.slots;
+        if (rows == 0 or rows > self.scratch.rows or slots > self.layer.experts or
+            route.width == 0 or !std.math.isFinite(route.scale) or route.scale <= 0)
+            return error.BadHy4Route;
+        try router.logits(stream, route.hidden, route.width, route.router, route.logits, rows, route.width, self.layer.experts);
+        try glue.topk(stream, route.logits, route.bias, .{
+            .experts = self.layer.experts,
+            .topk = slots,
+            .score = true,
+            .shared = false,
+            .normalize = true,
+            .scale = route.scale,
+        }, route.picks, route.probabilities, rows);
+        const output = try self.run(kernels, stream, latent, route.picks, rows);
+        try glue.combine(stream, output, .f32, route.probabilities, route.output, .f32, rows, slots, self.layer.dims);
+    }
+
+Facility record ZX-55: the access code for the Norwood pump station is PL-5317. The Norwood pump station was inspected on 14 March.
+
+
+
+    pub fn run(self: Routed, kernels: *const exl3.Experts, stream: cuda.Stream, x: u64, picks: u64, rows: usize) !u64 {
+        if (rows == 0 or rows > self.scratch.rows) return error.BadHy4ExpertRows;
+        try kernels.runSlots(stream, self.layer, x, self.layer.dims, .bf16, picks, rows, self.scratch);
+        return self.scratch.y;
+    }
+};
+
+fn projection(p: weights.Projection, k: usize, n: usize) !upload.Proj {
+    if (p.geometry.k() != k or p.geometry.n() != n) return error.BadHy4ExpertShape;
+    return .{
+        .trellis = p.parts.trellis.bytes,
+        .suh = p.parts.suh.bytes,
+        .svh = p.parts.svh.bytes,
+        .k2 = p.geometry.k2(),
+    };
+}
+
+
+===== zig/src/families/qwen3_5/cuda_dspine_weights.zig =====
+//! DSpine's code bridge on the device: read, gate, sender and write projections in affine-4, codebook and TG in bf16.
+const std = @import("std");
+const cuda = @import("cuda");
+const core = @import("core");
+const engine = @import("cuda_engine.zig");
+const dw = @import("cuda_draft_weights.zig");
+const precision = @import("cuda_draft_precision.zig");
+const Config = @import("cuda_draft_config.zig").Config;
+
+const Affine4 = cuda.qlinear.Affine4;
+const DeviceBuffer = cuda.DeviceBuffer;
+const aligned = engine.aligned;
+const prefix = "selected_prefix_bridge.";
+
+pub const Bridge = struct {
+    read: [8]Affine4 = undefined, // layer i's read: hidden -> code
+    write: [8]Affine4 = undefined, // layer i's feature write: rank -> hidden
+    gate: Affine4 = undefined, // code -> rank (the row's own gate term)
+    pv: Affine4 = undefined, // code -> [predecessor gate | value] (the sender's terms), 2 x rank
+    gate_b: u64 = 0, // gate.bias, rank bf16
+    codebook: u64 = 0, // (vocab, code) bf16
+    tg: u64 = 0, // (vocab, rank) bf16: W_write[last]^T (final_norm * head row)
+    arena: DeviceBuffer,
+    arena_at: usize = 0,
+
+    pub fn alloc(b: *Bridge, bytes: usize) !u64 {
+        const at = aligned(b.arena_at);
+        if (at + bytes > b.arena.len) return error.ArenaExhausted;
+        b.arena_at = at + bytes;
+        return b.arena.ptr + at;
+    }
+
+    pub fn deinit(b: *Bridge) void {
+        b.arena.free();
+    }
+};
+
+/// Device bytes of everything `load` keeps.
+pub fn total(c: Config) usize {
+    const L = c.layers;
+    return L * dw.packedBytes(c.code, c.hidden) + L * dw.packedBytes(c.hidden, c.rank) + dw.packedBytes(c.rank, c.code) +
+        dw.packedBytes(2 * c.rank, c.code) + aligned(c.rank * 2) + aligned(c.vocab * c.code * 2) + aligned(c.vocab * c.rank * 2);
+}
+
+fn version(ck: *core.Checkpoint, name: []const u8) !void {
+    const t = try ck.expect(name, .i64, &.{});
+    if (std.mem.readInt(i64, t.bytes[0..8], .little) != 1) return error.UnsupportedDraftConfig;
+}
+
+/// The bridge's tensors from `dir`; `transpose` (tf_q35d_transpose) turns the target head's TG rows into the table.
+pub fn load(gpa: std.mem.Allocator, io: std.Io, e: *engine.Engine, dir: []const u8, c: Config, transpose: cuda.Function) !Bridge {
+    var ck = try core.Checkpoint.openModel(gpa, io, dir);
+    defer core.checkpoint.cache.close(&ck);
+    for ([_][]const u8{ "draft_block_causal_version", "last_write_refine_version", prefix ++ "independent_write_version", prefix ++ "terminal_disabled_version" }) |n| try version(&ck, n);
+    var b: Bridge = .{ .arena = try DeviceBuffer.alloc(e.d, total(c)) };
+    errdefer b.arena.free();
+    const most = @max(dw.rawBytes(c.code, c.hidden), dw.rawBytes(c.hidden, c.rank), dw.rawBytes(2 * c.rank, c.code));
+    var stage = try DeviceBuffer.alloc(e.d, most);
+    defer stage.free();
+    const L = c.layers;
+    const early = try ck.expect(prefix ++ "early_read_weights", .bf16, &.{ L - 1, c.code, c.hidden });
+    const last = try ck.expect(prefix ++ "read_weight", .bf16, &.{ c.code, c.hidden });
+    const writes = try ck.expect(prefix ++ "feature_write_weights", .bf16, &.{ L, c.hidden, c.rank });
+    const one_read = c.code * c.hidden;
+    const one_write = c.hidden * c.rank;
+    for (0..L) |i| {
+        const rows = if (i + 1 < L) std.mem.bytesAsSlice(u16, early.bytes)[i * one_read ..][0..one_read] else std.mem.bytesAsSlice(u16, last.bytes);
+        b.read[i] = try dw.linearRows(gpa, e, &stage, &b, rows, c.code, c.hidden);
+        b.write[i] = try dw.linearRows(gpa, e, &stage, &b, std.mem.bytesAsSlice(u16, writes.bytes)[i * one_write ..][0..one_write], c.hidden, c.rank);
+    }
+    const gate = try ck.expect(prefix ++ "gate.weight", .bf16, &.{ c.rank, c.code });
+    b.gate = try dw.linearRows(gpa, e, &stage, &b, std.mem.bytesAsSlice(u16, gate.bytes), c.rank, c.code);
+    const pv = try gpa.alloc(u16, 2 * c.rank * c.code);
+    defer gpa.free(pv);
+    for ([_][]const u8{ prefix ++ "predecessor_gate.weight", prefix ++ "prev.weight" }, 0..) |name, i| {
+        const t = try ck.expect(name, .bf16, &.{ c.rank, c.code });
+        @memcpy(pv[i * c.rank * c.code ..][0 .. c.rank * c.code], std.mem.bytesAsSlice(u16, t.bytes));
+    }
+    b.pv = try dw.linearRows(gpa, e, &stage, &b, pv, 2 * c.rank, c.code);
+    const bias = try ck.expect(prefix ++ "gate.bias", .bf16, &.{c.rank});
+    b.gate_b = try b.alloc(bias.bytes.len);
+    try b.arena.upload(b.gate_b - b.arena.ptr, bias.bytes);
+    const book = try ck.expect(prefix ++ "codebook", .bf16, &.{ c.vocab, c.code });
+    b.codebook = try b.alloc(book.bytes.len);
+    try b.arena.upload(b.codebook - b.arena.ptr, book.bytes);
+    b.tg = try b.alloc(c.vocab * c.rank * 2);
+    const norm = try ck.expect("norm.weight", .bf16, &.{c.hidden});
+    const wl = std.mem.bytesAsSlice(u16, writes.bytes)[(L - 1) * one_write ..][0..one_write];
+    try table(gpa, e, c, std.mem.bytesAsSlice(u16, norm.bytes), wl, b.tg, transpose);
+    return b;
+}
+
+fn bf16(h: u16) f32 {
+    return @bitCast(@as(u32, h) << 16);
+}
+
+/// TG[v][k] = head row v . bf16(norm * W[:, k]): the target head over `rank` rows, transposed to vocab rows.
+fn table(gpa: std.mem.Allocator, e: *engine.Engine, c: Config, norm: []align(1) const u16, w: []align(1) const u16, out: u64, transpose: cuda.Function) !void {
+    const rows = try gpa.alloc(u16, c.rank * c.hidden);
+    defer gpa.free(rows);
+    for (0..c.rank) |k| for (0..c.hidden) |h| {
+        rows[k * c.hidden + h] = core.bf16_round.bits(bf16(norm[h]) * bf16(w[h * c.rank + k]));
+    };
+    var x = try DeviceBuffer.alloc(e.d, rows.len * 2 + c.rank * (c.hidden / 64) * 4);
+    defer x.free();
+    try x.upload(0, std.mem.sliceAsBytes(rows));
+    var logits = try DeviceBuffer.alloc(e.d, c.rank * c.vocab * 2);
+    defer logits.free();
+    const xs = x.ptr + rows.len * 2;
+    try precision.project(e, e.head, x.ptr, xs, logits.ptr, c.rank, .prompt, precision.dflash_projection_prompt_cutoff);
+    try e.run(transpose, .{ (c.vocab + 31) / 32, (c.rank + 31) / 32, 1 }, .{ 32, 8, 1 }, .{ logits.ptr, out, @as(c_int, @intCast(c.rank)), @as(c_int, @intCast(c.vocab)) });
+    try e.stream.synchronize();
+}
+
+
+===== zig/src/families/glm/cuda_prompt_trace.zig =====
+//! Paired same-stream events describe one prompt chunk without serializing its compute and transport streams.
+const std = @import("std");
+const cuda = @import("cuda");
+pub const Stage = enum {
+    control_reduce,
+    token_gather,
+    cache_write,
+    prompt_score,
+    drafter,
+    replicated_qakva,
+    projections,
+    index_update,
+    index_score,
+    index_select,
+    mla,
+    kda,
+    ffn,
+    router,
+    experts,
+    shared_expert,
+    output_projection,
+    glue,
+    partials,
+    glued,
+    all_gather,
+    wait_filled,
+    wait_gathered,
+    wait_glues,
+    wait_shared,
+    embed,
+    head,
+    gate,
+    draw,
+    mtp,
+    commit,
+};
+pub const Site = enum { chunk, mixer, ffn };
+pub const Meta = struct { rank: usize, slot: u32, start: usize, rows: usize };
+const Pair = struct {
+    first: cuda.Event,
+    last: cuda.Event,
+    stream: cuda.Stream = undefined,
+    stage: Stage = undefined,
+    layer: ?usize = null,
+    piece: ?usize = null,
+    site: Site = .chunk,
+    complete: bool = false,
+    ms: f32 = 0,
+};
+pub const Scope = struct {
+    trace: ?*Trace = null,
+    index: usize = 0,
+    pub inline fn end(s: Scope) void {
+        const t = s.trace orelse return;
+        const p = &t.events[s.index];
+        if (p.complete) {
+            t.invalid = true;
+            return;
+        }
+        p.last.record(p.stream) catch {
+            t.invalid = true;
+            return;
+        };
+        p.complete = true;
+    }
+};
+pub const Trace = struct {
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    events: []Pair,
+    n: usize = 0,
+    meta: Meta = undefined,
+    layer: ?usize = null,
+    piece: ?usize = null,
+    site: Site = .chunk,
+    usable: bool = true,
+    active: bool = false,
+    invalid: bool = false,
+    t0: i96 = 0,
+    pub fn init(gpa: std.mem.Allocator, io: std.Io, d: *const cuda.Driver, capacity: usize) !*Trace {
+        return initWith(gpa, io, d, capacity, cuda.Event.init);
+    }
+    pub fn initWith(gpa: std.mem.Allocator, io: std.Io, d: *const cuda.Driver, capacity: usize, comptime create: anytype) !*Trace {
+        const t = try gpa.create(Trace);
+        errdefer gpa.destroy(t);
+        const events = try gpa.alloc(Pair, capacity);
+        errdefer gpa.free(events);
+        var made: usize = 0;
+        errdefer for (events[0..made]) |*p| {
+            p.first.deinit();
+            p.last.deinit();
+        };
+        for (events) |*p| {
+            p.* = .{ .first = try create(d, true), .last = undefined };
+            p.last = create(d, true) catch |err| {
+                p.first.deinit();
+                return err;
+            };
+            made += 1;
+        }
+        t.* = .{ .gpa = gpa, .io = io, .events = events };
+        return t;
+    }
+    pub fn deinit(t: *Trace) void {
+        for (t.events) |*p| {
+            p.first.deinit();
+            p.last.deinit();
+        }
+        t.gpa.free(t.events);
+        t.gpa.destroy(t);
+    }
+    pub fn begin(t: *Trace, meta: Meta) void {
+        t.n = 0;
+        t.invalid = false;
+        t.active = true;
+        t.meta = meta;
+        t.layer = null;
+        t.piece = null;
+        t.site = .chunk;
+        t.t0 = std.Io.Clock.awake.now(t.io).toNanoseconds();
+    }
+    pub fn span(t: *Trace, stream: cuda.Stream, stage: Stage) Scope {
+        if (!t.active) return .{};
+        if (t.n == t.events.len) {
+            t.invalid = true;
+            return .{};
+        }
+        const index = t.n;
+        t.n += 1;
+        const p = &t.events[index];
+        p.stream = stream;
+        p.stage = stage;
+        p.layer = t.layer;
+        p.piece = t.piece;
+        p.site = t.site;
+        p.complete = false;
+        p.first.record(stream) catch {
+            t.invalid = true;
+            return .{};
+        };
+        return .{ .trace = t, .index = index };
+    }
+    pub fn collect(t: *Trace) !void {
+        if (!t.active or t.invalid or t.n == 0) return error.InvalidPromptProfile;
+        for (t.events[0..t.n]) |p| {
+            if (!p.complete) return error.IncompletePromptProfile;
+            try p.last.synchronize();
+        }
+        for (t.events[0..t.n]) |*p| {
+            p.ms = try cuda.Event.elapsedMs(p.first, p.last);
+            if (!std.math.isFinite(p.ms) or p.ms < 0) return error.InvalidPromptProfile;
+        }
+    }
+    pub fn drainIncomplete(t: *Trace) !void {
+        for (t.events[0..t.n]) |*p| if (!p.complete) {
+            t.invalid = true;
+            try p.last.record(p.stream);
+            p.complete = true;
+        };
+        for (t.events[0..t.n]) |p| try p.last.synchronize();
+    }
+    pub fn finish(t: *Trace) void {
+        if (!t.active) return;
+        defer t.active = false;
+        const wall: f64 = @as(f64, @floatFromInt(std.Io.Clock.awake.now(t.io).toNanoseconds() - t.t0)) / 1e6;
+        if (t.invalid or blk: {
+            for (t.events[0..t.n]) |p| if (!p.complete) break :blk true;
+            break :blk false;
+        }) t.drainIncomplete() catch {
+            t.usable = false;
+        };
+        t.collect() catch |err| {
+            std.log.warn("glm prompt invalid rank={d} slot={d} start={d} rows={d} reason={s}", .{ t.meta.rank, t.meta.slot, t.meta.start, t.meta.rows, @errorName(err) });
+            return;
+        };
+        std.log.info("glm prompt chunk rank={d} slot={d} start={d} rows={d} wall_ms={d:.4} spans={d}", .{ t.meta.rank, t.meta.slot, t.meta.start, t.meta.rows, wall, t.n });
+        for (t.events[0..t.n]) |p| std.log.info("glm prompt stage rank={d} slot={d} start={d} rows={d} layer={?d} piece={?d} site={s} stage={s} stream={s} ms={d:.4}", .{ t.meta.rank, t.meta.slot, t.meta.start, t.meta.rows, p.layer, p.piece, @tagName(p.site), @tagName(p.stage), if (p.stream.handle == t.events[0].stream.handle) "main" else "side", p.ms });
+    }
+};
+
+
+===== zig/src/server/images_progress.zig =====
+//! One image job whose step observer feeds SSE; request storage stays owned until its finished event.
+const api = @import("engine_api");
+const errors = @import("errors.zig");
+const Server = @import("server.zig").Server;
+const Conn = @import("http_conn.zig").Conn;
+const Queue = @import("image_progress_queue.zig").Queue;
+pub const Writer = @import("image_progress_wire.zig").Writer;
+
+/// The refusal for an engine that would not take a picture, the same for whole replies and streams; busy is counted.
+pub fn submitRefused(srv: *Server, cx: *errors.Cx, e: api.ImageSubmitError) errors.Refused {
+    return switch (e) {
+        error.Busy => @import("refusals.zig").count(srv, .engine_busy, cx.fail(.capacity, "the engine is busy; retry shortly", .{})),
+        error.Closed => cx.fail(.capacity, "the scheduler is closed", .{}),
+        error.InvalidRequest => cx.fail(.request, "the engine refused this image request's prompt, size or steps", .{}),
+        error.Unsupported => cx.fail(.capacity, "this model does not serve images", .{}),
+    };
+}
+
+/// Streams one picture's steps and PNG; false: the client left or a write failed, and the engine has finished.
+pub fn generate(srv: *Server, c: *Conn, cx: *errors.Cx, request: api.ImageRequest, interval: u32, index: usize, writer: *Writer) errors.Refused!bool {
+    if (c.peerGone()) return false;
+    var queue: Queue = .{ .io = srv.io, .gpa = srv.gpa, .steps = request.steps, .preview_interval = interval };
+    defer queue.deinit();
+    var owned = request;
+    owned.observer = queue.observer();
+    const id = srv.next_id.fetchAdd(1, .monotonic);
+    if (srv.keepalive) |k| k.begin();
+    defer if (srv.keepalive) |k| k.end();
+    srv.engine.submitImage(id, &owned, queue.sink()) catch |e| return submitRefused(srv, cx, e);
+    writer.start() catch {
+        queue.cancelAndWait(srv.engine, id);
+        return false;
+    };
+    while (true) {
+        const next = queue.next();
+        defer if (next.frame) |frame| queue.freeFrame(frame);
+        if (next.problem) |why| {
+            queue.cancelAndWait(srv.engine, id);
+            return cx.fail(.server, "{s}", .{why});
+        }
+        if (c.peerGone()) {
+            queue.cancelAndWait(srv.engine, id);
+            return false;
+        }
+        if (next.frame) |frame| {
+            writer.progress(index, request.seed, frame.step, frame.total) catch {
+                queue.cancelAndWait(srv.engine, id);
+                return false;
+            };
+            if (frame.preview) |preview| writer.preview(index, request.seed, frame.step, frame.total, interval, preview) catch {
+                queue.cancelAndWait(srv.engine, id);
+                return false;
+            };
+            continue;
+        }
+        if (!next.finished) continue;
+        request.result.reason = next.reason;
+        if (next.reason == .failed)
+            return cx.fail(.server, "{s}", .{if (next.message.len > 0) next.message else "the image generation failed"});
+        if (next.reason == .cancelled) return cx.fail(.capacity, "the image generation was cancelled", .{});
+        writer.completed(index, request.seed, request.png.items[0..@min(request.result.bytes, request.png.items.len)]) catch return false;
+        return true;
+    }
+}
+
+
+===== zig/src/families/deepseek_v41/phases_timed.zig =====
+//! Phase timers around the lanes' contract: a `Target` and a `Pass` that time their inner calls and pass them through.
+
+const std = @import("std");
+const lanes = @import("lanes");
+const iface = @import("draft/iface.zig");
+const ph = @import("phases.zig");
+
+pub const TimedTarget = struct {
+    inner: iface.Target,
+    p: *ph.Phases,
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    /// rows of the last window not kept yet
+    pending: usize = 0,
+
+    pub fn target(t: *TimedTarget) iface.Target {
+        return .{ .ptr = t, .vtable = &vtable };
+    }
+
+    const vtable: iface.Target.VTable = .{ .prefill = prefill, .window = window, .keep = keep, .taps = taps, .release = release, .admit = admit, .begin = begin, .piece = piece, .finish = finish, .tail = tail, .pieces = pieces, .replays = replays, .warm = warm, .images = images, .resumed = resumed };
+
+    fn images(p: *anyopaque, slot: u32, list: []const lanes.stream.Image) anyerror!void {
+        return self(p).inner.setImages(slot, list);
+    }
+
+    fn resumed(p: *anyopaque, slot: u32) u64 {
+        return self(p).inner.resumedRows(slot);
+    }
+
+    fn admit(p: *anyopaque, slot: u32, max_new: u64) void {
+        self(p).inner.admit(slot, max_new);
+    }
+
+    fn begin(p: *anyopaque, slot: u32, ids: []const u32) anyerror!iface.Target.Begun {
+        const t = self(p);
+        const tm = ph.start(t.p, .prefill);
+        defer tm.stop();
+        return t.inner.begin(slot, ids);
+    }
+
+    fn replays(p: *anyopaque, list: []const iface.Target.Final) anyerror!void {
+        const t = self(p);
+        const tm = ph.start(t.p, .prefill);
+        defer tm.stop();
+        return t.inner.runReplays(list);
+    }
+
+    fn pieces(p: *anyopaque, list: []const iface.Target.Piece) anyerror!void {
+        const t = self(p);
+        const tm = ph.start(t.p, .prefill);
+        defer tm.stop();
+        return t.inner.runPieces(list);
+    }
+
+    fn tail(p: *anyopaque, slot: u32, ids: []const u32, sampling: ?lanes.Sampling, draw: u64) anyerror!?u32 {
+        const t = self(p);
+        const tm = ph.start(t.p, .prefill);
+        defer tm.stop();
+        return t.inner.tail(slot, ids, sampling, draw);
+    }
+
+    fn warm(p: *anyopaque, asks: []const iface.Warm) void {
+        self(p).inner.warm(asks);
+    }
+
+    fn piece(p: *anyopaque, slot: u32, ids: []const u32, start: u64, end: u64, save: bool) anyerror!void {
+        const t = self(p);
+        const tm = ph.start(t.p, .prefill);
+        defer tm.stop();
+        return t.inner.piece(slot, ids, start, end, save);
+    }
+
+    fn finish(p: *anyopaque, slot: u32, ids: []const u32, sampling: ?lanes.Sampling, draw: u64) anyerror!u32 {
+        const t = self(p);
+        const tm = ph.start(t.p, .prefill);
+        defer tm.stop();
+        return t.inner.finish(slot, ids, sampling, draw);
+    }
+
+    fn self(p: *anyopaque) *TimedTarget {
+        return @ptrCast(@alignCast(p));
+    }
+
+    fn prefill(p: *anyopaque, slot: u32, ids: []const u32, sampling: ?lanes.Sampling, draw: u64) anyerror!u32 {
+        const t = self(p);
+        const tm = ph.start(t.p, .prefill);
+        defer tm.stop();
+        return t.inner.prefill(slot, ids, sampling, draw);
+    }
+
+    fn window(p: *anyopaque, segments: []const iface.Segment, choices: [][]u32) anyerror!void {
+        const t = self(p);
+        if (t.pending > 0) t.p.round(t.gpa, t.io, t.pending);
+        var rows: usize = 0;
+        for (segments) |s| rows += s.tokens.len;
+        t.pending = rows;
+        const tm = ph.start(t.p, .window);
+        defer tm.stop();
+        return t.inner.window(segments, choices);
+    }
+
+    fn keep(p: *anyopaque, slot: u32, path: []const u32) anyerror!void {
+        const t = self(p);
+        {
+            const tm = ph.start(t.p, .commit);
+            defer tm.stop();
+            try t.inner.keep(slot, path);
+        }
+        t.p.round(t.gpa, t.io, path.len);
+        t.pending = 0;
+    }
+
+    fn taps(p: *anyopaque, slot: u32) iface.Taps {
+        return self(p).inner.taps(slot);
+    }
+
+    fn release(p: *anyopaque, slot: u32) void {
+        const t = self(p);
+        t.inner.release(slot);
+        t.pending = 0;
+        t.p.flush(t.gpa, t.io);
+    }
+};
+
+pub const TimedPass = struct {
+    inner: iface.Pass,
+    p: *ph.Phases,
+
+    pub fn pass(t: *TimedPass) iface.Pass {
+        return .{ .ptr = t, .vtable = if (t.inner.vtable.begin != null) &vtable_begin else &vtable };
+    }
+
+    const vtable: iface.Pass.VTable = .{ .ingest = ingest, .propose = propose, .reset = reset, .markov = markov };
+    const vtable_begin: iface.Pass.VTable = .{ .ingest = ingest, .propose = propose, .reset = reset, .markov = markov, .begin = begin, .collect = collect, .arm = arm };
+
+    fn self(p: *anyopaque) *TimedPass {
+        return @ptrCast(@alignCast(p));
+    }
+
+    fn ingest(p: *anyopaque, slot: u32, start: u64, taps: iface.Taps, rows: []const u32) anyerror!void {
+        const t = self(p);
+        const tm = ph.start(t.p, .draft);
+        defer tm.stop();
+        return t.inner.ingest(slot, start, taps, rows);
+    }
+
+    fn propose(p: *anyopaque, asks: []const iface.Ask, out: []iface.Proposal) anyerror!void {
+        const t = self(p);
+        const tm = ph.start(t.p, .@"draft.pass");
+        defer tm.stop();
+        return t.inner.propose(asks, out);
+    }
+
+    /// The speculative pass as the inner pass gives it: launched under `spec`, collected under `draft.pass`.
+    fn begin(p: *anyopaque, asks: []const iface.Ask) anyerror!void {
+        const t = self(p);
+        const tm = ph.start(t.p, .spec);
+        defer tm.stop();
+        const f = t.inner.vtable.begin orelse return error.NoBegin;
+        return f(t.inner.ptr, asks);
+    }
+
+    fn collect(p: *anyopaque, out: []iface.Proposal) anyerror!void {
+        const t = self(p);
+        const tm = ph.start(t.p, .@"draft.pass");
+        defer tm.stop();
+        const f = t.inner.vtable.collect orelse return error.NoBegin;
+        return f(t.inner.ptr, out);
+    }
+
+    fn reset(p: *anyopaque, slot: u32) void {
+        self(p).inner.reset(slot);
+    }
+
+    fn arm(p: *anyopaque, slot: u32, start: u64, rows: u32, sampled: bool) void {
+        const t = self(p);
+        if (t.inner.vtable.arm) |f| f(t.inner.ptr, slot, start, rows, sampled);
+    }
+
+    fn markov(p: *anyopaque) ?@import("draft/dspark.zig").Markov {
+        return self(p).inner.markov();
+    }
+};
+
+
+===== zig/src/families/flashnext/backend.zig =====
+//! Isolated Flash Next sessions sharing target rounds and MTP command buffers.
+const std = @import("std");
+const lanes = @import("lanes");
+const fz = @import("replay.zig");
+const Engine = @import("engine.zig").Engine;
+const Session = @import("session.zig").Session;
+const meta = @import("batch_meta.zig");
+const forward = @import("batch_forward.zig");
+const snap = @import("snapshot.zig");
+const be = lanes.backend;
+const Stream = lanes.Stream;
+const Buf = fz.Buf;
+const mtl = @import("metal");
+const segments = @import("../../core/segments.zig");
+const slots = @import("slots.zig");
+const sample = @import("batch_sample.zig");
+const think = @import("think.zig");
+const batch_costs = @import("batch_costs.zig");
+const grammar = @import("grammar.zig");
+const fill = @import("prefill.zig");
+pub const decodeShare = fill.shareOf;
+const prompt_gpu = @import("prefill_metal.zig");
+const RoundTimes = @import("round_times.zig").RoundTimes;
+const batch_settle = @import("batch_settle.zig");
+const batch_draft = @import("batch_draft.zig");
+
+/// A stream's images through the host's tower: its prompt pass's rows and frame (in `a`), then their release.
+pub const Images = struct { ctx: *anyopaque, build: *const fn (ctx: *anyopaque, a: std.mem.Allocator, images: []const lanes.stream.Image, prompt_len: usize, from: usize) anyerror!*fz.vis_prompt.VisPrompt, release: *const fn (ctx: *anyopaque, p: *fz.vis_prompt.VisPrompt) void };
+
+pub const Backend = struct {
+    gpa: std.mem.Allocator,
+    e: *Engine,
+    primary: *fz.Model,
+    sessions: []Session,
+    by: std.AutoHashMapUnmanaged(*Stream, usize) = .empty,
+    filling: std.AutoHashMapUnmanaged(*Stream, fill.State) = .empty,
+    fill_grows: bool = false, // a prompt's steps beside decoders grow once it has waited (fill.besideRows)
+    hidden: Buf,
+    window_count: u64 = 0,
+    shared_count: u64 = 0,
+    chain_drafts: bool = false,
+    draft_calls: u64 = 0,
+    draft_waits: u64 = 0,
+    draft_seconds: f64 = 0,
+    lone_handoffs: u64 = 0, // lone streams the engine's rounds handed to the shared ones
+    sized: bool = false, // FLASHNEXT_SLOT_CONTEXTS set: sessions of several sizes; unset, every stream takes the first free one and none grows
+    grow: usize = std.math.maxInt(usize), // reply tokens a session must hold at admission past the prompt (the rest: move)
+    paused: std.ArrayList(*Stream) = .empty, // streams that outgrew their session and wait for a larger one to free
+    moves: u64 = 0,
+    serial_drafts: bool = false, // FZ_BATCH_MTP_SERIAL=1: each stream's drafts in their own command buffers
+    overlap: bool = true, // FZ_VERIFY_OVERLAP=0: verify on a serial encoder; else a concurrent one, the streams' recurrences without barriers between them
+    costs: ?batch_costs.Costs = null, // timeCosts: the lane allocator's prices
+    images: ?Images = null, // --vision: the tower's rows for a stream's images; null: an image stream fails
+    grammar: grammar.Masks, // structured output: the rounds' mask rows and first rows
+    unwrap_snapshot: ?*const fn (*anyopaque) *snap.State = null,
+    times: RoundTimes = .{}, // FZ_ROUND_TIMES=1: a shared round's phases
+    fence: ?mtl.counters.Fence = null, // orders a round's state copies before its forward in one command buffer
+    packed_drafts: batch_draft.State = .{}, // every stream's draft steps packed into one pass a step (FZ_BATCH_MTP_ROWS=0: off)
+
+    /// Sessions of the given capacities (the first, the engine's own, holds its whole window whatever is given).
+    pub fn init(gpa: std.mem.Allocator, e: *Engine, capacities: []const usize) !Backend {
+        if (capacities.len == 0 or capacities.len > fz.MAXR or e.r.tp != null) return error.BadBatchSlots;
+        const sessions = try gpa.alloc(Session, capacities.len);
+        errdefer gpa.free(sessions);
+        var made: usize = 0;
+        errdefer for (sessions[0..made]) |*s| s.deinit(gpa);
+        for (sessions, capacities, 0..) |*s, capacity, i| {
+            s.* = try Session.init(gpa, e, capacity, i == 0);
+            made += 1;
+        }
+        var masks = try grammar.Masks.init(e.r.device);
+        errdefer masks.deinit(gpa);
+        const hidden = try e.r.device.buffer(fz.MAXR * fz.WIDE * 2, fz.opts);
+        const env = struct {
+            fn on(name: [*:0]const u8) bool {
+                return if (std.c.getenv(name)) |v| v[0] == '1' else false;
+            }
+        };
+        return .{ .gpa = gpa, .e = e, .primary = e.m, .sessions = sessions, .hidden = .{ .b = hidden }, .grammar = masks, .chain_drafts = env.on("FZ_BATCH_MTP_CHAIN"), .serial_drafts = env.on("FZ_BATCH_MTP_SERIAL"), .overlap = if (std.c.getenv("FZ_VERIFY_OVERLAP")) |v| v[0] != '0' else true, .times = RoundTimes.init(), .fence = if (std.c.getenv("FZ_SETTLE_SYNC") == null) mtl.counters.Fence.init(e.r.device) catch null else null };
+    }
+
+    /// Times shared-round costs on the last free session, or leaves them unpriced when it cannot fit.
+    pub fn timeCosts(b: *Backend) !void {
+        return batch_costs.timeCosts(b);
+    }
+
+    pub fn deinit(b: *Backend) void {
+        b.packed_drafts.deinit(b.e.r);
+        if (b.fence) |f| f.deinit();
+        while (b.filling.count() > 0) {
+            var it = b.filling.keyIterator();
+            b.abortPrompt(it.next().?.*);
+        }
+        b.filling.deinit(b.gpa);
+        b.e.m = b.primary;
+        b.paused.deinit(b.gpa);
+        b.by.deinit(b.gpa);
+        for (b.sessions) |*s| s.deinit(b.gpa);
+        b.gpa.free(b.sessions);
+        b.hidden.b.deinit();
+        b.grammar.deinit(b.gpa);
+    }
+
+    pub fn backend(b: *Backend) be.Backend {
+        return .{ .ptr = b, .vtable = &.{ .prefill = fill.Callbacks(Backend).whole, .prefill_step = fill.Callbacks(Backend).one, .cancel_prefill = fill.Callbacks(Backend).cancelPrompt, .first = first, .queue = queue, .read = read, .verify = verify, .keep = keep, .draft = draft, .release = release, .first_masked = grammar.firstMasked, .held = grammar.held, .reports_fill = true } };
+    }
+
+    pub const facts = batch_costs.facts;
+
+    pub fn self(ptr: *anyopaque) *Backend {
+        return @ptrCast(@alignCast(ptr));
+    }
+    fn session(b: *Backend, s: *Stream) !*Session {
+        return &b.sessions[b.by.get(s) orelse return error.UnknownStream];
+    }
+    pub fn settle(b: *Backend) !void {
+        return batch_settle.now(b);
+    }
+
+    const Binding = @import("session_binding.zig").Binding;
+
+    pub fn bind(b: *Backend, session_: *Session) !Binding {
+        return @import("session_binding.zig").bind(b.e, session_);
+    }
+
+    /// Chooses a slot; LaneMemory means wait, ContextFull means no session can hold the reply.
+    pub fn slotFor(b: *Backend, prompt: usize, max_new: usize) !usize {
+        var caps: [fz.MAXR]usize = undefined;
+        var used: [fz.MAXR]bool = undefined;
+        var most: usize = 0;
+        for (b.sessions, 0..) |s, j| {
+            caps[j] = s.m.cap;
+            used[j] = s.used;
+            most = @max(most, s.m.cap);
+        }
+        const n = b.sessions.len;
+        const whole = prompt + max_new + slots.WINDOW;
+        const i = slots.pick(caps[0..n], used[0..n], b.sized, prompt, max_new, b.grow) orelse
+            return if (!b.sized) error.NoFreeSlot else if (whole > most) error.ContextFull else error.LaneMemory;
+        if (whole > (if (b.sized) most else caps[i])) return error.ContextFull; // sized, a smaller one grows into the largest
+        return i;
+    }
+
+    /// Moves or pauses a sized stream when its remaining reply needs a larger session.
+    fn makeRoom(b: *Backend, stream: *Stream, rows: usize) !void {
+        if (!b.sized) return;
+        const i = b.by.get(stream) orelse return error.UnknownStream;
+        const s = &b.sessions[i];
+        var most: usize = 0;
+        var larger = false;
+        for (b.sessions) |o| {
+            most = @max(most, o.m.cap);
+            larger = larger or (!o.used and o.m.cap > s.m.cap);
+        }
+        switch (slots.room(s.m.cap, s.m.pos, rows, stream.prompt().len + stream.max_new + slots.WINDOW, most, larger)) {
+            .ok => {},
+            .move => try b.move(stream, i),
+            .pause => {
+                if (!stream.paused) {
+                    try b.paused.append(b.gpa, stream);
+                    std.log.info("flash next: a stream at {d} tokens waits for a session larger than {d} tokens to free", .{ s.m.pos, s.m.cap });
+                }
+                stream.paused = true;
+            },
+            .full => return error.ContextFull,
+        }
+    }
+
+    /// Moves to the smallest free larger session holding the next grow tokens, or the largest available.
+    fn move(b: *Backend, stream: *Stream, i: usize) !void {
+        const from = &b.sessions[i];
+        const left: usize = @intCast(@max(stream.budgetLeft(), 0));
+        const need = from.m.pos + @min(left, b.grow) + 2 * slots.WINDOW;
+        var best: ?usize = null; // the smallest free larger session that holds `need`
+        var most: ?usize = null; // else the largest free larger one
+        for (b.sessions, 0..) |o, j| if (!o.used and o.m.cap > from.m.cap) {
+            if (o.m.cap >= need and (best == null or o.m.cap < b.sessions[best.?].m.cap)) best = j;
+            if (most == null or o.m.cap > b.sessions[most.?].m.cap) most = j;
+        };
+        const j = best orelse most orelse return error.LaneMemory;
+        try b.settle();
+        try from.moveTo(&b.sessions[j], b.e);
+        try b.by.put(b.gpa, stream, j);
+        from.used = false;
+        from.round = .{};
+        from.held_n = 0;
+        b.moves += 1;
+        std.log.info("flash next: a stream at {d} tokens moved from a {d}-token session to a {d}-token one ({d} moves)", .{ from.m.pos, from.m.cap, b.sessions[j].m.cap, b.moves });
+    }
+
+    /// Resumes paused streams; errors other than LaneMemory terminate the affected stream.
+    fn resumePaused(b: *Backend) void {
+        slots.resumePaused(&b.paused, b);
+    }
+
+    /// slots.resumePaused's move: the stream into a free larger session, LaneMemory while none is.
+    pub fn moveOut(b: *Backend, stream: *Stream) !void {
+        try b.move(stream, b.by.get(stream) orelse return error.UnknownStream);
+    }
+
+    /// slots.resumePaused's failure: the stream ends with an error the host reports, and its session frees now.
+    pub fn failed(b: *Backend, stream: *Stream, err: anyerror) void {
+        std.log.err("flash next: a paused stream at {d} tokens could not move to a larger session ({s}); it ends with an error", .{ stream.context.items.len, @errorName(err) });
+        slots.endPaused(stream);
+        const kv = b.by.fetchRemove(stream) orelse return;
+        b.sessions[kv.value].used = false;
+        b.sessions[kv.value].round = .{};
+        b.sessions[kv.value].held_n = 0;
+    }
+
+    /// LaneHost's admission check: a free session holds the request now.
+    pub fn fits(ptr: *anyopaque, prompt: u32, max_new: u32) bool {
+        _ = self(ptr).slotFor(prompt, max_new) catch return false;
+        return true;
+    }
+
+    pub fn promptPool(_: *Backend) @TypeOf(mtl.objc.Pool.push()) {
+        return mtl.objc.Pool.push();
+    }
+    pub fn beginPrompt(b: *Backend, stream: *Stream, slot: ?usize) !fill.State {
+        return prompt_gpu.begin(b, stream, slot);
+    }
+    pub fn settlePrompt(b: *Backend, _: *Stream) !void {
+        try b.settle();
+    }
+    pub fn finishChunk(b: *Backend, _: *Stream) !void {
+        try b.settle();
+    }
+    pub fn promptRows(b: *Backend, at: u32, end: u32) u32 {
+        return prompt_gpu.rows(b, at, end);
+    }
+    pub fn chunkPrompt(b: *Backend, stream: *Stream, slot: usize, at: u32, rows: u32) !void {
+        try prompt_gpu.chunk(b, stream, slot, at, rows);
+    }
+    pub fn markPrompt(b: *Backend, stream: *Stream, at: u32, interrupted: bool) !void {
+        try prompt_gpu.mark(b, stream, at, interrupted);
+    }
+    pub fn finishPrompt(b: *Backend, stream: *Stream) !void {
+        try prompt_gpu.finish(b, stream);
+    }
+    pub fn abortPrompt(b: *Backend, stream: *Stream) void {
+        release(b, stream);
+    }
+    pub fn decoding(b: *const Backend) bool {
+        var it = b.by.keyIterator();
+        while (it.next()) |key| {
+            const s = key.*;
+            if (!b.filling.contains(s) and !s.paused and !s.finished) return true;
+        }
+        return false;
+    }
+
+    /// Runs a lone request in session 0 until it finishes or hands over to shared rounds.
+    pub fn lone(b: *Backend, stream: *Stream, hooks: anytype) !bool {
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
+        const s = &b.sessions[0]; // the GPU-side rounds run on the engine's own buffers
+        if (s.used) return error.NoFreeSlot;
+        if (stream.prompt().len + stream.max_new + @import("engine.zig").MARGIN > s.m.cap) return error.ContextFull;
+        var handed = false;
+        defer if (!handed) release(b, stream);
+        if (!try fill.lone(b, stream, hooks)) {
+            handed = true;
+            return true;
+        }
+        const prompt = try @import("lone_stream.zig").commitFirst(b.gpa, stream, s.first); // decode copies it to the rounds' history before any round commits
+        hooks.committed(hooks.ctx);
+        if (stream.finished) return false;
+        const Hooks = @TypeOf(hooks);
+        const Ctx = struct {
+            gpa: std.mem.Allocator,
+            stream: *Stream,
+            hooks: Hooks,
+            failed: ?anyerror = null,
+            fn prefilled(_: *anyopaque) void {}
+            fn tokens(p: *anyopaque, toks: []const u32) bool {
+                const c: *@This() = @ptrCast(@alignCast(p));
+                _ = c.stream.commit(c.gpa, toks, &.{}) catch |err| {
+                    c.failed = err;
+                    return true;
+                };
+                c.hooks.committed(c.hooks.ctx);
+                return c.stream.finished;
+            }
+            fn cancelled(p: *anyopaque) bool { // a request waits, or one is cancelled: the lane core takes over
+                const c: *@This() = @ptrCast(@alignCast(p));
+                return c.hooks.yield(c.hooks.ctx);
+            }
+        };
+        var c: Ctx = .{ .gpa = b.gpa, .stream = stream, .hooks = hooks };
+        var ho: Engine.Handoff = .{};
+        {
+            const old = try b.bind(s);
+            defer old.restore(b.e);
+            outputs(b, s, 0);
+            var watch = try think.Watch.init(.{}); // no thinking budget: lone_host_lone.fits keeps those in the lane core
+            const res = try b.e.decode(prompt, s.first, s.last, stream.max_new, stream.eos, if (stream.drafts) null else 0, &watch, .{ .ctx = &c, .prefilled = Ctx.prefilled, .tokens = Ctx.tokens, .cancelled = Ctx.cancelled, .sampling = sample.active(stream.sampling) }, &ho);
+            if (c.failed) |err| return err;
+            stream.rounds += res.rounds;
+            stream.drafted += res.drafted;
+            stream.accepted += res.accepted;
+            if (res.rounds > 0) stream.min_rows = if (stream.min_rows == 0) res.min_rows else @min(stream.min_rows, res.min_rows);
+        }
+        if (!ho.yielded) {
+            if (!stream.finished) { // the rounds ended where the stream did not (eos or length by the engine's count)
+                stream.finished = true;
+                stream.reason = .stop;
+            }
+            return false;
+        }
+        const ctx = stream.context.items;
+        const at = ho.cache; // the cache's rows: every committed token but the last, the next window's first
+        if (at + 1 != ctx.len or at < 2) return error.HandoffOutOfStep;
+        s.m.pos = at;
+        s.m.state = 0;
+        s.m.state_row = 0;
+        s.m.ple.hist = .{ ctx[at - 2], ctx[at - 1] };
+        s.m.mtp.pos = at;
+        s.m.mtp.drafted = 0;
+        s.m.mtp.pooled_n = @min(s.m.mtp.pooled_n, at / 4); // blocks the rounds pooled are pooled again here
+        for (&s.m.layers) |*l| if (!l.linear) {
+            l.pooled_n = @min(l.pooled_n, at / 4);
+        };
+        s.held_n = 0;
+        s.round = .{};
+        stream.cache_len = at;
+        stream.pending = ctx[at];
+        stream.next = null;
+        handed = true;
+        b.lone_handoffs += 1;
+        std.log.info("flash next: a lone stream at {d} tokens handed to the shared rounds ({d} handoffs)", .{ at, b.lone_handoffs });
+        return true;
+    }
+
+    fn first(ptr: *anyopaque, stream: *Stream, position: u64) anyerror!u64 {
+        if (self(ptr).filling.contains(stream)) return error.PromptIncomplete;
+        const s = try self(ptr).session(stream);
+        if (position != s.m.pos) return error.PositionMismatch;
+        return s.first;
+    }
+    fn queue(_: *anyopaque, _: *Stream, _: be.Feed, _: u64) anyerror!u64 {
+        return error.Unsupported;
+    }
+    fn read(_: *anyopaque, handle: u64) anyerror!u32 {
+        return @intCast(handle);
+    }
+
+    pub fn outputs(b: *Backend, s: *Session, row: usize) void {
+        var li: usize = 0;
+        for (&s.m.layers) |*l| if (l.linear) {
+            l.cs[1] = .{ .b = b.e.o_cs, .off = (li * fz.MAXR + row) * fz.CS_ROW };
+            l.so[1] = .{ .b = b.e.o_so, .off = (li * fz.MAXR + row) * fz.SO_ROW };
+            li += 1;
+        };
+    }
+
+    fn verify(ptr: *anyopaque, windows: []const be.Window, out: []be.Verified) anyerror!void {
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
+        const b = self(ptr);
+        b.times.begin(false);
+        const fold = if (b.fence != null and !b.sized) try batch_settle.keep(b) else blk: {
+            try b.settle();
+            break :blk false;
+        };
+        b.times.settled();
+        if (windows.len == 0 or windows.len > fz.MAXR or out.len != windows.len) return error.BadBatch;
+        for (windows) |w| try b.makeRoom(w.stream, w.rows());
+        var desc: [fz.MAXR]meta.Window = undefined;
+        var segs: [fz.MAXR]forward.Seg = undefined;
+        for (windows, out, 0..) |w, o, i| {
+            const s = try b.session(w.stream);
+            if (w.parents != null or w.early or w.held > s.held_n) return error.WindowOutOfStep;
+            if (w.rows() > fz.MAXR or w.rows() > s.m.cap - s.m.pos or
+                w.positions.len != w.rows() or o.sampled.len != w.rows() or o.drafts.len != w.rows() - 1)
+                return error.WindowOutOfStep;
+            for (w.positions, 0..) |p, j| if (p != s.m.pos + j + 1) return error.PositionMismatch;
+            desc[i] = .{ .slot = @intCast(b.by.get(w.stream).?), .pos = @intCast(s.m.pos), .rows = @intCast(w.rows()) };
+        }
+        const plan = try meta.forBackend(b, desc[0..windows.len]);
+        const t = &b.primary.t;
+        for (windows, out, 0..) |w, o, i| {
+            const s = try b.session(w.stream);
+            const row = plan.starts[i];
+            s.row0 = row;
+            try s.round.begin(s.m.pos, w.rows());
+            s.tokens[0] = w.pending;
+            @memcpy(s.tokens[1..][0..w.held], s.held[0..w.held]);
+            @memcpy(s.tokens[1 + w.held ..][0..w.tokens.len], w.tokens);
+            s.m.windowMeta(s.round.rows);
+            s.m.pleIds(s.tokens[0..s.round.rows]);
+            @memcpy(t.ids8.b.slice(u32, fz.MAXR)[row..][0..s.round.rows], s.tokens[0..s.round.rows]);
+            @memcpy(t.ple_ids.b.slice(u32, fz.MAXR * 16)[row * 16 ..][0 .. s.round.rows * 16], s.m.t.ple_ids.b.slice(u32, s.round.rows * 16));
+            segs[i] = .{ .s = s, .row0 = row, .rows = s.round.rows };
+            @memcpy(o.drafts, s.tokens[1..s.round.rows]);
+        }
+        t.rows.b.slice(i32, 1)[0] = @intCast(plan.total);
+        t.mdims.b.slice(i32, 2)[0] = @intCast(plan.total);
+        const pos8 = t.pos8.b.slice(u32, fz.MAXR);
+        @memcpy(pos8[0..plan.total], plan.positions[0..plan.total]);
+        for (windows, 0..) |w, i| { // an image stream's rows past its last image rotate at their slot plus its delta
+            const d = (try b.session(w.stream)).m.delta;
+            fz.vis_prompt.decodePositions(pos8[plan.starts[i]..][0..w.rows()], d);
+        }
+        const cb = b.e.r.queue.commandBuffer();
+        // The copies read the kept round's rows: encode them before outputs() repoints cs[1] at this round's.
+        if (fold) batch_settle.encode(b, cb, b.fence.?);
+        for (segs[0..windows.len], 0..) |g, i| outputs(b, g.s, plan.starts[i]);
+        b.e.r.begin(cb, if (b.overlap) .concurrent else .serial);
+        errdefer if (b.e.r.fsr != null) b.e.r.abort();
+        if (fold) b.fence.?.waitCompute(b.e.r.enc);
+        const masked = b.grammar.fill(windows, plan.starts[0..windows.len]);
+        const was = b.e.r.serial;
+        if (b.overlap) b.e.r.serial = false; // every launch then ends in a barrier, as the drafts' encoders do
+        const encoded = forward.encode(b.e, segs[0..windows.len], plan.total, t.ids8, if (masked) &b.grammar else null);
+        b.e.r.serial = was;
+        try encoded;
+        @memcpy(b.e.draw_at.b.slice(u32, fz.MAXR)[0..plan.total], plan.keys[0..plan.total]);
+        var widths: [fz.MAXR]usize = undefined;
+        var ps: [fz.MAXR]?lanes.Sampling = undefined;
+        for (windows, 0..) |w, i| {
+            widths[i] = w.rows();
+            ps[i] = w.stream.sampling;
+        }
+        sample.encodeAll(b.e.r.enc, &b.e.r.draws, t.logits, b.e.draw_at, t.picks, plan.starts[0..windows.len], widths[0..windows.len], ps[0..windows.len]);
+        b.times.commit();
+        try b.primary.finish(cb);
+        b.times.end(cb, false, plan.total, windows.len);
+        Session.copy(b.primary.last, b.hidden, plan.total * fz.WIDE * 2);
+        for (out, 0..) |o, i| @memcpy(o.sampled, t.picks.b.slice(u32, plan.total)[plan.starts[i]..][0..o.sampled.len]);
+        b.window_count += 1;
+        if (windows.len > 1) b.shared_count += 1;
+        if (std.c.getenv("FZ_BATCH_LOG") != null)
+            std.log.info("flashnext batch: streams {d}, rows {d}, shared rounds {d}", .{ windows.len, plan.total, b.shared_count });
+    }
+
+    fn keep(ptr: *anyopaque, windows: []const be.Window, paths: []const []const u32) anyerror!void {
+        const b = self(ptr);
+        for (windows, paths) |w, path| {
+            for (path, 0..) |r, j| if (r != j) return error.TreeWindowsUnsupported;
+            try (try b.session(w.stream)).keep(path.len);
+        }
+    }
+
+    fn draft(ptr: *anyopaque, requests: []const be.DraftRequest) anyerror!void {
+        const b = self(ptr);
+        if (!b.serial_drafts) return b.draftTogether(requests);
+        for (requests) |r| {
+            const pool = mtl.objc.Pool.push();
+            defer pool.pop();
+            if (r.early or r.lanes != null or r.ranks or r.depth >= fz.MAXR) return error.DraftOutOfStep;
+            const s = try b.session(r.stream);
+            var one: [1]u32 = undefined;
+            const follow = if (r.first) |f| blk: {
+                one[0] = switch (f) {
+                    .value => |v| v,
+                    .handle => |h| @intCast(h),
+                };
+                break :blk one[0..];
+            } else r.follow;
+            const hidden = if (r.rows) |path| blk: {
+                try s.round.draft(r.start, path, follow.len);
+                break :blk b.hidden.at(s.row0 * fz.WIDE * 2);
+            } else s.last;
+            const old = try b.bind(s);
+            defer old.restore(b.e);
+            s.held_n = r.depth;
+            if (follow.len == 0) return error.DraftOutOfStep;
+            const start = mtl.clock.seconds();
+            if (b.chain_drafts and r.depth > 0 and follow.len <= fz.MAXR) {
+                try s.draftChain(follow, hidden, r.depth);
+                b.draft_waits += 1;
+            } else {
+                const token = try s.m.mtpAbsorb(follow, hidden);
+                if (r.depth > 0) s.held[0] = token;
+                if (r.depth > 1) for (1..r.depth) |i| {
+                    s.held[i] = try s.m.mtpChain(s.held[i - 1]);
+                };
+                b.draft_waits += (follow.len + fz.MAXR - 1) / fz.MAXR + (r.depth -| 1);
+            }
+            b.draft_calls += 1;
+            b.draft_seconds += mtl.clock.seconds() - start;
+        }
+    }
+
+    /// Every request's absorb and chained drafts in one command buffer, one wait (a long follow absorbs alone first).
+    fn draftTogether(b: *Backend, requests: []const be.DraftRequest) !void {
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
+        const start = mtl.clock.seconds();
+        b.times.begin(true);
+        var follows: [fz.MAXR][]const u32 = undefined;
+        var hiddens: [fz.MAXR]Buf = undefined;
+        var ones: [fz.MAXR][1]u32 = undefined;
+        var ss: [fz.MAXR]*Session = undefined;
+        var depths: [fz.MAXR]usize = undefined;
+        var draws: [fz.MAXR]?lanes.Sampling = undefined;
+        var lands: [fz.MAXR]u64 = undefined;
+        if (requests.len > fz.MAXR) return error.DraftOutOfStep;
+        for (requests, 0..) |r, k| {
+            if (r.early or r.lanes != null or r.ranks or r.depth >= fz.MAXR) return error.DraftOutOfStep;
+            const s = try b.session(r.stream);
+            ss[k], depths[k], draws[k], lands[k] = .{ s, r.depth, r.stream.sampling, r.position };
+            follows[k] = if (r.first) |f| blk: {
+                ones[k][0] = switch (f) {
+                    .value => |v| v,
+                    .handle => |h| @intCast(h),
+                };
+                break :blk ones[k][0..];
+            } else r.follow;
+            if (follows[k].len == 0) return error.DraftOutOfStep;
+            hiddens[k] = if (r.rows) |path| blk: {
+                try s.round.draft(r.start, path, follows[k].len);
+                break :blk b.hidden.at(s.row0 * fz.WIDE * 2);
+            } else s.last;
+            if (follows[k].len > fz.MAXR) { // all but the last MAXR rows absorbed first, on their own
+                const cut = follows[k].len - fz.MAXR;
+                const old = try b.bind(s);
+                defer old.restore(b.e);
+                _ = try s.m.mtpAbsorb(follows[k][0..cut], hiddens[k]);
+                hiddens[k] = hiddens[k].at(cut * fz.WIDE * 2);
+                follows[k] = follows[k][cut..];
+                b.draft_waits += (cut + fz.MAXR - 1) / fz.MAXR;
+            }
+        }
+        const cb = b.e.r.queue.commandBuffer();
+        b.e.r.begin(cb, if (b.e.r.serial) .serial else .concurrent);
+        errdefer if (b.e.r.fsr != null) b.e.r.abort();
+        const n = requests.len;
+        const packed_ = batch_draft.encode(b, ss[0..n], follows[0..n], hiddens[0..n], depths[0..n], draws[0..n], lands[0..n]) catch |err| {
+            if (b.e.r.fsr == null) b.e.r.enc.end();
+            return err;
+        };
+        if (!packed_) for (requests, 0..) |r, k| {
+            const s = try b.session(r.stream);
+            const old = try b.bind(s);
+            defer old.restore(b.e);
+            s.encodeDrafts(follows[k], hiddens[k], r.depth) catch |err| {
+                if (b.e.r.fsr == null) b.e.r.enc.end();
+                return err;
+            };
+        };
+        b.times.commit();
+        try b.primary.finish(cb);
+        b.times.end(cb, true, 0, requests.len);
+        if (packed_) batch_draft.read(&b.packed_drafts);
+        for (requests) |r| (try b.session(r.stream)).heldDrafts(r.depth);
+        b.draft_waits += 1;
+        b.draft_calls += requests.len;
+        b.draft_seconds += mtl.clock.seconds() - start;
+    }
+
+    fn release(ptr: *anyopaque, stream: *Stream) void {
+        const b = self(ptr);
+        prompt_gpu.clear(b, stream);
+        if (std.mem.indexOfScalar(*Stream, b.paused.items, stream)) |k| _ = b.paused.orderedRemove(k);
+        const kv = b.by.fetchRemove(stream) orelse return;
+        b.sessions[kv.value].used = false;
+        b.sessions[kv.value].round = .{};
+        b.sessions[kv.value].held_n = 0;
+        if (b.paused.items.len > 0) b.resumePaused();
+    }
+
+    pub fn snapBytes(ptr: *anyopaque, at: u32) u64 {
+        return self(ptr).e.snap_pool.size(snap.bytes(at));
+    }
+    pub fn snapCharged(_: *anyopaque, saved: *anyopaque) u64 {
+        const state: *snap.State = @ptrCast(@alignCast(saved));
+        return state.cap;
+    }
+    pub fn snapSpare(ptr: *anyopaque) u64 {
+        return self(ptr).e.snap_pool.spare();
+    }
+    pub fn snapTrim(ptr: *anyopaque, room: u64) void {
+        self(ptr).e.snap_pool.trim(room);
+    }
+    pub fn snapReuses(ptr: *anyopaque, at: u32) bool {
+        return self(ptr).e.snap_pool.fits(snap.bytes(at));
+    }
+    pub fn snapSave(ptr: *anyopaque, owner: ?*anyopaque, at: u32) anyerror!*anyopaque {
+        const b = self(ptr);
+        const s = try b.session(@ptrCast(@alignCast(owner orelse return error.NoStream)));
+        const old = try b.bind(s);
+        defer old.restore(b.e);
+        return try snap.save(b.e, b.gpa, at);
+    }
+    pub fn snapRestore(_: *anyopaque, _: ?*anyopaque, _: *anyopaque) anyerror!void {
+        return error.BackendRestores;
+    }
+    pub fn snapDrop(ptr: *anyopaque, saved: *anyopaque) void {
+        snap.drop(self(ptr).gpa, @ptrCast(@alignCast(saved)));
+    }
+};
+
+test "batch widths: shared verifier matches the legacy forward through lane rounds" {
+    if (comptime @hasDecl(mtl, "flashnext_recording")) {
+        try @import("batch_forward_test.zig").check(Backend.verify, Backend.keep);
+    } else return error.SkipZigTest;
+}
+
+
+===== zig/src/core/ocr_html.zig =====
+//! The HTML table subset OCR models write: cells and spans, and the table as GFM pipes, clean HTML or text rows.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+
+/// Most HTML bytes, grid rows and grid columns ``parse`` reads; a table past them is ``error.Malformed``.
+pub const max_bytes = 64 * 1024;
+pub const max_rows = 512;
+pub const max_cols = 64;
+
+/// One cell at its top-left grid position, covering ``rows`` x ``cols``; ``text`` holds '\n' where the HTML had <br>.
+pub const Cell = struct { text: []const u8, row: u32, col: u32, rows: u32, cols: u32, head: bool };
+
+/// A table's grid and its cells in row-major order; ``spanned``: some cell covers more than one position.
+pub const Table = struct {
+    rows: u32,
+    cols: u32,
+    cells: []Cell,
+    spanned: bool,
+
+    /// Frees what ``parse`` allocated in ``a``.
+    pub fn deinit(t: Table, a: Allocator) void {
+        for (t.cells) |c| a.free(c.text);
+        a.free(t.cells);
+    }
+};
+
+pub const ParseError = error{ Malformed, OutOfMemory };
+
+/// The one <table> in ``html``, with only whitespace and comments around it; cells and texts allocated in ``a``.
+pub fn parse(a: Allocator, html: []const u8) ParseError!Table {
+    if (html.len > max_bytes) return error.Malformed;
+    var p: Parser = .{ .a = a, .src = html };
+    defer p.text.deinit(a);
+    errdefer {
+        for (p.cells.items) |c| a.free(c.text);
+        p.cells.deinit(a);
+    }
+    try p.run();
+    var cols: u32 = 0;
+    var spanned = false;
+    for (p.cells.items) |*c| {
+        c.rows = @min(c.rows, p.rows - c.row); // a rowspan past the last row ends there, as in HTML
+        cols = @max(cols, c.col + c.cols);
+        spanned = spanned or c.rows > 1 or c.cols > 1;
+    }
+    if (cols == 0) return error.Malformed;
+    return .{ .rows = p.rows, .cols = cols, .cells = try p.cells.toOwnedSlice(a), .spanned = spanned };
+}
+
+/// The table as a GFM pipe table: first row the header, cell text escaped to read literally (``cellText``); spans lost.
+pub fn pipe(a: Allocator, t: Table) Allocator.Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(a);
+    var k: usize = 0;
+    for (0..t.rows) |r| {
+        for (0..t.cols) |c| {
+            try out.appendSlice(a, if (c == 0) "| " else " | ");
+            try cellText(a, &out, if (topLeft(t, &k, r, c)) |cell| cell.text else "");
+        }
+        try out.appendSlice(a, " |");
+        if (r == 0) {
+            try out.append(a, '\n');
+            for (0..t.cols) |_| try out.appendSlice(a, "| --- ");
+            try out.append(a, '|');
+        }
+        if (r + 1 < t.rows) try out.append(a, '\n');
+    }
+    return out.toOwnedSlice(a);
+}
+
+/// The table as one clean <table>: rows of <th>/<td>, rowspan and colspan only above 1, text entity-escaped.
+pub fn normalized(a: Allocator, t: Table) Allocator.Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(a);
+    try out.appendSlice(a, "<table>");
+    var k: usize = 0;
+    for (0..t.rows) |r| {
+        try out.appendSlice(a, "<tr>");
+        while (k < t.cells.len and t.cells[k].row == r) : (k += 1) {
+            const cell = t.cells[k];
+            const name = if (cell.head) "th" else "td";
+            try out.print(a, "<{s}", .{name});
+            if (cell.rows > 1) try out.print(a, " rowspan=\"{d}\"", .{cell.rows});
+            if (cell.cols > 1) try out.print(a, " colspan=\"{d}\"", .{cell.cols});
+            try out.append(a, '>');
+            for (cell.text) |ch| switch (ch) {
+                '&' => try out.appendSlice(a, "&amp;"),
+                '<' => try out.appendSlice(a, "&lt;"),
+                '>' => try out.appendSlice(a, "&gt;"),
+                '"' => try out.appendSlice(a, "&quot;"),
+                '\n' => try out.appendSlice(a, "<br>"),
+                else => try out.append(a, ch),
+            };
+            try out.print(a, "</{s}>", .{name});
+        }
+        try out.appendSlice(a, "</tr>");
+    }
+    try out.appendSlice(a, "</table>");
+    return out.toOwnedSlice(a);
+}
+
+/// A cell's text in a pipe row: math as written (only `|` escaped), markup escaped elsewhere, to read back literally.
+fn cellText(a: Allocator, out: *std.ArrayList(u8), text: []const u8) Allocator.Error!void {
+    var no_close = false; // a `$` found no closer, so no later `$` in the cell can (markdown.zig's rule)
+    var i: usize = 0;
+    while (i < text.len) {
+        const ch = text[i];
+        if (ch == '$') {
+            if (mathEnd(text, i, &no_close)) |end| {
+                try mathText(a, out, text[i..end]);
+                i = end;
+                continue;
+            }
+            // a `$` that opens no math is escaped, so a reader never pairs it with another
+            const lone: usize = if (i + 1 < text.len and text[i + 1] == '$') 2 else 1;
+            for (0..lone) |_| try out.appendSlice(a, "\\$");
+            i += lone;
+            continue;
+        }
+        switch (ch) {
+            '\n' => try out.append(a, ' '),
+            '|', '`', '*', '[', ']' => try out.appendSlice(a, &[_]u8{ '\\', ch }),
+            // CommonMark reads a backslash as an escape only before ASCII punctuation; elsewhere it is literal
+            '\\' => try out.appendSlice(a, if (i + 1 < text.len and isPunct(text[i + 1])) "\\\\" else "\\"),
+            // `_` between two word characters can neither open nor close emphasis, so snake_case stays readable
+            '_' => try out.appendSlice(a, if (i > 0 and i + 1 < text.len and isWord(text[i - 1]) and isWord(text[i + 1])) "_" else "\\_"),
+            '<' => try out.appendSlice(a, if (opensTag(text[i + 1 ..])) "&lt;" else "<"),
+            '&' => try out.appendSlice(a, if (opensEntity(text[i + 1 ..])) "&amp;" else "&"),
+            else => try out.append(a, ch),
+        }
+        i += 1;
+    }
+}
+
+/// Math as written, each `|` as `\|`: GFM's table step removes exactly that backslash, whatever precedes it.
+fn mathText(a: Allocator, out: *std.ArrayList(u8), m: []const u8) Allocator.Error!void {
+    for (m) |ch| switch (ch) {
+        '|' => try out.appendSlice(a, "\\|"),
+        '\n' => try out.append(a, ' '),
+        else => try out.append(a, ch),
+    };
+}
+
+/// The end of the `$$…$$` or `$…$` math opening at ``s[i]``, by markdown.zig's ``mathSpan`` rule; null when none.
+fn mathEnd(s: []const u8, i: usize, no_close: *bool) ?usize {
+    if (i + 1 < s.len and s[i + 1] == '$') return if (std.mem.indexOfPos(u8, s, i + 2, "$$")) |j| j + 2 else null;
+    if (i + 1 >= s.len or isSpace(s[i + 1]) or no_close.*) return null;
+    var j = i + 2;
+    while (j < s.len) : (j += 1) {
+        if (s[j] != '$' or isSpace(s[j - 1]) or escaped(s, j)) continue;
+        if (j + 1 < s.len and std.ascii.isDigit(s[j + 1])) continue;
+        return j + 1;
+    }
+    no_close.* = true;
+    return null;
+}
+
+/// Whether ``s[i]`` follows an odd run of backslashes.
+fn escaped(s: []const u8, i: usize) bool {
+    var n: usize = 0;
+    while (n < i and s[i - 1 - n] == '\\') n += 1;
+    return n % 2 == 1;
+}
+
+fn isSpace(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\n' or c == '\r';
+}
+
+fn isPunct(c: u8) bool {
+    return c < 0x80 and std.ascii.isPrint(c) and !std.ascii.isAlphanumeric(c) and c != ' ';
+}
+
+/// A byte of a word for emphasis rules: neither whitespace nor ASCII punctuation (UTF-8 letters count).
+fn isWord(c: u8) bool {
+    return !isSpace(c) and !isPunct(c);
+}
+
+/// Whether text after a literal `<` would start raw HTML in Markdown: a tag, an end tag, a comment or a declaration.
+fn opensTag(rest: []const u8) bool {
+    return rest.len > 0 and (std.ascii.isAlphabetic(rest[0]) or std.mem.indexOfScalar(u8, "/!?", rest[0]) != null);
+}
+
+/// Whether text after a literal `&` reads as an entity reference in Markdown (`name;`, `#digits;` or `#xhex;`).
+fn opensEntity(rest: []const u8) bool {
+    var n: usize = 0;
+    while (n < rest.len and n < 33 and (std.ascii.isAlphanumeric(rest[n]) or (n == 0 and rest[n] == '#'))) n += 1;
+    return n > 0 and n < rest.len and rest[n] == ';';
+}
+
+/// The cell whose top-left is (r, c), walking ``k`` through the row-major cells; null: covered or empty.
+fn topLeft(t: Table, k: *usize, r: usize, c: usize) ?Cell {
+    if (k.* >= t.cells.len or t.cells[k.*].row != r or t.cells[k.*].col != c) return null;
+    k.* += 1;
+    return t.cells[k.* - 1];
+}
+
+const Tag = enum { table, tr, td, th, br, other };
+
+fn tagKind(name: []const u8) Tag {
+    inline for (.{ Tag.table, Tag.tr, Tag.td, Tag.th, Tag.br }) |t| {
+        if (std.ascii.eqlIgnoreCase(name, @tagName(t))) return t;
+    }
+    return .other;
+}
+
+/// A span attribute's value as HTML reads it: leading digits, and 1 when there are none or they read 0.
+fn spanValue(v: []const u8) u32 {
+    var i: usize = 0;
+    while (i < v.len and std.ascii.isWhitespace(v[i])) i += 1;
+    var n: u32 = 0;
+    while (i < v.len and std.ascii.isDigit(v[i])) : (i += 1) n = @min(n * 10 + (v[i] - '0'), 1_000_000);
+    return @max(n, 1);
+}
+
+/// The code point a named or numeric entity body (between '&' and ';') stands for; null: not one this reader knows.
+fn entityPoint(name: []const u8) ?u21 {
+    const named = .{ .{ "amp", '&' }, .{ "lt", '<' }, .{ "gt", '>' }, .{ "quot", '"' }, .{ "apos", '\'' } };
+    if (std.mem.eql(u8, name, "nbsp")) return 0xa0;
+    inline for (named) |e| if (std.mem.eql(u8, name, e[0])) return e[1];
+    if (name.len < 2 or name[0] != '#') return null;
+    const hex = name[1] == 'x' or name[1] == 'X';
+    const base: u8 = if (hex) 16 else 10;
+    const digits = name[if (hex) 2 else 1..];
+    if (digits.len == 0 or digits.len > 7) return null;
+    var v: u32 = 0;
+    for (digits) |d| v = v * base + (std.fmt.charToDigit(d, base) catch return null);
+    return if (v == 0 or v > 0x10ffff or (v >= 0xd800 and v <= 0xdfff)) 0xfffd else @intCast(v);
+}
+
+/// Whitespace or one of ``ends``: where an attribute's name or unquoted value stops.
+fn stops(ch: u8, ends: []const u8) bool {
+    return std.ascii.isWhitespace(ch) or std.mem.indexOfScalar(u8, ends, ch) != null;
+}
+
+const Parser = struct {
+    a: Allocator,
+    src: []const u8,
+    i: usize = 0,
+    where: enum { before, inside, after } = .before,
+    cells: std.ArrayList(Cell) = .empty,
+    cell: ?Cell = null, // the open cell; its text gathers in ``text`` until it closes
+    text: std.ArrayList(u8) = .empty,
+    space: bool = false, // whitespace met in the open cell since its last character
+    row_open: bool = false,
+    rows: u32 = 0, // rows opened so far; the open row is the last
+    col: u32 = 0, // the open row's next column to try
+    until: [max_cols]u32 = @splat(0), // each column is covered by earlier cells through row until - 1
+
+    fn run(p: *Parser) ParseError!void {
+        while (p.i < p.src.len) {
+            const ch = p.src[p.i];
+            const next = if (p.i + 1 < p.src.len) p.src[p.i + 1] else 0;
+            const after = if (p.i + 2 < p.src.len) p.src[p.i + 2] else 0;
+            if (ch == '<' and (next == '!' or next == '?')) {
+                try p.skipMarkup();
+            } else if (ch == '<' and std.ascii.isAlphabetic(if (next == '/') after else next)) {
+                try p.tag();
+            } else if (ch == '&') {
+                try p.entity();
+            } else {
+                try p.char(ch);
+                p.i += 1;
+            }
+        }
+        if (p.where != .after) return error.Malformed;
+    }
+
+    /// A comment, a doctype or a processing instruction: skipped whole.
+    fn skipMarkup(p: *Parser) ParseError!void {
+        if (std.mem.startsWith(u8, p.src[p.i..], "<!--")) {
+            const end = std.mem.indexOfPos(u8, p.src, p.i + 4, "-->") orelse return error.Malformed;
+            p.i = end + 3;
+        } else {
+            const end = std.mem.indexOfScalarPos(u8, p.src, p.i, '>') orelse return error.Malformed;
+            p.i = end + 1;
+        }
+    }
+
+    fn entity(p: *Parser) ParseError!void {
+        const rest = p.src[p.i..];
+        const semi = std.mem.indexOfScalar(u8, rest[0..@min(rest.len, 12)], ';');
+        const point = if (semi) |s| entityPoint(rest[1..s]) else null;
+        const cp = point orelse {
+            p.i += 1;
+            return p.char('&');
+        };
+        p.i += semi.? + 1;
+        if (cp == 0xa0) return p.char(' ');
+        var buf: [4]u8 = undefined;
+        const n = std.unicode.utf8Encode(cp, &buf) catch unreachable;
+        for (buf[0..n]) |b| try p.char(b);
+    }
+
+    /// One text byte: whitespace runs fold to one space between words; outside a cell only whitespace may stand.
+    fn char(p: *Parser, ch: u8) ParseError!void {
+        const blank = std.ascii.isWhitespace(ch);
+        if (p.cell == null) {
+            if (!blank) return error.Malformed;
+            return;
+        }
+        if (blank) {
+            p.space = true;
+            return;
+        }
+        if (p.space and p.text.items.len > 0 and p.text.getLast() != '\n') try p.text.append(p.a, ' ');
+        p.space = false;
+        try p.text.append(p.a, ch);
+    }
+
+    /// A start or end tag at ``i``: its name, its span attributes in any quoting, then its effect.
+    fn tag(p: *Parser) ParseError!void {
+        const src = p.src;
+        var i = p.i + 1;
+        const close = src[i] == '/';
+        if (close) i += 1;
+        const start = i;
+        while (i < src.len and (std.ascii.isAlphanumeric(src[i]) or std.mem.indexOfScalar(u8, "-_:.", src[i]) != null)) i += 1;
+        const kind = tagKind(src[start..i]);
+        var span = [2]u32{ 1, 1 }; // rowspan, colspan
+        while (true) {
+            while (i < src.len and (std.ascii.isWhitespace(src[i]) or src[i] == '/')) i += 1;
+            if (i >= src.len) return error.Malformed;
+            if (src[i] == '>') break;
+            const name_start = i;
+            while (i < src.len and !stops(src[i], "=>/")) i += 1;
+            const name = src[name_start..i];
+            while (i < src.len and std.ascii.isWhitespace(src[i])) i += 1;
+            if (i >= src.len or src[i] != '=') continue;
+            i += 1;
+            while (i < src.len and std.ascii.isWhitespace(src[i])) i += 1;
+            if (i >= src.len) return error.Malformed;
+            var value: []const u8 = undefined;
+            if (src[i] == '"' or src[i] == '\'') {
+                const end = std.mem.indexOfScalarPos(u8, src, i + 1, src[i]) orelse return error.Malformed;
+                value = src[i + 1 .. end];
+                i = end + 1;
+            } else {
+                const value_start = i;
+                while (i < src.len and !stops(src[i], ">")) i += 1;
+                value = src[value_start..i];
+            }
+            if (std.ascii.eqlIgnoreCase(name, "rowspan")) span[0] = spanValue(value);
+            if (std.ascii.eqlIgnoreCase(name, "colspan")) span[1] = spanValue(value);
+        }
+        p.i = i + 1;
+        try p.apply(kind, close, span);
+    }
+
+    fn apply(p: *Parser, kind: Tag, close: bool, span: [2]u32) ParseError!void {
+        switch (p.where) {
+            .before => {
+                if (kind != .table or close) return error.Malformed;
+                p.where = .inside;
+                return;
+            },
+            .after => return error.Malformed,
+            .inside => {},
+        }
+        switch (kind) {
+            .table => {
+                if (!close) return error.Malformed; // a table inside a cell
+                try p.endCell();
+                p.row_open = false;
+                p.where = .after;
+            },
+            .tr => {
+                try p.endCell();
+                p.row_open = false;
+                if (!close) try p.openRow();
+            },
+            .td, .th => {
+                try p.endCell();
+                if (!close) try p.openCell(kind == .th, span);
+            },
+            .br => if (p.cell != null) {
+                p.space = false;
+                try p.text.append(p.a, '\n');
+            },
+            .other => {},
+        }
+    }
+
+    fn openRow(p: *Parser) ParseError!void {
+        if (p.rows == max_rows) return error.Malformed;
+        p.rows += 1;
+        p.row_open = true;
+        p.col = 0;
+    }
+
+    /// A cell at the open row's first free column; its spans clipped to the grid and to columns earlier rows cover.
+    fn openCell(p: *Parser, head: bool, span: [2]u32) ParseError!void {
+        if (!p.row_open) return error.Malformed;
+        const row = p.rows - 1;
+        while (p.col < max_cols and p.until[p.col] > row) p.col += 1;
+        if (p.col == max_cols) return error.Malformed;
+        var cols: u32 = 0;
+        while (cols < span[1] and p.col + cols < max_cols and p.until[p.col + cols] <= row) cols += 1;
+        const rows = @min(span[0], max_rows - row);
+        for (p.until[p.col..][0..cols]) |*u| u.* = row + rows;
+        p.cell = .{ .text = "", .row = row, .col = p.col, .rows = rows, .cols = cols, .head = head };
+        p.col += cols;
+    }
+
+    fn endCell(p: *Parser) ParseError!void {
+        var cell = p.cell orelse return;
+        p.cell = null;
+        p.space = false;
+        defer p.text.clearRetainingCapacity();
+        try p.cells.ensureUnusedCapacity(p.a, 1);
+        cell.text = try p.a.dupe(u8, std.mem.trim(u8, p.text.items, " \n"));
+        p.cells.appendAssumeCapacity(cell);
+    }
+};
+
+
+===== zig/src/core/picture/webp.zig =====
+//! WebP through one pinned libwebp decoder, loaded at the first WebP: the pixels Pillow 13.0.0's bundled libwebp gives.
+
+const std = @import("std");
+const builtin = @import("builtin");
+const Allocator = std.mem.Allocator;
+const picture = @import("picture.zig");
+const tags = @import("tags.zig");
+
+/// The libwebp release Pillow 13.0.0 bundles (features.version("webp")), as WebPGetDecoderVersion packs it.
+pub const pinned = "1.6.0";
+const pinned_code = 0x010600;
+
+/// The environment variable naming the libwebpdecoder file to load.
+pub const env = "TENSORFOLD_LIBWEBP";
+
+const needs = "WebP images need libwebp " ++ pinned ++ " (libwebpdecoder)";
+pub const missing = @import("sys").optional_libraries.spec(.webp).message;
+pub const wrong_version = needs ++ "; the library has another release, whose pixels can differ; " ++ @import("sys").optional_libraries.spec(.webp).message;
+
+const library = if (builtin.os.tag == .macos) "libwebpdecoder.3.dylib" else "libwebpdecoder.so.3";
+
+const Fns = struct {
+    WebPGetDecoderVersion: *const fn () callconv(.c) c_int,
+    WebPGetInfo: *const fn ([*]const u8, usize, *c_int, *c_int) callconv(.c) c_int,
+    WebPDecodeRGBAInto: *const fn ([*]const u8, usize, [*]u8, usize, c_int) callconv(.c) ?[*]u8,
+};
+
+const Loaded = union(enum) { unknown, missing, wrong, ready: Fns };
+var loaded: Loaded = .unknown;
+var load_mutex: std.atomic.Mutex = .unlocked;
+
+/// The pinned library: the file TENSORFOLD_LIBWEBP names, else ../lib, beside the server, then the loader's path.
+fn load(io: std.Io, a: Allocator) error{ NoWebpLibrary, WebpLibraryVersion }!Fns {
+    while (!load_mutex.tryLock()) std.atomic.spinLoopHint();
+    defer load_mutex.unlock();
+    if (loaded == .unknown) loaded = find(io, a);
+    return switch (loaded) {
+        .ready => |f| f,
+        .wrong => error.WebpLibraryVersion,
+        .missing, .unknown => error.NoWebpLibrary,
+    };
+}
+
+fn find(io: std.Io, a: Allocator) Loaded {
+    if ((@import("sys").environment.Process{}).get(env)) |named| return open(named) orelse .missing;
+    var seen_wrong = false;
+    if (std.process.executableDirPathAlloc(io, a)) |exe| {
+        defer a.free(exe);
+        for ([_][]const []const u8{ &.{ exe, "..", "lib", library }, &.{ exe, library } }) |parts| {
+            const p = std.fs.path.join(a, parts) catch continue;
+            defer a.free(p);
+            switch (open(p) orelse continue) {
+                .ready => |f| return .{ .ready = f },
+                else => seen_wrong = true,
+            }
+        }
+    } else |_| {}
+    const brew = [_][]const u8{ "/opt/homebrew/opt/webp/lib/" ++ library, "/usr/local/opt/webp/lib/" ++ library };
+    const fixed = if (builtin.os.tag == .macos) brew ++ [_][]const u8{library} else [_][]const u8{library};
+    for (fixed) |p| switch (open(p) orelse continue) {
+        .ready => |f| return .{ .ready = f },
+        else => seen_wrong = true,
+    };
+    return if (seen_wrong) .wrong else .missing;
+}
+
+/// One candidate: null when it does not load or lacks a function; `.wrong` when its version is not the pin.
+fn open(path: []const u8) ?Loaded {
+    var dl = @import("sys").DynLib.open(path) catch return null;
+    var f: Fns = undefined;
+    const info = @typeInfo(Fns).@"struct";
+    inline for (info.field_names, info.field_types) |name, T| {
+        @field(f, name) = dl.lookup(T, name) orelse {
+            dl.close();
+            return null;
+        };
+    }
+    if (f.WebPGetDecoderVersion() != pinned_code) {
+        std.log.warn("{s} is not libwebp {s}; WebP images are refused until it is", .{ path, pinned });
+        dl.close();
+        return .wrong;
+    }
+    return .{ .ready = f };
+}
+
+/// Whether the pinned library loads here (tests skip WebP pixels without it).
+pub fn available(io: std.Io, a: Allocator) bool {
+    check(io, a) catch return false;
+    return true;
+}
+
+/// Check the decoder's symbols and exact version without reading pixels.
+pub fn check(io: std.Io, a: Allocator) !void {
+    _ = try load(io, a);
+}
+
+/// What Pillow's open read from the RIFF chunks: the VP8X animation flag and the EXIF and XMP chunks.
+const Chunks = struct {
+    animated: bool = false,
+    exif: ?[]const u8 = null,
+    xmp: ?[]const u8 = null,
+};
+
+/// The container's chunks after "RIFF size WEBP"; error.Invalid when a chunk runs past the bytes.
+fn chunks(data: []const u8) picture.Error!Chunks {
+    if (data.len < 12) return error.Invalid;
+    const riff = std.mem.readInt(u32, data[4..8], .little);
+    const end = @min(data.len, @as(usize, riff) + 8);
+    var c: Chunks = .{};
+    var at: usize = 12;
+    while (at + 8 <= end) {
+        const id = data[at..][0..4];
+        const n = std.mem.readInt(u32, data[at + 4 ..][0..4], .little);
+        const body = at + 8;
+        if (n > end - body) return error.Invalid;
+        const bytes = data[body..][0..n];
+        if (std.mem.eql(u8, id, "VP8X")) {
+            if (n < 10) return error.Invalid;
+            c.animated = bytes[0] & 0x02 != 0;
+        } else if (std.mem.eql(u8, id, "ANIM") or std.mem.eql(u8, id, "ANMF")) {
+            c.animated = true;
+        } else if (std.mem.eql(u8, id, "EXIF")) {
+            c.exif = bytes;
+        } else if (std.mem.eql(u8, id, "XMP ")) {
+            c.xmp = bytes;
+        }
+        at = body + n + (n & 1); // chunks pad to an even size
+    }
+    return c;
+}
+
+/// WebP bytes as Pillow loaded them: one frame, RGBA (alpha opaque without one), and the orientation its tags give.
+pub fn decode(io: std.Io, a: Allocator, data: []const u8) picture.Error!picture.Samples {
+    return decodeWithLimits(io, a, data, .{});
+}
+
+pub fn decodeWithLimits(io: std.Io, a: Allocator, data: []const u8, limits: picture.Limits) picture.Error!picture.Samples {
+    const c = try chunks(data);
+    if (c.animated) return error.Animated;
+    const f = try load(io, a);
+    var w: c_int = 0;
+    var h: c_int = 0;
+    if (f.WebPGetInfo(data.ptr, data.len, &w, &h) == 0) return error.Invalid;
+    if (w <= 0 or h <= 0) return error.Invalid;
+    try limits.fits(@intCast(w), @intCast(h));
+    const width: usize = @intCast(w);
+    const height: usize = @intCast(h);
+    const rgba = try a.alloc(u8, width * height * 4);
+    errdefer a.free(rgba);
+    if (f.WebPDecodeRGBAInto(data.ptr, data.len, rgba.ptr, rgba.len, @intCast(width * 4)) == null) return error.Invalid;
+    const o = try tags.orientation(c.exif, c.xmp, .refuse);
+    return .{ .width = width, .height = height, .channels = 4, .data = rgba, .orientation = o };
+}
+
+test "a WebP's chunks: the animation flag, its EXIF, and a chunk past the bytes refused" {
+    const still = "RIFF\x16\x00\x00\x00WEBPVP8X\x0a\x00\x00\x00\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+    try std.testing.expect(!(try chunks(still)).animated);
+    const anim = "RIFF\x16\x00\x00\x00WEBPVP8X\x0a\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+    try std.testing.expect((try chunks(anim)).animated);
+    const exif = "RIFF\x18\x00\x00\x00WEBPEXIF\x03\x00\x00\x00abc\x00XMP \x00\x00\x00\x00";
+    const got = try chunks(exif);
+    try std.testing.expectEqualStrings("abc", got.exif.?);
+    try std.testing.expectEqualStrings("", got.xmp.?);
+    try std.testing.expectError(error.Invalid, chunks("RIFF\x10\x00\x00\x00WEBPVP8 \xff\x00\x00\x00"));
+}
+
+
+===== zig/src/sessions/disk_test.zig =====
+//! The NVMe tier on real files: whole and delta files round-trip bit for bit, split ranks, damage.
+
+const std = @import("std");
+const testing = std.testing;
+const pool_mod = @import("pool.zig");
+const Pool = pool_mod.Pool;
+const Family = pool_mod.Family;
+const HostPool = @import("pagestore.zig").HostPool;
+const disk = @import("disk.zig");
+
+const fams = [_]Family{
+    .{ .name = "comp.2", .ratio = 2, .row_bytes = 584, .split = true },
+    .{ .name = "index_k.2", .ratio = 2, .row_bytes = 132 },
+    .{ .name = "comp.20", .ratio = 1, .row_bytes = 584, .split = true },
+};
+
+/// Fills a page of every family with bytes that name (family, logical page, byte).
+fn fill(h: *HostPool, p: *const Pool, logical: u32, pg: u32, salt: u8) void {
+    for (fams, 0..) |f, fi| {
+        if (f.split and !p.owns(pg)) continue;
+        const v = h.pageOf(@intCast(fi), p.familyPage(f, pg));
+        for (v, 0..) |*b, i| b.* = @truncate(i *% 131 +% logical *% 7 +% fi *% 29 +% salt);
+    }
+}
+
+fn familyPages(gpa: std.mem.Allocator, p: *const Pool, pages: []const u32, first: u32, owned_only: bool) ![][]u32 {
+    const out = try gpa.alloc([]u32, fams.len);
+    for (fams, 0..) |f, fi| {
+        var l: std.ArrayList(u32) = .empty;
+        for (pages[first..], first..) |pg, k| {
+            if (f.split and p.world > 1 and owned_only and k % p.world != p.rank) continue;
+            try l.append(gpa, p.familyPage(f, pg));
+        }
+        out[fi] = try l.toOwnedSlice(gpa);
+    }
+    return out;
+}
+
+fn freePages(gpa: std.mem.Allocator, x: [][]u32) void {
+    for (x) |l| gpa.free(l);
+    gpa.free(x);
+}
+
+fn roundTrip(world: u32, rank: u32) !void {
+    const gpa = testing.allocator;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(root);
+    var p = try Pool.init(gpa, .{ .families = &fams, .page = 256 }, 64 * 256, world, rank);
+    defer p.deinit();
+    var h = try HostPool.init(gpa, &p);
+    defer h.deinit();
+    // small chunks so pool segments span many chunks; few staging buffers so the pump waits on the lanes
+    const d = try disk.Disk.open(gpa, io, .{ .root = root, .compat = @splat(5), .rank = rank, .world = world, .chunk = 3 * 74_752, .staging = 3, .lanes = 3, .min_tokens = 1 });
+    defer d.close();
+    const a = try p.newSlot(32 * 256);
+    const pos: u64 = 9 * 256 + 100;
+    try a.ensure(pos);
+    for (a.mapped(), 0..) |pg, k| fill(&h, &p, @intCast(k), pg, 1);
+    const ids = try gpa.alloc(i32, pos);
+    defer gpa.free(ids);
+    for (ids, 0..) |*t, i| t.* = @intCast(i * 3 + 1);
+    var blob: [5000]u8 = undefined;
+    for (&blob, 0..) |*x, i| x.* = @truncate(9 - i % 5);
+    const fp = try familyPages(gpa, &p, a.mapped(), 0, true);
+    defer freePages(gpa, fp);
+    const src: disk.WriteSrc = .{ .key = @splat(1), .tag = 4, .page = 256, .pos = pos, .npages = a.len, .ids = ids, .store = h.store(), .families = &fams, .pages = fp, .blobs = &.{.{ .name = "rings", .bytes = &blob }} };
+    const size = try d.writeFile(&src);
+    _ = try d.register(&src, size);
+    // a newer turn stacks a delta on it: pages [9, 14) only (page 9 was partial in the base)
+    const pos2: u64 = 13 * 256 + 7;
+    try a.ensure(pos2);
+    for (a.mapped()[9..], 9..) |pg, k| fill(&h, &p, @intCast(k), pg, 2);
+    const ids2 = try gpa.alloc(i32, pos2);
+    defer gpa.free(ids2);
+    for (ids2, 0..) |*t, i| t.* = @intCast(i * 3 + 1);
+    const fp2 = try familyPages(gpa, &p, a.mapped(), 9, true);
+    defer freePages(gpa, fp2);
+    const src2: disk.WriteSrc = .{ .key = @splat(2), .base = @splat(1), .tag = 4, .page = 256, .pos = pos2, .first_page = 9, .npages = a.len, .ids = ids2[9 * 256 ..], .store = h.store(), .families = &fams, .pages = fp2, .blobs = &.{.{ .name = "rings", .bytes = blob[0..77] }} };
+    const size2 = try d.writeFile(&src2);
+    _ = try d.register(&src2, size2);
+    try testing.expect(size2 < size);
+    try testing.expectError(error.HasDependents, d.remove(@splat(1)));
+    // restore the delta onto other pages through its chain
+    const b = try p.newSlot(32 * 256);
+    try b.ensure(pos2);
+    var ext: std.ArrayList(disk.Extent) = .empty;
+    defer ext.deinit(gpa);
+    try d.extents(@splat(2), &ext);
+    try testing.expectEqual(@as(usize, 2), ext.items.len);
+    try testing.expectEqual(@as(u32, 9), ext.items[0].hi);
+    const tp = try familyPages(gpa, &p, b.mapped(), 0, false);
+    defer freePages(gpa, tp);
+    const sink: disk.ReadSink = .{ .store = h.store(), .families = &fams, .page = 256, .world = world, .rank = rank, .pages = tp };
+    try testing.expect(try d.readFile(ext.items[0], &sink, false) == null);
+    var got = (try d.readFile(ext.items[1], &sink, true)).?;
+    defer got.deinit(gpa);
+    try testing.expectEqualSlices(u8, blob[0..77], got.blobs[0].bytes);
+    for (a.mapped(), b.mapped()) |pa, pb| for (fams, 0..) |f, fi| {
+        if (f.split and !p.owns(pa)) continue;
+        try testing.expectEqualSlices(u8, h.pageOf(@intCast(fi), p.familyPage(f, pa)), h.pageOf(@intCast(fi), p.familyPage(f, pb)));
+    };
+    // damage one chunk: the read refuses it before or as its rows land
+    var nb: [48]u8 = undefined;
+    const key2: [16]u8 = @splat(2);
+    const name = try std.fmt.bufPrint(&nb, "{x}.tfs", .{&key2});
+    const f = try d.dir.openFile(io, name, .{ .mode = .read_write });
+    var one = [_]u8{0};
+    _ = try f.readPositional(io, &.{&one}, 3 * 4096 + 100);
+    one[0] ^= 0xff;
+    try f.writePositionalAll(io, &one, 3 * 4096 + 100);
+    f.close(io);
+    try testing.expectError(error.ChecksumMismatch, d.readFile(ext.items[1], &sink, true));
+}
+
+test "whole and delta files round-trip bit for bit (replicated)" {
+    try roundTrip(1, 0);
+}
+
+test "split ranks write and restore their own pages (rank 0 and 1 of 2)" {
+    try roundTrip(2, 0);
+    try roundTrip(2, 1);
+}
+
+/// A restore's sink that refuses every page it is handed.
+const Refusing = struct {
+    fn read(_: *anyopaque, _: u32, _: []const u32, _: []u8) anyerror!void {
+        return error.Unused;
+    }
+    fn write(_: *anyopaque, _: u32, _: []const u32, _: []const u8) anyerror!void {
+        return error.SinkRefused;
+    }
+    fn copy(_: *anyopaque, _: u32, _: u32, _: u32) anyerror!void {
+        return error.Unused;
+    }
+    fn fence(_: *anyopaque) anyerror!u64 {
+        return 0;
+    }
+    fn wait(_: *anyopaque, _: u64) anyerror!void {}
+    fn publish(_: *anyopaque) anyerror!void {}
+    const vtable: @import("pagestore.zig").PageStore.VTable = .{ .read = read, .write = write, .copyPage = copy, .fence = fence, .waitFence = wait, .publish = publish };
+};
+
+test "a restore its sink refuses mid-stream gives every staging buffer back, and the next restore runs" {
+    const gpa = testing.allocator;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(root);
+    var p = try Pool.init(gpa, .{ .families = &fams, .page = 256 }, 64 * 256, 1, 0);
+    defer p.deinit();
+    var h = try HostPool.init(gpa, &p);
+    defer h.deinit();
+    // four buffers: the pump keeps three reads in flight, so two are still out when the first chunk is refused
+    const d = try disk.Disk.open(gpa, io, .{ .root = root, .compat = @splat(4), .chunk = 3 * 74_752, .staging = 4, .lanes = 2, .min_tokens = 1 });
+    defer d.close();
+    const a = try p.newSlot(32 * 256);
+    const pos: u64 = 9 * 256 + 100;
+    try a.ensure(pos);
+    for (a.mapped(), 0..) |pg, k| fill(&h, &p, @intCast(k), pg, 3);
+    const ids = try gpa.alloc(i32, pos);
+    defer gpa.free(ids);
+    for (ids, 0..) |*t, i| t.* = @intCast(i);
+    const fp = try familyPages(gpa, &p, a.mapped(), 0, true);
+    defer freePages(gpa, fp);
+    const src: disk.WriteSrc = .{ .key = @splat(3), .tag = 4, .page = 256, .pos = pos, .npages = a.len, .ids = ids, .store = h.store(), .families = &fams, .pages = fp };
+    _ = try d.register(&src, try d.writeFile(&src));
+    var ext: std.ArrayList(disk.Extent) = .empty;
+    defer ext.deinit(gpa);
+    try d.extents(@splat(3), &ext);
+    const b = try p.newSlot(32 * 256);
+    try b.ensure(pos);
+    const tp = try familyPages(gpa, &p, b.mapped(), 0, false);
+    defer freePages(gpa, tp);
+    var refusing: u8 = 0;
+    const refused: disk.ReadSink = .{ .store = .{ .ptr = &refusing, .vtable = &Refusing.vtable }, .families = &fams, .page = 256, .world = 1, .rank = 0, .pages = tp };
+    try testing.expectError(error.SinkRefused, d.readFile(ext.items[0], &refused, false));
+    const free = d.staging.free_n;
+    // repaired before any assert: a buffer short, the next restore's pump would wait in Staging.get, and close asserts
+    for (d.staging.free_list, 0..) |*x, i| x.* = @intCast(i);
+    d.staging.free_n = d.staging.count;
+    try testing.expectEqual(d.staging.count, free);
+    const sink: disk.ReadSink = .{ .store = h.store(), .families = &fams, .page = 256, .world = 1, .rank = 0, .pages = tp };
+    try testing.expect(try d.readFile(ext.items[0], &sink, false) == null);
+    try testing.expectEqual(d.staging.count, d.staging.free_n);
+}
+
+test "split reconcile refuses before deleting temporary files or indexing physical bytes" {
+    const gpa = testing.allocator;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(root);
+    const d = try disk.Disk.open(gpa, io, .{ .root = root, .compat = @splat(9), .world = 2 });
+    defer d.close();
+    const f = try d.dir.createFile(io, "unreconciled.tmp", .{});
+    f.close(io);
+    var found: std.ArrayList(disk.Disk.Found) = .empty;
+    defer found.deinit(gpa);
+    try testing.expectError(error.SplitReconcileUnsupported, d.scan(&found));
+    try testing.expectEqual(@as(usize, 0), d.recs.items.len);
+    try testing.expectEqual(@as(u64, 0), d.used);
+    const kept = try d.dir.openFile(io, "unreconciled.tmp", .{});
+    kept.close(io);
+}
+
+test "logical charge counts delta pages and bounded measure independently of blob and padded file bytes" {
+    const charge = @import("disk_charge.zig").charge;
+    var src: disk.WriteSrc = undefined;
+    src.page = 64;
+    src.npages = 7;
+    src.first_page = 4;
+    src.ids = &.{ 1, 2, 3 };
+    src.measure = 3000;
+    src.families = &fams;
+    var expected: u64 = 3012;
+    for (fams) |f| expected += 3 * f.pageBytes(64) / (if (f.split) @as(u64, 2) else 1);
+    try testing.expectEqual(expected, charge(&src, 2, 999999));
+    try testing.expectEqual(expected, charge(&src, 2, 4096));
+    try testing.expectEqual(@as(u64, 4096), charge(&src, 1, 4096));
+}
+
+test "fresh serving starts do not accumulate files from previous processes" {
+    const gpa = testing.allocator;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(root);
+    const opts: disk.Options = .{ .root = root, .compat = @splat(5), .rank = 0, .world = 2, .fresh_start = true };
+    {
+        const d = try disk.Disk.open(gpa, io, opts);
+        defer d.close();
+        // Exercise cleanup with hundreds of stale files.
+        for (0..300) |i| {
+            var name_buf: [32]u8 = undefined;
+            const name = try std.fmt.bufPrint(&name_buf, "stale-{d}.tfs", .{i});
+            const f = try d.dir.createFile(io, name, .{});
+            f.close(io);
+        }
+        // These are disposable, unindexed files left by a previous serving process.
+        for ([_][]const u8{ "old.tfs", "interrupted.tmp", "keep.txt" }) |name| {
+            const f = try d.dir.createFile(io, name, .{});
+            f.close(io);
+        }
+    }
+    const other = try disk.Disk.open(gpa, io, .{ .root = root, .compat = @splat(5), .rank = 1, .world = 2 });
+    defer other.close();
+    const peer = try other.dir.createFile(io, "peer.tfs", .{});
+    peer.close(io);
+    const foreign = try disk.Disk.open(gpa, io, .{ .root = root, .compat = @splat(6) });
+    defer foreign.close();
+    const unrelated = try foreign.dir.createFile(io, "foreign.tfs", .{});
+    unrelated.close(io);
+
+    const reopened = try disk.Disk.open(gpa, io, opts);
+    defer reopened.close();
+    try testing.expectError(error.FileNotFound, reopened.dir.openFile(io, "old.tfs", .{}));
+    try testing.expectError(error.FileNotFound, reopened.dir.openFile(io, "interrupted.tmp", .{}));
+    var it = reopened.dir.iterate();
+    while (try it.next(io)) |ent| {
+        try testing.expect(!std.mem.endsWith(u8, ent.name, ".tfs"));
+        try testing.expect(!std.mem.endsWith(u8, ent.name, ".tmp"));
+    }
+    const marker = try reopened.dir.openFile(io, "keep.txt", .{});
+    marker.close(io);
+    const peer_after = try other.dir.openFile(io, "peer.tfs", .{});
+    peer_after.close(io);
+    const foreign_after = try foreign.dir.openFile(io, "foreign.tfs", .{});
+    foreign_after.close(io);
+}
+
+test "fresh namespace has one owner and an active owner prevents cleanup" {
+    const gpa = testing.allocator;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(root);
+    const opts: disk.Options = .{ .root = root, .compat = @splat(3), .fresh_start = true };
+    const owner = try disk.Disk.open(gpa, io, opts);
+    defer owner.close();
+    const file = try owner.dir.createFile(io, "active.tfs", .{});
+    file.close(io);
+    try testing.expectError(error.SessionNamespaceBusy, disk.Disk.open(gpa, io, opts));
+    const kept = try owner.dir.openFile(io, "active.tfs", .{});
+    kept.close(io);
+}
+
+test "unknown dtype uses nonfollowing stat and cleanup errors surface" {
+    const ns = @import("disk_namespace.zig");
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file = try tmp.dir.createFile(io, "old.tfs", .{});
+    file.close(io);
+    try ns.discard(tmp.dir, io, .{ .name = "old.tfs", .kind = .unknown, .inode = 0 });
+    try testing.expectError(error.FileNotFound, tmp.dir.openFile(io, "old.tfs", .{}));
+    try tmp.dir.createDirPath(io, "keep.tmp");
+    try ns.discard(tmp.dir, io, .{ .name = "keep.tmp", .kind = .unknown, .inode = 0 });
+    try testing.expectEqual(std.Io.File.Kind.directory, (try tmp.dir.statFile(io, "keep.tmp", .{})).kind);
+    try tmp.dir.symLink(io, "elsewhere", "link.tfs", .{});
+    try ns.discard(tmp.dir, io, .{ .name = "link.tfs", .kind = .unknown, .inode = 0 });
+    try testing.expectEqual(std.Io.File.Kind.sym_link, (try tmp.dir.statFile(io, "link.tfs", .{ .follow_symlinks = false })).kind);
+    try testing.expectError(error.FileNotFound, ns.discard(tmp.dir, io, .{ .name = "missing.tmp", .kind = .unknown, .inode = 0 }));
+    if (ns.discard(tmp.dir, io, .{ .name = "keep.tmp", .kind = .file, .inode = 0 })) |_| {
+        return error.TestUnexpectedResult;
+    } else |_| {}
+}
+
+/// A file whose ids claim tokens [256, 0): its position below its first page, so `pos - first_page * page` wraps.
+fn scanBackwards() !void {
+    const gpa = testing.allocator;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(root);
+    const d = try disk.Disk.open(gpa, io, .{ .root = root, .compat = @splat(4) });
+    defer d.close();
+    const fmt = @import("format.zig");
+    const key: [16]u8 = @splat(7);
+    const head: fmt.Head = .{ .key = key, .compat = @splat(4), .tag = 1, .kind = 0, .page = 256, .world = 1, .rank = 0, .first_page = 1, .npages = 1, .nseg = 0, .ndigest = 0, .pos = 0 };
+    var l = try fmt.Layout.build(gpa, head, &.{.{ .name = fmt.segName("ids"), .kind = .ids, .family = 0, .nbytes = 0, .chunk = 4096 }});
+    defer l.deinit(gpa);
+    var buf: [4096]u8 = undefined;
+    l.encode(&buf);
+    var nb: [48]u8 = undefined;
+    try d.dir.writeFile(io, .{ .sub_path = try std.fmt.bufPrint(&nb, "{x}.tfs", .{&key}), .data = &buf });
+    var found: std.ArrayList(disk.Disk.Found) = .empty;
+    defer found.deinit(gpa);
+    try d.scan(&found);
+    try testing.expectEqual(@as(usize, 0), found.items.len);
+    try testing.expectEqual(@as(u64, 1), d.stats.bad);
+}
+
+// In a child: if found's `h.pos - first_page * page` is unchecked, a safe build panics and only this test fails
+test "a restart file whose position is below its first page is refused, not counted by a length that wraps" {
+    try testing.expectEqual(@import("sys").isolate.Outcome.passed, try @import("sys").isolate.run(scanBackwards, .{}));
+}
+
+
+===== zig/src/families/qwen27/gdn_pool.zig =====
+//! State persists per stream and layer; round logs persist per layer while one snapshot slab is reused.
+const std = @import("std");
+const abi = @import("gdn_contract.zig");
+const Plan = @import("gdn_plan.zig").Plan;
+
+pub fn validatePlan(shape: abi.Shape, slots: usize, capacity: usize, plan: Plan) !void {
+    const rows = plan.parents.len;
+    const taps = shape.c.conv_kernel;
+    if (rows == 0 or rows > capacity or slots == 0 or slots > 128 or plan.windows.len != rows * taps or plan.row_slots.len != rows or plan.segments.len == 0 or plan.segments.len > slots or plan.keeps.len != plan.segments.len) return error.BadGdnPoolPlan;
+    if (plan.compact and plan.slot_steps.len != rows) return error.BadGdnPoolPlan;
+    var first: usize = 0;
+    var kept: usize = 0;
+    var destinations: u128 = 0;
+    for (plan.segments, plan.keeps) |segment, keep| {
+        if (segment.first != first or segment.rows == 0 or segment.rows > rows - first or segment.state_slot >= slots or segment.next_slot >= slots or keep.state_slot != segment.state_slot or keep.next_slot != segment.next_slot or keep.first != kept or keep.rows > segment.rows or keep.rows > plan.kept_rows.len - kept) return error.BadGdnPoolPlan;
+        const bit = @as(u128, 1) << @intCast(segment.next_slot);
+        if (destinations & bit != 0) return error.BadGdnPoolPlan;
+        destinations |= bit;
+        for (0..segment.rows) |local| {
+            const row = first + local;
+            const parent = plan.parents[row];
+            if ((local == 0 and parent != -1) or (local > 0 and (parent < 0 or parent >= local)) or plan.row_slots[row] != segment.state_slot) return error.BadGdnPoolPlan;
+            for (plan.windows[row * taps ..][0..taps], 0..) |source, tap| {
+                const behind = taps - 1 - tap;
+                var ancestor: i32 = @intCast(local);
+                var hops: usize = 0;
+                while (hops < behind and ancestor >= 0) : (hops += 1) ancestor = plan.parents[first + @as(usize, @intCast(ancestor))];
+                const expected: usize = if (ancestor >= 0) taps - 1 + first + @as(usize, @intCast(ancestor)) else taps - 1 - (behind - hops + 1);
+                if (source != expected) return error.BadGdnPoolPlan;
+            }
+        }
+        var parent: i32 = -1;
+        for (plan.kept_rows[kept..][0..keep.rows]) |global| {
+            if (global < first or global >= first + segment.rows or plan.parents[global] != parent) return error.BadGdnPoolPlan;
+            parent = @intCast(global - first);
+        }
+        if (plan.compact) @import("core").tree_slots.validate(plan.parents[first..][0..segment.rows], plan.slot_steps[first..][0..segment.rows], segment.first, 16) catch return error.BadGdnPoolPlan;
+        first += segment.rows;
+        kept += keep.rows;
+    }
+    if (first != rows or kept != plan.kept_rows.len) return error.BadGdnPoolPlan;
+}
+
+/// Only one-row windows advanced by a verify need rollback words, indexed by their original slot.
+pub fn beforeSlots(plan: Plan, advance: bool) usize {
+    if (!advance) return 0;
+    var slots: usize = 0;
+    for (plan.segments) |segment| if (segment.rows == 1) {
+        slots = @max(slots, @as(usize, segment.state_slot) + 1);
+    };
+    return slots;
+}
+
+pub const Budget = struct {
+    shape: abi.Shape,
+    layers: usize,
+    slots: usize,
+    rows: usize,
+    state: usize,
+    history: usize,
+    projections: usize,
+    query: usize,
+    key: usize,
+    value: usize,
+    decay: usize,
+    mixing: usize,
+    snapshots: usize,
+    scratch: usize,
+
+    pub fn init(shape: abi.Shape, layers: usize, slots: usize, rows: usize) !Budget {
+        if (layers == 0 or layers > shape.c.layers or slots == 0 or slots > 128 or rows == 0 or rows > @import("gpu_frame.zig").max_rows) return error.BadGdnPool;
+        const layer_slots = try std.math.mul(usize, layers, slots);
+        const layer_rows = try std.math.mul(usize, layers, rows);
+        const query = try abi.countBytes(u16, shape.c.k_heads * shape.c.dk, layer_rows);
+        const value = try abi.countBytes(u16, shape.value, layer_rows);
+        const decay = try abi.countBytes(f32, shape.c.v_heads, layer_rows);
+        const mixing = try abi.countBytes(u16, shape.c.v_heads, layer_rows);
+        const snapshot = try abi.countBytes(f32, shape.state, @min(rows, abi.snapshot_rows)); // trees only: a chain keeps no snapshots
+        const outputs = try abi.countBytes(u16, shape.value, rows * 2);
+        return .{
+            .shape = shape,
+            .layers = layers,
+            .slots = slots,
+            .rows = rows,
+            .state = try abi.countBytes(f32, shape.state, layer_slots),
+            .history = try abi.countBytes(u16, shape.conv, layer_slots),
+            .projections = try abi.countBytes(u16, shape.qkv, layer_rows),
+            .query = query,
+            .key = query,
+            .value = value,
+            .decay = decay,
+            .mixing = mixing,
+            .snapshots = snapshot,
+            .scratch = try std.math.add(usize, snapshot, outputs),
+        };
+    }
+
+    pub fn allocationSizes(b: Budget) [11]usize {
+        return .{ b.state, b.history, b.history, b.projections, b.query, b.key, b.value, b.decay, b.mixing, b.snapshots, b.rows * b.shape.value * 2 };
+    }
+
+    pub fn stateOffset(b: Budget, layer: usize, slot: usize) !usize {
+        if (layer >= b.layers or slot >= b.slots) return error.BadGdnPoolIndex;
+        return abi.countBytes(f32, b.shape.state, layer * b.slots + slot);
+    }
+
+    pub fn historyOffset(b: Budget, layer: usize, slot: usize) !usize {
+        if (layer >= b.layers or slot >= b.slots) return error.BadGdnPoolIndex;
+        return abi.countBytes(u16, b.shape.conv, layer * b.slots + slot);
+    }
+
+    pub fn logBytes(b: Budget) usize {
+        return b.query + b.key + b.value + b.decay + b.mixing;
+    }
+
+    pub fn totalBytes(b: Budget) usize {
+        return 2 * b.state + 2 * b.history + b.projections + b.logBytes() + b.scratch;
+    }
+};
+
+
+===== zig/src/core/lane_stream.zig =====
+//! A request's stream on the lane host: its kept prefix looked up, its drafter made, the stream set up.
+const std = @import("std");
+const lanes = @import("lanes");
+const host = @import("lane_host.zig");
+const recalls = @import("lane_host_recall.zig");
+const LaneHost = host.LaneHost;
+const Job = LaneHost.Job;
+
+/// A job's drafter freed: the family's (LaneHost.proposers) or the built-in one.
+pub fn freeProposer(h: *LaneHost, job: *Job) void {
+    if (job.custom) |c| h.proposers.?.free(h.proposers.?.ctx, c) else job.proposer.deinit();
+    job.custom = null;
+}
+
+/// An admitted job's stream (its kept prefix looked up, its drafter): false when it failed (the job is finished).
+pub fn open(h: *LaneHost, job: *Job) bool {
+    const r = job.request;
+    var reuse: lanes.stream.Reuse = .{};
+    // the entry stays alive until the backend restores it: nothing keeps between here and this stream's own pass
+    if (h.frame_key) |frame| if (h.cache != null and r.images.len > 0 and r.cacheKey().len > 0) {
+        const f = frame(r.images);
+        job.frame = f;
+        if (f != 0) {
+            job.key = h.gpa.dupe(u32, r.cacheKey()) catch return !h.drop(job, "out of memory");
+            job.key[0] = 0x8000_0000 | @as(u32, @truncate(std.hash.Wyhash.hash(f, std.mem.asBytes(&job.key[0])) & 0x7fff_ffff));
+        }
+    };
+    if (h.cache) |store| if (!r.promptOnly() and r.prompt_logprobs == null and !r.untaught) if (@import("lane_cache_queue.zig").lookup(h, job)) |l| {
+        job.entry = l.entry;
+        job.kept0 = store.counts.kept;
+        job.marks = l.marks;
+        reuse = .{ .saved = if (l.entry) |e| e.saved else null, .at = if (l.entry) |e| e.at else 0, .marks = l.marks, .hook = .{ .ptr = job, .at = Job.kept, .interrupted = Job.interrupted } };
+    } else |_| {};
+    if (h.proposers) |ps| {
+        job.custom = ps.make(ps.ctx, h.gpa, r.prompt, r.eos) catch return !h.drop(job, "the drafter could not start");
+    } else job.proposer = lanes.SuffixLookup.init(h.gpa, .{ .min_match = h.min_match }) catch return !h.drop(job, "the drafter could not start");
+    const recall = recalls.reader(h, job);
+    job.stream = lanes.Stream.init(h.gpa, .{
+        .id = "request",
+        .prompt = r.prompt,
+        .embedding = r.embedding,
+        .readout = r.readout,
+        .max_new = r.max_tokens,
+        .eos = r.eos,
+        .sampling = r.sampling,
+        .penalties = r.penalties,
+        .drafts = r.drafts,
+        .proposer = job.custom orelse job.proposer.proposer(),
+        .recall = recall,
+        .stop_check = if (r.stop) |s| .{ .ptr = s.ctx, .check = s.check } else null,
+        .cancel_check = .{ .ptr = job, .check = LaneHost.cancelled },
+        .yield_check = if (r.background and r.max_tokens == 0) .{ .ptr = job, .check = LaneHost.yieldsTo } else null,
+        .think_budget = r.think_budget,
+        .think_close = r.think_close,
+        .think_end = if (r.think_end) |t| t else -1,
+        .answer_max = r.answer_max,
+        .logprobs = r.logprobs,
+        .prompt_logprobs = r.prompt_logprobs,
+        .loop_guard = r.loop_guard,
+        .loop_stop = r.loop_stop,
+        .chunks = r.chunks,
+        .message_starts = r.message_starts,
+        .history_len = r.history_len,
+        .shared_prefixes = r.shared_prefixes,
+        .reuse = reuse,
+        .grammar = if (r.structure) |st| h.constraint(st) catch |e| {
+            freeProposer(h, job);
+            recalls.release(job);
+            return !h.drop(job, if (e == error.OutOfMemory) "out of memory" else "the reply's grammar could not start (xgrammar)");
+        } else null,
+        .decode_spans = h.spans(r),
+        .decide = r.decide,
+        .untaught = r.untaught,
+        .images = r.images,
+        .key = r
+
+According to the facility records in the text, what is the access code for the Norwood pump station? End your reply with the code in double square brackets, like [[AB-0000]].

@@ -3,11 +3,22 @@
 const std = @import("std");
 const mtl = @import("metal");
 const cfg = @import("config.zig");
+const kernels = @import("kernels.zig");
 
 /// Positions a convolution ring keeps: the three tokens a kernel-4 tap reaches, plus the slot being written.
 pub const ring = 4;
 /// The most states one depth mix folds: the token's four block boundaries and itself.
 pub const mix_states = 5;
+/// Split-K decode attention: a chunk walks at most this many window positions.
+pub const attn_chunk = 64;
+/// Split-K decode attention: the most chunks one window splits into.
+pub const attn_splits = 16;
+
+/// The split of `n` window positions into contiguous chunks: the fewest chunks of at most attn_chunk positions.
+pub fn attnPartition(n: usize) struct { splits: u32, chunk: u32 } {
+    const splits: u32 = @intCast(@max(1, @min(attn_splits, (n + attn_chunk - 1) / attn_chunk)));
+    return .{ .splits = splits, .chunk = @intCast((n + splits - 1) / splits) };
+}
 
 pub const Cache = struct {
     keys: mtl.Buffer,
@@ -79,6 +90,9 @@ pub const Scratch = struct {
     sink: mtl.Buffer, // [heads]
     relbias: mtl.Buffer, // [heads][extent + 1]
     attn: mtl.Buffer, // [q_width]
+    attn_part: mtl.Buffer, // [heads][attn_splits][dim + 2] the split attention's per-chunk partials
+    attn_split: mtl.Pipeline,
+    attn_combine: mtl.Pipeline,
     gate: mtl.Buffer, // [q_width]
     projout: mtl.Buffer, // [h] an attention output projection
     o: mtl.Buffer, // [h] the attention sub-layer's output
@@ -113,6 +127,8 @@ pub const Scratch = struct {
         const topk: usize = c.text.topk;
         const rank: usize = c.loop.gate_rank;
         const experts: usize = c.text.experts;
+        const aheads: usize = @max(c.text.local.q, c.text.global.q);
+        const adim: usize = @max(c.text.local.dim, c.text.global.dim);
         var s: Scratch = undefined;
         const alloc = [_]struct { ptr: *mtl.Buffer, bytes: usize }{
             .{ .ptr = &s.x, .bytes = h * 4 },
@@ -132,6 +148,7 @@ pub const Scratch = struct {
             .{ .ptr = &s.sink, .bytes = heads * 4 },
             .{ .ptr = &s.relbias, .bytes = heads * extent * 4 },
             .{ .ptr = &s.attn, .bytes = qw * 4 },
+            .{ .ptr = &s.attn_part, .bytes = aheads * attn_splits * (adim + 2) * 4 },
             .{ .ptr = &s.gate, .bytes = qw * 4 },
             .{ .ptr = &s.projout, .bytes = h * 4 },
             .{ .ptr = &s.o, .bytes = h * 4 },
@@ -162,17 +179,33 @@ pub const Scratch = struct {
         s.ids = try device.buffer(16, mtl.ResourceOptions.shared);
         s.logits = try device.buffer(@max(c.text.unpadded_vocab * 4, 16), mtl.ResourceOptions.shared);
         s.capture = try device.buffer(@max(c.slots() * trace_rows * h * 4, 16), mtl.ResourceOptions.shared);
+        const attn_lib = try mtl.Library.fromSource(device, kernels.attention, mtl.CompileOptions.mlx());
+        defer attn_lib.deinit();
+        s.attn_split = try mtl.Pipeline.init(device, attn_lib, "i2_attn_split", false);
+        errdefer s.attn_split.deinit();
+        s.attn_combine = try mtl.Pipeline.init(device, attn_lib, "i2_attn_combine", false);
         return s;
     }
 
     pub fn deinit(s: *Scratch) void {
-        inline for ([_][]const u8{"ids", "x", "prelude", "passout", "bank", "ffnin", "xn", "q", "k", "v", "r", "kc", "vc", "kdyn", "vdyn", "sink", "relbias", "attn", "gate", "projout", "o", "aconv", "blocks", "states", "mixs", "mixout", "msg", "normed", "h2", "tanh", "router", "picks", "wts", "offsets", "order", "act", "down", "moe", "logits", "capture"}) |f| @field(s, f).deinit();
+        inline for ([_][]const u8{"ids", "x", "prelude", "passout", "bank", "ffnin", "xn", "q", "k", "v", "r", "kc", "vc", "kdyn", "vdyn", "sink", "relbias", "attn", "attn_part", "attn_split", "attn_combine", "gate", "projout", "o", "aconv", "blocks", "states", "mixs", "mixout", "msg", "normed", "h2", "tanh", "router", "picks", "wts", "offsets", "order", "act", "down", "moe", "logits", "capture"}) |f| @field(s, f).deinit();
     }
 };
 
 test "the state's rings and mix lists carry the graph's widths" {
     try std.testing.expectEqual(@as(usize, 4), ring);
     try std.testing.expectEqual(@as(usize, 5), mix_states);
+    for ([_]struct { n: usize, splits: u32, chunk: u32 }{
+        .{ .n = 1, .splits = 1, .chunk = 1 },
+        .{ .n = 64, .splits = 1, .chunk = 64 },
+        .{ .n = 65, .splits = 2, .chunk = 33 },
+        .{ .n = 1024, .splits = 16, .chunk = 64 },
+        .{ .n = 1335, .splits = 16, .chunk = 84 },
+    }) |c| {
+        const p = attnPartition(c.n);
+        try std.testing.expectEqual(c.splits, p.splits);
+        try std.testing.expectEqual(c.chunk, p.chunk);
+    }
 }
 
 /// Rows one executed slot writes into the capture buffer, in the reference's order: the three mixed inputs, the three

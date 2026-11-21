@@ -21,6 +21,7 @@ const Mix = extern struct { width: u32, depth: u32, k: u32, scale: f32 };
 const Clip = extern struct { heads: u32, width: u32, threshold: f32 };
 const Conv = extern struct { channels: u32, heads: u32, ring: u32, pos: u32, layout: u32, norm: f32 };
 const Attn = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, scale: f32, floor: f32, alpha: f32 };
+const AttnParts = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, splits: u32, chunk: u32, scale: f32, floor: f32, alpha: f32 };
 const Pair = extern struct { count: u32 };
 const Route = extern struct { experts: u32, topk: u32, route_scale: f32 };
 const Moe = extern struct { k: u32, n: u32, rows: u32, gate_cap: f32, up_cap: f32 };
@@ -84,6 +85,13 @@ pub const Forward = struct {
 
     fn set(f: Forward, g: wts.Glue, args: anytype, bufs: []const B) void {
         f.enc.setPipeline(f.m.pipe(g));
+        for (bufs, 0..) |buf, i| {
+            if (buf.args) f.enc.setValue(args, i) else f.enc.setBuffer(buf.buf, buf.off, i);
+        }
+    }
+
+    fn setParts(f: Forward, pipe: mtl.Pipeline, args: AttnParts, bufs: []const B) void {
+        f.enc.setPipeline(pipe);
         for (bufs, 0..) |buf, i| {
             if (buf.args) f.enc.setValue(args, i) else f.enc.setBuffer(buf.buf, buf.off, i);
         }
@@ -320,19 +328,29 @@ pub const Forward = struct {
         f.kvStore(slot);
         f.lin(a.sink, inputs[0], b(s.sink));
         f.relative(lay, b(s.r), extent, full);
-        f.set(.attn, Attn{
+        const win: u32 = if (full) 0 else text.window;
+        const lo: u32 = if (win != 0 and f.pos + 1 > win) f.pos + 1 - win else 0;
+        const part = st.attnPartition(f.pos + 1 - lo);
+        const parts = AttnParts{
             .heads = f.heads,
             .kv = f.kv,
             .dim = f.dim,
             .rel = f.drel,
             .extent = extent,
-            .window = if (full) 0 else text.window,
+            .window = win,
             .pos = f.pos,
             .tau = @intFromBool(full),
+            .splits = part.splits,
+            .chunk = part.chunk,
             .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(f.dim))),
             .floor = @floatFromInt(text.log_floor),
             .alpha = text.log_alpha,
-        }, &.{ b(s.q), bo(f.cache.keys, f.cache.row(&f.m.config, slot, 0)), bo(f.cache.values, f.cache.row(&f.m.config, slot, 0)), b(s.relbias), b(s.sink), A, b(s.attn) });
+        };
+        const keybase = bo(f.cache.keys, f.cache.row(&f.m.config, slot, 0));
+        const valbase = bo(f.cache.values, f.cache.row(&f.m.config, slot, 0));
+        f.setParts(f.s.attn_split, parts, &.{ b(s.q), keybase, valbase, b(s.relbias), b(s.sink), A, b(s.attn_part) });
+        f.enc.dispatchGroups(mtl.Size.of(f.kv * part.splits, 1, 1), mtl.Size.of((f.heads / f.kv) * 32, 1, 1));
+        f.setParts(f.s.attn_combine, parts, &.{ b(s.attn_part), A, b(s.attn) });
         f.enc.dispatchGroups(mtl.Size.of(f.heads, 1, 1), mtl.Size.of(32, 1, 1));
         f.lin(a.gate, inputs[0], b(s.gate));
         f.flat(.sig_mul, Pair{ .count = f.qw }, &.{ b(s.attn), b(s.gate), A, b(s.attn) }, f.qw);
@@ -495,4 +513,5 @@ pub fn positionTrace(m: *const Model, s: *Scratch, cache: *Cache, id: u32, trace
 
 test {
     _ = st;
+    _ = @import("attention_test.zig");
 }

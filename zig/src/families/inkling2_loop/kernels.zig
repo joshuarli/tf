@@ -7,6 +7,9 @@ const std = @import("std");
 
 pub const glue = @embedFile("kernels/glue.metal");
 
+/// Split-K decode attention: the window's positions partitioned over threadgroups, then one combine pass.
+pub const attention = @embedFile("kernels/attention.metal");
+
 /// The routed experts' source for one stored format: MXFP8 defines its decoder, NVFP4 is the default.
 pub fn expertSource(comptime mxfp8: bool) []const u8 {
     const text = @embedFile("kernels/experts.metal");
@@ -15,6 +18,8 @@ pub fn expertSource(comptime mxfp8: bool) []const u8 {
 
 test "the sources name the kernels the model loads" {
     try std.testing.expect(std.mem.indexOf(u8, glue, "i2_attn") != null);
+    try std.testing.expect(std.mem.indexOf(u8, attention, "i2_attn_split") != null);
+    try std.testing.expect(std.mem.indexOf(u8, attention, "i2_attn_combine") != null);
     try std.testing.expect(std.mem.indexOf(u8, glue, "i2_conv_store") != null);
     try std.testing.expect(std.mem.indexOf(u8, expertSource(false), "I2_MXFP8 1") == null);
     try std.testing.expect(std.mem.indexOf(u8, expertSource(true), "I2_MXFP8 1") != null);

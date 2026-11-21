@@ -1,0 +1,1 @@
+`intervals.py` over-counts overlapping time: `total_covered` sums the raw intervals instead of the merged ones, so overlapping bookings are counted twice and `test_intervals.py` fails. Fix `total_covered` to measure the union that `merge` already computes. Do not change `merge`. Run the tests.

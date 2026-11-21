@@ -61,8 +61,8 @@ pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.B
     test_step.dependOn(&run.step);
 }
 
-/// `tf-inkling2-loop-run <model> <tokens.json> logits <out>`: every position's float32 logits, teacher-forced.
-pub fn runner(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.Build.Module, core: *std.Build.Module) void {
+/// `tf-inkling2-loop-run`: every position's float32 logits, teacher-forced, for the campaign's parity check.
+pub fn runner(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.Build.Module, core: *std.Build.Module) *std.Build.Module {
     const m = b.createModule(.{
         .root_source_file = b.path("zig/src/families/inkling2_loop/run.zig"),
         .target = target,
@@ -73,9 +73,7 @@ pub fn runner(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.Build
     m.addImport("core", core);
     m.addImport("engine_api", b.createModule(.{ .root_source_file = b.path("zig/src/core/engine_api.zig"), .target = target, .optimize = .fast, .link_libc = true }));
     m.addImport("inkling2_config", b.createModule(.{ .root_source_file = b.path("zig/src/families/inkling2/config.zig"), .target = target, .optimize = .fast }));
-    const exe = b.addExecutable(.{ .name = "tf-inkling2-loop-run", .root_module = m });
-    const install = b.addInstallArtifact(exe, .{});
-    b.step("tf-inkling2-loop-run", "Inkling 2 Mini teacher-forced logits on Metal, for the campaign's parity check").dependOn(&install.step);
+    return m;
 }
 
 test {

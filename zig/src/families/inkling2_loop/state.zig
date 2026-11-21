@@ -100,6 +100,7 @@ pub const Scratch = struct {
     down: mtl.Buffer, // [topk][h]
     moe: mtl.Buffer, // [h]
     logits: mtl.Buffer, // [unpadded vocab], shared so the host can read it
+    capture: mtl.Buffer, // [slots][3][h], shared: attn_out, ffn_out and l_out an executed slot, for the trace
 
     pub fn init(device: mtl.Device, c: *const cfg.Config) !Scratch {
         const h: usize = c.text.hidden;
@@ -160,11 +161,12 @@ pub const Scratch = struct {
         }
         s.ids = try device.buffer(16, mtl.ResourceOptions.shared);
         s.logits = try device.buffer(@max(c.text.unpadded_vocab * 4, 16), mtl.ResourceOptions.shared);
+        s.capture = try device.buffer(@max(c.slots() * trace_rows * h * 4, 16), mtl.ResourceOptions.shared);
         return s;
     }
 
     pub fn deinit(s: *Scratch) void {
-        inline for ([_][]const u8{"ids", "x", "prelude", "passout", "bank", "ffnin", "xn", "q", "k", "v", "r", "kc", "vc", "kdyn", "vdyn", "sink", "relbias", "attn", "gate", "projout", "o", "aconv", "blocks", "states", "mixs", "mixout", "msg", "normed", "h2", "tanh", "router", "picks", "wts", "offsets", "order", "act", "down", "moe", "logits"}) |f| @field(s, f).deinit();
+        inline for ([_][]const u8{"ids", "x", "prelude", "passout", "bank", "ffnin", "xn", "q", "k", "v", "r", "kc", "vc", "kdyn", "vdyn", "sink", "relbias", "attn", "gate", "projout", "o", "aconv", "blocks", "states", "mixs", "mixout", "msg", "normed", "h2", "tanh", "router", "picks", "wts", "offsets", "order", "act", "down", "moe", "logits", "capture"}) |f| @field(s, f).deinit();
     }
 };
 
@@ -172,3 +174,72 @@ test "the state's rings and mix lists carry the graph's widths" {
     try std.testing.expectEqual(@as(usize, 4), ring);
     try std.testing.expectEqual(@as(usize, 5), mix_states);
 }
+
+/// Rows one executed slot writes into the capture buffer: its attention output, the FFN's input and its output.
+pub const trace_rows = 3;
+
+/// A token's per-slot rows, read back from the forward's shared capture buffer after the command buffer commits.
+/// `names` and `values` hold one summary row a tensor (mean, standard deviation, min, max), which is the reference's
+/// own `--trace` line format, in the reference's execution order.
+pub const Trace = struct {
+    gpa: std.mem.Allocator,
+    slots: usize,
+    h: usize,
+    names: std.ArrayList([]const u8),
+    values: std.ArrayList([4]f32),
+
+    pub fn init(gpa: std.mem.Allocator, c: *const cfg.Config) !Trace {
+        return .{
+            .gpa = gpa,
+            .slots = c.slots(),
+            .h = c.text.hidden,
+            .names = .empty,
+            .values = .empty,
+        };
+    }
+
+    pub fn deinit(t: *Trace) void {
+        for (t.names.items) |name| t.gpa.free(name);
+        t.names.deinit(t.gpa);
+        t.values.deinit(t.gpa);
+    }
+
+    /// One token's rows, in the reference's order: every executed slot's three rows, with `pos` naming the token.
+    pub fn position(t: *Trace, capture: mtl.Buffer, slots: []const u32, _: usize) !void {
+        const rows = capture.slice(f32, t.slots * trace_rows * t.h);
+        for (slots) |slot| {
+            const base: usize = @as(usize, slot) * trace_rows * t.h;
+            try t.row("attn_out", slot, rows[base..][0..t.h]);
+            try t.row("ffn_inp", slot, rows[base + t.h ..][0..t.h]);
+            try t.row("l_out", slot, rows[base + 2 * t.h ..][0..t.h]);
+        }
+    }
+
+    fn row(t: *Trace, comptime prefix: []const u8, slot: u32, x: []const f32) !void {
+        var sum: f64 = 0;
+        for (x) |v| sum += v;
+        const mean = sum / @as(f64, @floatFromInt(x.len));
+        var sq: f64 = 0;
+        var lo = x[0];
+        var hi = x[0];
+        for (x) |v| {
+            const d = @as(f64, v) - mean;
+            sq += d * d;
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+        }
+        const name = try std.fmt.allocPrint(t.gpa, "{s}-{d}", .{ prefix, slot });
+        try t.names.append(t.gpa, name);
+        try t.values.append(t.gpa, .{ @floatCast(mean), @floatCast(@sqrt(sq / @as(f64, @floatFromInt(x.len)))), lo, hi });
+    }
+
+    pub fn write(t: *Trace, io: std.Io, path: []const u8) !void {
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(t.gpa);
+        for (t.names.items, 0..) |name, i| {
+            const v = t.values.items[i];
+            try out.print(t.gpa, "{s} {e:.9} {e:.9} {e:.9} {e:.9}\n", .{ name, v[0], v[1], v[2], v[3] });
+        }
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = out.items });
+    }
+};

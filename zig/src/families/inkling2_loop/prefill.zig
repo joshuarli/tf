@@ -13,6 +13,8 @@ const Controller = wts.Controller;
 
 pub const default_chunk: usize = 64;
 
+pub const WantLogits = enum { none, last, all };
+
 const Dense = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32 };
 const Cap = extern struct { n: u32, k: u32, rows: u32, cap: f32 };
 const RouterA = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32 };
@@ -73,6 +75,7 @@ fn srows(x: Tensor, at: usize, count: usize) Tensor {
 pub const Pipes = struct {
     dense: mtl.Pipeline,
     cap: mtl.Pipeline,
+    capexact: mtl.Pipeline,
     router: mtl.Pipeline,
     pick: mtl.Pipeline,
     embed: mtl.Pipeline,
@@ -95,7 +98,7 @@ pub const Pipes = struct {
     combine: mtl.Pipeline,
 
     pub fn deinit(p: *Pipes) void {
-        inline for ([_][]const u8{ "dense", "cap", "router", "pick", "embed", "rms", "gather", "mix", "mix4", "ctl", "clips", "clip", "conv", "cstore", "kv", "rel", "attn", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
+        inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "pick", "embed", "rms", "gather", "mix", "mix4", "ctl", "clips", "clip", "conv", "cstore", "kv", "rel", "attn", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
     }
 };
 
@@ -226,6 +229,8 @@ pub const PrefillScratch = struct {
         errdefer s.pipes.dense.deinit();
         s.pipes.cap = try mtl.Pipeline.init(device, lib, "i2p_dense_cap", false);
         errdefer s.pipes.cap.deinit();
+        s.pipes.capexact = try mtl.Pipeline.init(device, lib, "i2p_cap_exact", false);
+        errdefer s.pipes.capexact.deinit();
         s.pipes.router = try mtl.Pipeline.init(device, lib, "i2p_router_exact", false);
         errdefer s.pipes.router.deinit();
         s.pipes.pick = try mtl.Pipeline.init(device, lib, "i2p_routepick", false);
@@ -331,13 +336,18 @@ const Chunk = struct {
 
     fn lin(c: Chunk, w: Tensor, x: In, out: B) void {
         const m: usize = nrows(w);
-        c.setP(c.s.pipes.dense, Dense{ .n = @intCast(m), .k = @intCast(width(w)), .rows = c.n, .xs = x.xs, .xb = x.xb }, &.{ x.buf, t(w), A, out });
-        c.enc.dispatchThreads(mtl.Size.of(m, c.n, 1), mtl.Size.of(256, 1, 1));
+        c.setP(c.s.pipes.router, RouterA{ .n = @intCast(m), .k = @intCast(width(w)), .rows = c.n, .xs = x.xs, .xb = x.xb }, &.{ x.buf, t(w), A, out });
+        c.enc.dispatchGroups(mtl.Size.of((m + 31) / 32, c.n, 1), mtl.Size.of(1024, 1, 1));
     }
 
     fn headModel(c: Chunk, w: Tensor, x: In, out: B, vocab: u32) void {
-        c.setP(c.s.pipes.cap, Cap{ .n = vocab, .k = @intCast(width(w)), .rows = c.n, .cap = c.m.config.text.logit_cap }, &.{ x.buf, t(w), A, out });
-        c.enc.dispatchThreads(mtl.Size.of(vocab, c.n, 1), mtl.Size.of(256, 1, 1));
+        c.setP(c.s.pipes.capexact, Cap{ .n = vocab, .k = @intCast(width(w)), .rows = c.n, .cap = c.m.config.text.logit_cap }, &.{ x.buf, t(w), A, out });
+        c.enc.dispatchGroups(mtl.Size.of((vocab + 31) / 32, c.n, 1), mtl.Size.of(1024, 1, 1));
+    }
+
+    fn headModelLast(c: Chunk, w: Tensor, xoff: B, out: B, vocab: u32) void {
+        c.setP(c.s.pipes.capexact, Cap{ .n = vocab, .k = @intCast(width(w)), .rows = 1, .cap = c.m.config.text.logit_cap }, &.{ xoff, t(w), A, out });
+        c.enc.dispatchGroups(mtl.Size.of((vocab + 31) / 32, 1, 1), mtl.Size.of(1024, 1, 1));
     }
 
     fn rmsW(c: Chunk, x: In, weight: B, out: B, ys: u32, yb: u32, w: u32, eps: f32) void {
@@ -591,6 +601,10 @@ const Chunk = struct {
 pub const Bank = struct { states: B, out: B, n: usize };
 
 pub fn prefill(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32) !void {
+    return prefillWant(m, s, cache, ids, .all);
+}
+
+pub fn prefillWant(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, want: WantLogits) !void {
     if (ids.len == 0 or ids.len > s.chunk) return error.BadChunk;
     if (ids.len + cache.len > cache.capacity) return error.ContextFull;
     if (ids.len > m.config.text.window) return error.ChunkTooLarge;
@@ -648,7 +662,11 @@ pub fn prefill(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const 
     for (config.loop.core_end..text.layers) |i| try c.layer(@intCast(i), @intCast(i), null);
     c.mixBlocks(b(s.x), m.weights.output_query, bo(s.mixout, 0));
     c.rmsW(.{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, t(m.weights.norm), b(s.n0), 1, 0, c.h, text.eps);
-    c.headModel(m.weights.unembed, .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, b(s.logits), text.unpadded_vocab);
+    switch (want) {
+        .none => {},
+        .last => c.headModelLast(m.weights.unembed, bo(s.n0, (@as(usize, c.n) - 1) * c.h * 4), b(s.logits), text.unpadded_vocab),
+        .all => c.headModel(m.weights.unembed, .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, b(s.logits), text.unpadded_vocab),
+    }
     c.enc.end();
     cb.commit();
     cb.wait();

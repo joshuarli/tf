@@ -4,11 +4,16 @@ BIN ?= $(WORK)/wt/baseline/zig-out/native/bin/tensorfold-native
 QUALIFY_RESULT ?=
 QUALIFY_BASELINE ?=
 
-.PHONY: quality-flint quality-cases quality-cases-check quality-qualify
+.PHONY: quality-flint quality-inkling2-mini quality-cases quality-cases-check quality-qualify
 
 quality-flint: quality-grammar
 	PYTHONDONTWRITEBYTECODE=1 $(UV) run --project $(CURDIR) python $(CURDIR)/quality/run.py \
-		--model $(MODEL) --set $(SET) --bin '$(BIN)'
+		--model flint --set $(SET) --bin '$(BIN)'
+
+quality-inkling2-mini: quality-grammar
+	@echo "$(call serve_preview,inkling2-mini,2)"
+	PYTHONDONTWRITEBYTECODE=1 $(UV) run --project $(CURDIR) python $(CURDIR)/quality/run.py \
+		--model inkling2-mini --set $(SET) --bin '$(BIN)'
 
 quality-qualify:
 	@test -n '$(QUALIFY_RESULT)' -a -n '$(QUALIFY_BASELINE)' || { \

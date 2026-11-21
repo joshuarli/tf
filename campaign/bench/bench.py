@@ -153,13 +153,13 @@ def pairing(experiment: str, session: str, cell: int, mode: str, pair: int, role
 
 
 def record_unavailable(path: Path, *, run_id: str, experiment: str, session: str, engine: str, binary: dict,
-                       mode: str, cell: int, cache_gib: int, flags: list[str], identity: dict) -> None:
+                       model_key: str, mode: str, cell: int, cache_gib: int, flags: list[str], identity: dict) -> None:
     entry = {"schema": 1, "kind": "unavailable", "recorded_at": dt.datetime.now(dt.timezone.utc).isoformat(),
              "run_id": run_id, "engine": engine, "binary": binary, "mode": mode, "mode_flags": flags, "cell": cell,
              "prompt_cache_gib": cache_gib,
              "pairing": pairing(experiment, session, cell, mode, 0, binary.get("role"), identity),
              "reason": f"drafter checkpoint unavailable at {harness.drafter_path() or '~/models/Flint-DFlash2@39b0a7f7a12a'}; not fetched",
-             "host": harness.host_summary()}
+             "host": harness.host_summary(model_key)}
     with path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(entry, sort_keys=True) + "\n")
         stream.flush()
@@ -173,7 +173,7 @@ def record_failure(path: Path, *, run_id: str, experiment: str, session: str, en
              "prompt_cache_gib": cache_gib, "pair": pair,
              "pairing": pairing(experiment, session, cell, mode, pair, binary.get("role"), identity),
              "model": {"key": model_key, "dir": str(model)},
-             "host": harness.host_summary(), "requests": {}, "natural_termination": None, "footprint": None,
+             "host": harness.host_summary(model_key), "requests": {}, "natural_termination": None, "footprint": None,
              "valid": False, "invalid_reasons": [error], "error": error}
     with path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(entry, sort_keys=True) + "\n")
@@ -193,7 +193,7 @@ def trial(path: Path, *, run_id: str, experiment: str, session: str, engine: str
                          "local_content_tokens": prompt["local_content_tokens"]},
               "model": {"key": model_key, "dir": str(server.model), "served": model_id, "hashes": hashes},
               "server": {"argv": server.argv, "port": server.port, **server.timing()},
-              "host": harness.host_summary(), "requests": {}, "natural_termination": None,
+              "host": harness.host_summary(model_key), "requests": {}, "natural_termination": None,
               "footprint": None, "valid": False, "invalid_reasons": [], "error": None}
     before = harness.conditions()
     record["pressure_before"] = before["pressure"]
@@ -251,6 +251,9 @@ def run(args) -> int:
     if args.mode in UNSUPPORTED_MODES:
         raise SystemExit(f"mode {args.mode} is unsupported: {UNSUPPORTED_MODES[args.mode]}")
     key = harness.model_key(args.model)
+    refused = harness.model_mode_problem(key, args.mode)
+    if refused:
+        raise SystemExit(f"mode {args.mode} is unsupported for {key}: {refused}")
     model = harness.model_dir(key)
     if not model.is_dir():
         raise SystemExit(f"model directory {model} is missing; run `make -C campaign fetch NAMES={key}`")
@@ -279,7 +282,7 @@ def run(args) -> int:
     path = out_dir / f"{run_id}.jsonl"
     path.touch()
     hashes = harness.model_hashes(key)
-    host = harness.host_summary()
+    host = harness.host_summary(key)
     binaries = [("baseline", baseline)] + ([("candidate", candidate)] if candidate else [])
     failures = 0
     for role, binary in binaries:
@@ -296,7 +299,7 @@ def run(args) -> int:
                 intended = list(flags) + (["--drafter", "~/models/Flint-DFlash2@39b0a7f7a12a"] if wants_drafter else [])
                 if wants_drafter and drafter is None:
                     record_unavailable(path, run_id=run_id, experiment=experiment, session=session,
-                                       engine=engine, binary=identity,
+                                       engine=engine, binary=identity, model_key=key,
                                        mode=args.mode, cell=cell, cache_gib=cache_gib, flags=intended,
                                        identity=contract_value)
                     continue

@@ -84,6 +84,40 @@ def rejected(trials):
     return scorecard.collect_pairs(trials)[1]
 
 
+class ModelSeparation(unittest.TestCase):
+    """Flint at 160 tok/s and Inkling at 30 tok/s under one engine label used to pool into one 95 tok/s row."""
+
+    def records(self, engine_for_inkling="tensorfold-native"):
+        flint = trial("run-f", "baseline", 160.0, contract=make_contract(), engine="tensorfold-native")
+        flint["model"] = {"key": "flint-int4", "hashes": {"revision": "3b93f9053b53"}}
+        inkling = trial("run-i", "baseline", 30.0, contract=make_contract(key="inkling-2-mini"),
+                        engine=engine_for_inkling)
+        inkling["model"] = {"key": "inkling-2-mini", "hashes": {"revision": "ed40e7da625f"}}
+        return [flint, inkling]
+
+    def test_matched_rows_never_pool_two_models(self):
+        groups = scorecard.group(self.records())
+        self.assertEqual(len(groups), 2)
+        rates = sorted(scorecard.summarize(v)["decode"]["median"] for v in groups.values())
+        self.assertEqual(rates, [30.0, 160.0])
+        self.assertEqual({key[0] for key in groups}, {"flint-int4@3b93f9053b53", "inkling-2-mini@ed40e7da625f"})
+
+    def test_best_useful_ranks_within_a_model_only(self):
+        document = scorecard.render(self.records(engine_for_inkling="other-engine"), [], [], 0)
+        best = document.split("## Best useful", 1)[1].split("## Natural termination", 1)[0]
+        rows = [line for line in best.splitlines() if line.startswith("| flint") or line.startswith("| inkling")]
+        self.assertEqual(len(rows), 2, best)
+        self.assertTrue(all(line.rstrip().endswith("| — |") for line in rows), best)
+        matched = document.split("## Matched", 1)[1].split("###", 1)[0]
+        self.assertNotIn("95.0", matched)
+
+    def test_natural_termination_keys_carry_the_model(self):
+        records = self.records()
+        for record in records:
+            record["natural_termination"] = {"completion": "stopped", "finish_reasons": ["stop"], "tokens": 10}
+        self.assertEqual(len(scorecard.natural(records)), 2)
+
+
 class PairingIdentity(unittest.TestCase):
     def test_integer_pair_numbers_do_not_join_unrelated_runs(self):
         contract = make_contract()
@@ -652,10 +686,10 @@ class Memory(unittest.TestCase):
     def test_sampled_peak_and_lifetime_peak_are_separate_columns(self):
         entry = self.record(peak=22 * 2**30, lifetime=25 * 2**30, samples=10)
         row = next(line for line in scorecard.render([entry], [], ["run.jsonl"], 0).splitlines()
-                   if line.startswith("| tensorfold-native-baseline |"))
+                   if "| tensorfold-native-baseline |" in line)
         cells = [cell.strip() for cell in row.strip("|").split("|")]
-        self.assertEqual(cells[11], "22.00")
-        self.assertEqual(cells[12], "25.00")
+        self.assertEqual(cells[12], "22.00")
+        self.assertEqual(cells[13], "25.00")
 
     def test_render_is_deterministic(self):
         entry = self.record(peak=22 * 2**30, lifetime=25 * 2**30, samples=10)

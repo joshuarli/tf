@@ -72,6 +72,19 @@ pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.B
     const step = b.step("test-inkling2-loop", "Inkling 2 Mini's native Metal forward against the checkpoint and its own state");
     step.dependOn(&run.step);
     test_step.dependOn(&run.step);
+    const d = b.createModule(.{
+        .root_source_file = b.path("zig/src/families/inkling2_loop/dense_test.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+    });
+    d.addImport("metal", metal);
+    d.addImport("core", core);
+    d.addImport("inkling2_config", b.createModule(.{ .root_source_file = b.path("zig/src/families/inkling2/config.zig"), .target = target, .optimize = .Debug }));
+    const dense_run = b.addRunArtifact(b.addTest(.{ .root_module = d }));
+    dense_run.has_side_effects = true;
+    step.dependOn(&dense_run.step);
+    test_step.dependOn(&dense_run.step);
 }
 
 /// `tf-inkling2-loop-run`: every position's float32 logits, teacher-forced, for the campaign's parity check.

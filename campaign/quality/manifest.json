@@ -1,0 +1,576 @@
+{
+  "cases": [
+    {
+      "id": "code-c01",
+      "kind": "code",
+      "licence": "Apache-2.0",
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "sha256": "f92866918a734cdc8b0b5273363e451b188ecadcfa56ab84d46224b867b41d57",
+      "source": "campaign/quality/build_cases.py#CODE"
+    },
+    {
+      "id": "code-c02",
+      "kind": "code",
+      "licence": "Apache-2.0",
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "sha256": "5759c5329e43a238747fd0d539fcb1c8890f94693f9b23183a4a541d2a5cb105",
+      "source": "campaign/quality/build_cases.py#CODE"
+    },
+    {
+      "id": "code-c03",
+      "kind": "code",
+      "licence": "Apache-2.0",
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "sha256": "e2e559aec2d2872626e73fb0057bb72f9a0ebd7219296f0065da315d30bf3006",
+      "source": "campaign/quality/build_cases.py#CODE"
+    },
+    {
+      "id": "code-c04",
+      "kind": "code",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "62652d71531bd60671dc9cf63b84489c794e1a9105de6a237522385c5a04b3b7",
+      "source": "campaign/quality/build_cases.py#CODE"
+    },
+    {
+      "id": "code-c05",
+      "kind": "code",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "df2084ebb08f6fc13386bc104b2879f4d5c4acaab27c846c56fe3e8acdd89d6d",
+      "source": "campaign/quality/build_cases.py#CODE"
+    },
+    {
+      "id": "code-c06",
+      "kind": "code",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "7d2e18c9ef9df992c79fccbef856e22ca310ced84bc71bf3c02a6c1498c7d989",
+      "source": "campaign/quality/build_cases.py#CODE"
+    },
+    {
+      "id": "code-c07",
+      "kind": "code",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "322f24e73c7cc574793cfa4a504f60ce84ceaa5a761aaee0ffa6dec6ee109085",
+      "source": "campaign/quality/build_cases.py#CODE"
+    },
+    {
+      "id": "code-c08",
+      "kind": "code",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "551fd7d1e52f4e76cb892f1d18e7c977bceb21e96c7c65a5b91fc638adaad366",
+      "source": "campaign/quality/build_cases.py#CODE"
+    },
+    {
+      "id": "code-c09",
+      "kind": "code",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "65fa3712364e351c64a2c45044f0877b95a45d6baf4a02835268bda61a134397",
+      "source": "campaign/quality/build_cases.py#CODE"
+    },
+    {
+      "id": "code-c10",
+      "kind": "code",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "8d4d8b445e621fccaad6a0d2d938f61fa85f96e5256f2fab289b4a65c48db27d",
+      "source": "campaign/quality/build_cases.py#CODE"
+    },
+    {
+      "id": "code-c11",
+      "kind": "code",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "af03735b3bee07b218f50d97c13c17e21d86a594e4fa2d8ff396402441d44bcb",
+      "source": "campaign/quality/build_cases.py#CODE"
+    },
+    {
+      "id": "code-c12",
+      "kind": "code",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "5e50dec35cb2eb422b075441deaac1f97a6ae59d599a3835fba5ec5de013bba5",
+      "source": "campaign/quality/build_cases.py#CODE"
+    },
+    {
+      "id": "code-c13",
+      "kind": "code",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "d7cfc4a3172443cfba391f1cb4689158af6c9994457f4ce029f62a9255583888",
+      "source": "campaign/quality/build_cases.py#CODE"
+    },
+    {
+      "id": "code-c14",
+      "kind": "code",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "57958f0016de7e7ad33ea0c3d339fe5f6475a784cce995b5e6658f1a8baf223b",
+      "source": "campaign/quality/build_cases.py#CODE"
+    },
+    {
+      "id": "code-c15",
+      "kind": "code",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "5eab0a4745661541847db341dd74c72fbc214cb89792e449d0ce5b60fa22c2b8",
+      "source": "campaign/quality/build_cases.py#CODE"
+    },
+    {
+      "id": "code-c16",
+      "kind": "code",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "5b79a39ffd24457d189e791a58afcf37f7b99769c9b832d12899a57292ff8ec8",
+      "source": "campaign/quality/build_cases.py#CODE"
+    },
+    {
+      "id": "structured-s01",
+      "kind": "structured",
+      "licence": "Apache-2.0",
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "sha256": "13966bd14153afdbc7364d046a75fcfad5e077e0a341ba1e44e3bb97dd1f9a00",
+      "source": "campaign/quality/build_cases.py#JSON_CASES"
+    },
+    {
+      "id": "structured-s02",
+      "kind": "structured",
+      "licence": "Apache-2.0",
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "sha256": "e6a3eb7a80beca1ea947544d7ef09a67535c444f08d6c6454f3ff210bd63f3b4",
+      "source": "campaign/quality/build_cases.py#JSON_CASES"
+    },
+    {
+      "id": "structured-s03",
+      "kind": "structured",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "28fe0aa76c4cf00deb993cbd6372e199999c1d5c18884815e31553307fbb3cd7",
+      "source": "campaign/quality/build_cases.py#JSON_CASES"
+    },
+    {
+      "id": "structured-s04",
+      "kind": "structured",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "8d906fbc11b800272bfd00bab23415722e9f0be9d93f16ba4bf88e4851ef299f",
+      "source": "campaign/quality/build_cases.py#JSON_CASES"
+    },
+    {
+      "id": "structured-s05",
+      "kind": "structured",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "f39bea4c7f0dfd7e672fd5b028b719b261948e081aab8c18de874fcccd46ed73",
+      "source": "campaign/quality/build_cases.py#JSON_CASES"
+    },
+    {
+      "id": "structured-s06",
+      "kind": "structured",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "a9a2b6cadfe1f0765bcaa775e5743da7b2e73a1339ea12e5a46c5723040d1b9f",
+      "source": "campaign/quality/build_cases.py#JSON_CASES"
+    },
+    {
+      "id": "structured-s07",
+      "kind": "structured",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "51ebebc51ee43c2bb355ccb95555b53133bdfa7d70365e762ddb7c0c7c22bd14",
+      "source": "campaign/quality/build_cases.py#JSON_CASES"
+    },
+    {
+      "id": "structured-s08",
+      "kind": "structured",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "5560b9367cfe2971cc3e4986ee09d2308a75085d8057211f15b2291a5e00e6f3",
+      "source": "campaign/quality/build_cases.py#JSON_CASES"
+    },
+    {
+      "id": "structured-s09",
+      "kind": "structured",
+      "licence": "Apache-2.0",
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "sha256": "067ac22e3133693c6db9d332b8e32bcd368fb4ccc5551070a96cbe362bea18bb",
+      "source": "campaign/quality/build_cases.py#TOOL_CASES"
+    },
+    {
+      "id": "structured-s10",
+      "kind": "structured",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "dca14d8fbaf6dc22af6ac428e25381924b3840da4266dd59bc1c725fcf142fd2",
+      "source": "campaign/quality/build_cases.py#TOOL_CASES"
+    },
+    {
+      "id": "structured-s11",
+      "kind": "structured",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "5de976a12e1518b15138b59928fbeff6bcf9ebbe687716d36fe6b92214388d30",
+      "source": "campaign/quality/build_cases.py#TOOL_CASES"
+    },
+    {
+      "id": "structured-s12",
+      "kind": "structured",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "aa7ff091771d15cd5ddd76cd6a3b565b5ae98951bfc40fa869d380504013d6f0",
+      "source": "campaign/quality/build_cases.py#TOOL_CASES"
+    },
+    {
+      "id": "reasoning-gsm8k-167",
+      "kind": "reasoning",
+      "licence": "MIT",
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "sha256": "5ab389a422243f2a5311de3d2e5fa494865ca729af93bb1469a29d2541f74740",
+      "source": "web/tensorfold_web/data/quality.json:gsm8k:gsm8k-167"
+    },
+    {
+      "id": "reasoning-gsm8k-83",
+      "kind": "reasoning",
+      "licence": "MIT",
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "sha256": "a53eca83c7ae39a495aa4a5ff61f9e5dc3bc10a5ef8837856d3966148f88ca5b",
+      "source": "web/tensorfold_web/data/quality.json:gsm8k:gsm8k-83"
+    },
+    {
+      "id": "reasoning-mmlu-163",
+      "kind": "reasoning",
+      "licence": "MIT",
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "sha256": "ade0bc478b3c2452f30f36c5df9b5c7cb1d0e086ab524eba40b1389f84c36bc1",
+      "source": "web/tensorfold_web/data/quality.json:mmlu:mmlu-163"
+    },
+    {
+      "id": "reasoning-gsm8k-3",
+      "kind": "reasoning",
+      "licence": "MIT",
+      "sets": [
+        "full"
+      ],
+      "sha256": "d8e67cc860a792e003eac6aad74c0ddb88e55337dbde09f0d6dc5aeb2037b752",
+      "source": "web/tensorfold_web/data/quality.json:gsm8k:gsm8k-3"
+    },
+    {
+      "id": "reasoning-gsm8k-23",
+      "kind": "reasoning",
+      "licence": "MIT",
+      "sets": [
+        "full"
+      ],
+      "sha256": "b4fbdd67a0fedf670f425e4cb7b8e59b4e1d2c30bafb091c481e35db19cba1dd",
+      "source": "web/tensorfold_web/data/quality.json:gsm8k:gsm8k-23"
+    },
+    {
+      "id": "reasoning-gsm8k-86",
+      "kind": "reasoning",
+      "licence": "MIT",
+      "sets": [
+        "full"
+      ],
+      "sha256": "8db85219b0d9c7d079ee5b9be0f20b33e93c6fdac306bcac066db4195e8041f5",
+      "source": "web/tensorfold_web/data/quality.json:gsm8k:gsm8k-86"
+    },
+    {
+      "id": "reasoning-gsm8k-120",
+      "kind": "reasoning",
+      "licence": "MIT",
+      "sets": [
+        "full"
+      ],
+      "sha256": "b2d159334dff139bea315f799de10217f0ecc012a0861fb7abe3541e04615a98",
+      "source": "web/tensorfold_web/data/quality.json:gsm8k:gsm8k-120"
+    },
+    {
+      "id": "reasoning-gsm8k-221",
+      "kind": "reasoning",
+      "licence": "MIT",
+      "sets": [
+        "full"
+      ],
+      "sha256": "210b1690eb103590faf6309837fd17ff5644d38c74cf78c059e5b0cabcb5a54c",
+      "source": "web/tensorfold_web/data/quality.json:gsm8k:gsm8k-221"
+    },
+    {
+      "id": "reasoning-gsm8k-278",
+      "kind": "reasoning",
+      "licence": "MIT",
+      "sets": [
+        "full"
+      ],
+      "sha256": "4cc0da115ad06f564e9e104edbdd35097cdf321b00460fff003d28deeda28859",
+      "source": "web/tensorfold_web/data/quality.json:gsm8k:gsm8k-278"
+    },
+    {
+      "id": "reasoning-mmlu-593",
+      "kind": "reasoning",
+      "licence": "MIT",
+      "sets": [
+        "full"
+      ],
+      "sha256": "69d1bbf1865ace962a9c60646cd2982c946348e062f0721bca0148c5725a22c3",
+      "source": "web/tensorfold_web/data/quality.json:mmlu:mmlu-593"
+    },
+    {
+      "id": "reasoning-mmlu-600",
+      "kind": "reasoning",
+      "licence": "MIT",
+      "sets": [
+        "full"
+      ],
+      "sha256": "03a9491ebb5a198c4dd0d32c3e7dca222713365a9b1b767c2fd077d6a1779b19",
+      "source": "web/tensorfold_web/data/quality.json:mmlu:mmlu-600"
+    },
+    {
+      "id": "reasoning-mmlu-1768",
+      "kind": "reasoning",
+      "licence": "MIT",
+      "sets": [
+        "full"
+      ],
+      "sha256": "a07624a30b76d7ddec01c490858a6c94ce861c8d41cca8cb9ec9ea4b76a94e29",
+      "source": "web/tensorfold_web/data/quality.json:mmlu:mmlu-1768"
+    },
+    {
+      "files": [
+        {
+          "bytes": 15051,
+          "cell": 4096,
+          "path": "campaign/quality/cases/retrieval/t01.txt",
+          "sha256": "7aacc825cfbb057b04002cfb350080b59cbc13448fa57db87f7537b6568b671e"
+        }
+      ],
+      "id": "retrieval-t01",
+      "kind": "retrieval",
+      "licence": "Apache-2.0",
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "sha256": "02475e06b407d584cb01694902fe4f7946ab838d100c6c959e308c15dd2e744f",
+      "source": "campaign/prompts/dev/code-4096.txt"
+    },
+    {
+      "files": [
+        {
+          "bytes": 15458,
+          "cell": 4096,
+          "path": "campaign/quality/cases/retrieval/t02.txt",
+          "sha256": "95e00c946cfc7691db61a773d85c86676dc08f00df68dbd175e0ddb8a7826b09"
+        }
+      ],
+      "id": "retrieval-t02",
+      "kind": "retrieval",
+      "licence": "Apache-2.0",
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "sha256": "c464111e9132bdf81878de8daa04b28ef4be764cb9e91ca0d74a863d33955717",
+      "source": "campaign/prompts/dev/prose-4096.txt"
+    },
+    {
+      "files": [
+        {
+          "bytes": 8455,
+          "cell": 4096,
+          "path": "campaign/quality/cases/retrieval/t03.txt",
+          "sha256": "cf93ff6c772d3e2cc6a7cb9d9bad174af9e768d9bf8996cd49797c6322e74433"
+        }
+      ],
+      "id": "retrieval-t03",
+      "kind": "retrieval",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "f6b398c18790ee95c827377bbfda12f97e6a48aad926a4eeec926dd100b69759",
+      "source": "campaign/prompts/dev/structured-4096.txt"
+    },
+    {
+      "files": [
+        {
+          "bytes": 12863,
+          "cell": 4096,
+          "path": "campaign/quality/cases/retrieval/t04.txt",
+          "sha256": "63741743da7bcb4ab0f2ee5c82d16cf8b495de52156a217094d6952f22ee6f3b"
+        }
+      ],
+      "id": "retrieval-t04",
+      "kind": "retrieval",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "126dd9773c56144debf09c73a4cd6b5b9b17e44750a6a3f5fe3f5a41fdc957f4",
+      "source": "campaign/prompts/holdout/heldout-code-4096.txt"
+    },
+    {
+      "files": [
+        {
+          "bytes": 114809,
+          "cell": 32768,
+          "path": "campaign/quality/cases/retrieval/t05.txt",
+          "sha256": "e0e4792a2422bb63f0deffb431686ce7917947927871977302dbd16d942b6c50"
+        }
+      ],
+      "id": "retrieval-t05",
+      "kind": "retrieval",
+      "licence": "Apache-2.0",
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "sha256": "3234b488ae7c95c6b19cbb54a7e5e1ba4e9af97facc385922c0a5bc49aa283bd",
+      "source": "campaign/prompts/dev/code-32768.txt"
+    },
+    {
+      "files": [
+        {
+          "bytes": 121579,
+          "cell": 32768,
+          "path": "campaign/quality/cases/retrieval/t06.txt",
+          "sha256": "9ead8b29de8685c911ec4bbe8a582971735917711e71ea31e42d1818cbfb0be6"
+        }
+      ],
+      "id": "retrieval-t06",
+      "kind": "retrieval",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "e7bc0ab3f45066ee3b977d48f1fb2560be66da2726b92e7677638a9ca5dbfda0",
+      "source": "campaign/prompts/dev/prose-32768.txt"
+    },
+    {
+      "files": [
+        {
+          "bytes": 70112,
+          "cell": 32768,
+          "path": "campaign/quality/cases/retrieval/t07.txt",
+          "sha256": "eddb0226cb061991dad1ed683b71873e9322a576d59897563200c0ae006ae77d"
+        }
+      ],
+      "id": "retrieval-t07",
+      "kind": "retrieval",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "9f4b035a0ffad3725310267cebdf49736d7ce7953e69007f821b29a6e0da7a4a",
+      "source": "campaign/prompts/dev/structured-32768.txt"
+    },
+    {
+      "files": [
+        {
+          "bytes": 109612,
+          "cell": 32768,
+          "path": "campaign/quality/cases/retrieval/t08.txt",
+          "sha256": "4e1cadd12ba35af80bd0cfcdeaf44334c90aec2e4a36c7ef2986944f58a3e928"
+        }
+      ],
+      "id": "retrieval-t08",
+      "kind": "retrieval",
+      "licence": "Apache-2.0",
+      "sets": [
+        "full"
+      ],
+      "sha256": "a47e38515030e9274d4d0d4ce0c768428a6ec747cad7c132e3d460ba40cef17e",
+      "source": "campaign/prompts/holdout/heldout-code-32768.txt"
+    }
+  ],
+  "cases_sha256": "65ae002d2d185ebb1501b731160d22681a92d14ccfd2113181864e05887b7e46",
+  "schema": 1,
+  "suite": {
+    "cases": 48,
+    "dev": 12,
+    "kinds": {
+      "code": 16,
+      "reasoning": 12,
+      "retrieval": 8,
+      "structured": 12
+    },
+    "prompt_tokens": {
+      "32k": 32768,
+      "4k": 4096
+    }
+  }
+}

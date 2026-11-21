@@ -24,6 +24,32 @@ TASK_WALL_S = 600.0
 SERVER_START_S = 1800.0
 
 
+def needs_vision(task_dir: Path) -> bool:
+    """Whether a task's prompt or fixture carries an image path, i.e. content a text-only model cannot read."""
+    prompt = (task_dir / "prompt.txt").read_text(encoding="utf-8", errors="replace")
+    if any(marker in prompt.lower() for marker in ("image", "screenshot", ".png", ".jpg", ".jpeg")):
+        return True
+    for path in (task_dir / "repo").rglob("*"):
+        if path.is_file() and path.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+            return True
+    return False
+
+
+def applicable(task_dirs: list[Path], key: str) -> tuple[list[Path], list[dict]]:
+    """Split Pi tasks into runnable ones and the ones a text-only model excludes with a recorded reason."""
+    if key != "inkling-2-mini":
+        return list(task_dirs), []
+    kept, excluded = [], []
+    for task_dir in task_dirs:
+        if needs_vision(task_dir):
+            excluded.append({"task": task_dir.name,
+                             "reason": "Inkling 2 Mini is text-only in this campaign: image content parts and "
+                                       "--vision are refused (zig/src/families/inkling2_loop/refuse.zig)"})
+        else:
+            kept.append(task_dir)
+    return kept, excluded
+
+
 def metrics(base: str) -> dict[str, int]:
     try:
         with urllib.request.urlopen(f"{base}/metrics", timeout=10) as response:
@@ -70,10 +96,9 @@ def render_models(template: Path, base: str, model_id: str) -> dict:
     document = json.loads(template.read_text(encoding="utf-8"))
     provider = document["providers"]["tensorfold"]
     provider["baseUrl"] = f"{base}/v1"
-    for model in provider.get("models") or []:
-        if model.get("id") == "flint":
-            model["id"] = model_id
-            break
+    models = provider.get("models") or []
+    if models:
+        models[0]["id"] = model_id
     return document
 
 
@@ -185,11 +210,14 @@ def main() -> int:
     tasks = sorted(path for path in tasks_root.iterdir() if path.is_dir() and (not wanted or path.name in wanted))
     if not tasks:
         raise SystemExit("no tasks selected")
+    tasks, excluded = applicable(tasks, model_key)
+    if not tasks:
+        raise SystemExit(f"every selected task needs images, which {model_key} refuses: {excluded}")
 
     stamp = dt.datetime.now(dt.timezone.utc)
     run_id = args.run_id or f"{args.model}-{stamp.strftime('%Y%m%dT%H%M%SZ')}"
     log_path = harness.TMP / f"pi-server-{run_id}.log"
-    server = harness.Server(binary, model, [], 2, log_path)
+    server = harness.Server(binary, model, harness.default_serve_args(model_key), 2, log_path)
     server.start(timeout=SERVER_START_S)
     base = server.base
     try:
@@ -199,6 +227,9 @@ def main() -> int:
         if problems:
             raise SystemExit(f"server at {base} cannot be attributed to {binary}: {'; '.join(problems)}")
         served_model = identity["model_ids"][0]
+        if not harness.served_model_matches(model_key, served_model):
+            raise SystemExit(f"server at {base} serves {served_model!r}, not a {harness.served_identity_name(model_key)} "
+                             "endpoint; the run cannot be attributed to this model")
         models_document = render_models(template, base, served_model)
         before = metrics(base)
         records = []
@@ -226,7 +257,7 @@ def main() -> int:
               "parse_errors": sum(r["parse_errors"]["total"] for r in records),
               "server_log_parse_errors": count_log_parse_errors(log_path)}
     record = {"schema": 1, "model": args.model, "recorded_at": stamp.isoformat(), "run_id": run_id,
-              "host": harness.host_summary(),
+              "host": harness.host_summary(model_key),
               "pi": {"path": str(PI), "flags": PI_FLAGS, "tools": PI_TOOLS, "provider": "tensorfold",
                      "model_id": served_model},
               "server": {"base": base, "port": server.port, "owned": True, "argv": server.argv,
@@ -236,7 +267,7 @@ def main() -> int:
               "agent": {"template": str(template.relative_to(campaign)),
                         "template_sha256": harness.sha256_file(template),
                         "rendered": models_document},
-              "tasks": records, "totals": totals,
+              "tasks": records, "totals": totals, **({"excluded": excluded} if excluded else {}),
               "completion": {"complete": totals["completed"] == totals["tasks"],
                              "checkers_passed": totals["checker_passed"] == totals["tasks"]},
               "qualification": "run `pi-qualify --result <this file>`; completion alone does not pass checkers"}

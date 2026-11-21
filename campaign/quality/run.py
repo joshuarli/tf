@@ -28,6 +28,32 @@ PROMPT_CACHE_GIB = 2
 REQUEST_TIMEOUT = 1800
 
 
+def needs_vision(case: dict) -> bool:
+    """Whether a case carries an image or other non-text content part rather than a text prompt."""
+    if case.get("kind") == "vision":
+        return True
+    prompt = case.get("prompt")
+    if isinstance(prompt, list):
+        return any(isinstance(part, dict) and part.get("type") in ("image_url", "image", "input_image")
+                   for part in prompt)
+    return bool(case.get("image") or case.get("media") or case.get("vision"))
+
+
+def applicable(cases: list[dict], key: str) -> tuple[list[dict], list[dict]]:
+    """Split a selection into scored cases and the cases a text-only model excludes with a recorded reason."""
+    if key != "inkling-2-mini":
+        return list(cases), []
+    kept, excluded = [], []
+    for case in cases:
+        if needs_vision(case):
+            excluded.append({"id": case["id"], "kind": case["kind"],
+                             "reason": "Inkling 2 Mini is text-only in this campaign: image and vision parts are "
+                                       "refused (zig/src/families/inkling2_loop/refuse.zig)"})
+        else:
+            kept.append(case)
+    return kept, excluded
+
+
 def load_suite() -> tuple[dict, dict]:
     document = json.loads(CASES.read_text(encoding="utf-8"))
     recorded = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -97,7 +123,9 @@ def prompt_sha(case: dict, body: dict) -> str:
 
 def run(args) -> int:
     document, recorded = load_suite()
-    cases = select(document, args.set)
+    cases, excluded = applicable(select(document, args.set), args.model)
+    if not cases:
+        raise SystemExit(f"every {args.set} case is excluded for {args.model}: {excluded}")
     binary = Path(args.bin).expanduser().resolve()
     if not binary.is_file():
         raise SystemExit(f"binary {binary} is missing")
@@ -129,13 +157,18 @@ def run(args) -> int:
               "protocol": {"temperature": TEMPERATURE, "seed": SEED, "max_tokens": MAX_TOKENS,
                            "prompt_cache_gib": PROMPT_CACHE_GIB, "drafts": "product default",
                            "sandbox": "sandbox-exec, no network, writes only in .work/quality/<run>/<case>"},
-              "host": harness.host_summary(), "pressure_before": before["pressure"], "cases": []}
+              "host": harness.host_summary(key), "pressure_before": before["pressure"], "cases": []}
+    if excluded:
+        record["excluded"] = excluded
     started = time.monotonic()
     failures = 0
     with harness.Server(binary, model, [], PROMPT_CACHE_GIB, log_path) as server:
         served = server.models()
         if not served:
             raise SystemExit("server listed no model id")
+        if not harness.served_model_matches(key, served[0]):
+            raise SystemExit(f"server at {server.base} serves {served[0]!r}, not {harness.served_identity_name(key)!r}; "
+                             "the run cannot be attributed to this model")
         record["server"] = {"argv": server.argv, "served": served[0], **server.timing()}
         print(f"serving {served[0]}; startup {server.timing()}", file=sys.stderr, flush=True)
         for index, case in enumerate(cases, 1):

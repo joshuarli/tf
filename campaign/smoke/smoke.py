@@ -8,7 +8,12 @@ import time
 import urllib.request
 from pathlib import Path
 
-MODELS = {"flint": Path.home() / "models" / "flint-int4@3b93f9053b53"}
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "bench"))
+
+import harness  # noqa: E402
+
+MODELS = {"flint": "flint-int4", "inkling": "inkling-2-mini", "inkling2-mini": "inkling-2-mini"}
 MODES = {"ar": ["--no-drafts"]}
 TOKENS = 512
 PROMPT = "Explain, step by step, how a hash map handles collisions, then compare open addressing with chaining."
@@ -44,15 +49,19 @@ def main() -> int:
     p.add_argument("--bin", required=True)
     p.add_argument("--model", choices=sorted(MODELS), required=True)
     p.add_argument("--mode", choices=sorted(MODES), required=True)
+    p.add_argument("--load-limit-var", required=True)
     p.add_argument("--load-limit-gb", type=int, required=True)
     p.add_argument("--log", required=True)
     args = p.parse_args()
+    refused = harness.model_mode_problem(MODELS[args.model], args.mode)
+    if refused:
+        raise SystemExit(f"mode {args.mode} is unsupported for {MODELS[args.model]}: {refused}")
 
     port = free_port()
     base = f"http://127.0.0.1:{port}"
-    cmd = [args.bin, "serve", str(MODELS[args.model]), "--host", "127.0.0.1", "--port", str(port),
+    cmd = [args.bin, "serve", str(harness.model_dir(MODELS[args.model])), "--host", "127.0.0.1", "--port", str(port),
            "--parallel", "1", "--prompt-cache-gib", "0", *MODES[args.mode]]
-    env = dict(os.environ, FLINT_LOAD_LIMIT_GB=str(args.load_limit_gb))
+    env = dict(os.environ, **{args.load_limit_var: str(args.load_limit_gb)})
     with open(args.log, "w") as log:
         proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env)
         try:

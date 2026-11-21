@@ -84,6 +84,23 @@ def rejected(trials):
     return scorecard.collect_pairs(trials)[1]
 
 
+class GpuContention(unittest.TestCase):
+    """The GPU lock serialises campaign runs, but other processes on the host can still use the GPU mid-trial."""
+
+    def test_other_gpu_time_over_the_limit_invalidates_the_trial(self):
+        before = {10: ("server", 0), 20: ("WindowServer", 1_000)}
+        after = {10: ("server", 9_000_000_000), 20: ("WindowServer", 1_000_000_000)}
+        users, reasons = harness.gpu_contention(before, after, 10.0, own={10})
+        self.assertEqual([u["pid"] for u in users], [20])
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("10.0% GPU time", reasons[0])
+
+    def test_the_servers_own_gpu_time_and_a_quiet_host_pass(self):
+        before = {10: ("server", 0), 20: ("WindowServer", 1_000)}
+        after = {10: ("server", 9_000_000_000), 20: ("WindowServer", 1_000 + 100_000_000)}
+        self.assertEqual(harness.gpu_contention(before, after, 10.0, own={10})[1], [])
+
+
 class PromptLengthPins(unittest.TestCase):
     """The corpus was sized with Flint's tokenizer; an Inkling 1,349-token prompt was marked invalid against 1024."""
 

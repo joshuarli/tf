@@ -200,6 +200,11 @@ def host() -> list[str]:
                  if servers else "no tensorfold-native servers running")
     holder = subprocess.run(["lsof", "-t", str(GPU_LOCK)], capture_output=True, text=True).stdout.split()
     notes.append(f"GPU lock held by pid {', '.join(holder)}; GPU workloads will wait" if holder else "GPU lock free")
+    try:
+        gate = subprocess.run(["gpu-gate-ready", "-s"], capture_output=True, text=True).stdout.strip().splitlines()
+        notes.append(gate[0].removeprefix("gpu-gate-ready: ") if gate else "gpu-gate-ready unreadable")
+    except FileNotFoundError:
+        notes.append("gpu-gate-ready not installed; GPU contention unchecked")
     return notes
 
 

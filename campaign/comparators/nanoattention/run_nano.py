@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-CAMPAIGN = HERE.parent
+CAMPAIGN = HERE.parents[1]
 sys.path.insert(0, str(CAMPAIGN / "bench"))
 sys.path.insert(0, str(HERE))
 
@@ -122,7 +122,7 @@ def run(args) -> int:
     path = out_dir / f"{run_id}.jsonl"
     path.touch()
     from importlib.util import module_from_spec, spec_from_file_location
-    spec = spec_from_file_location("nano_server", HERE / "nanoattention" / "server.py")
+    spec = spec_from_file_location("nano_server", HERE / "server.py")
     server = module_from_spec(spec)
     spec.loader.exec_module(server)
     metadata = server.metadata(model_dir)
@@ -137,7 +137,9 @@ def run(args) -> int:
                                     stderr=log, text=True, bufsize=1, start_new_session=True,
                                     env=dict(os.environ, **server.env(model_dir, 0)))
             try:
-                read_answer(proc, args.ready_timeout)
+                ready = proc.stdout.readline()
+                if not ready:
+                    raise RuntimeError(f"nanoattention exited during load: {log_path.read_text()[-2000:]}")
                 for prompt in by_cell[cell]:
                     text = (harness.REPO / prompt["path"]).read_text(encoding="utf-8")
                     ids = prompt_ids(model_dir, text)

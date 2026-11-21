@@ -8,7 +8,8 @@
 - **Accepted:** C0 (fetch, host and build-baseline exit 0; second fetch downloads nothing); F1 (`--no-drafts` already disables copies and the drafter: `no_drafts_test.zig` in `test-flint-draft-host`; `make -C campaign smoke MODEL=flint MODE=ar` gives 512 tokens, 0 drafted, 1.00 tokens per decode round, about 169 tok/s); C1 (`make -C campaign bench MODEL=flint MODE=ar CELLS=1024 PAIRS=1` plus a byte-identical second `scorecard`; baseline ar at 1,024 tokens decodes at 153 tok/s with a 22.5 GiB peak); Q1 (`make -C campaign quality MODEL=flint SET=dev`: 12/12 on the baseline; 48 cases; libtfgrammar built from xgrammar v0.2.8 `97787376`); H1 (`make -C campaign pi-harness MODEL=flint`: 8/8 completed, 8/8 checkers passed, 0 tool-call parse errors); I0 (`make -C campaign ref-check MODEL=inkling2-mini`: the float32 reference matches llama.cpp `40b7a546` top-1 on every confident position of 4 histories, max logit error 1.4e-4, mean KL 3e-11; recipe at `docs/recipes/inkling-2-mini.md`). **Red:** none beyond **Baseline**. **Parked:** none.
 - **In flight** (bridge workers; lane `.work/wt/<lane>`, branch `lane/<lane>`):
   - F2 `f2-parity`, `usrw_4bb1c566-c653-43f6-8d38-cab9288ef301`;
-- **Next:** F3 after F2; I1 after I0.
+  - I1 `i1-loader`, `usrw_0e08bc30-c06d-4a75-82db-c89ca1b9de1c`;
+- **Next:** F3 after F2; I2 after I1.
 - **Resume:** run `worker_status` on each in-flight session, then review and merge each lane whose acceptance passes. `.work/wt/c0-ground` holds an earlier C0 worker's leftover worktree. That worker has exited, and its branch is merged except commit `91a5a06a1`, which was superseded and not adopted.
 
 ## Charter

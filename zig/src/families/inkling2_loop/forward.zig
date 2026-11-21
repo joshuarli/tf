@@ -217,6 +217,8 @@ pub const Forward = struct {
             inputs = .{ bo(s.xn, 0), bo(s.xn, f.h * 4), bo(s.xn, 2 * f.h * 4) };
         }
 
+        if (f.capture) |cap| for (0..3) |j| f.record(cap, slot, j, inputs[j], f.h);
+
         if (full) {
             f.rms1(inputs[0], t(lay.q_norm), bo(s.xn, 0));
             f.rms1(inputs[1], t(lay.k_norm), bo(s.xn, f.h * 4));
@@ -230,15 +232,16 @@ pub const Forward = struct {
             inputs = .{ bo(s.xn, 0), bo(s.xn, 0), bo(s.xn, 0) };
         }
 
+        if (f.capture) |cap| for (0..3) |j| f.record(cap, slot, 3 + j, inputs[j], f.h);
         f.attention(lay, slot, full, inputs);
-        if (f.capture) |cap| f.record(cap, slot, 0, b(s.o), f.h);
+        if (f.capture) |cap| f.record(cap, slot, 6, b(s.o), f.h);
         if (ip % text.block == 0) {
             f.pushBlock(inp);
             f.copyN(b(s.o), b(s.x), f.h);
         } else f.addN(b(s.x), b(s.o), f.h);
 
         f.copyN(b(s.x), b(s.ffnin), f.h);
-        if (f.capture) |cap| f.record(cap, slot, 1, b(s.ffnin), f.h);
+        if (f.capture) |cap| f.record(cap, slot, 7, b(s.ffnin), f.h);
         f.mixBlocks(b(s.x), m.weights.mlp_queries[index], bo(s.mixout, 0));
         if (msg) |got| {
             const ctl = lay.controllers[3] orelse return error.MissingController;
@@ -250,7 +253,7 @@ pub const Forward = struct {
         f.convolve(b(s.moe), b(s.aconv), lay.mlp_post, null, A, A, slots[3], f.h, 0, 0);
         f.copyN(b(s.ffnin), b(s.x), f.h);
         f.addN(b(s.x), b(s.aconv), f.h);
-        if (f.capture) |cap| f.record(cap, slot, 2, b(s.x), f.h);
+        if (f.capture) |cap| f.record(cap, slot, 8, b(s.x), f.h);
     }
 
     fn record(f: Forward, _: *st.Trace, slot: u32, which: usize, src: B, cols: u32) void {

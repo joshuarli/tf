@@ -20,4 +20,8 @@ test "the sources name the kernels the model loads" {
     try std.testing.expect(std.mem.indexOf(u8, expertSource(true), "I2_MXFP8 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, expertSource(false), "i2_gu") != null);
     try std.testing.expect(std.mem.indexOf(u8, expertSource(false), "i2_down") != null);
+    try std.testing.expect(std.mem.indexOf(u8, expertSource(false), "i2_gu_table") != null);
+    try std.testing.expect(std.mem.indexOf(u8, expertSource(false), "i2_down_table") != null);
+    try std.testing.expect(std.mem.indexOf(u8, expertSource(true), "i2_gu_table") != null);
+    try std.testing.expect(std.mem.indexOf(u8, expertSource(true), "i2_down_thread") != null);
 }

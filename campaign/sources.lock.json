@@ -2,6 +2,18 @@
   "schema_version": 1,
   "inputs": [
     {
+      "name": "llama.cpp/llama.cpp-40b7a546defe1f60edd1338c719552ffc58c89a0.tar.gz",
+      "version": "40b7a546defe1f60edd1338c719552ffc58c89a0",
+      "sha256": "04ee9574a84722e6488f579c7007a2bddb20886f5eecb8090c54adf4dcd78d87",
+      "url": "https://codeload.github.com/ggml-org/llama.cpp/tar.gz/40b7a546defe1f60edd1338c719552ffc58c89a0",
+      "size": 39281271,
+      "role": "reference",
+      "license": "MIT",
+      "purpose": "Pinned llama.cpp source tarball at the commit recorded by plan Decision 9; src/models/inkling2-loop.cpp is the semantic reference graph and conversion/inkling2.py its converter",
+      "model": "llama.cpp",
+      "store": "src"
+    },
+    {
       "name": "flint-int4/LICENSE",
       "version": "3b93f9053b530488405ae9fca51d4900d6ce21f0",
       "sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
@@ -319,6 +331,94 @@
       "license": "Apache-2.0",
       "purpose": "Pinned tokenizer_config.json from thinkingmachines/Inkling-2-Mini at revision ed40e7da625f594fc9c4990f5f66be24873c22d7",
       "model": "inkling-2-mini"
+    },
+    {
+      "name": "inkling-2-mini-tiny/chat_template.jinja",
+      "version": "5e761216759d5d040c09f458d5f077b9aaa5ac78",
+      "sha256": "53a9035f3255945704b5857657cfb00c1165090c0641c4f782a0cbf268cc16dc",
+      "url": "https://huggingface.co/trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration/resolve/5e761216759d5d040c09f458d5f077b9aaa5ac78/chat_template.jinja",
+      "size": 6868,
+      "role": "fixture",
+      "license": "Apache-2.0",
+      "purpose": "Pinned chat_template.jinja from trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration at revision 5e761216759d5d040c09f458d5f077b9aaa5ac78",
+      "model": "inkling-2-mini-tiny"
+    },
+    {
+      "name": "inkling-2-mini-tiny/config.json",
+      "version": "5e761216759d5d040c09f458d5f077b9aaa5ac78",
+      "sha256": "c92f3bcb35731873b11b9c9ce786873d5ff115e9762d8169136538ae0cc4ff8c",
+      "url": "https://huggingface.co/trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration/resolve/5e761216759d5d040c09f458d5f077b9aaa5ac78/config.json",
+      "size": 3457,
+      "role": "fixture",
+      "license": "Apache-2.0",
+      "purpose": "Pinned config.json from trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration at revision 5e761216759d5d040c09f458d5f077b9aaa5ac78",
+      "model": "inkling-2-mini-tiny"
+    },
+    {
+      "name": "inkling-2-mini-tiny/generation_config.json",
+      "version": "5e761216759d5d040c09f458d5f077b9aaa5ac78",
+      "sha256": "83befb273af77c15f73a626864c8c2ca8b1401e76421538f9c1e56b00d4aa5f0",
+      "url": "https://huggingface.co/trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration/resolve/5e761216759d5d040c09f458d5f077b9aaa5ac78/generation_config.json",
+      "size": 139,
+      "role": "fixture",
+      "license": "Apache-2.0",
+      "purpose": "Pinned generation_config.json from trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration at revision 5e761216759d5d040c09f458d5f077b9aaa5ac78",
+      "model": "inkling-2-mini-tiny"
+    },
+    {
+      "name": "inkling-2-mini-tiny/hf_quant_config.json",
+      "version": "5e761216759d5d040c09f458d5f077b9aaa5ac78",
+      "sha256": "219bc3a9e1b8c1854dd87d8e2c60f97c30db708a60632da45db9cdc6046dfafa",
+      "url": "https://huggingface.co/trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration/resolve/5e761216759d5d040c09f458d5f077b9aaa5ac78/hf_quant_config.json",
+      "size": 13512,
+      "role": "fixture",
+      "license": "Apache-2.0",
+      "purpose": "Pinned hf_quant_config.json from trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration at revision 5e761216759d5d040c09f458d5f077b9aaa5ac78",
+      "model": "inkling-2-mini-tiny"
+    },
+    {
+      "name": "inkling-2-mini-tiny/model.safetensors",
+      "version": "5e761216759d5d040c09f458d5f077b9aaa5ac78",
+      "sha256": "3376ee624f277a4222bc0beeeedc62f2b6eba0f3d83a96dc387f3e693e42825c",
+      "url": "https://huggingface.co/trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration/resolve/5e761216759d5d040c09f458d5f077b9aaa5ac78/model.safetensors",
+      "size": 27279560,
+      "role": "fixture",
+      "license": "Apache-2.0",
+      "purpose": "Pinned model.safetensors from trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration at revision 5e761216759d5d040c09f458d5f077b9aaa5ac78",
+      "model": "inkling-2-mini-tiny"
+    },
+    {
+      "name": "inkling-2-mini-tiny/processor_config.json",
+      "version": "5e761216759d5d040c09f458d5f077b9aaa5ac78",
+      "sha256": "d7350adce18c8be4b607f261c8f0f7eabbf720bb7aaf648a43d4f8372bbacc2d",
+      "url": "https://huggingface.co/trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration/resolve/5e761216759d5d040c09f458d5f077b9aaa5ac78/processor_config.json",
+      "size": 461,
+      "role": "fixture",
+      "license": "Apache-2.0",
+      "purpose": "Pinned processor_config.json from trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration at revision 5e761216759d5d040c09f458d5f077b9aaa5ac78",
+      "model": "inkling-2-mini-tiny"
+    },
+    {
+      "name": "inkling-2-mini-tiny/tokenizer.json",
+      "version": "5e761216759d5d040c09f458d5f077b9aaa5ac78",
+      "sha256": "1bc3492b4ccc4ac57e227c13c259c36851d159a592bdabb101e5fd278ac9f600",
+      "url": "https://huggingface.co/trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration/resolve/5e761216759d5d040c09f458d5f077b9aaa5ac78/tokenizer.json",
+      "size": 26178846,
+      "role": "fixture",
+      "license": "Apache-2.0",
+      "purpose": "Pinned tokenizer.json from trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration at revision 5e761216759d5d040c09f458d5f077b9aaa5ac78",
+      "model": "inkling-2-mini-tiny"
+    },
+    {
+      "name": "inkling-2-mini-tiny/tokenizer_config.json",
+      "version": "5e761216759d5d040c09f458d5f077b9aaa5ac78",
+      "sha256": "23fb6a0a9dcbad6f2f799cea038ece2bc33d45e941e7a792e1a4e297388c2047",
+      "url": "https://huggingface.co/trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration/resolve/5e761216759d5d040c09f458d5f077b9aaa5ac78/tokenizer_config.json",
+      "size": 2925,
+      "role": "fixture",
+      "license": "Apache-2.0",
+      "purpose": "Pinned tokenizer_config.json from trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration at revision 5e761216759d5d040c09f458d5f077b9aaa5ac78",
+      "model": "inkling-2-mini-tiny"
     }
   ]
 }

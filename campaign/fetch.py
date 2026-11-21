@@ -10,6 +10,7 @@ REPO_NAMES = {
     "flint-int4": "flint-int4",
     "flint-dflash2": "Flint-DFlash2",
     "inkling-2-mini": "Inkling-2-Mini",
+    "inkling-2-mini-tiny": "tiny-Inkling2LoopForConditionalGeneration",
 }
 
 

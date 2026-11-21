@@ -118,6 +118,11 @@ pub const Glue = enum {
 pub const expert_names = [_][:0]const u8{ "i2_gu", "i2_down" };
 pub const Experts = enum { gu, down };
 
+fn expertKernels(mx: bool) [2][:0]const u8 {
+    if (!mx) return .{ "i2_gu_table", "i2_down_table" };
+    return .{ "i2_gu_table", "i2_down_thread" };
+}
+
 pub const Model = struct {
     gpa: std.mem.Allocator,
     device: mtl.Device,
@@ -129,6 +134,8 @@ pub const Model = struct {
     weights: Weights,
     glue: [glue_names.len]mtl.Pipeline,
     experts: [2][2]mtl.Pipeline, // [nvfp4, mxfp8][gate/up, down]
+    t16: mtl.Buffer,
+    t256: mtl.Buffer,
 
     pub fn load(gpa: std.mem.Allocator, io: std.Io, dir: []const u8) !*Model {
         const pool = mtl.objc.Pool.push();
@@ -149,6 +156,12 @@ pub const Model = struct {
         m.formats = try m.arena.allocator().alloc(cfg.Expert, m.config.text.layers);
         try cfg.expertFormats(m.shard.header, m.config.text.layers, m.formats);
         m.weights = try m.mapWeights();
+        m.t16 = try m.device.buffer(16 * 4, mtl.ResourceOptions.shared);
+        errdefer m.t16.deinit();
+        m.t256 = try m.device.buffer(256 * 4, mtl.ResourceOptions.shared);
+        errdefer m.t256.deinit();
+        for (0..16) |i| m.t16.slice(f32, 16)[i] = @floatCast(core.quant.nvfp4.e2m1(@intCast(i)));
+        for (0..256) |i| m.t256.slice(f32, 256)[i] = @floatCast(core.quant.fp8.e4m3(@intCast(i)));
         try m.buildPipelines();
         return m;
     }
@@ -156,6 +169,8 @@ pub const Model = struct {
     pub fn deinit(m: *Model) void {
         for (m.glue) |p| p.deinit();
         for (m.experts) |row| for (row) |p| p.deinit();
+        m.t16.deinit();
+        m.t256.deinit();
         m.arena.deinit();
         m.unmapShard();
         m.queue.deinit();
@@ -280,7 +295,7 @@ pub const Model = struct {
             const source = if (mx) kernels.expertSource(true) else kernels.expertSource(false);
             const lib = try mtl.Library.fromSource(m.device, source, opts);
             defer lib.deinit();
-            for (expert_names, 0..) |n, j| m.experts[i][j] = try mtl.Pipeline.init(m.device, lib, n, false);
+            for (expertKernels(mx), 0..) |n, j| m.experts[i][j] = try mtl.Pipeline.init(m.device, lib, n, false);
         }
     }
 };
@@ -382,7 +397,7 @@ fn buildPipelines(m: *Model) !void {
     for ([_]bool{ false, true }, 0..) |mx, i| {
         const lib = try mtl.Library.fromSource(m.device, kernels.expertSource(mx), opts);
         defer lib.deinit();
-        for (expert_names, 0..) |n, j| m.experts[i][j] = try mtl.Pipeline.init(m.device, lib, n, false);
+        for (expertKernels(mx), 0..) |n, j| m.experts[i][j] = try mtl.Pipeline.init(m.device, lib, n, false);
     }
 }
 

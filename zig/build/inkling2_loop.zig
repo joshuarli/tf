@@ -35,6 +35,19 @@ pub fn tests(b: *std.Build, target: std.Build.ResolvedTarget, test_step: *std.Bu
     const step = b.step("test-inkling2-loop-host", "Inkling 2 Mini family package: config, quant geometry, weight map, chat template, tokenizer and refusals");
     step.dependOn(&run.step);
     test_step.dependOn(&run.step);
+    if (target.result.os.tag == .macos) {
+        const metal = b.createModule(.{
+            .root_source_file = b.path("zig/src/metal/metal.zig"),
+            .target = target,
+            .optimize = .Debug,
+            .link_libc = true,
+        });
+        metal.linkFramework("Metal", .{});
+        metal.linkFramework("Foundation", .{});
+        metal.linkFramework("IOSurface", .{});
+        metal.linkSystemLibrary("objc", .{});
+        metalTests(b, target, metal, readers, test_step);
+    }
 }
 
 /// The family's own module over the Metal runtime, the core readers and the shared Inkling 2 config.

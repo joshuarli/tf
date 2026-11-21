@@ -7,7 +7,7 @@ FLINT_LOGITS := $(WORK)/parity/flint
 FLINT_CORPUS := $(FLINT_DIR)/histories.json
 FLINT_REPORT := $(FLINT_DIR)/report.md
 FLINT_ORACLE := rec_mlx 0.1.0 at e53663b262af4cb1ca498e596ca8b1a2d79e0800 (recursive-oss/rec, Apache-2.0), resident decode one token at a time
-FLINT_EQUIV := row 10 of linked-list-reversal, the equivalence rec's tests/validate_resident.py asserts, bit-identical
+FLINT_EQUIV := row 10 of linked-list-reversal, the equivalence asserted in tests/validate_resident.py, bit-identical
 FLINT_ENV := TMPDIR=$(TMPDIR) HF_HOME=$(HF_HOME) UV_CACHE_DIR=$(UV_CACHE_DIR) UV_PROJECT_ENVIRONMENT=$(FLINT_ORACLE_ENV)
 FLINT_PY := $(FLINT_ORACLE_ENV)/bin/python
 

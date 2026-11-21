@@ -8,6 +8,8 @@ pub const Scratch = @import("state.zig").Scratch;
 pub const Trace = @import("state.zig").Trace;
 pub const position = @import("forward.zig").position;
 pub const positionTrace = @import("forward.zig").positionTrace;
+pub const advance = @import("forward.zig").advance;
+pub const Output = @import("forward.zig").Output;
 pub const refuse = @import("refuse.zig");
 pub const kernels = @import("kernels.zig");
 

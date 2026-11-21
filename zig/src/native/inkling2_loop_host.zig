@@ -6,6 +6,7 @@ const inkling = tf.inkling2_loop;
 const cache_fit = @import("cache_fit.zig");
 const Allocator = std.mem.Allocator;
 
+
 const Job = struct {
     id: api.Id,
     request: *const api.Request,
@@ -297,14 +298,15 @@ pub const Host = struct {
         }
         h.cache.len = 0;
         const vocab: usize = h.model.config.text.unpadded_vocab;
-        for (r.prompt) |id| {
+        for (r.prompt, 0..) |id, i| {
             if (h.cancelled(job)) {
                 if (!job.prefill_sent) emit(job, .{ .prefilled = 0 });
                 fin.reason = .cancelled;
                 h.cache.len = 0;
                 return;
             }
-            inkling.position(h.model, &h.scratch, &h.cache, id) catch |e| {
+            const last = i + 1 == r.prompt.len;
+            inkling.advance(h.model, &h.scratch, &h.cache, id, if (last) .logits else .state) catch |e| {
                 if (!job.prefill_sent) emit(job, .{ .prefilled = 0 });
                 fin.message = @errorName(e);
                 h.cache.len = 0;

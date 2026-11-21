@@ -428,11 +428,25 @@ pub const Bank = struct { states: []const B, out: B };
 
 /// One token's forward: `cache.len` positions precede it; the logits land in `s.logits`.
 pub fn position(m: *const Model, s: *Scratch, cache: *Cache, id: u32) !void {
-    return positionTrace(m, s, cache, id, null);
+    return run(m, s, cache, id, null, .logits);
 }
 
 /// The same pass, recording the executed slots' rows into `t` when it is given.
 pub fn positionTrace(m: *const Model, s: *Scratch, cache: *Cache, id: u32, trace: ?*st.Trace) !void {
+    return run(m, s, cache, id, trace, .logits);
+}
+
+/// What a pass produces beyond the KV, convolution and loop state it always carries forward.
+pub const Output = enum { logits, state };
+
+/// One prompt position for prefill: `.state` skips the output mix, final norm and unembedding, whose logits a
+/// prompt position other than the last never reads. Every pass still waits: the token id goes through a shared
+/// buffer the next pass's embed overwrites from the CPU.
+pub fn advance(m: *const Model, s: *Scratch, cache: *Cache, id: u32, output: Output) !void {
+    return run(m, s, cache, id, null, output);
+}
+
+fn run(m: *const Model, s: *Scratch, cache: *Cache, id: u32, trace: ?*st.Trace, output: Output) !void {
     const c = &m.config;
     const text = &c.text;
     const pool = mtl.objc.Pool.push();
@@ -480,9 +494,11 @@ pub fn positionTrace(m: *const Model, s: *Scratch, cache: *Cache, id: u32, trace
         }
     }
     for (c.loop.core_end..text.layers) |i| try f.layer(@intCast(i), @intCast(i), null);
-    f.mixBlocks(b(s.x), m.weights.output_query, bo(s.mixout, 0));
-    f.rms1(bo(s.mixout, 0), t(m.weights.norm), bo(s.xn, 0));
-    f.headModel(m.weights.unembed, bo(s.xn, 0), b(s.logits), text.unpadded_vocab);
+    if (output == .logits) {
+        f.mixBlocks(b(s.x), m.weights.output_query, bo(s.mixout, 0));
+        f.rms1(bo(s.mixout, 0), t(m.weights.norm), bo(s.xn, 0));
+        f.headModel(m.weights.unembed, bo(s.xn, 0), b(s.logits), text.unpadded_vocab);
+    }
     f.enc.end();
     cb.commit();
     cb.wait();

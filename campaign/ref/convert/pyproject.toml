@@ -1,0 +1,17 @@
+[project]
+name = "inkling2-convert"
+version = "1.0.0"
+requires-python = "==3.12.*"
+dependencies = [
+    "numpy==2.5.5",
+    "pyyaml==6.0.4",
+    "safetensors==0.8.0",
+    "sentencepiece==0.2.3",
+    "tokenizers==0.23.3",
+    "torch==2.15.0",
+    "tqdm==4.70.1",
+    "transformers==5.23.0",
+]
+
+[tool.uv]
+package = false

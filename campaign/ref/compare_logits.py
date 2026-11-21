@@ -1,10 +1,7 @@
-"""Compare teacher-forced logits from the CPU reference with llama.cpp.
+"""Compare teacher-forced logits from the CPU reference with llama.cpp under a declared arithmetic contract.
 
-The reference is the float32 oracle; llama.cpp is the teacher. For every
-position this prints top-1 agreement, the absolute logit error and the KL
-between the two next-token distributions. A position counts as confident when
-the teacher's top-2 margin is at least --min-margin; any top-1 disagreement
-there fails the check.
+Exits non-zero unless every history has the expected shape, finite values, numerical error within the
+contract's bounds and full top-1 agreement on confident positions.
 """
 
 from __future__ import annotations
@@ -16,17 +13,15 @@ from pathlib import Path
 
 import numpy as np
 
+from logit_gate import check, load_contract
+
 
 def read_llama(path: Path) -> np.ndarray:
     tokens, vocab = np.fromfile(path, dtype=np.int32, count=2)
     logits = np.fromfile(path, dtype=np.float32, offset=8)
+    if logits.size != int(tokens) * int(vocab):
+        return np.empty((0, 0), dtype=np.float32)
     return logits.reshape(int(tokens), int(vocab))
-
-
-def log_softmax(x: np.ndarray) -> np.ndarray:
-    x = x.astype(np.float64)
-    x = x - x.max(axis=-1, keepdims=True)
-    return x - np.log(np.exp(x).sum(axis=-1, keepdims=True))
 
 
 def main() -> int:
@@ -34,47 +29,35 @@ def main() -> int:
     parser.add_argument("--histories", required=True)
     parser.add_argument("--ref-dir", required=True)
     parser.add_argument("--llama-dir", required=True)
-    parser.add_argument("--min-margin", type=float, default=0.1)
+    parser.add_argument("--contract", default="f32-vs-f32")
     args = parser.parse_args()
 
+    contract = load_contract(args.contract)
     histories = json.loads(Path(args.histories).read_text())
-    failures = 0
-    print(f"positions are teacher-forced; confident = llama.cpp top-2 margin >= {args.min_margin}")
+    if not histories:
+        print("no histories to compare")
+        return 1
+    failed = []
+    print(f"contract {contract.name}: {contract.bounds}")
     for entry in histories:
         name = entry["name"]
         teacher = read_llama(Path(args.llama_dir) / f"{name}.bin")
         reference = np.load(Path(args.ref_dir) / f"{name}.npy")
-        if teacher.shape != reference.shape:
-            print(f"{name}: shape mismatch llama {teacher.shape} reference {reference.shape}")
-            return 1
-        top_teacher = teacher.argmax(axis=1)
-        top_ref = reference.argmax(axis=1)
-        sorted_teacher = np.sort(teacher, axis=1)
-        margin = sorted_teacher[:, -1] - sorted_teacher[:, -2]
-        confident = margin >= args.min_margin
-        agree = top_teacher == top_ref
-        error = np.abs(teacher.astype(np.float64) - reference.astype(np.float64))
-        kl = (np.exp(log_softmax(teacher)) * (log_softmax(teacher) - log_softmax(reference))).sum(axis=1)
-
-        print(f"\n{name}: {len(entry['token_ids'])} tokens, "
-              f"top-1 agreement {agree.mean() * 100:.1f}% overall, "
-              f"{(f'{agree[confident].mean() * 100:.1f}%' if confident.any() else 'n/a')} "
-              f"on {int(confident.sum())} confident positions")
-        print(f"  max |logit error| {error.max():.6g}, mean |logit error| {error.mean():.6g}, mean KL {kl.mean():.6g}")
-        print("  position  agree  margin    max|err|   KL       teacher/ref top-1")
-        for i in range(teacher.shape[0]):
-            mark = "ok" if agree[i] else ("FAIL" if confident[i] else "diff")
-            print(f"  {i:8d}  {mark:6s} {margin[i]:8.4f}  {error[i].max():9.4g}  {kl[i]:8.4g}  "
-                  f"{top_teacher[i]} / {top_ref[i]}")
-        if not agree[confident].all():
-            failures += 1
-            print(f"  {int((~agree & confident).sum())} confident positions disagree")
+        result = check(teacher, reference, len(entry["token_ids"]), contract)
+        print(f"\n{name}: {result.positions} positions, top-1 {result.top1:.2%}, "
+              f"confident top-1 {result.confident_top1:.2%} on {result.confident}")
+        print(f"  max |err| {result.max_abs:.4g} (position {result.worst_position}), mean |err| {result.mean_abs:.4g}, "
+              f"max KL {result.max_position_kl:.4g}, mean KL {result.mean_kl:.4g}")
+        for problem in result.problems:
+            print(f"  FAIL {problem}")
+        if result.problems:
+            failed.append(name)
 
     print()
-    if failures:
-        print(f"reference disagrees with llama.cpp on confident positions in {failures} histories")
+    if failed:
+        print(f"{len(failed)} of {len(histories)} histories fail the {contract.name} contract: {', '.join(failed)}")
         return 1
-    print("reference reproduces llama.cpp top-1 on every confident position")
+    print(f"all {len(histories)} histories meet the {contract.name} contract")
     return 0
 
 

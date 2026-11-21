@@ -9,7 +9,7 @@
 - **In flight** (bridge workers; lane `.work/wt/<lane>`, branch `lane/<lane>`):
   - I0 `i0-inkling-ref`, `usrw_9cd7b765-da4c-4972-99c8-e9e46c79da45`;
   - F2 `f2-parity`, `usrw_4bb1c566-c653-43f6-8d38-cab9288ef301`;
-  - H1 `h1-pi`, `usrw_9a24993e-a0cd-4bff-b396-1e551c842a90`.
+  - H1 `h1-pi`, retry `usrw_3246bead-acc5-49ef-b3a5-15e2c1470314`. The first attempt (`usrw_9a24993e…`) committed nothing: it built a fake server that pi looped against. The retry uses the real server, explicit `--tools` and hard per-task timeouts.
 - **Next:** F3 after F2; I1 after I0. After I0 merges, add the pending xgrammar entry from the ledger to `sources.lock.json`.
 - **Resume:** run `worker_status` on each in-flight session, then review and merge each lane whose acceptance passes. `.work/wt/c0-ground` holds an earlier C0 worker's leftover worktree. That worker has exited, and its branch is merged except commit `91a5a06a1`, which was superseded and not adopted.
 

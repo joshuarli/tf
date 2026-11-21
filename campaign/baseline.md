@@ -20,7 +20,7 @@ Measured on 2026-11-21 by `make -C campaign baseline-timings`. The cold build ra
 
 ## Known red
 
-`zig build test test-golden -Dcpu=apple_m1` on the baseline: 928 of 938 steps succeeded with 7 failed, and 16,372 of 16,519 tests passed with 141 skipped and 6 failed. The goldens report 324 of 337 equal and 0 unexpected differences. Every failure:
+`zig build test test-golden -Dcpu=apple_m1` on the baseline: 928 of 938 steps succeeded with 7 failed, and 16,372 of 16,519 tests passed with 141 skipped and 6 failed. The goldens report 324 of 337 equal and 0 unexpected differences. Every failure, plus one reported but unverified:
 
 | Failing step or test | Modules | Failure |
 | --- | --- | --- |
@@ -28,7 +28,8 @@ Measured on 2026-11-21 by `make -C campaign baseline-timings`. The cold build ra
 | `the release's vision_config parses to the defaults` | `vision`, `families.deepseek_v41.metal.vision` | expected `error.UnsupportedVision`, found `error.ZeroHeads` |
 | `copied shard pages leave the file cache without changing the copy or stored bytes` | `checkpoint_file_cache`, `src.core.checkpoint_file_cache` | expected 0, found 2 |
 | `PDF render worker: a worker killed by a signal is named as a crash; a limit or a missing reply keeps today's message` | `pdf_worker` (two test binaries) | the `ulimit -t 1` busy loop reports "PDF rendering exceeded resource limits or failed" instead of a crash |
+| `GLM copies and transforms join before shard eviction; errors and duplicate opens retain ownership` | `families.glm.weights_fix_test` | unverified: reported once by an earlier C0 worker's Zig 0.17.0 run, whose log was not kept; it did not fail in the run above |
 
-The memcpy check also fails on the unmodified `fa13df5d` built with Zig 0.17.0, so it is upstream red rather than an effect of the Zig pin ([ledger.md](ledger.md)).
+The `copied shard pages` test passed in that same earlier run, so treat it and the GLM test as possibly flaky. The memcpy check also fails on the unmodified `fa13df5d` built with Zig 0.17.0, so it is upstream red rather than an effect of the Zig pin ([ledger.md](ledger.md)).
 
 Logs are in `.work/logs/baseline/` while the scratch tree exists. Rerun `make -C campaign baseline-timings` to reproduce them.

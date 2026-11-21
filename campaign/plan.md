@@ -4,10 +4,11 @@
 
 - **Goal:** a faster, leaner native Zig/Metal TensorFold on this M5 Max. Flint comes first, then a qualified Inkling 2 Mini port (see **Acceptance**).
 - **Upstream frozen at:** `fa13df5dd1fdd23ada775510a464c9aa03a39e09` (TensorFold `main`, 2026-11-21). The campaign branch is `campaign/m5`.
-- **Last accepted revision:** none.
-- **Accepted:** none. **Red:** none. **Parked:** none.
-- **In flight:** C0, the ground slice (lane `.work/wt/c0-ground`, branch `lane/c0-ground`).
-- **Next:** F1, after C0. I0 may start in parallel with F1.
+- **Last accepted revision:** `281c91250` (F1 merge).
+- **Accepted:** C0 (fetch, host and build-baseline exit 0; second fetch downloads nothing), F1 (`--no-drafts` already disables copies and the drafter: `no_drafts_test.zig` in `test-flint-draft-host`; `make -C campaign smoke MODEL=flint MODE=ar` gives 512 tokens, 0 drafted, 1.00 tokens per decode round, about 169 tok/s). **Red:** none beyond **Baseline**. **Parked:** none.
+- **In flight:** C1, the benchmark harness (bridge worker `usrw_b6fdcac1-14d2-44e6-be6e-462d9a7307eb`, lane `.work/wt/c1-bench`, branch `lane/c1-bench`); I0, the Inkling 2 Mini prior-art map and reference (bridge worker `usrw_9cd7b765-da4c-4972-99c8-e9e46c79da45`, lane `.work/wt/i0-inkling-ref`, branch `lane/i0-inkling-ref`).
+- **Next:** F2 once C1 lands; Q1 and H1 after C1; I1 after I0.
+- **Resume:** run `worker_status` on both sessions, then review and merge each lane whose acceptance passes. `.work/wt/c0-ground` holds an earlier C0 worker's leftover worktree. That worker has exited, and its branch is merged except commit `91a5a06a1`, which was superseded and not adopted.
 
 ## Charter
 
@@ -102,13 +103,13 @@ The owner made the first two decisions on 2026-11-21:
 
 ## Baseline
 
-C0 fills this section. The loop timings record:
+[baseline.md](baseline.md) holds the frozen binary's sha256, the loop timings and every known red test. In brief, for `fa13df5d` built with Zig 0.17.1:
 
-- `zig build native -Dcpu=apple_m1 -Dversion=1.0.0`, cold and warm no-op;
-- `zig build test test-golden -Dcpu=apple_m1`, under the GPU lock;
-- `zig build test-flint-draft-host`.
+- `zig build native -Dcpu=apple_m1 -Dversion=1.0.0`: 239.3 s cold and 4.0 s warm no-op;
+- `zig build test-flint-draft-host`: 17.7 s;
+- `zig build test test-golden -Dcpu=apple_m1`: 547.6 s under the GPU lock, with 7 known red steps (the memcpy link check plus three tests in two modules each).
 
-Known red records each failing test name in the baseline, so the executor never mistakes it for its own.
+The benchmark load limit is `FLINT_LOAD_LIMIT_GB=36`, from W = 40,200,896,512 bytes.
 
 Host facts measured on 2026-11-21:
 - Apple M5 Max: 6 performance and 12 efficiency CPU cores, a 40-core GPU with Metal 4, and 48 GiB of RAM.

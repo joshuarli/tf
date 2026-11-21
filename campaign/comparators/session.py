@@ -50,7 +50,7 @@ def run(args) -> int:
     failures = 0
     print(f"baseline {binary} sha256 {identity['sha256']}", file=sys.stderr)
     for cell, cache_gib in cells:
-        for pair in range(args.pairs_start, args.pairs_stop + 1):
+        for pair in args.pair_list:
             log_path = harness.TMP / f"bench-{run_id}-{cell}-{args.mode}-{pair}-baseline.log"
             try:
                 with harness.Server(binary, model, server_args, cache_gib, log_path) as server:
@@ -80,11 +80,18 @@ def main() -> int:
     parser.add_argument("--session", default="B")
     parser.add_argument("--pairs-start", type=int, default=4)
     parser.add_argument("--pairs-stop", type=int, default=6)
+    parser.add_argument("--pairs", default=None, help="explicit comma list, overriding pairs-start/stop")
     parser.add_argument("--bin", default=str(harness.BASELINE_BIN))
     parser.add_argument("--run-id", default=None)
     args = parser.parse_args()
-    if not 1 <= args.pairs_start <= args.pairs_stop:
-        parser.error("need 1 <= pairs-start <= pairs-stop")
+    if args.pairs is not None:
+        args.pair_list = [int(token) for token in args.pairs.split(",") if token.strip()]
+        if not args.pair_list:
+            parser.error("--pairs named no pair")
+    else:
+        if not 1 <= args.pairs_start <= args.pairs_stop:
+            parser.error("need 1 <= pairs-start <= pairs-stop")
+        args.pair_list = list(range(args.pairs_start, args.pairs_stop + 1))
     return run(args)
 
 

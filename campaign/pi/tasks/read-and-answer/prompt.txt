@@ -1,0 +1,10 @@
+Read `retry.py` and answer its questions in a new file `answers.md`, exactly in this form:
+
+```
+workers: <number for the webhook queue>
+retry_limit: <number for the backfill queue>
+webhook_after_attempt: <what schedule("webhook", 1) returns>
+dead_letter: <the set of queue names, comma-separated in sorted order, whose give_up() is True at attempts=99>
+```
+
+Use the code, not guesses. Do not change `retry.py`.

@@ -1,0 +1,1 @@
+Change the default timeout from 10 seconds to 4 seconds and the default retries from 2 to 5. The defaults live in `settings.py`; `client.py` reads them and must keep working, and `test_client.py` asserts the old values so update it to the new ones as well. Run the tests afterwards.

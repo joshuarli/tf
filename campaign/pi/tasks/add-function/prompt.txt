@@ -1,0 +1,1 @@
+Add a `distinct_ratio(text)` function to `rates.py` that returns the number of distinct normalized words divided by the total word count, as a float, and returns `0.0` for empty input. Add tests for it to `test_rates.py` (an ordinary sentence and the empty string), and run the test file to confirm it passes.

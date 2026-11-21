@@ -1,10 +1,3 @@
-# Teacher-forced reference check for Inkling 2 Mini (campaign item I0).
-#
-# ref-check runs the CPU float32 reference (campaign/ref/inkling2_loop_ref.py)
-# and llama.cpp at the pinned commit over the four short histories in
-# campaign/ref/histories.json, then compares their logits. Every process that
-# loads a full model runs under the campaign GPU lock, one at a time.
-
 REF_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
 CAMPAIGN_DIR := $(abspath $(REF_DIR)..)
 MODEL ?= inkling2-mini
@@ -45,7 +38,6 @@ ref-check: $(LLAMA_LOGITS) $(GGUF)
 	env UV_PROJECT_ENVIRONMENT=$(REF_VENV) $(REF_UV) python $(REF_DIR)compare_logits.py --histories $(HISTORIES) \
 		--ref-dir $(REF_OUT)/ref --llama-dir $(REF_OUT)/llama --min-margin 0.1
 
-# the pinned source tarball, through the campaign lock file
 $(LLAMA_TGZ):
 	$(MAKE) -C $(CAMPAIGN_DIR) fetch NAMES=llama.cpp
 
@@ -68,8 +60,6 @@ $(LLAMA_LOGITS): $(REF_DIR)llama_logits.cpp $(LLAMA_BIN)/libllama.dylib | $(LLAM
 		-I$(LLAMA_SRC)/include -I$(LLAMA_SRC)/ggml/include $< -o $@ \
 		-L$(LLAMA_BIN) -lllama -lggml -lggml-base -lggml-cpu -Wl,-rpath,$(LLAMA_BIN)
 
-# The converter dequantizes NVFP4/MXFP8 to float32 without requantizing, so the
-# GGUF keeps the checkpoint's exact decoded values. It needs its own torch venv.
 $(CONVERT_VENV)/bin/python:
 	$(UV) venv --python 3.12 $(CONVERT_VENV)
 	$(UV) pip install --python $(CONVERT_VENV)/bin/python torch numpy pyyaml sentencepiece tqdm transformers

@@ -1,0 +1,89 @@
+You are reviewing a large native inference codebase. Below are consecutive excerpts from several source files, each introduced by a line of the form ===== path =====. Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text.
+
+===== zig/src/server/slide_correction_source.zig =====
+//! Corrections target a shipped belief, never an answer supplied by another pocket fact.
+const std = @import("std");
+const reads = @import("slide_correction_ask.zig");
+const correction = @import("slide_correction.zig");
+const teach = @import("slide_lesson.zig");
+const errors = @import("errors.zig");
+const Server = @import("server.zig").Server;
+
+/// Refuse before training, naming the facts: their later deletion must not invalidate an old-answer reference.
+pub fn independent(srv: *Server, cx: *errors.Cx, h: teach.Held, old: []const u8, ids: []const u32, gone: anytype) !void {
+    const base = try reads.base(srv, cx, h.question, h.context, gone);
+    if (!std.mem.eql(u8, base.finish_reason, "stop")) return error.CorrectionReferenceIncomplete;
+    const changed = !std.mem.eql(u32, ids, try reads.ids(cx.a, base));
+    const facts = try srv.slide.snapshot(cx.a);
+    var names: std.ArrayList(u8) = .empty;
+    for (facts) |f| {
+        if (f.state != .learned or f.neurons.len == 0) continue;
+        // A matching kept value is conservatively refused even if several pocket effects currently cancel.
+        var matches = correction.oldReturned(h.question, old, old, f.text);
+        for (f.answers) |x| matches = matches or correction.oldReturned(h.question, old, old, x.answer);
+        if (!changed and !matches) continue;
+        if (names.items.len > 0) try names.appendSlice(cx.a, ", ");
+        try names.print(cx.a, "fact {d} (\"{s}\")", .{ f.id, f.text });
+    }
+    if (!changed and names.items.len == 0) return;
+    if (names.items.len == 0) try names.appendSlice(cx.a, "pocket neurons missing from this graph");
+    return cx.fail(.request, "correction refused: its old answer depends on, or matches, {s}; delete those facts before correcting it", .{names.items});
+}
+
+
+===== zig/src/metal/sync.zig =====
+//! MTLSharedEvent: a 64-bit counter both the host and the GPU can signal and wait on.
+const objc = @import("objc.zig");
+
+const Id = objc.Id;
+
+pub const SharedEvent = struct {
+    id: Id,
+
+    pub fn value(self: SharedEvent) u64 {
+        return objc.msg(u64, self.id, "signaledValue", .{});
+    }
+
+    /// Host signal: releases GPU work waiting for `v` or less.
+    pub fn set(self: SharedEvent, v: u64) void {
+        objc.msg(void, self.id, "setSignaledValue:", .{v});
+    }
+
+    /// Block until the value reaches `v`; false on timeout.
+    pub fn wait(self: SharedEvent, v: u64, timeout_ms: u64) bool {
+        return objc.msg(bool, self.id, "waitUntilSignaledValue:timeoutMS:", .{ v, timeout_ms });
+    }
+
+    pub fn deinit(self: SharedEvent) void {
+        objc.release(self.id);
+    }
+};
+
+/// MTLEvent: a GPU-only counter that orders command buffers, also across queues; no host access, cheaper than shared.
+pub const Event = struct {
+    id: Id,
+
+    pub fn deinit(self: Event) void {
+        objc.release(self.id);
+    }
+};
+
+
+===== zig/src/families/hy4_flash/index_cuda.zig =====
+//! Hy4-flash's CUDA compressed indexer: cache token keys, pool closed groups, rank them, keep 511 plus its own.
+const std = @import("std");
+const cuda = @import("cuda");
+const mla = @import("mla_cuda.zig");
+const rotary = @import("rope.zig");
+const recall = @import("index_recall.zig");
+const recall_cuda = @import("index_recall_cuda.zig");
+const groups = @import("index_groups.zig");
+
+pub const heads = recall.heads;
+pub const width = recall.width;
+pub const nope = width - 2 * rotary.pairs;
+pub const budget_groups: u32 = 512;
+
+/// Device weights: BF16 projections and norm, FP32 pooling parameters.
+pub const Weights = struct {
+    token_keys: u64,

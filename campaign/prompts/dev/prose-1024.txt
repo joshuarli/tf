@@ -1,0 +1,52 @@
+The following are consecutive excerpts from engineering notes and design documents. Reason carefully about the argument they build. Restate the central claim in your own words, set out the evidence offered for it, identify the weakest inference and why it is weak, and say what measurement or observation would settle it.
+
+===== docs/recipes/nemotron-3.5-super-vl.md =====
+# Nemotron 3.5 Super VL
+
+NVIDIA's Nemotron 3.5 Super VL 120B-A12B (`nemotron_h_omni`) runs on the native CUDA engine from NVIDIA's NVFP4
+checkpoint, on one GB10 or split over two. The text model is Nemotron-H with a latent MoE: 88 blocks (40 Mamba-2,
+8 attention, 40 MoE), 512 routed experts with 22 picked a token, each reading and writing a 1,024-wide latent between
+two bf16 projections, a shared expert on the hidden rows, and one MTP layer. The family is
+`zig/src/families/nemotron/` (the latent MoE in `cuda_latent.zig`); images go through the checkpoint's RADIO tower,
+described in [vision](../vision.md#nemotron-35-super-vl-on-cuda).
+
+## Checkpoint
+
+`nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4` at revision `82d93699acd3be9e4617c53360fe5b3f5dbeb1b3`
+(75.1 GB). Its ModelOpt export stores the experts in NVFP4 (e2m1 codes, an e4m3 scale every 16 inputs, one fp32 scale
+an expert), the Mamba, attention and output-head projections in FP8 with static input scales, and the router, latent
+projections, embeddings and the MTP layer's attention in bf16. The engine reads these tensors as stored; nothing is
+converted ahead of time.
+
+## Run on one GB10
+
+```bash
+tensorfold pull nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4@82d93699acd3be9e4617c53360fe5b3f5dbeb1b3
+tensorfold serve nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4 --name super --vision
+```
+
+The weights take 70.8 GiB of the GB10's memory (73.2 GiB with the image tower and its rows). At the default
+16,384-token window the server admits 8 streams at 0.35 GiB each and keeps a prompt cache of about 8 to 10 GiB, and
+about 24 GB of the GB10's memory stays available. Leave the other ranks' variables below unset.
+
+A [community recipe](https://github.com/plotarmordev/Nemotron-3.5-Super-VL-Single-DGX-Spark-TensorFold/tree/72ef12b05b0b3d839ff973ff624e8410859dfb8c)
+from @plotarmordev sets this up on stock v1.1.3: it downloads the release, checks it and the checkpoint against pinned
+sha256 sums, and has start and stop scripts and smoke and benchmark clients.
+
+The MTP draft head can use the embedded draft vocabulary's FP8 output rows or the already-resident full output head.
+A stream drafts on the subset while the last 16 tokens of its context, its prompt's tail at first, are all draft ids,
+and on the full head otherwise; other streams do not change its choice. Each head has its own captured graphs and
+its own measured level cost beside the window costs both share, and shared rounds are priced at the full head's.
+The target still verifies proposals with its unchanged full-vocabulary head.
+For CUDA MTP streams, `--mtp-drafts` caps MTP depth (at most 31 for Super) and `--mtp-confidence` sets a
+cumulative-confidence threshold from 0 to 1 instead of the cost-based cutoff. A zero draft cap disables
+drafting. The same controls apply in lone and shared rounds, including resumes and handoff.
+Positive MTP caps leave copied continuations and Recall on their existing row limits.
+
+## Run on two GB10s
+
+Use NCCL 2.30.7 or newer, the tested minimum for this setup. The runtime refuses versions below 2.30.0;
+2.28.9 can deadlock during startup window-cost timing (#1060).
+
+Rank 0 runs the whole model and serves; rank 1 holds only its share of every MoE layer's experts (the MTP layer's
+too) and computes it for rank 0's jobs. The ranks meet over NCCL, which the engine opens

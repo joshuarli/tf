@@ -419,6 +419,18 @@
       "license": "Apache-2.0",
       "purpose": "Pinned tokenizer_config.json from trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration at revision 5e761216759d5d040c09f458d5f077b9aaa5ac78",
       "model": "inkling-2-mini-tiny"
+    },
+    {
+      "name": "xgrammar/xgrammar-v0.2.8.tar.gz",
+      "version": "97787376faee5ed8466cfad57c99855e4ce2f6aa",
+      "sha256": "16c06f7cef8f13ae597b007cce515991725603bded6ebce5f1828e6a9c9685be",
+      "url": "https://github.com/mlc-ai/xgrammar/archive/refs/tags/v0.2.8.tar.gz",
+      "size": 1269197,
+      "role": "source",
+      "license": "Apache-2.0",
+      "purpose": "xgrammar v0.2.8 sources for libtfgrammar; the checkout HEAD and submodule commits are pinned in campaign/quality/xgrammar.pins.json",
+      "model": "xgrammar",
+      "store": "src"
     }
   ]
 }

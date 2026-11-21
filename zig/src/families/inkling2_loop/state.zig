@@ -175,8 +175,9 @@ test "the state's rings and mix lists carry the graph's widths" {
     try std.testing.expectEqual(@as(usize, 5), mix_states);
 }
 
-/// Rows one executed slot writes into the capture buffer: its attention output, the FFN's input and its output.
-pub const trace_rows = 3;
+/// Rows one executed slot writes into the capture buffer, in the reference's order: the three mixed inputs, the three
+/// normed ones, the attention output, the FFN's input and the slot's output.
+pub const trace_rows = 9;
 /// The summaries the trace keeps for one tensor: count, mean, standard deviation, min, max.
 const Summary = struct { n: usize = 0, mean: f64 = 0, m2: f64 = 0, lo: f32 = std.math.inf(f32), hi: f32 = -std.math.inf(f32) };
 
@@ -195,15 +196,17 @@ pub const Trace = struct {
         return t;
     }
 
-    /// The names in the order they will be written: every executed slot's three rows.
+    /// The names in the order they will be written: the reference's per-slot order, for every executed slot.
     fn reserve(t: *Trace, c: *const cfg.Config) !void {
         var slot: u32 = 0;
-        while (slot < t.slots) : (slot += 1) {
-            if (slot >= c.text.layers) {
-                const span = c.loop.core_end - c.loop.core_start;
-                const at = slot - c.text.layers;
-                const base = c.loop.core_start + at % span;
-                if (base >= c.loop.core_start and base < c.loop.core_end) {} else continue;
+        while (slot < c.slots()) : (slot += 1) {
+            for (0..3) |j| {
+                const name = try std.fmt.allocPrint(t.gpa, "mixin-{d}-{d}", .{ slot, j });
+                try t.names.append(t.gpa, name);
+            }
+            for (0..3) |j| {
+                const name = try std.fmt.allocPrint(t.gpa, "normin-{d}-{d}", .{ slot, j });
+                try t.names.append(t.gpa, name);
             }
             inline for (.{ "attn_out", "ffn_inp", "l_out" }) |prefix| {
                 const name = try std.fmt.allocPrint(t.gpa, "{s}-{d}", .{ prefix, slot });

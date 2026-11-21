@@ -9,7 +9,8 @@ const inkling = tf.inkling2_loop;
 const usage =
     \\tf-inkling2-loop-run <model> <tokens.json> logits <out>       f32 logits [tokens, 200058], teacher-forced
     \\tf-inkling2-loop-run <model> <tokens.json> greedy <steps> <out>  then <steps> greedy tokens, one decode a step
-    \\tf-inkling2-loop-run <model> <tokens.json> trace <out>        per-tensor summaries in the reference's order
+    \\tf-inkling2-loop-run <model> <tokens.json> trace <out> [at]  per-tensor summaries in the reference's order, the whole pass or only position <at>
+    \\tf-inkling2-loop-run <model> <tokens.json> tracerow <out> <at>  the raw per-tensor rows of position <at> as f32, [slots][9][hidden]
     \\tf-inkling2-loop-run <model> <tokens.json> reset <out>        the same logits twice from a fresh cache, byte-compared
     \\tf-inkling2-loop-run <model> <tokens.json> bench <steps> [warmup]  the prompt, warmup, then steps: wall, encode, GPU ms
     \\tf-inkling2-loop-run <tokenizer.json> <text> tokenize <out>   the text's token ids, for the modes above
@@ -213,12 +214,35 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, mode, "trace")) {
         var t = try inkling.Trace.init(gpa, c);
         defer t.deinit();
+        const at: ?usize = if (args.len > 5) try std.fmt.parseInt(usize, args[5], 10) else null;
+        if (at) |a| {
+            if (a >= ids.value.len) return error.ExpectedArgs;
+        }
         for (ids.value, 0..) |id, i| {
-            try inkling.positionTrace(m, &scratch, &cache, id, &t);
+            const tr: ?*inkling.Trace = if (at) |a| (if (i == a) &t else null) else &t;
+            try inkling.positionTrace(m, &scratch, &cache, id, tr);
             @memcpy(out[i * vocab ..][0..vocab], scratch.logits.slice(f32, vocab));
         }
         try t.write(init.io, args[4]);
         std.debug.print("inkling2_loop trace: {d} rows, {d} tensors in {d} ms\n", .{ ids.value.len, t.names.items.len, (now() - t0) / std.time.ns_per_ms });
+    } else if (std.mem.eql(u8, mode, "tracerow")) {
+        if (args.len != 6) {
+            std.debug.print("{s}", .{usage});
+            return error.ExpectedArgs;
+        }
+        const at = try std.fmt.parseInt(usize, args[5], 10);
+        if (at >= ids.value.len) return error.ExpectedArgs;
+        var t = try inkling.Trace.init(gpa, c);
+        defer t.deinit();
+        const per = t.names.items.len / c.slots();
+        for (ids.value, 0..) |id, i| {
+            if (i > at) break;
+            const tr: ?*inkling.Trace = if (i == at) &t else null;
+            try inkling.positionTrace(m, &scratch, &cache, id, tr);
+        }
+        const rows = scratch.capture.slice(f32, c.slots() * per * m.config.text.hidden);
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[4], .data = std.mem.sliceAsBytes(rows) });
+        std.debug.print("inkling2_loop tracerow: position {d} of {d}, {d} rows in {d} ms\n", .{ at, ids.value.len, c.slots() * per, (now() - t0) / std.time.ns_per_ms });
     } else {
         std.debug.print("{s}", .{usage});
         return error.UnknownMode;

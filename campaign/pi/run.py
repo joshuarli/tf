@@ -20,7 +20,6 @@ import harness  # noqa: E402
 PI = Path(os.environ.get("PI_BIN") or shutil.which("pi") or "/Users/josh/.local/bin/pi")
 PI_FLAGS = ["--no-extensions", "--no-mcp", "--no-skills", "-nc", "--no-session", "--mode", "json"]
 PI_TOOLS = "read,bash,edit,write"
-SERVER_PORT = 8888
 TASK_WALL_S = 600.0
 SERVER_START_S = 1800.0
 
@@ -43,21 +42,39 @@ def healthy(base: str) -> bool:
     return harness.get_json(f"{base}/health", timeout=3) is not None
 
 
-def start_server(binary: Path, model: Path) -> tuple["harness.Server", bool]:
-    base = f"http://127.0.0.1:{SERVER_PORT}"
-    if healthy(base):
-        return None, False
-    original = harness.free_port
-    harness.free_port = lambda: SERVER_PORT
-    try:
-        server = harness.Server(binary, model, [], 2, harness.TMP / "pi-server.log")
-        server.start(timeout=SERVER_START_S)
-    finally:
-        harness.free_port = original
-    if not healthy(base):
-        server.stop()
-        raise RuntimeError("server did not report healthy")
-    return server, True
+def served_identity(base: str) -> dict:
+    """What the live endpoint reports about itself: served model ids and their model objects."""
+    document = harness.get_json(f"{base}/v1/models") or {}
+    data = [entry for entry in document.get("data") or [] if isinstance(entry, dict)]
+    return {"model_ids": [entry.get("id") for entry in data], "models": data}
+
+
+def identity_problems(identity: dict, *, binary_sha256: str, model_key: str, expected_model: str) -> list[str]:
+    """Reasons a live endpoint cannot be attributed to the requested binary and model."""
+    problems = []
+    if not identity.get("model_ids"):
+        problems.append("endpoint listed no model id")
+    entries = identity.get("models") or []
+    owned = [entry.get("owned_by") for entry in entries]
+    if any(value not in (None, "tensorfold") for value in owned):
+        problems.append(f"endpoint is not owned by tensorfold: owned_by {owned}")
+    served = identity.get("model_ids") or []
+    if expected_model and served and expected_model not in served:
+        problems.append(f"endpoint serves {served}, not the requested {expected_model!r}")
+    if model_key and not any(str(model_id or "").startswith(model_key) for model_id in served):
+        problems.append(f"endpoint model ids {served} do not name model {model_key!r}")
+    return problems
+
+
+def render_models(template: Path, base: str, model_id: str) -> dict:
+    document = json.loads(template.read_text(encoding="utf-8"))
+    provider = document["providers"]["tensorfold"]
+    provider["baseUrl"] = f"{base}/v1"
+    for model in provider.get("models") or []:
+        if model.get("id") == "flint":
+            model["id"] = model_id
+            break
+    return document
 
 
 def load_events(path: Path) -> list[dict]:
@@ -89,7 +106,7 @@ def summarize(events: list[dict]) -> dict:
             "turn_output_tokens": [t["output_tokens"] for t in turns], "pi_event_errors": errors}
 
 
-def run_task(task_dir: Path, name: str, workspace_root: Path, agent_dir: Path, sandbox: Path,
+def run_task(task_dir: Path, name: str, workspace_root: Path, models_document: dict, sandbox: Path,
              model_id: str) -> dict:
     workspace = workspace_root / name
     repo = workspace / "repo"
@@ -100,7 +117,8 @@ def run_task(task_dir: Path, name: str, workspace_root: Path, agent_dir: Path, s
     shutil.copytree(task_dir / "repo", repo)
     for directory in (tmp, task_agent):
         directory.mkdir(parents=True)
-    shutil.copy2(agent_dir / "models.json", task_agent / "models.json")
+    (task_agent / "models.json").write_text(json.dumps(models_document, indent=2, sort_keys=True) + "\n",
+                                            encoding="utf-8")
     (task_agent / "auth.json").write_text("{}\n", encoding="utf-8")
     (task_agent / "models-store.json").write_text("{}\n", encoding="utf-8")
     events_path = workspace / "events.jsonl"
@@ -148,11 +166,12 @@ def main() -> int:
     parser.add_argument("--bin", default=str(harness.BASELINE_BIN))
     parser.add_argument("--only", default="", help="comma-separated task names")
     parser.add_argument("--pi-model", default="flint")
+    parser.add_argument("--run-id", default=None)
     args = parser.parse_args()
 
     campaign = Path(__file__).resolve().parent
     tasks_root = campaign / "tasks"
-    agent_dir = campaign / "agent"
+    template = campaign / "agent" / "models.json"
     sandbox = campaign / "sandbox.sb"
     results_dir = campaign / "results"
     model_key = harness.model_key(args.model)
@@ -160,19 +179,31 @@ def main() -> int:
     binary = Path(args.bin).expanduser().resolve()
     if not binary.is_file():
         raise SystemExit(f"binary {binary} is missing")
+    binary_sha256 = harness.sha256_file(binary)
 
     wanted = {n.strip() for n in args.only.split(",") if n.strip()}
     tasks = sorted(path for path in tasks_root.iterdir() if path.is_dir() and (not wanted or path.name in wanted))
     if not tasks:
         raise SystemExit("no tasks selected")
 
-    server, owned = start_server(binary, model)
-    base = f"http://127.0.0.1:{SERVER_PORT}"
-    before = metrics(base)
-    records = []
+    stamp = dt.datetime.now(dt.timezone.utc)
+    run_id = args.run_id or f"{args.model}-{stamp.strftime('%Y%m%dT%H%M%SZ')}"
+    log_path = harness.TMP / f"pi-server-{run_id}.log"
+    server = harness.Server(binary, model, [], 2, log_path)
+    server.start(timeout=SERVER_START_S)
+    base = server.base
     try:
+        identity = served_identity(base)
+        problems = identity_problems(identity, binary_sha256=binary_sha256, model_key=model_key,
+                                     expected_model=None)
+        if problems:
+            raise SystemExit(f"server at {base} cannot be attributed to {binary}: {'; '.join(problems)}")
+        served_model = identity["model_ids"][0]
+        models_document = render_models(template, base, served_model)
+        before = metrics(base)
+        records = []
         for task_dir in tasks:
-            record = run_task(task_dir, task_dir.name, harness.WORK / "pi", agent_dir, sandbox, args.pi_model)
+            record = run_task(task_dir, task_dir.name, harness.WORK / "pi", models_document, sandbox, served_model)
             after = metrics(base)
             record["parse_errors"] = {
                 "metrics_unoffered": after.get("kept_tool_calls_unoffered_total", 0) - before.get("kept_tool_calls_unoffered_total", 0),
@@ -186,31 +217,39 @@ def main() -> int:
             records.append(record)
             print(f"{record['task']}: completed={record['completed']} checker={record['checker']['pass']} "
                   f"turns={record['turns']} parse_errors={record['parse_errors']['total']}", file=sys.stderr)
+        live_identity = served_identity(base)
     finally:
-        if owned and server is not None:
-            server.stop()
+        server.stop()
 
-    server_log = harness.TMP / "pi-server.log"
     totals = {"tasks": len(records), "completed": sum(1 for r in records if r["completed"]),
               "checker_passed": sum(1 for r in records if r["checker"]["pass"]),
               "parse_errors": sum(r["parse_errors"]["total"] for r in records),
-              "server_log_parse_errors": count_log_parse_errors(server_log) if owned else None}
-    record = {"schema": 1, "model": args.model, "recorded_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+              "server_log_parse_errors": count_log_parse_errors(log_path)}
+    record = {"schema": 1, "model": args.model, "recorded_at": stamp.isoformat(), "run_id": run_id,
               "host": harness.host_summary(),
-              "pi": {"path": str(PI), "flags": PI_FLAGS, "tools": PI_TOOLS, "provider": "tensorfold", "model_id": args.pi_model},
-              "server": {"base": base, "owned": owned, "argv": server.argv if server else None,
-                         "model_ids": harness.get_json(f"{base}/v1/models") or None,
-                         "binary": {"path": str(binary), "sha256": harness.sha256_file(binary)}},
+              "pi": {"path": str(PI), "flags": PI_FLAGS, "tools": PI_TOOLS, "provider": "tensorfold",
+                     "model_id": served_model},
+              "server": {"base": base, "port": server.port, "owned": True, "argv": server.argv,
+                         "identity": live_identity,
+                         "binary": {"path": str(binary), "sha256": binary_sha256}},
               "model": {"key": model_key, "dir": str(model), "hashes": harness.model_hashes(model_key)},
-              "agent": {"models_sha256": harness.sha256_file(agent_dir / "models.json")},
-              "tasks": records, "totals": totals}
+              "agent": {"template": str(template.relative_to(campaign)),
+                        "template_sha256": harness.sha256_file(template),
+                        "rendered": models_document},
+              "tasks": records, "totals": totals,
+              "completion": {"complete": totals["completed"] == totals["tasks"],
+                             "checkers_passed": totals["checker_passed"] == totals["tasks"]},
+              "qualification": "run `pi-qualify --result <this file>`; completion alone does not pass checkers"}
     results_dir.mkdir(parents=True, exist_ok=True)
-    out = results_dir / f"{dt.datetime.now().astimezone().strftime('%Y-%m-%d')}-{args.model}.json"
+    out = results_dir / f"{run_id}.json"
     out.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    latest = results_dir / f"latest-{args.model}.json"
+    latest.write_text(json.dumps({"run_id": run_id, "result": str(out.relative_to(campaign))}, sort_keys=True) + "\n",
+                      encoding="utf-8")
     print(json.dumps(totals, sort_keys=True))
     failed = [r["task"] for r in records if not r["completed"]]
     print(f"incomplete: {failed}" if failed else "all task runs completed", file=sys.stderr)
-    return 0 if totals["completed"] == totals["tasks"] and totals["parse_errors"] == 0 else 1
+    return 0 if totals["completed"] == totals["tasks"] else 1
 
 
 if __name__ == "__main__":

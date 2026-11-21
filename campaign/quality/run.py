@@ -115,8 +115,9 @@ def run(args) -> int:
         raise SystemExit(f"host is not in a measurable state: {before['pressure_reasons']}")
     stamp = dt.datetime.now(dt.timezone.utc)
     run_id = args.run_id or f"{args.model}-{args.set}-{stamp.strftime('%Y%m%dT%H%M%SZ')}"
-    RESULTS.mkdir(parents=True, exist_ok=True)
-    jsonl = RESULTS / f"{args.model}-{args.set}.jsonl"
+    run_dir = RESULTS / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    jsonl = run_dir / "cases.jsonl"
     jsonl.write_text("", encoding="utf-8")
     binary_info = {"path": str(binary), "sha256": harness.sha256_file(binary)}
     hashes = harness.model_hashes(key)
@@ -185,13 +186,20 @@ def run(args) -> int:
         block["passed" if case["passed"] else "failed"] += 1
     record["totals"] = {"cases": len(record["cases"]), "passed": sum(1 for c in record["cases"] if c["passed"]),
                         "failed": sum(1 for c in record["cases"] if not c["passed"]), "kinds": kinds}
-    out = RESULTS / f"{args.model}-{args.set}.json"
+    record["completion"] = {"complete": len(record["cases"]) == len(cases) and failures == 0,
+                            "scored": len(record["cases"]), "requested": len(cases),
+                            "scoring_failures": failures,
+                            "qualification": "run `quality-qualify --result <this file> --baseline <frozen result>`"}
+    out = run_dir / "result.json"
     out.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    latest = RESULTS / f"latest-{args.model}-{args.set}.json"
+    latest.write_text(json.dumps({"run_id": run_id, "result": str(out.relative_to(HERE))}, sort_keys=True) + "\n",
+                      encoding="utf-8")
     totals = record["totals"]
     print(f"quality {totals['passed']}/{totals['cases']} passed; " +
           ", ".join(f"{kind} {block['passed']}/{block['cases']}" for kind, block in sorted(kinds.items())) +
           f"; wrote {out}")
-    return 1 if failures else 0
+    return 0 if record["completion"]["complete"] else 1
 
 
 def main() -> int:

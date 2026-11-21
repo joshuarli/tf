@@ -1,12 +1,21 @@
 MODEL ?= flint
 SET ?= dev
 BIN ?= $(WORK)/wt/baseline/zig-out/native/bin/tensorfold-native
+QUALIFY_RESULT ?=
+QUALIFY_BASELINE ?=
 
-.PHONY: quality-flint quality-cases quality-cases-check
+.PHONY: quality-flint quality-cases quality-cases-check quality-qualify
 
 quality-flint: quality-grammar
 	PYTHONDONTWRITEBYTECODE=1 $(UV) run --project $(CURDIR) python $(CURDIR)/quality/run.py \
 		--model $(MODEL) --set $(SET) --bin '$(BIN)'
+
+quality-qualify:
+	@test -n '$(QUALIFY_RESULT)' -a -n '$(QUALIFY_BASELINE)' || { \
+		echo "quality-qualify needs QUALIFY_RESULT=<run result.json> QUALIFY_BASELINE=<frozen baseline result.json>" >&2; \
+		exit 2; }
+	PYTHONDONTWRITEBYTECODE=1 $(UV) run --project $(CURDIR) python $(CURDIR)/quality/qualify.py \
+		--result '$(QUALIFY_RESULT)' --baseline '$(QUALIFY_BASELINE)'
 
 quality-cases:
 	PYTHONDONTWRITEBYTECODE=1 $(UV) run --project $(CURDIR) python $(CURDIR)/quality/build_cases.py

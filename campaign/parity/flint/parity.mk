@@ -37,5 +37,11 @@ parity-flint: check-zig
 		--out $(FLINT_LOGITS)/comparison.json --logits-out $(FLINT_LOGITS)/divergent \
 		--other $(FLINT_LOGITS)/oracle-chunked \
 		--oracle-note '$(FLINT_ORACLE)' --oracle-equivalence '$(FLINT_EQUIV)'
+	cd $(FLINT_REPO) && $(FLINT_PY) campaign/$(FLINT_DIR)/trace.py \
+		--corpus campaign/$(FLINT_CORPUS) --model-dir $(FLINT_MODEL_DIR) --logits $(FLINT_LOGITS) \
+		--binary $(FLINT_REPO)/zig-out/bin/tf-flint-run --python $(FLINT_PY) \
+		--oracle-script campaign/$(FLINT_DIR)/oracle_trace.py --lock $(GPU_LOCK) \
+		--out $(FLINT_LOGITS) --exact-histories debug-session-nan-loss,json-invoice-records
 	cd $(FLINT_REPO) && $(FLINT_PY) campaign/$(FLINT_DIR)/report.py \
-		$(FLINT_LOGITS)/comparison.json campaign/$(FLINT_CORPUS) campaign/$(FLINT_REPORT)
+		$(FLINT_LOGITS)/comparison.json campaign/$(FLINT_CORPUS) campaign/$(FLINT_REPORT) \
+		$(FLINT_LOGITS)/trace.json

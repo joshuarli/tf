@@ -1,0 +1,11 @@
+[project]
+name = "flint-comparator-mlx-lm"
+version = "0.1.0"
+description = "F3 comparator: mlx-lm at the Exo-pinned rev serving the Flint INT4 checkpoint"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+    "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@6b572ab1b531dd8fd2d13f6f36a89c2eccda18ea",
+]
+
+[tool.uv]
+package = false

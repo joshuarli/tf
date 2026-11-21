@@ -52,19 +52,106 @@ pub const Config = struct {
     mtp: ?Mtp,
     eos: u32,
     image_token: u32,
+    /// `layer_types`: which layers attend over the whole context. The checkpoint carries it, and a checkpoint whose
+    /// every-other layer is global is not the published every-sixth one the shared package assumes.
+    local: [small.max_layers]bool = @splat(false),
 
     pub fn slots(c: *const Config) u32 {
         return c.loop.slotCount(c.text.layers);
     }
 
-    pub fn isFull(_: *const Config, layer: u32) bool {
-        return small.isGlobal(layer);
+    pub fn isFull(c: *const Config, layer: u32) bool {
+        return layer < small.max_layers and !c.local[layer];
+    }
+
+    pub fn heads(c: *const Config, layer: u32) small.Heads {
+        return if (c.isFull(layer)) c.text.global else c.text.local;
     }
 
     pub fn extent(c: *const Config, layer: u32) u32 {
-        return c.text.extent(layer);
+        return if (c.isFull(layer)) c.text.rel_extent else c.text.window;
     }
 };
+
+/// `layer_types` (or its `local_layer_ids` form) as the mask the graph indexes; absent keeps the published layout.
+fn parseLayout(tc: std.json.ObjectMap, layers: u32, out: *[small.max_layers]bool, why: *Why) !void {
+    if (tc.get("layer_types")) |v| {
+        if (v != .array or v.array.items.len != layers) {
+            why.set("layer_types must list all {d} layers", .{layers});
+            return error.Layout;
+        }
+        for (v.array.items, 0..) |e, i| {
+            const t = if (e == .string) e.string else {
+                why.set("layer_types' entries are not strings", .{});
+                return error.Layout;
+            };
+            if (std.mem.eql(u8, t, "hybrid_sliding")) {
+                out[i] = true;
+            } else if (std.mem.eql(u8, t, "hybrid")) {
+                out[i] = false;
+            } else {
+                why.set("layer_types names {s}: the engine reads hybrid and hybrid_sliding only", .{t});
+                return error.Unsupported;
+            }
+        }
+        return;
+    }
+    const v = try get(tc, "local_layer_ids", why);
+    if (v != .array or v.array.items.len > layers) {
+        why.set("local_layer_ids must list at most {d} layers", .{layers});
+        return error.Layout;
+    }
+    for (0..layers) |i| out[i] = !small.isGlobal(@intCast(i));
+    for (v.array.items) |e| {
+        if (e != .integer or e.integer < 0 or e.integer >= layers) {
+            why.set("local_layer_ids names a layer the backbone does not have", .{});
+            return error.Layout;
+        }
+        out[@intCast(e.integer)] = true;
+    }
+}
+
+/// A checkpoint's expert geometry per layer, read from its own tensor headers rather than from config.json.
+pub const Expert = enum { nvfp4, mxfp8 };
+
+/// The text shard's file name, from `model.safetensors.index.json`; the checkpoint splits the text stack from the
+/// MTP head, so exactly one file holds it.
+pub fn shard(a: std.mem.Allocator, io: std.Io, dir: []const u8) ![]const u8 {
+    const idx = try std.fs.path.join(a, &.{ dir, "model.safetensors.index.json" });
+    defer a.free(idx);
+    const body = try std.Io.Dir.cwd().readFileAlloc(io, idx, a, .limited(1 << 26));
+    defer a.free(body);
+    const doc = try std.json.parseFromSliceLeaky(std.json.Value, a, body, .{});
+    if (doc != .object) return error.BadIndex;
+    const map = doc.object.get("weight_map") orelse return error.BadIndex;
+    if (map != .object) return error.BadIndex;
+    var found: ?[]const u8 = null;
+    var it = map.object.iterator();
+    while (it.next()) |kv| {
+        if (kv.value_ptr.* != .string) return error.BadIndex;
+        const f = kv.value_ptr.string;
+        if (std.mem.indexOf(u8, f, "..") != null or std.fs.path.isAbsolute(f)) return error.BadIndex;
+        if (found) |g| {
+            if (!std.mem.eql(u8, g, f)) return error.MultipleShards;
+        } else found = f;
+    }
+    return a.dupe(u8, found orelse return error.BadIndex);
+}
+
+/// Each layer's expert format from its `w13_weight` header: packed U8 is NVFP4, F8_E4M3 is MXFP8.
+pub fn expertFormats(entries: anytype, layers: u32, out: []Expert) !void {
+    if (out.len < layers) return error.FormatCount;
+    for (0..layers) |i| {
+        var buf: [96]u8 = undefined;
+        const name = try std.fmt.bufPrint(&buf, "model.llm.layers.{d}.mlp.experts.w13_weight", .{i});
+        const e = entries.get(name) orelse return error.NoExperts;
+        out[i] = switch (e.dtype) {
+            .u8 => .nvfp4,
+            .f8_e4m3 => .mxfp8,
+            else => return error.ExpertFormat,
+        };
+    }
+}
 
 fn get(o: std.json.ObjectMap, key: []const u8, why: *Why) !std.json.Value {
     return o.get(key) orelse {
@@ -249,6 +336,17 @@ pub fn parse(gpa: std.mem.Allocator, json: []const u8, why: *Why) !Config {
     doc.object.getPtr("architectures").?.array.items[0] = .{ .string = "Inkling2ForConditionalGeneration" };
     doc.object.getPtr("model_type").?.* = .{ .string = "inkling2" };
     _ = doc.object.orderedRemove("mtp_config");
+    var layout: [small.max_layers]bool = @splat(false);
+    try parseLayout(tc, layers, &layout, why);
+    // The shared package checks `local_layer_ids` against its own every-sixth layout. Only its shapes are used here:
+    // `parseLayout` above holds the checkpoint's real mask, and every layout question goes through `Config`.
+    const base_tc = &doc.object.getPtr("text_config").?.object;
+    var published: std.json.Array = .init(a);
+    for (0..layers) |i| if (!small.isGlobal(@intCast(i))) try published.append(.{ .integer = @intCast(i) });
+    base_tc.put(a, "local_layer_ids", .{ .array = published }) catch |e| {
+        why.set("config.json's text_config is not writable", .{});
+        return e;
+    };
     const normalized = try std.json.Stringify.valueAlloc(a, doc, .{});
     const base = try small.parse(gpa, normalized, why);
     return .{
@@ -258,5 +356,6 @@ pub fn parse(gpa: std.mem.Allocator, json: []const u8, why: *Why) !Config {
         .mtp = mtp,
         .eos = base.eos,
         .image_token = base.image_token,
+        .local = layout,
     };
 }

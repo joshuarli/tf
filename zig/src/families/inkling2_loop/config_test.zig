@@ -50,6 +50,9 @@ test "Inkling 2 Mini's config.json parses to the recipe's values" {
         try t.expectEqual(i == 5 or i == 11 or i == 17 or i == 23, c.isFull(@intCast(i)));
         try t.expectEqual(@as(u32, 1024), c.extent(@intCast(i)));
     }
+    // The mask follows the checkpoint's own `local_layer_ids`, so a layout that is not the published every-sixth one
+    // reads its own layer types rather than the shared package's default.
+    try t.expect(!c.isFull(0) and !c.isFull(4) and c.isFull(5));
     const m = c.mtp.?;
     try t.expectEqual(@as(u32, 2304), m.hidden);
     try t.expectEqual(@as(u32, 3), m.layers);
@@ -112,7 +115,7 @@ test "the loop and the MTP head are refused by key when they are not the ones th
 }
 
 test "layouts the engine does not run are refused with the key that differs" {
-    try failed(real, "\"local_layer_ids\": [\n      0,\n      1,", "\"local_layer_ids\": [\n      1,", error.Layout, "local_layer_ids must list the 20 sliding layers");
+    try failed(real, "\"local_layer_ids\": [\n      0,\n      1,", "\"local_layer_ids\": [\n      0,\n      25,", error.Layout, "local_layer_ids names a layer the backbone does not have");
     try failed(real, "\"sconv_kernel_size\": 4", "\"sconv_kernel_size\": 3", error.Unsupported, "sconv_kernel_size must be 4");
     try failed(real, "\"hidden_size\": 2304,\n    \"num_hidden_layers\": 24", "\"hidden_size\": 2300,\n    \"num_hidden_layers\": 24", error.Layout, "backbone's width");
     try failed(real, "\"quant_algo\": \"NVFP4\"", "\"quant_algo\": \"FP8\"", error.Quant, "ModelOpt NVFP4");

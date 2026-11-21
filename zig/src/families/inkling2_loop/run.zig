@@ -3,6 +3,7 @@
 const std = @import("std");
 const mtl = @import("metal");
 const tf = @import("tensorfold");
+const tk = @import("tokenizer");
 const inkling = tf.inkling2_loop;
 
 const usage =
@@ -10,8 +11,41 @@ const usage =
     \\tf-inkling2-loop-run <model> <tokens.json> greedy <steps> <out>  then <steps> greedy tokens, one decode a step
     \\tf-inkling2-loop-run <model> <tokens.json> trace <out>        per-tensor summaries in the reference's order
     \\tf-inkling2-loop-run <model> <tokens.json> reset <out>        the same logits twice from a fresh cache, byte-compared
+    \\tf-inkling2-loop-run <model> <tokens.json> bench <steps> [warmup]  the prompt, warmup, then steps: wall, encode, GPU ms
+    \\tf-inkling2-loop-run <tokenizer.json> <text> tokenize <out>   the text's token ids, for the modes above
     \\
 ;
+
+pub const std_options: std.Options = .{ .log_level = .info, .logFn = logFn };
+pub const tf_metal4 = true;
+
+var metrics_ms: f64 = 0;
+var metrics_wait_ms: f64 = 0;
+var metrics_gpu_ms: f64 = 0;
+var metrics_commits: u64 = 0;
+var metrics_seen: bool = false;
+
+/// Keeps the forward's pass receipts (one `q27_pass` line) out of stderr and in this program's hands.
+fn logFn(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comptime format: []const u8, args: anytype) void {
+    if (comptime std.mem.startsWith(u8, format, "q27_pass")) {
+        var buf: [512]u8 = undefined;
+        const line = std.fmt.bufPrint(&buf, format, args) catch return;
+        metrics_ms += field(line, "ms=") orelse 0;
+        metrics_wait_ms += field(line, "wait_ms=") orelse 0;
+        metrics_gpu_ms += field(line, "gpu_ms=") orelse 0;
+        if (field(line, "commits=")) |v| metrics_commits += @intFromFloat(v);
+        metrics_seen = true;
+        return;
+    }
+    std.log.defaultLog(level, scope, format, args);
+}
+
+fn field(line: []const u8, key: []const u8) ?f64 {
+    const at = std.mem.indexOf(u8, line, key) orelse return null;
+    const rest = line[at + key.len ..];
+    const end = std.mem.indexOfScalar(u8, rest, ' ') orelse rest.len;
+    return std.fmt.parseFloat(f64, rest[0..end]) catch null;
+}
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -22,14 +56,28 @@ pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const pool = mtl.objc.Pool.push();
     defer pool.pop();
+    const mode = args[3];
+    if (std.mem.eql(u8, mode, "tokenize")) {
+        try tokenize(gpa, init.io, args[1], args[2], args[4]);
+        return;
+    }
     const bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, args[2], gpa, .limited(64 << 20));
     defer gpa.free(bytes);
     const ids = try std.json.parseFromSlice([]u32, gpa, bytes, .{});
     defer ids.deinit();
     if (ids.value.len == 0) return error.EmptyPrompt;
-    const mode = args[3];
+    const timeline = std.c.getenv("TF_METAL4_TIMELINE");
+    const want_timeline = if (timeline) |p| std.mem.span(p).len > 0 and !std.mem.eql(u8, std.mem.span(p), "0") else false;
+    if (want_timeline) mtl.Pipeline.labels(true);
     const m = try inkling.Model.load(gpa, init.io, args[1]);
     defer m.deinit();
+    if (want_timeline) {
+        const q4 = m.device.queue4() catch null;
+        if (q4) |q| {
+            m.queue.deinit();
+            m.queue = q;
+        }
+    }
     const c = &m.config;
     const vocab: usize = c.text.unpadded_vocab;
     const t0 = now();
@@ -52,6 +100,56 @@ pub fn main(init: std.process.Init) !void {
         }
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[5], .data = std.mem.sliceAsBytes(out) });
         std.debug.print("inkling2_loop greedy: {d} prompt tokens, {d} steps, {d} ms\n", .{ ids.value.len, steps, (now() - t0) / std.time.ns_per_ms });
+        return;
+    }
+    if (std.mem.eql(u8, mode, "bench")) {
+        if (args.len < 5 or args.len > 6) {
+            std.debug.print("{s}", .{usage});
+            return error.ExpectedArgs;
+        }
+        const steps = try std.fmt.parseInt(usize, args[4], 10);
+        if (steps == 0) {
+            std.debug.print("{s}", .{usage});
+            return error.ExpectedArgs;
+        }
+        const warm = if (args.len == 6) try std.fmt.parseInt(usize, args[5], 10) else 8;
+        var cache = try inkling.Cache.init(m.device, c, ids.value.len + warm + steps + 1);
+        defer cache.deinit();
+        var scratch = try inkling.Scratch.init(m.device, c);
+        defer scratch.deinit();
+        const walls = try gpa.alloc(f64, steps);
+        defer gpa.free(walls);
+        try run(m, &scratch, &cache, ids.value);
+        var tok = argmax(scratch.logits.slice(f32, vocab));
+        for (0..warm) |_| {
+            try inkling.position(m, &scratch, &cache, tok);
+            tok = argmax(scratch.logits.slice(f32, vocab));
+        }
+        var argmax_ns: u64 = 0;
+        metrics_ms = 0;
+        metrics_wait_ms = 0;
+        metrics_gpu_ms = 0;
+        metrics_commits = 0;
+        metrics_seen = false;
+        mtl.pass_metrics.begin(true, "inkling2-bench", @intCast(steps), mtl.clock.seconds);
+        for (0..steps) |i| {
+            const start = now();
+            m.queue.roundBegin("inkling2-bench");
+            try inkling.position(m, &scratch, &cache, tok);
+            m.queue.roundEnd();
+            const stop = now();
+            walls[i] = @as(f64, @floatFromInt(stop - start)) / 1e6;
+            tok = argmax(scratch.logits.slice(f32, vocab));
+            argmax_ns += now() - stop;
+        }
+        mtl.pass_metrics.end();
+        std.mem.sort(f64, walls, {}, std.sort.asc(f64));
+        const median = if (steps % 2 == 1) walls[steps / 2] else (walls[steps / 2 - 1] + walls[steps / 2]) / 2;
+        const n: f64 = @floatFromInt(steps);
+        const host = if (metrics_seen) (metrics_ms - metrics_wait_ms - @as(f64, @floatFromInt(argmax_ns)) / 1e6) / n else 0;
+        const gpu = if (metrics_seen) metrics_gpu_ms / n else 0;
+        std.debug.print("inkling2_loop bench at {d}: {d:.3} ms a step wall (median of {d}), {d:.3} encode, {d:.3} GPU, {d} warmup steps, {d} command buffers\n", .{ ids.value.len, median, steps, host, gpu, warm, metrics_commits });
+        std.debug.print("receipt: seen={} ms={d:.3} wait={d:.3} gpu={d:.3} commits={d}\n", .{ metrics_seen, metrics_ms, metrics_wait_ms, metrics_gpu_ms, metrics_commits });
         return;
     }
     var cache = try inkling.Cache.init(m.device, c, ids.value.len);
@@ -125,6 +223,20 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("{s}", .{usage});
         return error.UnknownMode;
     }
+}
+
+fn tokenize(gpa: std.mem.Allocator, io: std.Io, tok_path: []const u8, text_path: []const u8, out_path: []const u8) !void {
+    const text = try std.Io.Dir.cwd().readFileAlloc(io, text_path, gpa, .limited(64 << 20));
+    defer gpa.free(text);
+    var tok = try tk.loadTokenizer(io, gpa, tok_path);
+    defer tok.deinit();
+    const ids = try tok.encode(gpa, text);
+    defer gpa.free(ids);
+    var w: std.Io.Writer.Allocating = .init(gpa);
+    defer w.deinit();
+    try std.json.Stringify.value(ids, .{}, &w.writer);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = w.written() });
+    std.debug.print("inkling2_loop tokenize: {d} tokens\n", .{ids.len});
 }
 
 fn run(m: *const inkling.Model, s: *inkling.Scratch, cache: *inkling.Cache, ids: []const u32) !void {

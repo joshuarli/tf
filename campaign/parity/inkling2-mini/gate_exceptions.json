@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "exceptions": [
+    {
+      "history": "harbour",
+      "onset_position": 556,
+      "mechanism": "demonstrated routing discontinuity: the Metal pass takes the other side of reference router ties (slot 38 at 556 with an 8th/9th selection gap of 2.98e-08, slot 24 at 557 with a gap of 1.34e-07); forcing the reference's 8th picks reproduces Metal's logits to 9.1e-05 and 4.6e-05, and the corrupted state then persists",
+      "evidence": "campaign/parity/inkling2-mini/long-divergence.md"
+    }
+  ]
+}

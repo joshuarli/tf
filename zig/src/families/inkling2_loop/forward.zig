@@ -20,7 +20,6 @@ const Mv = extern struct { m: u32, k: u32, cap: f32 };
 const Dm = extern struct { m: u32, k: u32, cap: f32 };
 const Dmg = extern struct { k: u32, m0: u32, m1: u32, m2: u32, m3: u32 };
 const Dmgx = extern struct { k0: u32, k1: u32, k2: u32, m: [8]u32, x: [8]u32 };
-const Dctl = extern struct { k0: u32, k1: u32, m0: u32, m1: u32 };
 const Rms = extern struct { width: u32, blocks: u32, eps: f32 };
 const Mix = extern struct { width: u32, depth: u32, k: u32, scale: f32 };
 const Clip = extern struct { heads: u32, width: u32, threshold: f32 };
@@ -143,6 +142,13 @@ pub const Forward = struct {
         f.enc.dispatchGroups(mtl.Size.of((total + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
     }
 
+    fn fused2(f: Forward, p: kernels.Dense, x: B, w0: Tensor, o0: B, w1: Tensor, o1: B) void {
+        const m0: usize = nrows(w0);
+        const m1: usize = nrows(w1);
+        f.setRaw(p.fused, Dmg{ .k = @intCast(width(w0)), .m0 = @intCast(m0), .m1 = @intCast(m1), .m2 = 0, .m3 = 0 }, &.{ x, t(w0), o0, t(w1), o1, t(w0), o0, t(w0), o0, A });
+        f.enc.dispatchGroups(mtl.Size.of((m0 + m1 + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+    }
+
     fn projGroup(f: Forward, p: kernels.Dense, lay: *const Layer, inputs: [3]B, full: bool) void {
         const a = &lay.attn;
         const s = f.s;
@@ -151,12 +157,6 @@ pub const Forward = struct {
         f.fusedx(p, inputs, .{ @intCast(width(a.q)), @intCast(width(a.k)), @intCast(width(a.v)) }, .{ a.q, a.r, a.sink, a.gate, a.k, kd, a.v, vd }, .{ b(s.q), b(s.r), b(s.sink), b(s.gate), b(s.k), if (full) b(s.kdyn) else b(s.k), b(s.v), if (full) b(s.vdyn) else b(s.v) }, .{ @intCast(nrows(a.q)), @intCast(nrows(a.r)), @intCast(nrows(a.sink)), @intCast(nrows(a.gate)), @intCast(nrows(a.k)), if (full) @intCast(nrows(a.k_dyn.?)) else 0, @intCast(nrows(a.v)), if (full) @intCast(nrows(a.v_dyn.?)) else 0 }, .{ 0, 0, 0, 0, 1, 1, 2, 2 });
     }
 
-    fn fused2(f: Forward, p: kernels.Dense, x: B, w0: Tensor, o0: B, w1: Tensor, o1: B) void {
-        const m0: usize = nrows(w0);
-        const m1: usize = nrows(w1);
-        f.setRaw(p.fused, Dmg{ .k = @intCast(width(w0)), .m0 = @intCast(m0), .m1 = @intCast(m1), .m2 = 0, .m3 = 0 }, &.{ x, t(w0), o0, t(w1), o1, t(w0), o0, t(w0), o0, A });
-        f.enc.dispatchGroups(mtl.Size.of((m0 + m1 + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
-    }
 
     /// rms_norm of `count` rows `w` wide; a null weight leaves them unweighted (the depth mix).
     fn rms(f: Forward, x: B, weight: ?B, out: B, count: u32, w: u32, eps: f32) void {

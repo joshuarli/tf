@@ -13,9 +13,9 @@ pub const glue = @embedFile("kernels/glue.metal");
 
 pub const dense = @embedFile("kernels/dense.metal");
 
-pub const dense_names = [_][:0]const u8{ "i2_dmv", "i2_dmv_cap", "i2_dmv_fused", "i2_dmv_fusedx", "i2_dmv_ctl" };
+pub const dense_names = [_][:0]const u8{ "i2_dmv", "i2_dmv_cap", "i2_dmv_fused", "i2_dmv_fusedx" };
 
-pub const Dense = struct { mv: mtl.Pipeline, mv_cap: mtl.Pipeline, fused: mtl.Pipeline, fusedx: mtl.Pipeline, ctl: mtl.Pipeline };
+pub const Dense = struct { mv: mtl.Pipeline, mv_cap: mtl.Pipeline, fused: mtl.Pipeline, fusedx: mtl.Pipeline };
 
 var dense_owner: ?mtl.Device = null;
 var dense_pipes: ?Dense = null;
@@ -28,7 +28,6 @@ pub fn densePipes(device: mtl.Device) !Dense {
         .mv_cap = try mtl.Pipeline.init(device, lib, dense_names[1], false),
         .fused = try mtl.Pipeline.init(device, lib, dense_names[2], false),
         .fusedx = try mtl.Pipeline.init(device, lib, dense_names[3], false),
-        .ctl = try mtl.Pipeline.init(device, lib, dense_names[4], false),
     };
     dense_owner = device;
     dense_pipes = pipes;

@@ -25,8 +25,13 @@ needed, and no forward code was changed.
   plus the 9th were used at that slot in rows 0-303 with zero error, so this is neither a router
   flip nor a weight-decode defect. Elementwise, all 2,304 inputs agree to <=5.9e-04 while 40
   output elements reach 1.5e-03: ordinary MoE amplification of accumulated drift (~1.6e-04 at the
-  303 control), whose state echo damps back to 8.8e-05 at 305. The 656-694 regime (max 0.68,
-  top-1 still 100%) is further drift growth and was not separately diagnosed.
+  303 control), whose state echo damps back to 8.8e-05 at 305. The 656-694 regime (max 0.68
+  at 690, top-1 still 100%) is drift plus two reference-side router ties, diagnosed in
+  the cells_code 656-694 section below: a tie at slot 21, row 473 (gap ~3e-8) whose echo
+  damps into the drift floor, and a tie at slot 21, row 690 (gap ~1.5e-7) behind the peak.
+  In prefix-matched comparisons Metal never departs from the reference beyond their
+  mutual spread; the discrete jumps exist only between the reference's own
+  full-history and prefix batch shapes.
 
 Hypotheses closed out: the relative-bias/attention index idea is excluded arithmetically (onset
 positions 304/556/557 sit below the 1,024 relative-bias extent and sliding-window thresholds, and
@@ -103,6 +108,77 @@ On the 558-token prefix, 170 overlapping tensors agree within 1e-3 first, then:
   difference in, sparse 1.5e-03 out: MoE forward amplification of drift, not a discrete event.
   The state echo is visible and damped: row-305 error 8.8e-05.
 
+### cells_code 656-694: reference-side router ties at rows 473 and 690
+
+Fresh full-history numbers below use the integrated main runner
+(`zig-out/bin/tf-inkling2-loop-run` sha256
+`eaea2a5d727307b1aeaf7ca17e900af47d287961bf60295584a2519d325faf21`)
+wrote to a lane-private directory, against the saved reference logits
+(`.work/parity/inkling2-mini/ref/cells_code.npy`, sha256
+`8fb4a4f2d156906f9ff1bf95188dff32bf02b154b182d1ada3d89a23fe9e940d`;
+D1 recorded no digest for this file). Overall max abs logit error 0.6775174 at
+position 690, top-1 agreement 100% over all 1,178 positions. Post-304 drift peaks
+at 9.24e-04 (row 327); rows 328-655 never exceed 6.99e-04 (row 337) and rows
+600-655 never exceed 1.74e-04. Row 656 (9.034e-04) is the first position since
+the 327 spike to approach 1e-3, ~5x the 600-655 envelope; rows 688/689 sit at
+4.84e-04/3.35e-04, then 690 explodes to 0.6775174 and the echo decays (691:
+0.074331, 692: 0.016438, 693: 0.005901, 694: 0.001617).
+
+Onset (656): ordinary drift on the same discrete path, no Metal departure. The
+prefix-matched comparison (both sides fold row 656 of the 657-token prefix from
+empty state) agrees on all 432 overlapping tensors within 1e-3, and raw,
+elementwise, on all 432 x 2,304 values: max 8.81e-04 (ffn_inp-23), median
+4.18e-05, p90 2.21e-04, zero values over 1e-3, against the 655 control's max
+1.26e-04 (median 1.14e-05). There is no first tensor where Metal departs beyond
+the implementations' mutual spread; the 656 blip is a diffuse drift peak, the
+same kind as position 304. A reference-internal tie contributes to the
+reference side of the comparison: slot 21 (tail layer 21, sliding-window) at row
+473 has selection gap 2.98e-08 in the 657-prefix batch vs 4.47e-08 in the
+full-history batch, the unique near-tie at that row (next-tightest anywhere is
+slot 5 at 3.0e-04), with the 657-prefix picking 8th expert 88 and the full run
+picking 89 (9th expert swapped accordingly). Forcing the prefix run onto the
+full side (`--force-pick 21,89,473`) reproduces the full-history row 473 to
+4.10e-05 (unforced: 0.6320047) and tracks it to ~4-6e-05 through row 600, while
+by row 656 the forced run rejoins the same ~1.3e-03 batch-shape drift floor as
+the unforced prefix run: the 473 echo damps out and does not explain row 656.
+Metal demonstrably takes the full-history side of that tie: the fresh Metal
+full-history run tracks the saved oracle to ~4-10e-05 across rows 473-500,
+where the 88-side prefix run sits 0.63 away at row 473. So both compared sides
+share one discrete path through 656; the 9.03e-04 is inter-implementation
+drift, not a flip.
+
+Peak (690): a demonstrated routing discontinuity, and it sits inside the
+reference's own batch shapes. The prefix-matched comparison agrees everywhere:
+logits to 4.36e-05, all 432 overlapping summary tensors within 1e-3, raw rows
+max 1.52e-04 (median 1.05e-05) — while both sides disagree with the saved
+full-history oracle row by 0.6775. The reference's slot-21 router at row 690 is
+a 1.639e-07 tie (prob gap 0.0164, the bias closing a 1.6%-scale prob margin to
+1e-7, as at harbour 557): the 691-prefix run picks
+[97, 24, 53, 72, 43, 17, 85, 125] against 9th expert 120, while the
+full-history run picks 8th expert 120 against 9th 125 (gap 1.341e-07); nearby
+slots are ~1000x wider (slot 2: 1.43e-04, slot 20: 3.91e-04, slot 0: 7.32e-04,
+slot 22: 8.27e-04). Forcing the prefix run onto the full side
+(`--force-pick 21,120,690`) reproduces the oracle row 690 to 9.1553e-05, down
+from 0.67751 unforced, top-1 37860 on all three. Forced-vs-unforced prefix
+traces agree on the first 413 overlapping tensors and differ first at
+**l_out-21** (3.714e-02 in the summaries), so the MoE at slot 21, row 690 is
+the origin. Elementwise: all eight slot-21 input tensors are identical between
+forced and unforced (0.0) and agree with Metal to <=2.22e-05, while l_out-21
+differs by max 0.5408 between the two sides (worst element 1549: 125-side
+7.5828648 vs 120-side 7.0420713; Metal 7.58287 matches the 125 side to
+1.36e-05). As at row 473, slot 22's row-690 pick follows the flip (29 vs 53 at
+a non-tie gap) as downstream state carry, not a second tie. Metal behaviourally
+takes the 125 side (it matches the 125-side prefix run to 4.4e-05 logits); the
+oracle's 120 side is the reference's own batch-shape coin flip.
+
+A full-history reference rerun (1,178 tokens, peak 18.9 GB) reproduces the saved
+oracle bit-for-bit (max diff 0.0), so the oracle is sound, and a fresh Metal
+prefix-690 logits run reproduces the Metal full-history row 690 bit-for-bit
+(0.0): neither side has a state-handling defect. Between the two discrete
+ties, the 656-694 span is continued drift amplification of the position-304
+kind, with the 690 tie's state echo decaying through 694 and a raised floor
+(whole-history top-1 still 100%) carried downstream.
+
 ## How to reproduce
 
 Every model load below ran through `python3 /Users/josh/repos/tensorfold-m5/campaign/heavy.py --`,
@@ -132,6 +208,18 @@ Build: `zig build tf-inkling2-loop-run -Dcpu=apple_m1` (exit 0).
 - Reference full-harbour rerun: same reference command with all 1,336 ids, no flags
   (exit 0, peak 19.2 GB); `harbour.full-rerun.npy` matches the saved oracle bit-for-bit
   (max diff 0.0), proving the oracle sound and the prefix/full difference a tie flip.
+- cells_code 656-694 forensics (all exits 0; `$W` is the lane-private
+  `/Users/josh/repos/tensorfold-m5/.work/tmp/w1/` holding every file this run wrote):
+  fresh full-history Metal logits `cells_code.metal.bin` (1,178 rows in 46.5 s, peak
+  1.6 GB; sha256 `77e41236fb6355a145d286e567ee34be6d26fa8cfa7736919ceafb56b7540ab9`)
+  and Metal prefix traces/rows (`trace`/`tracerow` at 655, 656, 689, 690; peaks 1.2/0.6 GB);
+  reference prefix runs with `--trace-row`, `--router-report`, `--row-dump` for 655, 656,
+  689, 690 (peaks 18.5-19.7 GB); a full-history reference run with `--router-report`
+  (peak 18.9 GB, reproduces the saved cells_code oracle bit-for-bit, max diff 0.0);
+  forced runs `--force-pick 21,120,690` on the 691-prefix (peak 18.6 GB, row-690
+  reproduction 9.1553e-05) and `--force-pick 21,89,473` on the 657-prefix (peak
+  19.6 GB, row-473 reproduction 4.101e-05); a Metal prefix-690 `logits` run (peak
+  1.2 GB) reproducing the Metal full-history row 690 bit-for-bit (0.0).
 - Harness proof: `uv run --frozen --project campaign/ref python
   campaign/parity/inkling2-mini/compare.py --histories <harbour+cells_code subset> --ref-dir
   <ref bins> --metal-dir <metal bins> --report <report> --runner … --model $M --heavy … --ref-venv …
@@ -155,9 +243,14 @@ Build: `zig build tf-inkling2-loop-run -Dcpu=apple_m1` (exit 0).
   stochastically and only sometimes propagate visibly. A future tie could flip the other way on
   a rebuild with different kernel order; the parity gate tolerates this (confident agreement
   stays >= 99.5%) but exact-logit reproducibility across implementations is not achievable at
-  ties.
-- The cells_code 656-694 growth (max 0.68, top-1 still 100%) was not separately diagnosed; the
-  working model is continued drift amplification of the same kind as position 304.
+  ties. The cells_code regime adds two instances: the 656- and 657-token prefix
+  batches resolve the row-473 tie on opposite sides (88 vs 89) while the
+  full-history batch sides with the 656-token prefix, so a different prefix length
+  alone moves the echo.
+- The cells_code 656-694 regime is now diagnosed (routing discontinuities at slot 21,
+  rows 473 and 690, plus position-304-kind drift amplification between and after
+  them). Fresh Metal builds still drift from each other inside the regime
+  (fresh-vs-stale Metal max 9.24e-04 at row 908) while agreeing at the discrete events.
 - During this run the shared `.work/parity/inkling2-mini/metal/*.bin` files were deleted and
   regenerated by concurrent harness activity; all numbers above come from files this run wrote
   itself or verified by hash (saved harbour oracle md5 6d39491b57d480d00ef4560f47e3c475,

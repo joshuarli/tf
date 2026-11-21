@@ -1,0 +1,11 @@
+[project]
+name = "inkling2-loop-ref"
+version = "1.0.0"
+description = "CPU float32 teacher-forced reference for Inkling 2 Mini"
+requires-python = ">=3.12"
+dependencies = ["numpy>=2.0"]
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true

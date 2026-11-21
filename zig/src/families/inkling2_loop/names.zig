@@ -67,7 +67,7 @@ fn put(sink: anytype, comptime fmt: []const u8, args: anytype, dtype: DType, dim
 
 fn attention(c: *const config.Config, i: u32, sink: anytype) !void {
     const h: u64 = c.text.hidden;
-    const hd = c.text.heads(i);
+    const hd = c.heads(i);
     const q: u64 = @as(u64, hd.q) * hd.dim;
     const kv: u64 = @as(u64, hd.kv) * hd.dim;
     const k: u64 = config.conv_taps;
@@ -81,7 +81,7 @@ fn attention(c: *const config.Config, i: u32, sink: anytype) !void {
     try put(sink, "model.llm.layers.{d}.attn.attn_sink_proj.weight", L, .bf16, &.{ hd.q, h }, .attn_sink);
     try put(sink, "model.llm.layers.{d}.attn.q_l2_clip.scale", L, .bf16, &.{ hd.q, hd.dim }, .attn_q_scale);
     try put(sink, "model.llm.layers.{d}.attn.rel_l2_clip.scale", L, .bf16, &.{ hd.q, c.text.d_rel }, .attn_r_scale);
-    try put(sink, "model.llm.layers.{d}.attn.rel_logits_proj.proj", L, .bf16, &.{ c.text.d_rel, c.text.extent(i) }, .attn_rel_bias);
+    try put(sink, "model.llm.layers.{d}.attn.rel_logits_proj.proj", L, .bf16, &.{ c.text.d_rel, c.extent(i) }, .attn_rel_bias);
     inline for (.{ "k", "v" }) |kind| {
         if (c.isFull(i)) {
             try put(sink, "model.llm.layers.{d}.attn." ++ kind ++ "_sconv.static_w", L, .bf16, &.{ k, kv }, .sconv_static);

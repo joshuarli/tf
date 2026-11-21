@@ -252,7 +252,7 @@ pub const Model = struct {
         }
         for (0..L - 1) |i| {
             const name = try std.fmt.allocPrint(a, "model.llm.attn_res.attn_queries.{d}", .{i});
-            w.attn_queries[i] = if (cfg.isGlobal(@intCast(i + 1)))
+            w.attn_queries[i] = if (c.isFull(@intCast(i + 1)))
                 try m.want(name, .f32, &.{ 3, h })
             else
                 try m.want(name, .f32, &.{h});
@@ -297,8 +297,8 @@ fn mapLayer(m: *Model, i: u32) !Layer {
     const c = &m.config;
     const a = m.arena.allocator();
     const h: usize = c.text.hidden;
-    const full = cfg.isGlobal(i);
-    const heads = c.text.heads(i);
+    const full = c.isFull(i);
+    const heads = c.heads(i);
     const qw: usize = heads.q * heads.dim;
     const kvw: usize = heads.kv * heads.dim;
     const p = try layerPrefix(a, i);

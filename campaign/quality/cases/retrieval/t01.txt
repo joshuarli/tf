@@ -1,0 +1,348 @@
+You are reviewing a large native inference codebase. Below are consecutive excerpts from several source files, each introduced by a line of the form ===== path =====. Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text.
+
+===== zig/src/server/slide_correction_source.zig =====
+//! Corrections target a shipped belief, never an answer supplied by another pocket fact.
+const std = @import("std");
+const reads = @import("slide_correction_ask.zig");
+const correction = @import("slide_correction.zig");
+const teach = @import("slide_lesson.zig");
+const errors = @import("errors.zig");
+const Server = @import("server.zig").Server;
+
+/// Refuse before training, naming the facts: their later deletion must not invalidate an old-answer reference.
+pub fn independent(srv: *Server, cx: *errors.Cx, h: teach.Held, old: []const u8, ids: []const u32, gone: anytype) !void {
+    const base = try reads.base(srv, cx, h.question, h.context, gone);
+    if (!std.mem.eql(u8, base.finish_reason, "stop")) return error.CorrectionReferenceIncomplete;
+    const changed = !std.mem.eql(u32, ids, try reads.ids(cx.a, base));
+    const facts = try srv.slide.snapshot(cx.a);
+    var names: std.ArrayList(u8) = .empty;
+    for (facts) |f| {
+        if (f.state != .learned or f.neurons.len == 0) continue;
+        // A matching kept value is conservatively refused even if several pocket effects currently cancel.
+        var matches = correction.oldReturned(h.question, old, old, f.text);
+        for (f.answers) |x| matches = matches or correction.oldReturned(h.question, old, old, x.answer);
+        if (!changed and !matches) continue;
+        if (names.items.len > 0) try names.appendSlice(cx.a, ", ");
+        try names.print(cx.a, "fact {d} (\"{s}\")", .{ f.id, f.text });
+    }
+    if (!changed and names.items.len == 0) return;
+    if (names.items.len == 0) try names.appendSlice(cx.a, "pocket neurons missing from this graph");
+    return cx.fail(.request, "correction refused: its old answer depends on, or matches, {s}; delete those facts before correcting it", .{names.items});
+}
+
+Facility record ZX-51: the access code for the Zephyr Point relay station is QX-7419. The Zephyr Point relay station was inspected on 14 March.
+
+
+
+
+===== zig/src/metal/sync.zig =====
+//! MTLSharedEvent: a 64-bit counter both the host and the GPU can signal and wait on.
+const objc = @import("objc.zig");
+
+const Id = objc.Id;
+
+pub const SharedEvent = struct {
+    id: Id,
+
+    pub fn value(self: SharedEvent) u64 {
+        return objc.msg(u64, self.id, "signaledValue", .{});
+    }
+
+    /// Host signal: releases GPU work waiting for `v` or less.
+    pub fn set(self: SharedEvent, v: u64) void {
+        objc.msg(void, self.id, "setSignaledValue:", .{v});
+    }
+
+    /// Block until the value reaches `v`; false on timeout.
+    pub fn wait(self: SharedEvent, v: u64, timeout_ms: u64) bool {
+        return objc.msg(bool, self.id, "waitUntilSignaledValue:timeoutMS:", .{ v, timeout_ms });
+    }
+
+    pub fn deinit(self: SharedEvent) void {
+        objc.release(self.id);
+    }
+};
+
+/// MTLEvent: a GPU-only counter that orders command buffers, also across queues; no host access, cheaper than shared.
+pub const Event = struct {
+    id: Id,
+
+    pub fn deinit(self: Event) void {
+        objc.release(self.id);
+    }
+};
+
+
+===== zig/src/families/hy4_flash/index_cuda.zig =====
+//! Hy4-flash's CUDA compressed indexer: cache token keys, pool closed groups, rank them, keep 511 plus its own.
+const std = @import("std");
+const cuda = @import("cuda");
+const mla = @import("mla_cuda.zig");
+const rotary = @import("rope.zig");
+const recall = @import("index_recall.zig");
+const recall_cuda = @import("index_recall_cuda.zig");
+const groups = @import("index_groups.zig");
+
+pub const heads = recall.heads;
+pub const width = recall.width;
+pub const nope = width - 2 * rotary.pairs;
+pub const budget_groups: u32 = 512;
+
+/// Device weights: BF16 projections and norm, FP32 pooling parameters.
+pub const Weights = struct {
+    token_keys: u64, // [128, hidden]
+    token_norm: u64, // [128]
+    query: u64, // [16 * 128, q_rank]
+    head_weights: u64, // [16, hidden]
+    values: u64, // f32 [128, 128]
+    gates: u64, // f32 [128, 128]
+    bias: u64, // f32 [4, 128]
+    norm: u64, // f32 [128]
+};
+
+pub const Indexer = struct {
+    pool: cuda.Module,
+    groups_fn: cuda.Function,
+    select_kernels: recall_cuda.Kernels,
+
+    pub fn load(driver: *const cuda.Driver) !Indexer {
+        if (!cuda.kernels.available) return error.BuiltWithoutKernels;
+        var pool = try cuda.Module.load(driver, cuda.kernels.hy4_indexpool);
+        errdefer pool.unload();
+        return .{
+            .pool = pool,
+            .groups_fn = try pool.function("tf_hy4_index_groups"),
+            .select_kernels = try recall_cuda.Kernels.load(driver),
+        };
+    }
+
+    pub fn deinit(self: *Indexer) void {
+        self.select_kernels.deinit();
+        self.pool.unload();
+        self.* = undefined;
+    }
+
+    pub const Keys = struct {
+        hidden: u64, // BF16 [gemm_rows, hidden], zero past the active rows
+        gemm_rows: usize, // fixed per lane class so cuBLASLt keeps one reduction order
+        count: usize,
+        projected: u64, // BF16 [gemm_rows, 128]
+        norm_tmp: u64,
+        staged: u64, // BF16 [gemm_rows, 128]
+        first_slot: usize,
+    };
+
+    /// Normalized BF16 token keys of the active rows into contiguous cache slots from `first_slot`.
+    pub fn cacheKeys(_: Indexer, s: cuda.Stream, gemm: *cuda.vit.Gemms, norms: *const cuda.norms.Norms, w: Weights, b: Keys, cache: cuda.DeviceBuffer, hidden_size: usize, eps: f32) !void {
+        if (b.count == 0 or b.count > b.gemm_rows) return error.BadHy4IndexRows;
+        try gemm.run(s, b.hidden, w.token_keys, b.projected, b.gemm_rows, width, hidden_size, .bf16);
+        try norms.addRmsTail(s, b.projected, null, w.token_norm, b.norm_tmp, b.staged, null, b.gemm_rows, width, eps, .{ .round = true });
+        try cache.copyFrom(b.first_slot * width * 2, b.staged, b.count * width * 2, s.handle);
+    }
+
+    /// Pool, normalize and rotate `count` closed groups from `first_group` (positions: each group's first token).
+    pub fn poolGroups(self: Indexer, s: cuda.Stream, project: mla.Projections, w: Weights, cache: u64, arena: u64, first_group: u32, count: u32, positions: u64, table: u64, p: rotary.Parameters, eps: f32) !void {
+        if (count == 0) return;
+        var args: cuda.Args = .{};
+        inline for (.{ cache, w.values, w.gates, w.bias, w.norm, arena, first_group, eps }) |x| args.add(x);
+        try cuda.launch.launch(self.groups_fn, .{ .grid = .{ .x = count }, .block = .{ .x = width } }, s, &args);
+        try project.rotaryTable(s, positions, table, count, p);
+        const rope_base = arena + (@as(u64, first_group) * width + nope) * 2;
+        try project.rotate(s, rope_base, table, rope_base, .{ .rows = count, .heads = 1, .input_stride = width, .output_stride = width });
+    }
+
+    pub const Select = struct {
+        q_resid: u64, // BF16 [gemm_rows, q_rank], the q_a_layernorm output
+        hidden: u64, // BF16 [gemm_rows, hidden]
+        gemm_rows: usize,
+        positions: u64, // i32 [rows, 3]
+        table: u64, // BF16 [rows, 64]
+        query: u64, // BF16 [rows, 16 * 128]
+        head_weights: u64, // BF16 [rows, 16]
+        arena: u64,
+        rows: u64, // recall.Row [rows]
+        scores: u64,
+        tokens: u64,
+        counts: u64,
+    };
+
+    /// Rotated query heads, head weights, closed-group scores and the recalled slot list of each row.
+    pub fn select(self: Indexer, s: cuda.Stream, gemm: *cuda.vit.Gemms, project: mla.Projections, w: Weights, b: Select, shape: recall.Shape, q_rank: usize, hidden_size: usize, p: rotary.Parameters) !void {
+        if (shape.rows > b.gemm_rows) return error.BadHy4IndexRows;
+        try gemm.run(s, b.q_resid, w.query, b.query, b.gemm_rows, heads * width, q_rank, .bf16);
+        try project.rotaryTable(s, b.positions, b.table, shape.rows, p);
+        const rope_base = b.query + nope * 2;
+        try project.rotate(s, rope_base, b.table, rope_base, .{ .rows = shape.rows, .heads = heads, .input_stride = width, .output_stride = width });
+        try gemm.run(s, b.hidden, w.head_weights, b.head_weights, b.gemm_rows, heads, hidden_size, .bf16);
+        try self.select_kernels.run(s, .{
+            .query = b.query,
+            .keys = b.arena,
+            .weights = b.head_weights,
+            .rows = b.rows,
+            .scores = b.scores,
+            .tokens = b.tokens,
+            .counts = b.counts,
+        }, shape);
+    }
+};
+
+/// Closed groups a pass of `count` new slots after `previous` cached slots makes poolable.
+pub fn closedBy(previous: usize, count: usize) !groups.Append {
+    return groups.append(previous, count);
+}
+
+
+===== zig/src/families/hy4_flash/moe_exl3_cuda.zig =====
+//! Standard MUL1 routed experts for the Hy4 latent branch.
+const std = @import("std");
+const cuda = @import("cuda");
+const weights = @import("exl3_weights.zig");
+const exl3 = cuda.exl3_experts;
+const upload = cuda.exl3_upload;
+
+pub const Route = struct {
+    hidden: u64,
+    width: usize,
+    router: u64,
+    bias: u64,
+    logits: u64,
+    picks: u64,
+    probabilities: u64,
+    scale: f32,
+    output: u64,
+};
+
+pub const Routed = struct {
+    layer: exl3.Layer,
+    scratch: exl3.Scratch,
+
+    pub fn init(
+        owner: *upload.Uploader,
+        experts: []const weights.Expert,
+        latent: usize,
+        intermediate: usize,
+        rows: usize,
+        slots: usize,
+        limit: f32,
+    ) !Routed {
+        if (experts.len == 0 or experts.len > 512 or rows == 0 or slots == 0 or slots > 32 or
+            rows > 16384 / slots or !std.math.isFinite(limit) or limit <= 0)
+            return error.BadHy4ExpertShape;
+        _ = try exl3.plan(latent, intermediate, true);
+        _ = try exl3.plan(intermediate, latent, false);
+        const a = owner.gpa;
+        const projections = try a.alloc(upload.Proj, 3 * experts.len);
+        defer a.free(projections);
+        const gate = projections[0..experts.len];
+        const up = projections[experts.len..][0..experts.len];
+        const down = projections[2 * experts.len ..];
+        for (experts, gate, up, down) |e, *g, *u, *d| {
+            g.* = try projection(e.gate, latent, intermediate);
+            u.* = try projection(e.up, latent, intermediate);
+            d.* = try projection(e.down, intermediate, latent);
+        }
+        const mark = owner.bufs.items.len;
+        errdefer owner.rollback(mark);
+        const layer = try upload.layer(owner, a, latent, intermediate, .mul1, limit, 0, gate, up, down);
+        const size = try exl3.scratchBytes(layer, rows, slots);
+        const space = try a.alloc(u8, size);
+        defer a.free(space);
+        @memset(space, 0);
+        const base = try owner.dev(space);
+        return .{ .layer = layer, .scratch = try exl3.scratch(base, layer, rows, slots) };
+    }
+
+    pub fn forward(
+        self: Routed,
+        kernels: *const exl3.Experts,
+        router: *const cuda.route_rows.RouteRows,
+        glue: *const cuda.moe_glue.MoeGlue,
+        stream: cuda.Stream,
+        latent: u64,
+        rows: usize,
+        route: Route,
+    ) !void {
+        const slots = self.scratch.slots;
+        if (rows == 0 or rows > self.scratch.rows or slots > self.layer.experts or
+            route.width == 0 or !std.math.isFinite(route.scale) or route.scale <= 0)
+            return error.BadHy4Route;
+        try router.logits(stream, route.hidden, route.width, route.router, route.logits, rows, route.width, self.layer.experts);
+        try glue.topk(stream, route.logits, route.bias, .{
+            .experts = self.layer.experts,
+            .topk = slots,
+            .score = true,
+            .shared = false,
+            .normalize = true,
+            .scale = route.scale,
+        }, route.picks, route.probabilities, rows);
+        const output = try self.run(kernels, stream, latent, route.picks, rows);
+        try glue.combine(stream, output, .f32, route.probabilities, route.output, .f32, rows, slots, self.layer.dims);
+    }
+
+    pub fn run(self: Routed, kernels: *const exl3.Experts, stream: cuda.Stream, x: u64, picks: u64, rows: usize) !u64 {
+        if (rows == 0 or rows > self.scratch.rows) return error.BadHy4ExpertRows;
+        try kernels.runSlots(stream, self.layer, x, self.layer.dims, .bf16, picks, rows, self.scratch);
+        return self.scratch.y;
+    }
+};
+
+fn projection(p: weights.Projection, k: usize, n: usize) !upload.Proj {
+    if (p.geometry.k() != k or p.geometry.n() != n) return error.BadHy4ExpertShape;
+    return .{
+        .trellis = p.parts.trellis.bytes,
+        .suh = p.parts.suh.bytes,
+        .svh = p.parts.svh.bytes,
+        .k2 = p.geometry.k2(),
+    };
+}
+
+
+===== zig/src/families/qwen3_5/cuda_dspine_weights.zig =====
+//! DSpine's code bridge on the device: read, gate, sender and write projections in affine-4, codebook and TG in bf16.
+const std = @import("std");
+const cuda = @import("cuda");
+const core = @import("core");
+const engine = @import("cuda_engine.zig");
+const dw = @import("cuda_draft_weights.zig");
+const precision = @import("cuda_draft_precision.zig");
+const Config = @import("cuda_draft_config.zig").Config;
+
+const Affine4 = cuda.qlinear.Affine4;
+const DeviceBuffer = cuda.DeviceBuffer;
+const aligned = engine.aligned;
+const prefix = "selected_prefix_bridge.";
+
+pub const Bridge = struct {
+    read: [8]Affine4 = undefined, // layer i's read: hidden -> code
+    write: [8]Affine4 = undefined, // layer i's feature write: rank -> hidden
+    gate: Affine4 = undefined, // code -> rank (the row's own gate term)
+    pv: Affine4 = undefined, // code -> [predecessor gate | value] (the sender's terms), 2 x rank
+    gate_b: u64 = 0, // gate.bias, rank bf16
+    codebook: u64 = 0, // (vocab, code) bf16
+    tg: u64 = 0, // (vocab, rank) bf16: W_write[last]^T (final_norm * head row)
+    arena: DeviceBuffer,
+    arena_at: usize = 0,
+
+    pub fn alloc(b: *Bridge, bytes: usize) !u64 {
+        const at = aligned(b.arena_at);
+        if (at + bytes > b.arena.len) return error.ArenaExhausted;
+        b.arena_at = at + bytes;
+        return b.arena.ptr + at;
+    }
+
+    pub fn deinit(b: *Bridge) void {
+        b.arena.free();
+    }
+};
+
+/// Device bytes of everything `load` keeps.
+pub fn total(c: Config) usize {
+    const L = c.layers;
+    return L * dw.packedBytes(c.code, c.hidden) + L * dw.packedBytes(c.hidden, c.rank) + dw.packedBytes(c.rank, c.code) +
+        dw.packedBytes(2 * c.rank, c.code) + aligned(c.rank * 2) + aligned(c.vocab * c.code * 2) + aligned(c.vocab * c.rank * 2);
+}
+
+fn version(ck: *core.Checkpoint, name: []const u8) !void {
+    const
+
+According to the facility records in the text, what is the access code for the Zephyr Point relay station? End your reply with the code in double square brackets, like [[AB-0000]].

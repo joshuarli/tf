@@ -32,7 +32,8 @@ struct i2_attn_parts { uint heads, kv, dim, rel, extent, window, pos, tau, split
   float top = -INFINITY, mass = 0.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
   for (uint j = js; j < je; ++j) {
     const uint col = min(a.pos - j, a.extent);
-    const size_t at = ((size_t)j * a.kv + kv) * D;
+    const uint rj = a.window ? (j % a.window) : j;
+    const size_t at = ((size_t)rj * a.kv + kv) * D;
     const float bias = B[h * (a.extent + 1u) + col] - sk;
     for (uint i = tid; i < D; i += nth) {
       KB[i] = KEYS[at + i];

@@ -30,14 +30,71 @@ pub const Cache = struct {
     capacity: usize,
     len: usize = 0,
 
+    pub fn isLocalSlot(c0: *const cfg.Config, s: usize) bool {
+        const phys = c0.loop.physicalLayer(c0.text.layers, @intCast(s));
+        return !c0.isFull(phys);
+    }
+
+    pub fn slotRows(c0: *const cfg.Config, s: usize, capacity: usize) usize {
+        return if (isLocalSlot(c0, s)) c0.text.window else capacity;
+    }
+
+    pub fn globalSlots(c0: *const cfg.Config) usize {
+        var n: usize = 0;
+        for (0..c0.slots()) |s| {
+            if (!isLocalSlot(c0, s)) n += 1;
+        }
+        return n;
+    }
+
+    pub fn localSlots(c0: *const cfg.Config) usize {
+        return c0.slots() - globalSlots(c0);
+    }
+
+    pub fn keysBytes(c0: *const cfg.Config, capacity: usize) usize {
+        const kv: usize = c0.text.local.kv * c0.text.local.dim;
+        var total: usize = 0;
+        for (0..c0.slots()) |s| total += slotRows(c0, s, capacity) * kv * 4;
+        return total;
+    }
+
+    pub fn bytesPerToken(c0: *const cfg.Config) usize {
+        const kv: usize = c0.text.local.kv * c0.text.local.dim;
+        return globalSlots(c0) * kv * 4 * 2;
+    }
+
+    pub fn fixedBytes(c0: *const cfg.Config) usize {
+        const kv: usize = c0.text.local.kv * c0.text.local.dim;
+        const h: usize = c0.text.hidden;
+        const slots: usize = c0.slots();
+        const rings = localSlots(c0) * c0.text.window * kv * 4 * 2;
+        const conv = slots * ring * kv * 4 * 2 + slots * ring * h * 4 * 2;
+        return rings + conv;
+    }
+
+    pub fn longestFitting(c0: *const cfg.Config, budget: u64, most: usize) usize {
+        const per: u64 = bytesPerToken(c0);
+        const fixed: u64 = fixedBytes(c0);
+        if (per == 0 or budget <= fixed) return 0;
+        return @min(most, (budget - fixed) / per);
+    }
+
+    pub fn baseOffset(c: *const Cache, c0: *const cfg.Config, s: usize) usize {
+        const kv: usize = c0.text.local.kv * c0.text.local.dim;
+        var base: usize = 0;
+        for (0..s) |t| base += slotRows(c0, t, c.capacity) * kv * 4;
+        return base;
+    }
+
     pub fn init(device: mtl.Device, c: *const cfg.Config, capacity: usize) !Cache {
         const kv: usize = c.text.local.kv * c.text.local.dim;
         const h: usize = c.text.hidden;
         const slots: usize = c.slots();
         var out = Cache{ .keys = undefined, .values = undefined, .k_conv = undefined, .v_conv = undefined, .attn_conv = undefined, .mlp_conv = undefined, .capacity = capacity };
-        out.keys = try device.buffer(@max(slots * capacity * kv * 4, 16), mtl.ResourceOptions.private);
+        const total = keysBytes(c, capacity);
+        out.keys = try device.buffer(@max(total, 16), mtl.ResourceOptions.private);
         errdefer out.keys.deinit();
-        out.values = try device.buffer(@max(slots * capacity * kv * 4, 16), mtl.ResourceOptions.private);
+        out.values = try device.buffer(@max(total, 16), mtl.ResourceOptions.private);
         errdefer out.values.deinit();
         out.k_conv = try device.buffer(@max(slots * ring * kv * 4, 16), mtl.ResourceOptions.private);
         errdefer out.k_conv.deinit();
@@ -59,10 +116,12 @@ pub const Cache = struct {
         c.mlp_conv.deinit();
     }
 
-    /// Slot `s`'s row for position `at` in the key or value buffer, in bytes.
+    /// Slot `s`'s row for position `at` in the key or value buffer, in bytes. Local slots keep a ring of
+    /// `window` rows addressed by `at % window`; global slots keep the full capacity.
     pub fn row(c: *const Cache, c0: *const cfg.Config, s: usize, at: usize) usize {
-        const slot: usize = c.capacity * c0.text.local.kv * c0.text.local.dim * 4;
-        return s * slot + at * c0.text.local.kv * c0.text.local.dim * 4;
+        const kvw: usize = c0.text.local.kv * c0.text.local.dim;
+        const r: usize = if (isLocalSlot(c0, s)) at % c0.text.window else at;
+        return c.baseOffset(c0, s) + r * kvw * 4;
     }
 
     /// Slot `s`'s convolution ring for a site `channels` wide, in bytes.
@@ -206,6 +265,40 @@ test "the state's rings and mix lists carry the graph's widths" {
         try std.testing.expectEqual(c.splits, p.splits);
         try std.testing.expectEqual(c.chunk, p.chunk);
     }
+}
+
+test "local slots ring while global slots keep the full capacity" {
+    var c: cfg.Config = std.mem.zeroes(cfg.Config);
+    c.text.layers = 24;
+    c.text.hidden = 2304;
+    c.text.local = .{ .q = 24, .kv = 8, .dim = 128 };
+    c.text.window = 1024;
+    c.loop = .{ .core_start = 6, .core_end = 18, .passes = 3, .gate_rank = 64 };
+    for (0..24) |i| c.local[i] = true;
+    for ([_]u32{ 5, 11, 17, 23 }) |g| c.local[g] = false;
+    try std.testing.expectEqual(@as(u32, 48), c.slots());
+    try std.testing.expectEqual(@as(usize, 8), Cache.globalSlots(&c));
+    try std.testing.expectEqual(@as(usize, 40), Cache.localSlots(&c));
+    const kvw: usize = 8 * 128;
+    try std.testing.expectEqual(8 * kvw * 4 * 2, Cache.bytesPerToken(&c));
+    const cap: usize = 9000;
+    try std.testing.expectEqual((40 * 1024 + 8 * cap) * kvw * 4, Cache.keysBytes(&c, cap));
+    var probe = Cache{ .keys = undefined, .values = undefined, .k_conv = undefined, .v_conv = undefined, .attn_conv = undefined, .mlp_conv = undefined, .capacity = cap };
+    for (0..c.slots()) |s| {
+        const want = Cache.slotRows(&c, s, cap) * kvw * 4;
+        try std.testing.expectEqual(want, probe.baseOffset(&c, s + 1) - probe.baseOffset(&c, s));
+    }
+    var local: usize = 0;
+    while (local < c.slots() and !Cache.isLocalSlot(&c, local)) local += 1;
+    try std.testing.expectEqual(probe.row(&c, local, 0), probe.row(&c, local, 1024));
+    try std.testing.expectEqual(probe.row(&c, local, 1), probe.row(&c, local, 1025));
+    try std.testing.expectEqual(probe.row(&c, local, 2047 % 1024), probe.row(&c, local, 2047));
+    try std.testing.expect(probe.row(&c, local, 0) != probe.row(&c, local, 1));
+    var global: usize = 0;
+    while (global < c.slots() and Cache.isLocalSlot(&c, global)) global += 1;
+    try std.testing.expectEqual(probe.baseOffset(&c, global) + 2048 * kvw * 4, probe.row(&c, global, 2048));
+    const budget: u64 = Cache.fixedBytes(&c) + 8259 * Cache.bytesPerToken(&c);
+    try std.testing.expectEqual(@as(usize, 8259), Cache.longestFitting(&c, budget, 1 << 20));
 }
 
 /// Rows one executed slot writes into the capture buffer, in the reference's order: the three mixed inputs, the three

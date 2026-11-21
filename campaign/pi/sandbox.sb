@@ -1,0 +1,8 @@
+(version 1)
+(allow default)
+(deny network*)
+(allow network-outbound (remote ip "localhost:*"))
+(deny file-write*)
+(allow file-write* (subpath (param "TASK_DIR")) (subpath (param "WORK_TMP")) (literal "/dev/null") (literal "/dev/stdout") (literal "/dev/stderr"))
+(deny file-read* file-write* (subpath "/Users/josh/.pi"))
+(deny file-read* (subpath (param "TASKS_DIR")))

@@ -1,0 +1,3 @@
+Count the rows in `events.csv` per `status` column (the third field) using shell tools such as `awk`, `sort`, or `cut`. Write the result to `status_counts.txt` as one line per status, formatted `status: count`, sorted by status name.
+
+Do not hardcode the numbers: derive them from the file.

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://pi.dev/schemas/models.schema.json",
+  "providers": {
+    "tensorfold": {
+      "name": "TensorFold local",
+      "baseUrl": "http://127.0.0.1:8888/v1",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "models": [
+        {
+          "id": "flint",
+          "name": "Flint (local TensorFold)",
+          "reasoning": true,
+          "input": ["text"],
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+          "contextWindow": 262144,
+          "maxTokens": 32768
+        }
+      ]
+    }
+  }
+}

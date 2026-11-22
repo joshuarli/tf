@@ -113,3 +113,53 @@ python3 campaign/heavy.py -- ./zig-out/bin/tf-inkling2-loop-run ~/models/Inkling
 python3 campaign/heavy.py -- ./zig-out/bin/tf-inkling2-loop-run ~/models/Inkling-2-Mini@ed40e7da625f /tmp/ids-1024.json bench 4 1 128
 make -C campaign smoke MODEL=inkling2-mini MODE=ar SMOKE_BIN=<tree>/zig-out/native/bin/tensorfold-native
 ```
+
+## P3 timeline attribution
+
+Metal 4 timestamp rounds were split at execution slots and every 16 rows of
+cross-pass copies, with one command buffer per segment. One timed chunk after
+8 warm chunks is sampled at base position 1024 (1,334-token code prompt) and
+4992 (5,265-token code prompt), both with 128 rows and full-history logits.
+The sums below exclude gaps between command buffers and include timestamp and
+profiling overhead; they are not end-to-end timings. The timeline prints at
+most 25 kernel names per round, so the smallest entries may be incomplete.
+The initial long run captured every receipt but exited 1 writing the 4.2 GB
+output with a single write; its rerun is pending.
+
+| kernel | 1024 base ms | 4992 base ms |
+| --- | ---: | ---: |
+| i2p_gu_grouped | 325.993 | 367.317 |
+| i2p_down_grouped | 248.569 | 276.051 |
+| i2p_attn | 264.433 | 480.580 |
+| i2p_gemm | 253.100 | 288.721 |
+| i2_copy | 16.431 | 17.820 |
+| i2p_relbias | 5.964 | 6.722 |
+| i2p_routepick | 5.840 | 6.696 |
+| i2p_router_exact | 3.845 | 4.098 |
+| i2p_conv | 2.405 | 2.141 |
+| i2p_rms | 2.324 | 2.395 |
+| i2_rms | 1.992 | 1.561 |
+| i2p_clip_scaled | 1.819 | 2.046 |
+| i2p_mix | 1.704 | 1.868 |
+| i2p_gather | 1.693 | 1.901 |
+| i2p_combine | 1.291 | 1.001 |
+| i2p_conv_store | 0.916 | 1.010 |
+| i2p_ctl | 0.778 | 0.883 |
+| i2p_mix4 | 0.733 | 0.814 |
+| i2p_moe_offsets | 0.659 | 0.365 |
+| i2_add | 0.413 | 0.433 |
+| i2p_clip | 0.372 | 0.414 |
+| i2p_kv_store | 0.304 | 0.318 |
+| i2_sig_mul | 0.287 | 0.299 |
+| i2p_moe_sort | 0.144 | 0.147 |
+| i2p_moe_count | 0.122 | 0.144 |
+| i2p_moe_zero | 0.058 | 0.054 |
+| i2p_embed | 0.012 | 0.012 |
+| total span, 4,374 dispatches | 1,142.250 | 1,465.868 |
+
+Expert gate/up and down account for 574.562 ms (50.3%) and 643.368 ms
+(43.9%), respectively; attention rises with context. A 56 TFLOPS measured
+fp16/bf16 GEMM rate at 50% utilization divided by approximately 2 × 4.4B
+active parameters per token gives about 3,182 tok/s. This is a compute-only
+arithmetic ceiling, not an observed prefill rate; compared with the previously
+reported 120 tok/s it is about 26.5 times higher.

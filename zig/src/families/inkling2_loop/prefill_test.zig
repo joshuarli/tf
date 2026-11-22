@@ -551,3 +551,94 @@ test "tiled dense projections match the original gemm" {
         }
     }
 }
+
+const AttnArgs = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, base: u32, rows: u32, rmode: u32, scale: f32, floor: f32, alpha: f32 };
+
+fn attnKey(j: usize, kv: usize, d: usize) f32 {
+    return @as(f32, @floatFromInt(@as(i32, @intCast((j * 17 + kv * 7) % 101)) - 50)) * @as(f32, @floatFromInt(@as(i32, @intCast(d % 17)) - 8)) / 512;
+}
+
+fn attnValue(j: usize, kv: usize, d: usize) f32 {
+    return @as(f32, @floatFromInt(@as(i32, @intCast((j * 13 + kv * 11) % 97)) - 48)) * @as(f32, @floatFromInt(@as(i32, @intCast(d % 17)) - 8)) / 512;
+}
+
+test "tiled attention matches fp64 and original attention" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, @import("kernels.zig").prefill, mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const tiled = try mtl.Pipeline.init(device, lib, "i2p_attn_tiled", false);
+    defer tiled.deinit();
+    const original = try mtl.Pipeline.init(device, lib, "i2p_attn", false);
+    defer original.deinit();
+    const heads = 24; const kv = 8; const dim = 128; const extent = 64;
+    for ([_]usize{ 0, 900, 5000 }) |base| {
+        for ([_]usize{ 0, 1024 }) |window| {
+            const cache_rows = if (window > 0) window else @max(base, 1);
+            const keys = try device.buffer(cache_rows * kv * dim * 4, mtl.ResourceOptions.shared);
+            defer keys.deinit();
+            const values = try device.buffer(cache_rows * kv * dim * 4, mtl.ResourceOptions.shared);
+            defer values.deinit();
+            const start = if (window > 0 and base > window) base - window else 0;
+            for (start..base) |j| for (0..kv) |h| for (0..dim) |d| {
+                const at = ((if (window > 0) j % window else j) * kv + h) * dim + d;
+                keys.slice(f32, cache_rows * kv * dim)[at] = attnKey(j, h, d);
+                values.slice(f32, cache_rows * kv * dim)[at] = attnValue(j, h, d);
+            };
+            for ([_]usize{ 35, 1, 7, 9, 17, 33, 63, 100, 128 }) |rows| {
+                if (base == 5000 and rows != 1 and rows != 7 and rows != 128) continue;
+                const q = try device.buffer(rows * heads * dim * 4, mtl.ResourceOptions.shared); defer q.deinit();
+                const kc = try device.buffer(rows * kv * dim * 4, mtl.ResourceOptions.shared); defer kc.deinit();
+                const vc = try device.buffer(rows * kv * dim * 4, mtl.ResourceOptions.shared); defer vc.deinit();
+                const bias = try device.buffer(rows * heads * (extent + 1) * 4, mtl.ResourceOptions.shared); defer bias.deinit();
+                const sink = try device.buffer(rows * heads * 4, mtl.ResourceOptions.shared); defer sink.deinit();
+                const got = try device.buffer(rows * heads * dim * 4, mtl.ResourceOptions.shared); defer got.deinit();
+                const ref = try device.buffer(rows * heads * dim * 4, mtl.ResourceOptions.shared); defer ref.deinit();
+                for (q.slice(f32, rows * heads * dim), 0..) |*x, i| x.* = @as(f32, @floatFromInt(@as(i32, @intCast((i * 7 + i / dim * 3) % 67)) - 33)) / 64;
+                for (0..rows) |r| for (0..kv) |h| for (0..dim) |d| {
+                    const at = (r * kv + h) * dim + d;
+                    kc.slice(f32, rows * kv * dim)[at] = attnKey(base + r, h, d);
+                    vc.slice(f32, rows * kv * dim)[at] = attnValue(base + r, h, d);
+                };
+                for (bias.slice(f32, rows * heads * (extent + 1)), 0..) |*x, i| x.* = @as(f32, @floatFromInt(@as(i32, @intCast((i * 19) % 61)) - 30)) / 128;
+                for (sink.slice(f32, rows * heads), 0..) |*x, i| x.* = @as(f32, @floatFromInt(@as(i32, @intCast(i % 13)) - 6)) / 16;
+                const args = AttnArgs{ .heads = heads, .kv = kv, .dim = dim, .rel = 0, .extent = extent, .window = @intCast(window), .base = @intCast(base), .rows = @intCast(rows), .rmode = @intFromBool(window > 0), .scale = 1.0 / @sqrt(@as(f32, dim)), .floor = 128, .alpha = 0.25 };
+                for ([_]mtl.Pipeline{ tiled, original }, [_]mtl.Buffer{ got, ref }, [_]bool{ true, false }) |pipe, output, is_tiled| {
+                    const cb = queue.commandBuffer(); const enc = cb.compute(.serial);
+                    enc.setPipeline(pipe); enc.setBuffer(q, 0, 0); enc.setBuffer(keys, 0, 1); enc.setBuffer(values, 0, 2);
+                    enc.setBuffer(bias, 0, 3); enc.setBuffer(sink, 0, 4); enc.setValue(args, 5); enc.setBuffer(output, 0, 6); enc.setBuffer(kc, 0, 7); enc.setBuffer(vc, 0, 8);
+                    if (is_tiled) enc.dispatchGroups(mtl.Size.of(kv, (rows + 7) / 8, 1), mtl.Size.of(768, 1, 1)) else enc.dispatchGroups(mtl.Size.of(heads, rows, 1), mtl.Size.of(32, 1, 1));
+                    enc.end(); cb.commit(); cb.wait();
+                    if (cb.failure()) |msg| { std.debug.print("attention: {s}\n", .{msg}); return error.GpuFailed; }
+                }
+                var max_fp64: f64 = 0; var max_original: f32 = 0;
+                for (0..rows) |r| for (0..heads) |h| {
+                    var qsum: f64 = 0;
+                    for (0..dim) |d| qsum += @as(f64, q.slice(f32, rows * heads * dim)[(r * heads + h) * dim + d]) * @as(f64, @floatFromInt(@as(i32, @intCast(d % 17)) - 8));
+                    const pos = base + r;
+                    const lo = if (window > 0 and pos + 1 > window) pos + 1 - window else 0;
+                    const tau: f64 = if (window == 0) 1 + @as(f64, args.alpha) * @log(@max(1, @as(f64, @floatFromInt(pos + 1)) / @as(f64, args.floor))) else 1;
+                    var mass: f64 = 1; var numerator: f64 = 0;
+                    for (lo..pos + 1) |j| {
+                        const score = qsum * @as(f64, args.scale) * tau * @as(f64, attnKey(j, h / 3, 9)) + @as(f64, bias.slice(f32, rows * heads * (extent + 1))[(r * heads + h) * (extent + 1) + @min(pos - j, extent)]) - @as(f64, sink.slice(f32, rows * heads)[r * heads + h]);
+                        const w = @exp(score); mass += w;
+                        numerator += w * @as(f64, attnValue(j, h / 3, 9));
+                    }
+                    for (0..dim) |d| {
+                        const expected = numerator / mass * @as(f64, @floatFromInt(@as(i32, @intCast(d % 17)) - 8));
+                        const at = (r * heads + h) * dim + d;
+                        const actual = got.slice(f32, rows * heads * dim)[at];
+                        try t.expect(std.math.isFinite(actual) and std.math.isFinite(ref.slice(f32, rows * heads * dim)[at]));
+                        max_fp64 = @max(max_fp64, @abs(@as(f64, actual) - expected));
+                        max_original = @max(max_original, @abs(actual - ref.slice(f32, rows * heads * dim)[at]));
+                    }
+                };
+                std.debug.print("attention base={d} window={d} rows={d} fp64={e} original={e}\n", .{ base, window, rows, max_fp64, max_original });
+                try t.expect(max_fp64 <= 0.00005 and max_original == 0);
+            }
+        }
+    }
+}

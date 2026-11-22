@@ -94,6 +94,7 @@ pub const Pipes = struct {
     kv: mtl.Pipeline,
     rel: mtl.Pipeline,
     attn: mtl.Pipeline,
+    attn_tiled: mtl.Pipeline,
     gu_nv: mtl.Pipeline,
     down_nv: mtl.Pipeline,
     gu_mx: mtl.Pipeline,
@@ -109,7 +110,7 @@ pub const Pipes = struct {
     combine: mtl.Pipeline,
 
     pub fn deinit(p: *Pipes) void {
-        inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "gemm", "pick", "gu_g_nv", "down_g_nv", "gu_g_mx", "down_g_mx", "moe_zero", "moe_count", "moe_offsets", "moe_sort", "embed", "rms", "gather", "mix", "mix4", "ctl", "clips", "clip", "conv", "cstore", "kv", "rel", "attn", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
+        inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "gemm", "pick", "gu_g_nv", "down_g_nv", "gu_g_mx", "down_g_mx", "moe_zero", "moe_count", "moe_offsets", "moe_sort", "embed", "rms", "gather", "mix", "mix4", "ctl", "clips", "clip", "conv", "cstore", "kv", "rel", "attn", "attn_tiled", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
     }
 };
 
@@ -282,6 +283,8 @@ pub const PrefillScratch = struct {
         errdefer s.pipes.rel.deinit();
         s.pipes.attn = try mtl.Pipeline.init(device, lib, "i2p_attn", false);
         errdefer s.pipes.attn.deinit();
+        s.pipes.attn_tiled = try mtl.Pipeline.init(device, lib, "i2p_attn_tiled", false);
+        errdefer s.pipes.attn_tiled.deinit();
         s.pipes.gu_nv = try mtl.Pipeline.init(device, lib, "i2p_gu", false);
         errdefer s.pipes.gu_nv.deinit();
         s.pipes.down_nv = try mtl.Pipeline.init(device, lib, "i2p_down", false);
@@ -535,8 +538,9 @@ const Chunk = struct {
         const win: u32 = if (full) 0 else text.window;
         const keybase = bo(c.cache.keys, c.slotBase(slot));
         const valbase = bo(c.cache.values, c.slotBase(slot));
-        c.setP(s.pipes.attn, AttnB{ .heads = c.heads, .kv = c.kv, .dim = c.dim, .rel = c.drel, .extent = extent, .window = win, .base = c.base, .rows = c.n, .rmode = @intFromBool(c.ring), .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.dim))), .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha }, &.{ b(s.q), keybase, valbase, b(s.relbias), b(s.sink), A, b(s.attn), b(s.kc), b(s.vc) });
-        c.enc.dispatchGroups(mtl.Size.of(c.heads, c.n, 1), mtl.Size.of(32, 1, 1));
+        const tiled = c.heads == 24 and c.kv == 8 and c.dim == 128;
+        c.setP(if (tiled) s.pipes.attn_tiled else s.pipes.attn, AttnB{ .heads = c.heads, .kv = c.kv, .dim = c.dim, .rel = c.drel, .extent = extent, .window = win, .base = c.base, .rows = c.n, .rmode = @intFromBool(c.ring), .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.dim))), .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha }, &.{ b(s.q), keybase, valbase, b(s.relbias), b(s.sink), A, b(s.attn), b(s.kc), b(s.vc) });
+        if (tiled) c.enc.dispatchGroups(mtl.Size.of(c.kv, (c.n + 7) / 8, 1), mtl.Size.of(768, 1, 1)) else c.enc.dispatchGroups(mtl.Size.of(c.heads, c.n, 1), mtl.Size.of(32, 1, 1));
         c.kvStore(slot);
         c.lin(lay.attn.gate, ins[0], b(s.gate));
         c.flat(.sig_mul, Pair{ .count = c.qw * c.n }, &.{ b(s.attn), b(s.gate), A, b(s.attn) }, @as(usize, c.qw) * c.n);

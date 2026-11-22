@@ -96,3 +96,8 @@ comparison passes: maximum absolute error 3.582090139389038e-4, with identical a
 candidate was restored. The campaign FP32 reference parity command exited 2 with its expected classification:
 14 histories within contract, two explained divergences and zero unexplained. The timing verdict remains
 pending until the GPU gate permits the interleaved measurements.
+
+The gated benchmark stopped after 30 minutes of contention before the first baseline sample. The last gate
+reported 26.2% other-process GPU time against the 5% limit, mainly Ghostty and WindowServer. No interleaved
+medians or before/after timeline profiles were collected. The restored candidate remains an unmeasured
+experiment; its keep/revert verdict requires a quiet GPU and the specified three-context comparison.

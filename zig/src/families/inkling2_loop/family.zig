@@ -14,6 +14,7 @@ pub const WantLogits = @import("prefill.zig").WantLogits;
 pub const PrefillScratch = @import("prefill.zig").PrefillScratch;
 pub const default_chunk = @import("prefill.zig").default_chunk;
 pub const Verification = @import("verify.zig").Verification;
+pub const verify = @import("verify.zig");
 pub const hybrid_drafts = @import("verify.zig").hybrid_drafts;
 pub const refuse = @import("refuse.zig");
 pub const kernels = @import("kernels.zig");

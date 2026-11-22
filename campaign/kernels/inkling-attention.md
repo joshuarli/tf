@@ -101,3 +101,25 @@ The gated benchmark stopped after 30 minutes of contention before the first base
 reported 26.2% other-process GPU time against the 5% limit, mainly Ghostty and WindowServer. No interleaved
 medians or before/after timeline profiles were collected. The restored candidate remains an unmeasured
 experiment; its keep/revert verdict requires a quiet GPU and the specified three-context comparison.
+
+### Long-context diagnosis and revert
+
+The owner measured `bench 14 2` with a raised other-process GPU threshold for the desktop: at 83 tokens,
+12 base samples had median 23.424 ms/step (range 23.38–23.52), and six candidate samples had median
+22.432 ms/step (22.39–22.44). At 1,139 tokens, the first two quiet pairs gave base 25.12, 25.16, 25.00,
+25.39 ms and candidate 26.69, 26.41 ms. Later samples were disturbed; the run ended on critical host memory
+pressure. These figures are not a completed long-context performance gate.
+
+Separate `TF_METAL4_TIMELINE=4` profiles at 1,139 tokens measured the following per call (48 calls per step):
+
+| Kernel | Base | Eight-key candidate | Full-simdgroup long-chunk variant |
+| --- | ---: | ---: | ---: |
+| `i2_attn_split` | 83.1 us | 109.8 us | 163.7 us |
+| `i2_attn_combine` | 17.1 us | 15.7 us | 16.4 us |
+
+The eight-key path loads query vectors again for every eight-row block and reads K/V independently for each
+query head. The long-chunk variant instead removed the threadgroup barriers and used full-simdgroup dots,
+but its timeline was slower still. The base and long-chunk runs saw elevated memory pressure and swapping,
+so these stamped profiles are diagnostic rather than clean end-to-end timings. Neither variant beat the base
+in this profile. Verdict: revert the experiment; the restored runner is the base binary. No 8K timing or
+short-context timing for the long-chunk variant was collected.

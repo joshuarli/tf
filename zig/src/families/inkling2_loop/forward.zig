@@ -463,7 +463,12 @@ pub const Forward = struct {
         f.lin(lay.router, input, b(s.router));
         f.set(.route, Route{ .experts = E, .topk = K, .route_scale = c.text.route_scale }, &.{ b(s.router), t(lay.router_bias), A, b(s.picks), b(s.wts) });
         f.enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(32, 1, 1));
-        if (f.capture != null) f.copyN(b(s.picks), bo(s.capture, (c.slots() * st.trace_rows * f.h + slot * K) * 4), K);
+        if (f.capture != null) {
+            f.copyN(b(s.picks), bo(s.capture, (c.slots() * st.trace_rows * f.h + slot * K) * 4), K);
+            const start = c.slots() * (st.trace_rows * f.h + K) + slot * E * 2;
+            f.copyN(b(s.router), bo(s.capture, start * 4), E);
+            f.copyN(t(lay.router_bias), bo(s.capture, (start + E) * 4), E);
+        }
         const codes = b(if (lay.mxfp8) m.t256 else m.t16);
         f.setExpert(lay.mxfp8, .gu, Moe{ .k = f.h, .n = inter, .rows = 2 * inter, .gate_cap = c.text.gate_cap, .up_cap = c.text.up_cap }, &.{
             input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.picks), b(s.order), A, b(s.act), codes,

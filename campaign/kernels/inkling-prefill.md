@@ -392,7 +392,7 @@ not a performance rejection and establishes no speedup. The corrected timing
 harness acquired the campaign GPU lock before `gpu-gate-ready -1` and retained
 it through the runner and the post-run check with its PID ignored. Every
 attempt stopped at the pre-run gate. The controller exited 75 after one hour;
-a representative final check reported 20.8% other GPU time and 19% device
+the final check reported 20.5% other GPU time and 19% device
 utilization against limits of 5% and 15%, with Ghostty and WindowServer
 listed. Earlier control and candidate samples were discarded because the lock
 was not held during both checks and another job could run in the gap. The

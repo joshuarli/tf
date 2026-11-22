@@ -8,11 +8,11 @@ Contract: f32-vs-f32 over a 200058-token vocabulary: per-logit max abs 0.001, me
 ## Summary
 
 - positions compared: 3015 over 16 histories (2 past the 1,024-token sliding window)
-- mean KL: 8.02246e-05
+- mean KL: 8.0225e-05
 - top-1 agreement overall: 99.67%
 - top-1 agreement on positions with reference top-2 margin >= 0.1: 99.79% over 2862 positions
-- absolute logit error: p50 7.367e-05, p90 3.892e-02, p99 8.394e-01, max 6.038e+00
-- relative logit error: p50 2.972e-06, p90 1.881e-03, p99 3.957e-02, max 2.949e-01
+- absolute logit error: p50 7.188e-05, p90 3.893e-02, p99 8.393e-01, max 6.038e+00
+- relative logit error: p50 2.931e-06, p90 1.881e-03, p99 3.957e-02, max 2.949e-01
 - qualification: 14 within contract, 2 explained divergences, 0 unexplained
 
 ## Per history
@@ -20,7 +20,7 @@ Contract: f32-vs-f32 over a 200058-token vocabulary: per-logit max abs 0.001, me
 | history | tokens | max abs error | mean KL | top-1 | confident top-1 | confident | status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | harbour | 1336 | 6.038e+00 | 1.284e-03 | 99.25% | 99.51% | 1214 | explained divergence |
-| cells_code | 1178 | 6.775e-01 | 8.222e-08 | 100.00% | 100.00% | 1164 | explained divergence |
+| cells_code | 1178 | 6.775e-01 | 8.224e-08 | 100.00% | 100.00% | 1164 | explained divergence |
 | greeting | 25 | 1.097e-04 | 3.122e-11 | 100.00% | 100.00% | 24 | within contract |
 | explain_sliding | 34 | 8.512e-05 | 2.981e-11 | 100.00% | 100.00% | 30 | within contract |
 | unit_test | 32 | 7.153e-05 | 2.558e-11 | 100.00% | 100.00% | 31 | within contract |
@@ -38,9 +38,9 @@ Contract: f32-vs-f32 over a 200058-token vocabulary: per-logit max abs 0.001, me
 
 ## Provenance
 
-- runner sha256: 800c774d858af85d1b1f5ead2f4482fff297e1c414386c8261505bf663ef0a26
+- runner sha256: 954c2e7406726ddc3bdc3a0310f177c01f8bd38e4e04be6d68b2414e7643f943
 - model identity: 27dd9e1ad71c134fbe909b9a74c1102c8589ccdf08e12f4c9eeef185f99b6c1c
-- arithmetic policy: f32-activations+prefill-128
+- arithmetic policy: f32-activations+prefill-512
 - Open provenance gap: campaign/ref/oracle_receipts.json records output digests only for the ref-check outputs, not for these parity histories' reference .npy files; the reference files are verified by oracle.py shape/finiteness/token-count checks, and their observed digests are recorded below. The current build identity is not attached to those older files.
 
 | history | token-history sha256 | reference sha256 | candidate receipt |
@@ -94,19 +94,19 @@ Contract: f32-vs-f32 over a 200058-token vocabulary: per-logit max abs 0.001, me
 
 ### harbour: 2 further top-1 disagreements
 
-### harbour onset position 557: largest logit error 0.06164, KL 1.963e-05
+### harbour onset position 557: largest logit error 0.06165, KL 1.963e-05
 - first divergent tensor: l_out-24: reference (mean 0.0106271, std 0.699803, min -12.4817, max 19.3329) against Metal (mean 0.0103036, std 0.703953, min -12.4828, max 19.7603), largest difference 4.273e-01 over 171 overlapping tensors
 - clean control at 556: l_out-38: reference (mean 0.0286352, std 1.84985, min -25.7621, max 54.6575) against Metal (mean 0.0285382, std 1.85234, min -25.9324, max 54.7187), largest difference 1.703e-01 over 297 overlapping tensors
 - tightest reference router 8th/9th gaps at 557: slot 24 (layer 6): picks [67, 33, 66, 50, 78, 64, 23, 125] against 9th 22, 8th/9th selection gap 1.34e-07 (prob gap 0.00997); slot 17 (layer 17): picks [95, 7, 124, 110, 111, 72, 104, 43] against 9th 4, 8th/9th selection gap 3.15e-05 (prob gap -0.0219); slot 28 (layer 10): picks [61, 92, 59, 102, 118, 11, 19, 97] against 9th 98, 8th/9th selection gap 0.000372 (prob gap -0.219)
 
-### cells_code gate problems: cells_code: max_abs 0.6775 exceeds the f32-vs-f32 bound 0.001; cells_code: mean_abs 0.0001656 exceeds the f32-vs-f32 bound 0.0001; cells_code: max_position_kl 9.017e-05 exceeds the f32-vs-f32 bound 1e-06; cells_code: mean_kl 8.222e-08 exceeds the f32-vs-f32 bound 1e-08
+### cells_code gate problems: cells_code: max_abs 0.6775 exceeds the f32-vs-f32 bound 0.001; cells_code: mean_abs 0.0001648 exceeds the f32-vs-f32 bound 0.0001; cells_code: max_position_kl 9.016e-05 exceeds the f32-vs-f32 bound 1e-06; cells_code: mean_kl 8.224e-08 exceeds the f32-vs-f32 bound 1e-08
 
-### cells_code outliers: position 690 (max abs 6.775e-01, KL 9.017e-05), position 691 (max abs 7.434e-02, KL 2.965e-06), position 783 (max abs 1.945e-02, KL 4.278e-07), position 692 (max abs 1.642e-02, KL 1.162e-07), position 699 (max abs 9.588e-03, KL 2.174e-09)
+### cells_code outliers: position 690 (max abs 6.775e-01, KL 9.016e-05), position 691 (max abs 7.433e-02, KL 2.974e-06), position 783 (max abs 1.947e-02, KL 4.306e-07), position 692 (max abs 1.643e-02, KL 1.172e-07), position 699 (max abs 9.591e-03, KL 2.168e-09)
 
-### cells_code onset position 664: largest logit error 0.001023, KL 1.657e-08
+### cells_code onset position 688: largest logit error 0.001118, KL 7.715e-12
 - first divergent tensor: every one of 432 overlapping tensors agrees within 0.001
-- clean control at 663: every one of 432 overlapping tensors agrees within 0.001
-- tightest reference router 8th/9th gaps at 664: slot 33 (layer 15): picks [85, 49, 27, 67, 53, 122, 64, 21] against 9th 123, 8th/9th selection gap 9.37e-05 (prob gap -0.00591); slot 12 (layer 12): picks [106, 120, 5, 25, 49, 41, 79, 21] against 9th 73, 8th/9th selection gap 0.000168 (prob gap -0.0255); slot 27 (layer 9): picks [3, 103, 35, 36, 124, 23, 75, 21] against 9th 34, 8th/9th selection gap 0.000636 (prob gap -0.0319)
+- clean control at 687: every one of 432 overlapping tensors agrees within 0.001
+- tightest reference router 8th/9th gaps at 688: slot 21 (layer 21): picks [114, 17, 105, 26, 2, 46, 43, 85] against 9th 50, 8th/9th selection gap 0.000254 (prob gap -0.000512); slot 47 (layer 17): picks [56, 8, 15, 35, 114, 116, 30, 89] against 9th 61, 8th/9th selection gap 0.000587 (prob gap 0.726); slot 20 (layer 20): picks [23, 88, 57, 18, 54, 46, 37, 93] against 9th 73, 8th/9th selection gap 0.000888 (prob gap -0.00254)
 
 ### greeting outliers: position 5 (max abs 1.097e-04, KL 4.374e-11), position 7 (max abs 7.820e-05, KL 2.184e-10), position 13 (max abs 7.725e-05, KL 1.537e-11), position 10 (max abs 7.200e-05, KL 4.228e-14), position 6 (max abs 7.153e-05, KL 1.596e-10)
 
@@ -144,5 +144,5 @@ Qualification is incomplete: every failing history above must return to within c
 
 Recorded explanations (evidence only; none of these turns a failure into a pass):
 - harbour: recorded onset 556, observed onset in this run 557; this run's observed onset differs from the recorded one; demonstrated routing discontinuity: the Metal pass takes the other side of reference router ties (slot 38 at 556 with an 8th/9th selection gap of 2.98e-08, slot 24 at 557 with a gap of 1.34e-07); forcing the reference's 8th picks reproduces Metal's logits to 9.1e-05 and 4.6e-05, and the corrupted state then persists (evidence: campaign/parity/inkling2-mini/long-divergence.md)
-- cells_code: recorded onset 304, observed onset in this run 664; this run's observed onset differs from the recorded one; demonstrated routing discontinuity plus drift amplification: onset at 304 is MoE forward amplification of drift (all eight slot-47 inputs agree to <=5.9e-04 while l_out-47 differs on 40 elements up to 1.5e-03); row 656 is diffuse drift under 1e-3 on the same discrete path (prefix-matched sides agree on all 432x2304 values); reference-side router ties at slot 21, row 473 (gap ~3e-08, --force-pick 21,89,473 reproduces the full-history row to 4.1e-05) and row 690 (gap ~1.6e-07, --force-pick 21,120,690 reproduces the oracle row to 9.2e-05), with the 690 tie's state echo decaying through 694 (evidence: campaign/parity/inkling2-mini/long-divergence.md)
+- cells_code: recorded onset 304, observed onset in this run 688; this run's observed onset differs from the recorded one; demonstrated routing discontinuity plus drift amplification: onset at 304 is MoE forward amplification of drift (all eight slot-47 inputs agree to <=5.9e-04 while l_out-47 differs on 40 elements up to 1.5e-03); row 656 is diffuse drift under 1e-3 on the same discrete path (prefix-matched sides agree on all 432x2304 values); reference-side router ties at slot 21, row 473 (gap ~3e-08, --force-pick 21,89,473 reproduces the full-history row to 4.1e-05) and row 690 (gap ~1.6e-07, --force-pick 21,120,690 reproduces the oracle row to 9.2e-05), with the 690 tie's state echo decaying through 694 (evidence: campaign/parity/inkling2-mini/long-divergence.md)
 

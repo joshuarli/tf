@@ -434,3 +434,20 @@ The parity make target reported 14 histories within the f32-vs-f32 contract,
 its overall qualification requires all 16 histories within contract. The
 first comparison's harbour diagnostic was interrupted by critical host memory
 pressure; a retry completed that diagnostic and reproduced the same counts.
+
+## P4 end-to-end timing
+
+Runner prefill (`tf-inkling2-loop-run <model> .work/tmp/ids-1k.json bench 2 1 128`, 1,139 tokens, chunk 128),
+base `main` 6b2614352 against P4 `a8c227997`, six base-candidate-base rounds, each run inside `heavy.py`
+between two `gpu-gate-ready -1` checks. Busy host: the desktop (ghostty, WindowServer) held about 20%
+device utilization and 25% GPU time, so both limits were raised to 35%; memory pressure stayed normal.
+Logits are byte-identical to the base runner.
+
+| | median tok/s | samples |
+| --- | ---: | --- |
+| base | 128.7 | 127.8, 131.2, 124.2, 123.3, 123.5, 129.5, 129.9, 133.7, 136.5, 123.5, 137.0, 110.9 |
+| P4 | 136.5 | 131.9, 132.1, 133.6, 147.5, 146.5, 139.4 |
+
+Per-round ratio against the mean of its two base runs: 1.019, 1.067, 1.056, 1.119, 1.127, 1.125; geometric
+mean 1.085 (95% t-interval 1.038-1.133). Every round favours P4. Verdict: keep. Script:
+`.work/tmp/prefill_ab.py BASE CAND IDS PAIRS` (scratch; the protocol above reproduces it).

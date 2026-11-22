@@ -12,6 +12,8 @@ const usage =
     \\tf-inkling2-loop-run <model> <tokens.json> greedy <steps> <out>  then <steps> greedy tokens, one decode a step
     \\tf-inkling2-loop-run <model> <tokens.json> greedy-prefill|greedy-copy|greedy-hybrid|greedy-decode <steps> <out>  raw u32 output IDs
     \\tf-inkling2-loop-run <model> <tokens.json> verifybench <min-width> <rounds>  time interleaved prefill widths
+    \\tf-inkling2-loop-run <model> <tokens.json> verifycheck <accepted>  compare continuation with replay
+    \\tf-inkling2-loop-run <model> <tokens.json> roundbench <rounds> [width]  time full verification rounds
     \\tf-inkling2-loop-run <model> <tokens.json> trace <out> [at]  per-tensor summaries in the reference's order, the whole pass or only position <at>
     \\tf-inkling2-loop-run <model> <tokens.json> prefillrow <chunk> <out> <at>  capture a chunked prefill row and router sidecars
     \\tf-inkling2-loop-run <model> <tokens.json> prefillroutes <chunk> <out> <at>  capture per-chunk router picks, logits, and bias
@@ -118,14 +120,23 @@ pub fn main(init: std.process.Init) !void {
         var rounds: usize = 0;
         var drafted: usize = 0;
         var accepted_total: usize = 0;
+        var draft_ns: u64 = 0;
+        var save_ns: u64 = 0;
+        var forward_ns: u64 = 0;
+        var argmax_ns: u64 = 0;
+        var restore_ns: u64 = 0;
+        var replay_ns: u64 = 0;
+        var decode_ns: u64 = 0;
         const start = now();
         while (history.items.len < ids.value.len + steps) {
             try history.append(gpa, token);
             if (history.items.len == ids.value.len + steps) break;
             if (!hybrid and decode != null) {
+                const decode_start = now();
                 const s = &decode.?;
                 try inkling.position(m, s, &cache, token);
                 token = argmax(s.logits.slice(f32, vocab));
+                decode_ns += now() - decode_start;
                 rounds += 1;
                 continue;
             }
@@ -136,12 +147,16 @@ pub fn main(init: std.process.Init) !void {
                 continue;
             }
             const most: usize = if (hybrid) (if (std.c.getenv("TF_INKLING_HYBRID_DRAFTS")) |v| std.fmt.parseInt(usize, std.mem.span(v), 10) catch inkling.hybrid_drafts else inkling.hybrid_drafts) else 15;
+            const draft_start = now();
             const draft = try proposer.propose(history.items, @intCast(most));
+            draft_ns += now() - draft_start;
             const count: usize = @min(draft.len, @min(most, ids.value.len + steps - history.items.len - 1));
             const row_count = try std.math.add(usize, count, 1);
             if (count == 0 and hybrid) {
+                const decode_start = now();
                 try inkling.position(m, &decode.?, &cache, token);
                 token = argmax(decode.?.logits.slice(f32, vocab));
+                decode_ns += now() - decode_start;
                 rounds += 1;
                 continue;
             }
@@ -155,10 +170,18 @@ pub fn main(init: std.process.Init) !void {
             rows[0] = token;
             @memcpy(rows[1..][0..count], draft[0..count]);
             var predictions: [16]u32 = undefined;
+            var round_times = inkling.verify.RoundTimes{};
+            inkling.verify.round_times = &round_times;
             var verify = try inkling.Verification.begin(m, &ps, &cache, rows[0..row_count], predictions[0..row_count]);
             var accepted: usize = 0;
             while (accepted < count and predictions[accepted] == rows[accepted + 1]) : (accepted += 1) {}
             try verify.finish(rows[0..row_count], try std.math.add(usize, accepted, 1));
+            inkling.verify.round_times = null;
+            save_ns += round_times.save;
+            forward_ns += round_times.forward;
+            argmax_ns += round_times.argmax;
+            restore_ns += round_times.restore;
+            replay_ns += round_times.replay;
             try proposer.observe(@intCast(count), @intCast(accepted));
             try history.appendSlice(gpa, predictions[0..accepted]);
             token = predictions[accepted];
@@ -166,9 +189,99 @@ pub fn main(init: std.process.Init) !void {
             drafted += count;
             accepted_total += accepted;
         }
-        const seconds = @as(f64, @floatFromInt(now() - start)) / 1e9;
+        const elapsed_ns = now() - start;
+        const seconds = @as(f64, @floatFromInt(elapsed_ns)) / 1e9;
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[5], .data = std.mem.sliceAsBytes(history.items[ids.value.len..]) });
         std.debug.print("{s}: tokens={d} rounds={d} drafted={d} accepted={d} seconds={d:.3}\n", .{ mode, steps, rounds, drafted, accepted_total, seconds });
+        std.debug.print("roundcost draft_ns={d} save_ns={d} forward_ns={d} argmax_ns={d} restore_ns={d} replay_ns={d} decode_ns={d} elapsed_ns={d}\n", .{ draft_ns, save_ns, forward_ns, argmax_ns, restore_ns, replay_ns, decode_ns, elapsed_ns });
+        return;
+    }
+    if (std.mem.eql(u8, mode, "verifycheck")) {
+        if (args.len != 5 or ids.value.len < c.text.window + 21) return error.ExpectedArgs;
+        const accepted = try std.fmt.parseInt(usize, args[4], 10);
+        if (accepted == 0 or accepted >= 16) return error.ExpectedArgs;
+        const base: usize = c.text.window - 1;
+        var a = try inkling.Cache.init(m.device, c, base + 32);
+        defer a.deinit();
+        var bcache = try inkling.Cache.init(m.device, c, base + 32);
+        defer bcache.deinit();
+        var sa = try inkling.PrefillScratch.init(m.device, c, 512);
+        defer sa.deinit();
+        var sb = try inkling.PrefillScratch.init(m.device, c, 512);
+        defer sb.deinit();
+        var at: usize = 0;
+        while (at < base) {
+            const take = @min(sa.chunk, base - at);
+            try inkling.prefillWant(m, &sa, &a, ids.value[at..][0..take], .none);
+            try inkling.prefillWant(m, &sb, &bcache, ids.value[at..][0..take], .none);
+            at += take;
+        }
+        const draft = ids.value[base..][0..16];
+        var predictions: [16]u32 = undefined;
+        var v = try inkling.Verification.begin(m, &sa, &a, draft, &predictions);
+        const prefix = try gpa.dupe(f32, sa.logits.slice(f32, accepted * vocab));
+        defer gpa.free(prefix);
+        try v.finish(draft, accepted);
+        try inkling.prefillWant(m, &sb, &bcache, draft[0..accepted], .all);
+        var prefix_changed: usize = 0;
+        var prefix_maximum: f32 = 0;
+        for (prefix, sb.logits.slice(f32, accepted * vocab)) |lhs, rhs| {
+            if (@as(u32, @bitCast(lhs)) != @as(u32, @bitCast(rhs))) prefix_changed += 1;
+            prefix_maximum = @max(prefix_maximum, @abs(lhs - rhs));
+        }
+        const continuation = ids.value[base + 16 ..][0..5];
+        try inkling.prefillWant(m, &sa, &a, continuation, .all);
+        try inkling.prefillWant(m, &sb, &bcache, continuation, .all);
+        const n = continuation.len * vocab;
+        const x = sa.logits.slice(f32, n);
+        const y = sb.logits.slice(f32, n);
+        var changed: usize = 0;
+        var maximum: f32 = 0;
+        for (x, y) |lhs, rhs| {
+            if (@as(u32, @bitCast(lhs)) != @as(u32, @bitCast(rhs))) changed += 1;
+            maximum = @max(maximum, @abs(lhs - rhs));
+        }
+        std.debug.print("verifycheck accepted={d} prefix_changed={d} prefix_max_diff={e} continuation_changed={d} continuation_max_diff={e}\n", .{ accepted, prefix_changed, prefix_maximum, changed, maximum });
+        return;
+    }
+    if (std.mem.eql(u8, mode, "roundbench")) {
+        if (args.len != 5 and args.len != 6) return error.ExpectedArgs;
+        const rounds = try std.fmt.parseInt(usize, args[4], 10);
+        if (rounds == 0) return error.ExpectedArgs;
+        const selected_width = if (args.len == 6) try std.fmt.parseInt(usize, args[5], 10) else 0;
+        if (selected_width != 0 and selected_width != 1 and selected_width != 2 and selected_width != 4 and selected_width != 8 and selected_width != 16) return error.ExpectedArgs;
+        var cache = try inkling.Cache.init(m.device, c, ids.value.len + 32);
+        defer cache.deinit();
+        var ps = try inkling.PrefillScratch.init(m.device, c, 512);
+        defer ps.deinit();
+        var at: usize = 0;
+        while (at < ids.value.len) {
+            const take = @min(ps.chunk, ids.value.len - at);
+            try inkling.prefillWant(m, &ps, &cache, ids.value[at..][0..take], .none);
+            at += take;
+        }
+        var tokens: [16]u32 = undefined;
+        for (&tokens, 0..) |*token, i| token.* = ids.value[i % ids.value.len];
+        var predictions: [16]u32 = undefined;
+        var initial = try inkling.Verification.begin(m, &ps, &cache, &tokens, &predictions);
+        const widths = [_]usize{ 1, 2, 4, 8, 16 };
+        for (0..rounds) |round| {
+            for (0..widths.len) |i| {
+                const width = widths[if (round % 2 == 0) i else widths.len - 1 - i];
+                if (selected_width != 0 and selected_width != width) continue;
+                try initial.reset();
+                var times = inkling.verify.RoundTimes{};
+                inkling.verify.round_times = &times;
+                const start = now();
+                var v = try inkling.Verification.begin(m, &ps, &cache, tokens[0..width], predictions[0..width]);
+                const accepted = if (want_timeline) 0 else width / 2;
+                try v.finish(tokens[0..width], accepted);
+                const total = now() - start;
+                inkling.verify.round_times = null;
+                std.debug.print("roundbench width={d} accepted={d} save_ns={d} forward_ns={d} argmax_ns={d} restore_ns={d} replay_ns={d} total_ns={d}\n", .{ width, accepted, times.save, times.forward, times.argmax, times.restore, times.replay, total });
+            }
+        }
+        try initial.finish(&tokens, 0);
         return;
     }
     if (std.mem.eql(u8, mode, "verifybench")) {

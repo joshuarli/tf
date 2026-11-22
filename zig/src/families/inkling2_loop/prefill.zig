@@ -119,6 +119,35 @@ pub const Pipes = struct {
     }
 };
 
+pub const ConvSite = enum { key, value, attention, mlp };
+
+pub const ConvCapture = struct {
+    buffer: mtl.Buffer,
+    rows: usize,
+    kv_width: usize,
+    hidden: usize,
+
+    pub fn init(device: mtl.Device, config: *const cfg.Config, rows: usize) !ConvCapture {
+        const kv_width: usize = config.text.local.kv * config.text.local.dim;
+        const hidden: usize = config.text.hidden;
+        const bytes = config.slots() * rows * (2 * kv_width + 2 * hidden) * 4;
+        return .{ .buffer = try device.buffer(@max(bytes, 16), mtl.ResourceOptions.private), .rows = rows, .kv_width = kv_width, .hidden = hidden };
+    }
+
+    pub fn width(c: ConvCapture, site: ConvSite) usize {
+        return switch (site) { .key, .value => c.kv_width, .attention, .mlp => c.hidden };
+    }
+
+    pub fn offset(c: ConvCapture, slot: usize, site: ConvSite, row: usize) usize {
+        const site_width: usize = switch (site) { .key => 0, .value => c.kv_width, .attention => 2 * c.kv_width, .mlp => 2 * c.kv_width + c.hidden };
+        return (slot * c.rows * (2 * c.kv_width + 2 * c.hidden) + site_width * c.rows + row * c.width(site)) * 4;
+    }
+
+    pub fn deinit(c: *ConvCapture) void {
+        c.buffer.deinit();
+    }
+};
+
 pub const PrefillScratch = struct {
     pipes: Pipes,
     chunk: usize,
@@ -174,6 +203,7 @@ pub const PrefillScratch = struct {
     capture: ?mtl.Buffer,
     capture_row: usize,
     routes: ?mtl.Buffer,
+    verify_conv: ?*ConvCapture,
 
     pub fn init(device: mtl.Device, c: *const cfg.Config, chunk: usize) !PrefillScratch {
         const h: usize = c.text.hidden;
@@ -192,6 +222,7 @@ pub const PrefillScratch = struct {
         s.capture = null;
         s.capture_row = 0;
         s.routes = null;
+        s.verify_conv = null;
         s.chunk = chunk;
         s.h = @intCast(h);
         s.heads = c.text.local.q;
@@ -498,7 +529,7 @@ const Chunk = struct {
         };
     }
 
-    fn convolve(c: Chunk, x: B, out: B, weight: Tensor, dyn: ?Tensor, dyn_in: In, dyn_out: B, ring: B, channels: u32, conv_heads: u32, layout: u32) void {
+    fn convolve(c: Chunk, x: B, out: B, weight: Tensor, dyn: ?Tensor, dyn_in: In, dyn_out: B, ring: B, channels: u32, conv_heads: u32, layout: u32, slot: u32, site: ConvSite) void {
         const taps: u32 = cfg.conv_taps;
         const mul: u32 = if (dyn != null) 2 else 1;
         const norm: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(mul * taps + 1)));
@@ -507,6 +538,7 @@ const Chunk = struct {
         c.enc.dispatchThreads(mtl.Size.of(channels, c.n, 1), mtl.Size.of(256, 1, 1));
         c.setP(c.s.pipes.cstore, CStore{ .channels = channels, .ring = st.ring, .base = c.base, .rows = c.n }, &.{ x, ring, A });
         c.enc.dispatchThreads(mtl.Size.of(channels, c.n, 1), mtl.Size.of(256, 1, 1));
+        if (c.s.verify_conv) |capture| c.copyN(x, bo(capture.buffer, capture.offset(slot, site, 0)), @as(usize, c.n) * channels);
     }
 
     fn kvStore(c: Chunk, slot: u32) void {
@@ -571,10 +603,10 @@ const Chunk = struct {
         c.clipScaled(b(s.r), lay.attn.r_scale, c.heads, c.drel, text.rel_clip);
         const ring = c.rings(slot);
         c.lin(lay.attn.k, ins[1], b(s.k));
-        c.convolve(b(s.k), b(s.kc), lay.attn.k_conv, lay.attn.k_dyn, ins[1], b(s.kdyn), ring[0], c.kvw, if (full) c.kv else 0, @intFromBool(full));
+        c.convolve(b(s.k), b(s.kc), lay.attn.k_conv, lay.attn.k_dyn, ins[1], b(s.kdyn), ring[0], c.kvw, if (full) c.kv else 0, @intFromBool(full), slot, .key);
         c.clipPlain(b(s.kc), c.kv, c.dim, text.qk_clip);
         c.lin(lay.attn.v, ins[2], b(s.v));
-        c.convolve(b(s.v), b(s.vc), lay.attn.v_conv, lay.attn.v_dyn, ins[2], b(s.vdyn), ring[1], c.kvw, if (full) c.kv else 0, @intFromBool(full));
+        c.convolve(b(s.v), b(s.vc), lay.attn.v_conv, lay.attn.v_dyn, ins[2], b(s.vdyn), ring[1], c.kvw, if (full) c.kv else 0, @intFromBool(full), slot, .value);
         c.rmsU(b(s.vc), b(s.vc), @as(usize, c.n) * c.kv, c.dim, text.eps);
         c.lin(lay.attn.sink, ins[0], b(s.sink));
         c.relative(lay, b(s.r), extent, full);
@@ -588,7 +620,7 @@ const Chunk = struct {
         c.lin(lay.attn.gate, ins[0], b(s.gate));
         c.flat(.sig_mul, Pair{ .count = c.qw * c.n }, &.{ b(s.attn), b(s.gate), A, b(s.attn) }, @as(usize, c.qw) * c.n);
         c.lin(lay.attn.o, .{ .buf = b(s.attn), .xs = 1, .xb = 0 }, b(s.projout));
-        c.convolve(b(s.projout), b(s.o), lay.attn_post, null, undefined, b(s.projout), ring[2], c.h, 0, 0);
+        c.convolve(b(s.projout), b(s.o), lay.attn_post, null, undefined, b(s.projout), ring[2], c.h, 0, 0, slot, .attention);
     }
 
     fn experts(c: Chunk, lay: *const Layer, input: B, slot: u32) void {
@@ -615,7 +647,7 @@ const Chunk = struct {
             c.copyN(t(lay.router_bias), bo(routes, (start + @as(usize, c.n) * (K + E)) * 4), E);
         }
         const slots: u32 = c.n * K;
-        if (c.n <= 2) {
+        if (c.n <= 8) {
             const codes = b(if (lay.mxfp8) m.t256 else m.t16);
             const gu = if (lay.mxfp8) s.pipes.gu_mx else s.pipes.gu_nv;
             const down = if (lay.mxfp8) s.pipes.down_mx else s.pipes.down_nv;
@@ -716,7 +748,7 @@ const Chunk = struct {
         c.rmsW(.{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, t(lay.mlp_norm), b(s.m0), 1, 0, c.h, text.eps);
         c.experts(lay, b(s.m0), slot);
         const slots = c.rings(slot);
-        c.convolve(b(s.moe), b(s.aconv), lay.mlp_post, null, undefined, b(s.moe), slots[3], c.h, 0, 0);
+        c.convolve(b(s.moe), b(s.aconv), lay.mlp_post, null, undefined, b(s.moe), slots[3], c.h, 0, 0, slot, .mlp);
         c.copyN(b(s.ffnin), b(s.x), @as(usize, c.n) * c.h);
         c.addN(b(s.x), b(s.aconv), @as(usize, c.n) * c.h);
         c.record(slot, 8, .{ .buf = b(s.x), .xs = 1, .xb = 0 });
@@ -842,6 +874,7 @@ pub fn prefillWant(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []co
     if (profiling) try rounds.next(&c, "inkling2-head");
     c.mixBlocks(b(s.x), m.weights.output_query, bo(s.mixout, 0));
     c.rmsW(.{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, t(m.weights.norm), b(s.n0), 1, 0, c.h, text.eps);
+    if (profiling) try rounds.next(&c, "inkling2-vocabulary");
     switch (want) {
         .none => {},
         .last => c.headModelLast(m.weights.unembed, bo(s.n0, (@as(usize, c.n) - 1) * c.h * 4), b(s.logits), text.unpadded_vocab),

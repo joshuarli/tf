@@ -880,7 +880,7 @@ test "per slot expert projections meet fp64 bounds" {
             defer out.deinit();
             const direct = try mtl.Pipeline.init(device, lib, if (gu) "i2p_gu" else "i2p_down", false);
             defer direct.deinit();
-            for ([_]usize{ 1, 2 }) |rows| {
+            for ([_]usize{ 1, 2, 4, 8 }) |rows| {
                 const slots = rows * 8;
                 const args = ExpertSlotArgs{ .k = @intCast(k), .n = n, .slots = @intCast(slots), .topk = 8, .gate_cap = if (gu) 7 else 0, .up_cap = if (gu) 7 else 0 };
                 const cb = queue.commandBuffer();

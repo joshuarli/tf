@@ -130,6 +130,9 @@ be measured before any keep decision.
 
 ## Native drafter
 
+The native drafter, its fixture test and `campaign/comparators/mlx-vlm/dspark_ref.py` are parked on
+`lane/ds1-dspark-drafter` at `c33e27796`; they are not on main. The reproduction below runs from that branch.
+
 The Metal drafter consumes captured tap rows and constructs the normalized anchor embedding from its token ID. It
 retains per-layer context keys and values across blocks and resets the Markov recurrence for each block. The f32 computation reads BF16
 weights from `mtp.safetensors` and the target embedding, embedding norm, and unembedding tensors. The full trained
@@ -195,3 +198,27 @@ the run, and the host check passed afterward. The heavy guard reported a peak ch
 These measured round costs exceed both projection assumptions. They do not establish a served decoding rate or a
 keep decision for native speculation. An earlier admitted run using the identical worktree copy of `heavy.py` gave
 16.769 ms and 29.820 ms medians for widths four and eight respectively.
+
+## Verdict: NO-GO for integration
+
+The measured drafter takes 16.675 ms at width 4. Each round costs that plus the 58.241 ms V3 verification round,
+74.916 ms in all. At the MLX acceptance above (3.036, 2.674 and 2.953 committed per round), that projects:
+
+| Prompt | Width-4 DSpark | ar | Served copy drafts |
+| :--- | ---: | ---: | ---: |
+| code | 40.5 | 40.7 | 44.3 |
+| prose | 35.7 | 40.8 | 43.1 |
+| structured | 39.4 | 40.9 | 39.5 |
+
+It beats neither comparator on any prompt, so the decision rule gives NO-GO. Host integration (DS2) is not started.
+
+At unchanged verification cost, the drafter round must fit in the following budgets:
+
+- Code: at most 10.3 ms, since 3.036 / 44.3 is 68.5 ms per round.
+- Prose: at most 3.8 ms, since 2.674 / 43.1 is 62.0 ms per round.
+
+The prose budget is not reachable with the trained width-8 block. Its three sequential proposal steps each read the
+201,024 × 2,304 shared unembedding, about 2.8 GB in BF16 in all, before the drafter's own 0.64 GB.
+
+Revisit integration only if verification at four rows falls far enough that 2.674 committed tokens beat 43.1 tok/s
+with the measured drafter. That needs a round of at most 45.4 ms, which is a cut of 12.9 ms or more from 58.2 ms.

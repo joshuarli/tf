@@ -67,8 +67,8 @@
   5. Peak memory within +0.5 GB.
   Otherwise revert and record. It runs after V3 merges, because it edits V3's files.
 - **M1 result: reverted** (`campaign/kernels/inkling-bf16-prefill.md`). Criterion 2 fails: confident top-1 is 96.37%, against the required 99.5%. Criterion 3 fails: structured greedy ids diverge at token 56, at margin 0.21. The code is parked on `lane/m1-bf16-prefill`. No mixed-precision configuration remains in this campaign.
-- **In flight:** DS1, the native DSpark drafter against the MLX fixture. MLX's default TF32 matmul accounted for its logit gap, and the reference now runs with TF32 off.
-- **Parked:** `lane/m1-bf16-prefill` (reverted), `lane/s1-skip-logits` (race), `lane/p6-prefill-gemm2`, `lane/e2-prefill-experts2`, `lane/e3-expert-tensorops` (see Prefill), `lane/d2-depth-norm` (slower), `lane/c0-ground` (superseded), `.work/wt/k2-inkling-experts` (untracked scratch).
+- **DS1 result: native drafter exact, DSpark NO-GO** (`campaign/kernels/inkling-dspark.md`, "Verdict"). Against the TF32-off MLX fixture, all greedy proposals match on 65 blocks, with logit error 1.1e-4. The drafter takes 16.7 ms at width 4 and 29.7 ms at width 8. Width 4 then projects 40.5, 35.7 and 39.4 tok/s, which beats neither ar nor served copy drafts. DS2 is not started. The code is parked on `lane/ds1-dspark-drafter`. Revisit when the four-row verify round falls to 45 ms or less.
+- **Parked:** `lane/ds1-dspark-drafter` (NO-GO), `lane/m1-bf16-prefill` (reverted), `lane/s1-skip-logits` (race), `lane/p6-prefill-gemm2`, `lane/e2-prefill-experts2`, `lane/e3-expert-tensorops` (see Prefill), `lane/d2-depth-norm` (slower), `lane/c0-ground` (superseded), `.work/wt/k2-inkling-experts` (untracked scratch).
 
 ## Charter
 

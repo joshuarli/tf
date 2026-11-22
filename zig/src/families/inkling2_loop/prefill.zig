@@ -170,6 +170,7 @@ pub const PrefillScratch = struct {
     logits: mtl.Buffer,
     capture: ?mtl.Buffer,
     capture_row: usize,
+    routes: ?mtl.Buffer,
 
     pub fn init(device: mtl.Device, c: *const cfg.Config, chunk: usize) !PrefillScratch {
         const h: usize = c.text.hidden;
@@ -187,6 +188,7 @@ pub const PrefillScratch = struct {
         var s: PrefillScratch = undefined;
         s.capture = null;
         s.capture_row = 0;
+        s.routes = null;
         s.chunk = chunk;
         s.h = @intCast(h);
         s.heads = c.text.local.q;
@@ -569,7 +571,18 @@ const Chunk = struct {
         c.enc.dispatchGroups(mtl.Size.of((E + 31) / 32, c.n, 1), mtl.Size.of(1024, 1, 1));
         c.setP(s.pipes.pick, Pick{ .experts = E, .topk = K, .rows = c.n, .route_scale = cc.text.route_scale }, &.{ b(s.router), t(lay.router_bias), A, b(s.picks), b(s.wts) });
         c.enc.dispatchGroups(mtl.Size.of(c.n, 1, 1), mtl.Size.of(32, 1, 1));
-        if (s.capture) |capture| c.copyN(bo(s.picks, s.capture_row * K * 4), bo(capture, (cc.slots() * st.trace_rows * c.h + slot * K) * 4), K);
+        if (s.capture) |capture| {
+            c.copyN(bo(s.picks, s.capture_row * K * 4), bo(capture, (cc.slots() * st.trace_rows * c.h + slot * K) * 4), K);
+            const start = cc.slots() * (st.trace_rows * c.h + K) + slot * E * 2;
+            c.copyN(bo(s.router, s.capture_row * E * 4), bo(capture, start * 4), E);
+            c.copyN(t(lay.router_bias), bo(capture, (start + E) * 4), E);
+        }
+        if (s.routes) |routes| {
+            const start = @as(usize, slot) * (@as(usize, c.n) * (K + E) + E);
+            c.copyN(b(s.picks), bo(routes, start * 4), @as(usize, c.n) * K);
+            c.copyN(b(s.router), bo(routes, (start + @as(usize, c.n) * K) * 4), @as(usize, c.n) * E);
+            c.copyN(t(lay.router_bias), bo(routes, (start + @as(usize, c.n) * (K + E)) * 4), E);
+        }
         const slots: u32 = c.n * K;
         c.setP(s.pipes.moe_zero, E, &.{ b(s.moe_cnt), A });
         c.enc.dispatchThreads(mtl.Size.of(E, 1, 1), mtl.Size.of(32, 1, 1));

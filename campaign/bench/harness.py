@@ -42,14 +42,18 @@ MODEL_KEYS = {"flint": "flint-int4", "inkling2-mini": "inkling-2-mini", "inkling
 LOAD_LIMIT_VARS = {"flint-int4": "FLINT_LOAD_LIMIT_GB", "inkling-2-mini": "INKLING_LOAD_LIMIT_GB"}
 UNSUPPORTED_MODES = {
     "inkling-2-mini": {
-        "copy": "Inkling 2 Mini is text-only in this campaign and has no copy-draft path; run mode ar",
         "drafter": "Inkling 2 Mini has no served drafter in this campaign (its mtp.safetensors head is not wired); "
                    "run mode ar",
     },
 }
 # Inkling serves at most CONTEXT_CAP tokens so its caches, and every campaign run that loads it, stay small.
 CONTEXT_CAP = 32768
-DEFAULT_SERVE_ARGS = {"flint-int4": [], "inkling-2-mini": ["--no-drafts", "--temperature", "0", "--context", str(CONTEXT_CAP)]}
+# Flags every server for a model passes, whatever the caller's mode; Server applies them itself.
+MODEL_SERVE_ARGS = {"inkling-2-mini": ["--temperature", "0", "--context", str(CONTEXT_CAP)]}
+# The mode a caller that names none (Pi) serves: Inkling is greedy ar unless copy drafts are requested.
+DEFAULT_SERVE_ARGS = {"flint-int4": [], "inkling-2-mini": ["--no-drafts"]}
+# Inkling's copy drafts are opt-in through the environment, not a flag.
+COPY_DRAFT_ENV = {"inkling-2-mini": {"INKLING_COPY_DRAFTS": "1"}}
 
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
@@ -140,8 +144,18 @@ def model_mode_problem(key: str, mode: str) -> str | None:
 
 
 def default_serve_args(key: str) -> list[str]:
-    """The flags every server for a model passes: Inkling 2 Mini serves greedy ar only, so its default temperature is 0 for clients (Pi) that send none."""
+    """The mode flags a caller that names no mode passes; Inkling 2 Mini serves greedy ar."""
     return list(DEFAULT_SERVE_ARGS.get(key, []))
+
+
+def model_serve_args(key: str | None) -> list[str]:
+    """The flags every server for a model passes: Inkling's 32k context and temperature 0 for clients that send none."""
+    return list(MODEL_SERVE_ARGS.get(key, [])) if key else []
+
+
+def copy_draft_env(key: str) -> dict[str, str]:
+    """The environment that turns on a model's copy drafts, empty where they are on by default."""
+    return dict(COPY_DRAFT_ENV.get(key, {}))
 
 
 def model_key_for_dir(path: Path) -> str | None:
@@ -388,11 +402,13 @@ def load_limit_env(model: Path) -> dict[str, str]:
 class Server:
     """A model server under the GPU lock: ready wait, log parsing, /memory sampling and a group-only stop."""
 
-    def __init__(self, binary: Path, model: Path, extra_args: list[str], prompt_cache_gib: int, log_path: Path):
-        self.binary, self.model, self.extra_args = Path(binary), Path(model), list(extra_args)
+    def __init__(self, binary: Path, model: Path, extra_args: list[str], prompt_cache_gib: int, log_path: Path,
+                 env: dict[str, str] | None = None):
+        self.binary, self.model = Path(binary), Path(model)
+        self.extra_args = list(extra_args) + model_serve_args(model_key_for_dir(self.model))
         self.prompt_cache_gib = prompt_cache_gib
         self.log_path = Path(log_path)
-        self.env = dict(os.environ, **load_limit_env(self.model), TENSORFOLD_NO_UPDATE_CHECK="1")
+        self.env = dict(os.environ, **load_limit_env(self.model), TENSORFOLD_NO_UPDATE_CHECK="1", **(env or {}))
         self.port: int | None = None
         self.base: str | None = None
         self.process: subprocess.Popen | None = None

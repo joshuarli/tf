@@ -136,7 +136,15 @@ pub fn main(init: std.process.Init) !void {
         const p1 = now();
         const ms: f64 = @as(f64, @floatFromInt(p1 - p0)) / 1e6;
         const rate: f64 = @as(f64, @floatFromInt(ids.value.len)) / (ms / 1000.0);
-        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[5], .data = std.mem.sliceAsBytes(outp) });
+        const output = try std.Io.Dir.cwd().createFile(init.io, args[5], .{});
+        defer output.close(init.io);
+        const output_bytes = std.mem.sliceAsBytes(outp);
+        var written: usize = 0;
+        while (written < output_bytes.len) {
+            const end = @min(written + (1 << 30), output_bytes.len);
+            try output.writeStreamingAll(init.io, output_bytes[written..end]);
+            written = end;
+        }
         std.debug.print("inkling2_loop prefill: {d} tokens in {d:.1} ms, {d:.1} tok/s chunk {d}\n", .{ ids.value.len, ms, rate, chunk });
         return;
     }

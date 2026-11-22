@@ -681,4 +681,25 @@ The new E4 kernels are unregistered in the kernel contract, as are the other Ink
 
 The candidate stages eight experts at a time. The serialized family test (`zig build test-inkling2-loop -Dcpu=apple_m1 -j1` under `heavy.py` with `TF_INKLING2_LOOP_DIR` set to the Mini checkpoint) exited 0. Its fp64 checkpoint comparison examined 24,461,180,928 staged weights: 0 inexact conversions, 0 staged-value mismatches and 768 detected corrupted-value controls. The `-j1` scheduling flag kept the two test executables from loading the checkpoint concurrently. The f32 global scale remains outside NVFP4 staging and is applied to the f32 product.
 
-Prefill parity with chunks 512 and 4 each exited 2 with 14 within contract, 2 explained divergences and 0 unexplained. The first chunk-512 attempt generated the candidate outputs but failed before comparison because a space in the reference PATH was split by make; the corrected reference PATH reused the matching receipts and produced the result above. End-to-end keep/revert timing and memory evidence are pending.
+Prefill parity with chunks 512 and 4 each exited 2 with 14 within contract, 2 explained divergences and 0 unexplained. The first chunk-512 attempt generated the candidate outputs but failed before comparison because a space in the reference PATH was split by make; the corrected reference PATH reused the matching receipts and produced the result above.
+
+Five busy-host control–candidate–control rounds on the 1,334-token prompt passed the 60/60 GPU gate and CPU pre/post checks. Control median was 3,484.85 ms (range 3,375.9–6,060.9); candidate median was 3,986.4 ms (3,894.1–5,736.2). The median ratio of mean adjacent-control time to candidate time was 0.879 (range 0.656–1.184). The ranges overlap, so the candidate fails the stated keep rule. The first control had 1,067,267 pageins, making its unusually long time a cold-read observation. Maximum `heavy.py` charged peaks were 20.9 GB for control and 22.3 GB for candidate; host-wide wired growth is included, so these noisy peaks do not isolate scratch growth.
+
+The same five busy-host rounds on 5,265 tokens gave control median 14,040.7 ms (range 13,356.8–14,534.1) and candidate median 15,936.3 ms (15,249.4–17,729.1). The paired speed ratio median was 0.893 (range 0.765–0.918). The ranges do not overlap and favor the control. The control and candidate maximum charged peaks were 22.0 and 21.5 GB respectively. Those host-wide figures vary with other activity and do not establish negative scratch usage. Each round ran the base, candidate and base runner sequentially with `bench 2 1 512`; failed admission or post-run CPU checks were discarded and retried. The control was built from `d6b0dbf1370aa633c599d6d026cce5ca44fffa4d`. Both runners used the same Zig version, prompts, model, chunk and `heavy.py` cap. The tokenized prompts were the campaign's `code-1024.txt` and `code-4096.txt`.
+
+| Tokens | Round | Control 1 ms | Candidate ms | Control 2 ms | Paired speed ratio |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,334 | 1 | 6,060.9 | 3,986.4 | 3,375.9 | 1.184 |
+| 1,334 | 2 | 4,068.1 | 5,736.2 | 3,461.9 | 0.656 |
+| 1,334 | 3 | 3,413.1 | 3,894.1 | 3,398.0 | 0.875 |
+| 1,334 | 4 | 3,392.4 | 3,939.2 | 3,734.0 | 0.905 |
+| 1,334 | 5 | 3,507.8 | 3,999.8 | 3,522.3 | 0.879 |
+| 5,265 | 1 | 14,373.8 | 15,936.3 | 14,152.7 | 0.895 |
+| 5,265 | 2 | 13,760.2 | 17,729.1 | 13,356.8 | 0.765 |
+| 5,265 | 3 | 14,048.1 | 15,883.9 | 14,310.6 | 0.893 |
+| 5,265 | 4 | 14,534.1 | 15,977.3 | 13,689.9 | 0.883 |
+| 5,265 | 5 | 13,964.2 | 15,249.4 | 14,033.3 | 0.918 |
+
+The instrumented split timeline used the 5,265-token runner, chunk 512, `TF_METAL4_TIMELINE=1` and `TF_INKLING_PREFILL_PROFILE_BASE=0`. After eight warm rounds it captured 115 segments and 15,126 dispatches over 48 slots, with 1,512.517 ms of summed GPU span. Weight staging took 321.265 ms, expert TensorOps 356.195 ms, gather 80.407 ms and scatter 70.079 ms; grouped low-occupancy gate/up and down took 76.353 and 56.469 ms. These instrumented figures are attribution, not the paired throughput measurements. Admission and immediate post-CPU checks passed, and `heavy.py` reported 21.1 GB peak charged. The first profile used base 4096 and captured only embedding because it did not leave eight warm rounds for each slot; it was discarded.
+
+**Verdict: revert E4.** The 1K ranges overlap, and the long-prompt candidate is slower with non-overlapping ranges. Decode, gather and scatter erase the isolated preconverted-matmul advantage in this implementation. The candidate kernels and temporary test are removed; the existing expert path and chunk default remain in use.

@@ -369,6 +369,32 @@ four rows failed post-checks and were discarded. Dense includes the separately l
 | 8 | 101.900 | 25.485 | 39.395 | 18.436 | 4.900 | 3.091 |
 | 16 | 155.485 | 53.699 | 60.462 | 18.226 | 4.896 | 2.175 |
 
+### Per-row attention at short widths
+
+An experiment selected the existing per-row attention kernel for one and two rows. Revert:
+five alternating pairs showed a large regression. The candidate family test passed and
+rollback continuation remained byte-identical.
+
+| Rows | Save ms | Forward ms | Read and argmax ms | Restore ms | Replay ms | Host ms | Candidate total ms (range) | Baseline total ms (range) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.337 | 153.167 | 0.329 | 0.252 | 0 | 0.007 | 154.094 (154.057–154.323) | 40.463 (40.334–40.636) |
+| 2 | 0.366 | 155.047 | 0.660 | 0.280 | 153.264 | 0.019 | 309.718 (309.172–309.736) | 84.861 (84.599–84.980) |
+| 4 | 0.452 | 55.661 | 1.326 | 0.330 | 154.971 | 0.021 | 212.741 (212.548–213.009) | 101.742 (101.609–102.025) |
+| 8 | 0.575 | 86.248 | 2.648 | 1.238 | 55.768 | 0.015 | 146.491 (146.386–146.665) | 146.519 (146.282–146.605) |
+| 16 | 0.850 | 150.975 | 5.279 | 1.365 | 86.287 | 0.021 | 244.722 (244.367–245.061) | 244.919 (244.447–245.831) |
+
+The candidate split profile used the same five-round timeline method and admission checks.
+Dense includes the separately listed vocabulary head. The per-row attention kernel accounts
+for the large one- and two-row regression.
+
+| Rows | Summed GPU span ms | Dense ms | Expert gate/up and down ms | Attention ms | Route selection ms | Vocabulary head ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 155.521 | 11.583 | 4.946 | 124.162 | 4.919 | 1.578 |
+| 2 | 157.362 | 12.528 | 8.408 | 121.642 | 4.923 | 1.593 |
+| 4 | 58.560 | 15.644 | 15.213 | 12.718 | 4.912 | 1.719 |
+| 8 | 89.338 | 25.504 | 29.921 | 18.509 | 4.896 | 3.088 |
+| 16 | 155.236 | 53.827 | 60.171 | 18.284 | 4.894 | 2.171 |
+
 The family test passed with `TF_INKLING2_LOOP_DIR` set to the checkpoint and
 `python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1`. It compared
 repeated predictions after snapshot reset and continuation logits byte for byte across the local

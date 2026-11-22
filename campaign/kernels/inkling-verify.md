@@ -292,6 +292,32 @@ residual after subtracting the measured components from generation time; rounded
 do not necessarily sum to the median total. The runner now separately measures undrafted
 decode for subsequent comparisons.
 
+### Packed per-slot expert outputs
+
+An experiment packed four independent output rows into one 128-thread threadgroup. Revert:
+five alternating pairs showed no measurable difference at eight rows. The candidate family
+test passed, including FP64 expert bounds and byte-identical rollback continuation.
+
+| Rows | Save ms | Forward ms | Read and argmax ms | Restore ms | Replay ms | Host ms | Candidate total ms (range) | Baseline total ms (range) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.350 | 39.603 | 0.328 | 0.249 | 0 | 0.006 | 40.584 (40.439–40.797) | 40.552 (40.464–40.563) |
+| 2 | 0.395 | 44.017 | 0.674 | 0.271 | 39.573 | 0.022 | 84.948 (84.747–85.344) | 84.927 (84.831–85.200) |
+| 4 | 0.449 | 55.713 | 1.320 | 0.328 | 43.954 | 0.017 | 101.834 (101.744–101.902) | 101.879 (101.728–102.510) |
+| 8 | 0.598 | 85.897 | 2.637 | 1.210 | 55.694 | 0.018 | 146.070 (145.932–146.424) | 146.469 (146.130–146.662) |
+| 16 | 0.852 | 150.922 | 5.299 | 1.459 | 85.944 | 0.024 | 244.468 (244.055–245.081) | 244.661 (244.190–245.023) |
+
+The candidate split profile used the same five-round timeline method and admission checks.
+Dense includes the separately listed vocabulary head. The profile is instrumented GPU span,
+not unsplit wall time.
+
+| Rows | Summed GPU span ms | Dense ms | Expert gate/up and down ms | Attention ms | Route selection ms | Vocabulary head ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 42.113 | 11.370 | 4.661 | 11.246 | 4.935 | 1.574 |
+| 2 | 46.635 | 12.341 | 8.050 | 11.410 | 4.919 | 1.590 |
+| 4 | 58.466 | 15.638 | 15.192 | 12.656 | 4.920 | 1.720 |
+| 8 | 89.224 | 25.716 | 29.646 | 18.474 | 4.908 | 3.090 |
+| 16 | 155.083 | 53.610 | 60.164 | 18.277 | 4.904 | 2.142 |
+
 The family test passed with `TF_INKLING2_LOOP_DIR` set to the checkpoint and
 `python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1`. It compared
 repeated predictions after snapshot reset and continuation logits byte for byte across the local

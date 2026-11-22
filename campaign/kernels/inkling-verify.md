@@ -564,3 +564,23 @@ make -C campaign -f parity/inkling2-mini/parity.mk parity-inkling2-mini RUNNER_M
 Both commands used the lane runner built from this change, the established saved oracle, and
 `heavy.py` for the model loads. The comparison's trace diagnostics are a tool-level check,
 not a performance measurement.
+
+## Served copy drafts after the replay-free commit
+
+The runner figures above use the raw development prompts (1,334, 1,139 and 1,109 IDs), without the chat
+template's assistant turn. The model therefore continues the prompt text, which copy drafts predict well.
+Served requests render the chat template (1,349, 1,154 and 1,124 prompt tokens), so the model answers
+instead, and far less of its output is copyable. One served pair per mode on main `868c2ad8a`
+(`make -C campaign bench MODEL=inkling2-mini MODE=ar|copy CELLS=1024 PAIRS=1`, busy host, 512 greedy
+tokens, `--context 32768`); `copy` serves with `INKLING_COPY_DRAFTS=1`:
+
+| Prompt | ar decode tok/s | copy decode tok/s | drafted / accepted | verification rounds | Same output as ar |
+| --- | ---: | ---: | ---: | ---: | --- |
+| code-1024 | 40.7 | 44.3 | 200 / 120 | 391 | yes |
+| prose-1024 | 40.8 | 43.1 | 161 / 92 | 419 | yes |
+| structured-1024 | 40.9 | 39.5 | 147 / 42 | 469 | yes |
+
+On served chat requests, copy drafts give about +9% on code and +6% on prose, and lose 3% on structured. They
+stay opt-in. The runner's 55 and 80 tok/s prose and structured rates describe text continuation, not chat
+answers. Records: `campaign/runs/2026-11-22/inkling2-mini-ar-1024-180358.jsonl` and
+`campaign/runs/2026-11-22/inkling2-mini-copy-1024-181920.jsonl`.

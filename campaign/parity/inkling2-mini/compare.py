@@ -295,7 +295,8 @@ def main() -> int:
             problems.extend(history_problems)
             per_history.append({"name": name, "tokens": expected, "status": "unexplained",
                                 "gate": None, "problems": history_problems,
-                                "ref_digest": ref_digest, "token_sha256": token_sha})
+                                "ref_digest": ref_digest, "token_sha256": token_sha,
+                                "observed_onset": None})
             unexplained += 1
             rows.append(f"| {name} | {expected} | n/a | n/a | n/a | n/a | n/a | unexplained |")
             continue
@@ -328,6 +329,8 @@ def main() -> int:
             not p.startswith(f"{name}: receipt") and "refusing" not in p and "missing" not in p
             and "holds" not in p and "width" not in p and "load" not in p
             for p in history_problems)
+        over_tol = np.nonzero(err.max(axis=1) > args.tensor_tol)[0]
+        observed_onset: int | None = int(over_tol[0]) if over_tol.size else None
         if not history_problems:
             status = "within contract"
             within += 1
@@ -338,6 +341,7 @@ def main() -> int:
             status = "unexplained"
             unexplained += 1
         per_history.append({"name": name, "tokens": expected, "status": status,
+                            "observed_onset": observed_onset,
                             "gate": {"positions": result.positions, "confident": result.confident,
                                      "top1": result.top1, "confident_top1": result.confident_top1,
                                      "max_abs": result.max_abs, "mean_abs": result.mean_abs,
@@ -474,10 +478,16 @@ def main() -> int:
         lines += ["Qualification is incomplete: every failing history above must return to within contract.",
                   ""]
     if exceptions:
-        lines += ["Recorded explanations (evidence only; none of these turns a failure into a pass):",
-                  *[f"- {e.get('history')}: onset {e.get('onset_position')}, {e.get('mechanism')} "
-                    f"(evidence: {e.get('evidence')})" for e in exceptions],
-                  ""]
+        lines += ["Recorded explanations (evidence only; none of these turns a failure into a pass):"]
+        for e in exceptions:
+            hist = next((h for h in per_history if h["name"] == e.get("history")), None)
+            observed = hist.get("observed_onset") if hist else None
+            drift = ("; this run's observed onset differs from the recorded one"
+                     if observed is not None and observed != e.get("onset_position") else "")
+            lines.append(f"- {e.get('history')}: recorded onset {e.get('onset_position')}, "
+                         f"observed onset in this run {observed}{drift}; {e.get('mechanism')} "
+                         f"(evidence: {e.get('evidence')})")
+        lines += [""]
     report.write_text("\n".join(lines) + "\n")
 
     console = verdict if not failed else (

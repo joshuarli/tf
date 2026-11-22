@@ -672,3 +672,13 @@ measurement of an unguarded split. Path usage was not counted. The split
 kernel and its temporary tests were discarded, and no split parity run was
 made. The earlier float TensorOps implementation remains on the lane for the
 parent's decision.
+
+## E4 staged expert decode screen
+
+The initial busy-host decode screen used the candidate's `i2p_stage_weights` kernel on 42,467,328 synthetic weights, with three warmups and 20 timed GPU command buffers per format. It counted packed weights and scales read plus bf16 output written. NVFP4 took a median 0.484 ms (range 0.400–1.185 ms), or 225 GB/s; MXFP8 took 0.399 ms (0.374–0.500 ms), or 322 GB/s. Sampled output values matched the synthetic inputs. These are standalone, warm-buffer measurements, not end-to-end gains; the NVFP4 range is wide. The 60/60 GPU and CPU admission checks and immediate post-CPU check passed; `heavy.py` reported 0.4 GB peak charged memory and pressure level 1. No full model was loaded.
+
+The new E4 kernels are unregistered in the kernel contract, as are the other Inkling 2 Mini family kernels. Registration is a family-wide promotion requirement tracked by the parent.
+
+The candidate stages eight experts at a time. The serialized family test (`zig build test-inkling2-loop -Dcpu=apple_m1 -j1` under `heavy.py` with `TF_INKLING2_LOOP_DIR` set to the Mini checkpoint) exited 0. Its fp64 checkpoint comparison examined 24,461,180,928 staged weights: 0 inexact conversions, 0 staged-value mismatches and 768 detected corrupted-value controls. The `-j1` scheduling flag kept the two test executables from loading the checkpoint concurrently. The f32 global scale remains outside NVFP4 staging and is applied to the f32 product.
+
+Prefill parity with chunks 512 and 4 each exited 2 with 14 within contract, 2 explained divergences and 0 unexplained. The first chunk-512 attempt generated the candidate outputs but failed before comparison because a space in the reference PATH was split by make; the corrected reference PATH reused the matching receipts and produced the result above. End-to-end keep/revert timing and memory evidence are pending.

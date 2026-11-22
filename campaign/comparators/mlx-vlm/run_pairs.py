@@ -13,7 +13,7 @@ mlx = '/Users/josh/repos/tensorfold-m5/.work/venv-mlx-vlm/bin/python'
 env = os.environ.copy()
 env.update({'PATH': '/opt/homebrew/bin:' + env['PATH'], 'TMPDIR': '/Users/josh/repos/tensorfold-m5/.work/tmp', 'ZIG_GLOBAL_CACHE_DIR': '/Users/josh/repos/tensorfold-m5/.work/zig-global-cache', 'HF_HOME': '/Users/josh/repos/tensorfold-m5/.work/hf-home', 'HF_HUB_OFFLINE': '1', 'PYTHONDONTWRITEBYTECODE': '1', 'GPU_GATE_MAX_GPU_PCT': '35', 'GPU_GATE_MAX_UTIL_PCT': '35'})
 sequence = [(512, 1, 'mlx'), (512, 1, 'native'), (512, 2, 'native'), (512, 2, 'mlx'), (512, 3, 'mlx'), (512, 3, 'native'), (1024, 1, 'native'), (1024, 1, 'mlx'), (1024, 2, 'mlx'), (1024, 2, 'native'), (1024, 3, 'native'), (1024, 3, 'mlx')]
-receipt = root / 'campaign/runs/inkling-mlxvlm-pairs.jsonl'
+receipt = root / 'campaign/comparators/mlx-vlm/runs/inkling-mlxvlm-pairs.jsonl'
 critical = 0
 for size, pair, engine in sequence:
     prompt = f'campaign/prompts/inkling/code-{size}.json'

@@ -47,7 +47,9 @@ UNSUPPORTED_MODES = {
                    "run mode ar",
     },
 }
-DEFAULT_SERVE_ARGS = {"flint-int4": [], "inkling-2-mini": ["--no-drafts", "--temperature", "0"]}
+# Inkling serves at most CONTEXT_CAP tokens so its caches, and every campaign run that loads it, stay small.
+CONTEXT_CAP = 32768
+DEFAULT_SERVE_ARGS = {"flint-int4": [], "inkling-2-mini": ["--no-drafts", "--temperature", "0", "--context", str(CONTEXT_CAP)]}
 
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))

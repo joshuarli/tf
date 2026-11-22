@@ -61,7 +61,7 @@ level 2 during the run but passed the postcheck. The raw receipt includes
 successful runs and all rejected attempts, including the first mistakenly
 selected native build helper. Failed gate checks were excluded.
 
-[Raw run records](../runs/inkling-mlxvlm-pairs.jsonl) contain the exact commands,
+[Raw run records](../comparators/mlx-vlm/runs/inkling-mlxvlm-pairs.jsonl) contain the exact commands,
 exit codes, output IDs and memory receipts. The first pair used the same command
 as the remaining pairs, invoked directly. Subsequent pairs used
 [run_pairs.py](../comparators/mlx-vlm/run_pairs.py). Rebuild the native runner

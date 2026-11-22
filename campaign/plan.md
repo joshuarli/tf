@@ -66,8 +66,9 @@
   4. Quality dev set no worse than 8/12, and Pi checkers no worse than 7/8.
   5. Peak memory within +0.5 GB.
   Otherwise revert and record. It runs after V3 merges, because it edits V3's files.
-- **In flight:** V3 `v3-verify-round` (`usrw_a0b6c112-1320-4e18-a4ce-daecd3d66219`).
-- **Parked:** `lane/s1-skip-logits` (race), `lane/p6-prefill-gemm2`, `lane/e2-prefill-experts2`, `lane/e3-expert-tensorops` (see Prefill), `lane/d2-depth-norm` (slower), `lane/c0-ground` (superseded), `.work/wt/k2-inkling-experts` (untracked scratch).
+- **M1 result: reverted** (`campaign/kernels/inkling-bf16-prefill.md`). Criterion 2 fails: confident top-1 is 96.37%, against the required 99.5%. Criterion 3 fails: structured greedy ids diverge at token 56, at margin 0.21. The code is parked on `lane/m1-bf16-prefill`. No mixed-precision configuration remains in this campaign.
+- **In flight:** DS1, the native DSpark drafter against the MLX fixture. MLX's default TF32 matmul accounted for its logit gap, and the reference now runs with TF32 off.
+- **Parked:** `lane/m1-bf16-prefill` (reverted), `lane/s1-skip-logits` (race), `lane/p6-prefill-gemm2`, `lane/e2-prefill-experts2`, `lane/e3-expert-tensorops` (see Prefill), `lane/d2-depth-norm` (slower), `lane/c0-ground` (superseded), `.work/wt/k2-inkling-experts` (untracked scratch).
 
 ## Charter
 

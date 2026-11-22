@@ -65,6 +65,7 @@ env PATH="$PWD/.work/venv-omlx/bin:$PATH" \
 files, and 624 installed oMLX Python and JSON files. The CPU adapter tests pass.
 `make -C campaign omlx-smoke` passed with one busy-host sample per mode. Each
 process received the same 1,024 IDs and generated 512 tokens at temperature 0.
+The first recorded pair is:
 
 | Lightning MTP | TTFT seconds | Prefill tokens/s | Decode tokens/s | Peak charged GB |
 | --- | ---: | ---: | ---: | ---: |
@@ -77,6 +78,18 @@ adaptive maximum of seven draft tokens. Peak charged memory was 0.4 GB below
 the watchdog cap. This single pair cannot establish a speed difference or
 general greedy equivalence. The [smoke receipt](../comparators/omlx/results/code-1024-1795386552036119000.json)
 contains the IDs, commands, gate attempts, and raw output.
+
+After receipt redaction changed, a second smoke passed on the committed code:
+
+| Lightning MTP | TTFT seconds | Prefill tokens/s | Decode tokens/s | Peak charged GB |
+| --- | ---: | ---: | ---: | ---: |
+| off | 1.096 | 934.2 | 55.22 | 19.5 |
+| on | 1.095 | 934.8 | 69.04 | 24.0 |
+
+The modes again matched all 512 IDs, and the IDs matched the first pair. The
+on run reported 182 draft-and-verify cycles. The [second receipt](../comparators/omlx/results/code-1024-1795387728840664000.json)
+records the run. These two pairs use the same order and do not establish a
+speed ranking.
 
 For a peak-delta estimate, the MTP-off 1,024-token run reached 18,834,789,592
 bytes of MLX peak used memory. The MTP-off `code-4096` corpus run used 5,280

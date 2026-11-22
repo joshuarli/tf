@@ -671,6 +671,10 @@ test "routed expert projections meet fp64 bounds at occupancy boundaries" {
                     }
                 }
                 std.debug.print("expert mx={} gu={} rows={d} worst={e}\n", .{ mx, gu, rows, worst });
+            }
+        }
+    }
+}
 
 const AttnArgs = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, base: u32, rows: u32, rmode: u32, scale: f32, floor: f32, alpha: f32 };
 

@@ -171,6 +171,23 @@ def timings():
     return failures
 
 
+def fidelity_row(reference, candidate):
+    ref = np.asarray(reference, dtype=np.float64).copy()
+    got = np.asarray(candidate, dtype=np.float64).copy()
+    if ref.shape != got.shape or ref.ndim != 1 or ref.size < 2:
+        raise ValueError('logit rows must have equal one-dimensional shapes')
+    if not np.isfinite(ref).all() or not np.isfinite(got).all():
+        raise ValueError('nonfinite logits')
+    best = np.argpartition(ref, -2)[-2:]
+    confident = float(ref[best].max() - ref[best].min()) >= 0.1
+    agree = ref.argmax() == got.argmax()
+    ref -= ref.max()
+    got -= got.max()
+    log_ref = ref - np.log(np.exp(ref).sum())
+    log_got = got - np.log(np.exp(got).sum())
+    return confident, bool(agree), float(np.sum(np.exp(log_ref) * (log_ref - log_got)))
+
+
 def fidelity():
     histories = json.loads((ROOT / 'campaign/parity/inkling2-mini/histories.json').read_text())
     total_kl = 0.0
@@ -185,24 +202,17 @@ def fidelity():
         if row['exit']:
             return row['exit']
         reference = np.load(ORACLE / f'{name}.npy', mmap_mode='r')
-        candidate = np.memmap(output, dtype='<f4', mode='r', shape=reference.shape)
         if reference.shape != (len(ids), 200058):
             raise ValueError(f'unexpected oracle shape: {name} {reference.shape}')
+        if output.stat().st_size != len(ids) * 200058 * 4:
+            raise ValueError(f'unexpected candidate logits size: {name} {output.stat().st_size}')
+        candidate = np.memmap(output, dtype='<f4', mode='r', shape=reference.shape)
         for i in range(len(ids)):
-            ref = np.asarray(reference[i], dtype=np.float64)
-            got = np.asarray(candidate[i], dtype=np.float64)
-            if not np.isfinite(ref).all() or not np.isfinite(got).all():
-                raise ValueError(f'nonfinite logits: {name} position {i}')
-            best = np.argpartition(ref, -2)[-2:]
-            margin = float(ref[best].max() - ref[best].min())
-            if margin >= 0.1:
+            is_confident, is_agree, kl = fidelity_row(reference[i], candidate[i])
+            if is_confident:
                 confident += 1
-                agree += int(ref.argmax() == got.argmax())
-            ref -= ref.max()
-            got -= got.max()
-            log_ref = ref - np.log(np.exp(ref).sum())
-            log_got = got - np.log(np.exp(got).sum())
-            total_kl += float(np.sum(np.exp(log_ref) * (log_ref - log_got)))
+                agree += int(is_agree)
+            total_kl += kl
             total_rows += 1
         record({'label': f'oracle/{name}/compared', 'positions': len(ids)})
         del candidate

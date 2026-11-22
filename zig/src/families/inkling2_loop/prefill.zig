@@ -553,8 +553,8 @@ const Chunk = struct {
         const E: u32 = cc.text.experts;
         const K: u32 = cc.text.topk;
         const inter: u32 = cc.text.expert_inter;
-        c.setP(s.pipes.gemm, Gemm{ .n = E, .k = c.h, .rows = c.n, .xs = 1, .xb = 0, .cap = 0 }, &.{ input, t(lay.router), A, b(s.router) });
-        c.enc.dispatchGroups(mtl.Size.of((E + 63) / 64, (c.n + 7) / 8, 1), mtl.Size.of(256, 1, 1));
+        c.setP(s.pipes.router, RouterA{ .n = E, .k = c.h, .rows = c.n, .xs = 1, .xb = 0 }, &.{ input, t(lay.router), A, b(s.router) });
+        c.enc.dispatchGroups(mtl.Size.of((E + 31) / 32, c.n, 1), mtl.Size.of(1024, 1, 1));
         c.setP(s.pipes.pick, Pick{ .experts = E, .topk = K, .rows = c.n, .route_scale = cc.text.route_scale }, &.{ b(s.router), t(lay.router_bias), A, b(s.picks), b(s.wts) });
         c.enc.dispatchGroups(mtl.Size.of(c.n, 1, 1), mtl.Size.of(32, 1, 1));
         const slots: u32 = c.n * K;

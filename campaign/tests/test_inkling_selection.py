@@ -145,7 +145,7 @@ class ModelModes(unittest.TestCase):
 
     def test_inkling_serves_ar(self):
         self.assertIsNone(harness.model_mode_problem("inkling-2-mini", "ar"))
-        self.assertEqual(harness.default_serve_args("inkling-2-mini"), ["--no-drafts"])
+        self.assertEqual(harness.default_serve_args("inkling-2-mini"), ["--no-drafts", "--temperature", "0"])
 
     def test_flint_is_unchanged(self):
         self.assertIsNone(harness.model_mode_problem("flint-int4", "ar"))

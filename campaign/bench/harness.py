@@ -47,7 +47,7 @@ UNSUPPORTED_MODES = {
                    "run mode ar",
     },
 }
-DEFAULT_SERVE_ARGS = {"flint-int4": [], "inkling-2-mini": ["--no-drafts"]}
+DEFAULT_SERVE_ARGS = {"flint-int4": [], "inkling-2-mini": ["--no-drafts", "--temperature", "0"]}
 
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
@@ -138,7 +138,7 @@ def model_mode_problem(key: str, mode: str) -> str | None:
 
 
 def default_serve_args(key: str) -> list[str]:
-    """The acceleration flags a model's plain (non-matmul) runs pass: Inkling 2 Mini serves ar only."""
+    """The flags every server for a model passes: Inkling 2 Mini serves greedy ar only, so its default temperature is 0 for clients (Pi) that send none."""
     return list(DEFAULT_SERVE_ARGS.get(key, []))
 
 

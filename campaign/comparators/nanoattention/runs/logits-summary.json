@@ -1,0 +1,22 @@
+[
+  {
+    "prompt_tokens": 512,
+    "engine": "reference",
+    "max_abs_difference": 0.7570958137512207
+  },
+  {
+    "prompt_tokens": 512,
+    "engine": "optimized",
+    "max_abs_difference": 0.5918726921081543
+  },
+  {
+    "prompt_tokens": 1024,
+    "engine": "reference",
+    "max_abs_difference": 1.8921473026275635
+  },
+  {
+    "prompt_tokens": 1024,
+    "engine": "optimized",
+    "max_abs_difference": 1.0913329124450684
+  }
+]

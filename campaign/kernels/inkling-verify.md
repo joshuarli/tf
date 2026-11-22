@@ -144,3 +144,22 @@ is slower than decode: each verification round also allocates a snapshot buffer,
 the touched local KV rows in a separate command buffer, reads all rows' logits back for a CPU argmax, and on a
 partial accept re-runs the accepted prefix. Those per-round costs (~12 ms) are the next target; copy drafts stay
 opt-in until code is no slower than decode.
+
+## Round instrumentation
+
+`roundbench` measures snapshot allocation and save, target forward, CPU logits read and argmax,
+restore, and accepted-prefix replay. It restores the initial cache before each width and alternates
+width order. The benchmark accepts half the rows, rounded down. A timeline run accepts zero rows
+to keep replay kernels out of the target-forward profile. Hybrid generation also reports round
+costs. The full-round baseline and hybrid throughput comparisons are not yet measured.
+
+The family test passed with `TF_INKLING2_LOOP_DIR` set to the checkpoint and
+`python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1`. It compared
+repeated predictions after snapshot reset and continuation logits byte for byte across the local
+window and convolution ring boundaries. Peak charged memory was 22.2 GB.
+
+Prefill parity at chunk sizes 4 and 512 each returned exit 2 with 14 histories within contract,
+two explained divergences, and zero unexplained. The 512 comparison's runner binary was rebuilt
+during the trace diagnostics. The rebuild changed runner instrumentation, not prefill arithmetic,
+but the receipt does not pin a single binary for the entire comparison. One chunk-4 candidate
+run observed memory pressure level 2 during execution. Neither result establishes throughput.

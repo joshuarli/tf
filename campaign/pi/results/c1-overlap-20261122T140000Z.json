@@ -1,0 +1,491 @@
+{
+  "agent": {
+    "rendered": {
+      "$schema": "https://pi.dev/schemas/models.schema.json",
+      "providers": {
+        "tensorfold": {
+          "api": "openai-completions",
+          "apiKey": "local",
+          "baseUrl": "http://127.0.0.1:52295/v1",
+          "models": [
+            {
+              "contextWindow": 32768,
+              "cost": {
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "input": 0,
+                "output": 0
+              },
+              "id": "Inkling-2-Mini@ed40e7da625f",
+              "input": [
+                "text"
+              ],
+              "maxTokens": 8192,
+              "name": "Flint (local TensorFold)",
+              "reasoning": true
+            }
+          ],
+          "name": "TensorFold local"
+        }
+      }
+    },
+    "template": "agent/models.json",
+    "template_sha256": "07de22ca7a934deaa41a6ad0a16d503c0483ff0e22efcb6688998fce804624af"
+  },
+  "completion": {
+    "checkers_passed": false,
+    "complete": true
+  },
+  "host": {
+    "efficiency_cores": 12,
+    "gpu_cores": 40,
+    "load_limit_gb": 26,
+    "memory_bytes": 51539607552,
+    "metal": "Metal 4",
+    "os": "macOS 26B123",
+    "performance_cores": 6,
+    "product": "Apple M5 Max",
+    "recommended_max_working_set_bytes": 40200896512
+  },
+  "model": {
+    "dir": "/Users/josh/models/Inkling-2-Mini@ed40e7da625f",
+    "hashes": {
+      "aggregate_sha256": "866f5b7d260230b2196f85b9c3a53c91fbd2d96d2a5ea5ba297802ec54f3e687",
+      "config": [
+        {
+          "name": "inkling-2-mini/chat_template.jinja",
+          "sha256": "53a9035f3255945704b5857657cfb00c1165090c0641c4f782a0cbf268cc16dc",
+          "size": 6868
+        },
+        {
+          "name": "inkling-2-mini/config.json",
+          "sha256": "a7a349601f0984c4abf999c480ef775d8567d21f5f84b4e8a3e035b44f288dc2",
+          "size": 2722
+        },
+        {
+          "name": "inkling-2-mini/generation_config.json",
+          "sha256": "a08737c07a65a8fdf69f7cf086576210e5aad4b241437090b26d7b0c4f7905f7",
+          "size": 98
+        },
+        {
+          "name": "inkling-2-mini/hf_quant_config.json",
+          "sha256": "7c656207d3ce37879c7be209a036b0dde43bf01f78159bff06880b868ed57143",
+          "size": 67924
+        },
+        {
+          "name": "inkling-2-mini/model.safetensors.index.json",
+          "sha256": "c1631065b7b00787993522dddc66a68b3abee869192977fb3dcb796e63bc5838",
+          "size": 109300
+        },
+        {
+          "name": "inkling-2-mini/processor_config.json",
+          "sha256": "d7350adce18c8be4b607f261c8f0f7eabbf720bb7aaf648a43d4f8372bbacc2d",
+          "size": 461
+        },
+        {
+          "name": "inkling-2-mini/special_tokens_map.json",
+          "sha256": "c16f44b3594563d82743ddb0417a2be1bfe3e2000dfad2da4b8f32554593e1a0",
+          "size": 529
+        },
+        {
+          "name": "inkling-2-mini/tiktoken/tokenizer.model",
+          "sha256": "f170372dd655728909228220d77cf6b8104a59f38a91262a7d2c4027906ec0d8",
+          "size": 3386494
+        },
+        {
+          "name": "inkling-2-mini/tokenizer.json",
+          "sha256": "7f332727f9a3f093dd452a39cc978e6757627e5dad1b0673aa4e75174f236dd6",
+          "size": 26178678
+        },
+        {
+          "name": "inkling-2-mini/tokenizer_config.json",
+          "sha256": "bf09342d285139fd37ce10c70878af1d52cb390e9901e10248654293a80ee636",
+          "size": 13235
+        }
+      ],
+      "other": [],
+      "revision": "ed40e7da625f594fc9c4990f5f66be24873c22d7",
+      "sources_lock_sha256": "2e74a7212b69482e80c67c582ed2fd542957f7f12e6245a7821a428c5edab388",
+      "weights": [
+        {
+          "name": "inkling-2-mini/model-00001-of-00001.safetensors",
+          "sha256": "65e60f51aa1284d4fb022584908c315270334d991828bb774af60584523539d1",
+          "size": 19526019168
+        },
+        {
+          "name": "inkling-2-mini/mtp.safetensors",
+          "sha256": "7c3b651317f01f73bcf4e1dceba66ef8b7e1a1eac6bc171e882e690a4b10a1d2",
+          "size": 635801416
+        }
+      ]
+    },
+    "key": "inkling-2-mini"
+  },
+  "pi": {
+    "flags": [
+      "--no-extensions",
+      "--no-mcp",
+      "--no-skills",
+      "-nc",
+      "--no-session",
+      "--mode",
+      "json"
+    ],
+    "model_id": "Inkling-2-Mini@ed40e7da625f",
+    "path": "/Users/josh/.local/bin/pi",
+    "provider": "tensorfold",
+    "tools": "read,bash,edit,write"
+  },
+  "qualification": "run `pi-qualify --result <this file>`; completion alone does not pass checkers",
+  "recorded_at": "2026-11-22T13:51:39.102981+00:00",
+  "run_id": "c1-overlap-20261122T140000Z",
+  "schema": 1,
+  "server": {
+    "argv": [
+      "/opt/homebrew/bin/python3",
+      "/Users/josh/repos/tensorfold-m5/campaign/heavy.py",
+      "--",
+      "/Users/josh/repos/tensorfold-m5/.work/wt/c1-prefix-reuse/zig-out/native/bin/tensorfold-native",
+      "serve",
+      "/Users/josh/models/Inkling-2-Mini@ed40e7da625f",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "52295",
+      "--parallel",
+      "1",
+      "--prompt-cache-gib",
+      "2",
+      "--no-update-check",
+      "--no-drafts",
+      "--temperature",
+      "0",
+      "--context",
+      "32768"
+    ],
+    "base": "http://127.0.0.1:52295",
+    "binary": {
+      "path": "/Users/josh/repos/tensorfold-m5/.work/wt/c1-prefix-reuse/zig-out/native/bin/tensorfold-native",
+      "sha256": "e8fc29c8b19a9f8b488ba60c795a6186c93cace3a8e569e1ffb1e648e43446d2"
+    },
+    "exit": null,
+    "identity": {
+      "model_ids": [
+        "Inkling-2-Mini@ed40e7da625f"
+      ],
+      "models": [
+        {
+          "capabilities": {
+            "answer_limit": false,
+            "call_gates": false,
+            "context_fitted": true,
+            "decides": false,
+            "embeddings": false,
+            "greedy_only": true,
+            "logprobs": false,
+            "loop_guard": false,
+            "penalties": false,
+            "pictures": false,
+            "plain_only": false,
+            "prompt_cache": false,
+            "prompt_logprobs": false,
+            "readouts": false,
+            "reasoning": true,
+            "rerank": false,
+            "slide_conversations": false,
+            "speech": false,
+            "structures": false,
+            "text_generation": true,
+            "thinking_applicable": false,
+            "thinking_budget": true,
+            "thinking_switch": true,
+            "vision": true,
+            "warm_turns": false
+          },
+          "context_length": 32768,
+          "created": 1795356011,
+          "id": "Inkling-2-Mini@ed40e7da625f",
+          "input_types": [
+            "text",
+            "image"
+          ],
+          "max_model_len": 32768,
+          "object": "model",
+          "owned_by": "tensorfold",
+          "reasoning": {
+            "default_enabled": true,
+            "supported_efforts": [
+              "max",
+              "xhigh",
+              "high",
+              "medium",
+              "low",
+              "minimal"
+            ]
+          }
+        }
+      ]
+    },
+    "owned": true,
+    "port": 52295
+  },
+  "tasks": [
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "add-function",
+      "timed_out": false,
+      "turn_latency_ms": [
+        7373,
+        12429,
+        17661,
+        14975
+      ],
+      "turn_output_tokens": [
+        65,
+        208,
+        347,
+        215
+      ],
+      "turns": 4,
+      "wall_s": 55.63,
+      "workspace": "/Users/josh/repos/tensorfold-m5/.work/wt/c1-prefix-reuse/.work/pi/add-function"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "bugfix-dedupe",
+      "timed_out": false,
+      "turn_latency_ms": [
+        6645,
+        7064,
+        9791,
+        9398
+      ],
+      "turn_output_tokens": [
+        45,
+        71,
+        141,
+        66
+      ],
+      "turns": 4,
+      "wall_s": 36.0,
+      "workspace": "/Users/josh/repos/tensorfold-m5/.work/wt/c1-prefix-reuse/.work/pi/bugfix-dedupe"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "bugfix-intervals",
+      "timed_out": false,
+      "turn_latency_ms": [
+        7901,
+        12563,
+        12525
+      ],
+      "turn_output_tokens": [
+        48,
+        168,
+        129
+      ],
+      "turns": 3,
+      "wall_s": 35.27,
+      "workspace": "/Users/josh/repos/tensorfold-m5/.work/wt/c1-prefix-reuse/.work/pi/bugfix-intervals"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "bugfix-window",
+      "timed_out": false,
+      "turn_latency_ms": [
+        8223,
+        17774,
+        12752
+      ],
+      "turn_output_tokens": [
+        48,
+        320,
+        93
+      ],
+      "turns": 3,
+      "wall_s": 41.16,
+      "workspace": "/Users/josh/repos/tensorfold-m5/.work/wt/c1-prefix-reuse/.work/pi/bugfix-window"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "multifile-config",
+      "timed_out": false,
+      "turn_latency_ms": [
+        8660,
+        15082,
+        11710
+      ],
+      "turn_output_tokens": [
+        59,
+        234,
+        83
+      ],
+      "turns": 3,
+      "wall_s": 37.65,
+      "workspace": "/Users/josh/repos/tensorfold-m5/.work/wt/c1-prefix-reuse/.work/pi/multifile-config"
+    },
+    {
+      "checker": {
+        "detail": "dead_letter: 'backfill, ingest' != 'backfill,ingest'",
+        "pass": false
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "read-and-answer",
+      "timed_out": false,
+      "turn_latency_ms": [
+        8796,
+        21143,
+        13459,
+        16960
+      ],
+      "turn_output_tokens": [
+        41,
+        398,
+        79,
+        200
+      ],
+      "turns": 4,
+      "wall_s": 63.01,
+      "workspace": "/Users/josh/repos/tensorfold-m5/.work/wt/c1-prefix-reuse/.work/pi/read-and-answer"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "refactor-preserve",
+      "timed_out": false,
+      "turn_latency_ms": [
+        9313,
+        8887,
+        25294,
+        15937
+      ],
+      "turn_output_tokens": [
+        44,
+        33,
+        576,
+        139
+      ],
+      "turns": 4,
+      "wall_s": 63.54,
+      "workspace": "/Users/josh/repos/tensorfold-m5/.work/wt/c1-prefix-reuse/.work/pi/refactor-preserve"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "shell-inspect",
+      "timed_out": false,
+      "turn_latency_ms": [
+        8538,
+        8673,
+        9735,
+        10072
+      ],
+      "turn_output_tokens": [
+        48,
+        101,
+        100,
+        99
+      ],
+      "turns": 4,
+      "wall_s": 40.4,
+      "workspace": "/Users/josh/repos/tensorfold-m5/.work/wt/c1-prefix-reuse/.work/pi/shell-inspect"
+    }
+  ],
+  "totals": {
+    "checker_passed": 7,
+    "completed": 8,
+    "parse_errors": 0,
+    "server_log_parse_errors": 0,
+    "tasks": 8
+  }
+}

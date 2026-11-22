@@ -159,6 +159,13 @@ class ModelModes(unittest.TestCase):
         self.assertEqual(harness.default_serve_args("flint-int4"), [])
 
 
+class QualityHostConditions(unittest.TestCase):
+    def test_other_gpu_users_do_not_refuse_a_quality_run_but_memory_pressure_does(self):
+        gpu = "gpu-gate-ready: contended (check 1 of 1): other processes used 103.4% GPU time (limit 5); "
+        self.assertEqual(quality_run.quality_blockers([gpu]), [])
+        self.assertEqual(quality_run.quality_blockers([gpu, "memory pressure level 2"]), ["memory pressure level 2"])
+
+
 class PiServerLoss(unittest.TestCase):
     def test_a_server_that_exits_mid_run_fails_the_run_and_stops_it(self):
         import tempfile

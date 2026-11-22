@@ -237,7 +237,7 @@ pub const Scratch = struct {
         }
         s.ids = try device.buffer(16, mtl.ResourceOptions.shared);
         s.logits = try device.buffer(@max(c.text.unpadded_vocab * 4, 16), mtl.ResourceOptions.shared);
-        s.capture = try device.buffer(@max(c.slots() * trace_rows * h * 4, 16), mtl.ResourceOptions.shared);
+        s.capture = try device.buffer(@max(c.slots() * (trace_rows * h + c.text.topk) * 4, 16), mtl.ResourceOptions.shared);
         const attn_lib = try mtl.Library.fromSource(device, kernels.attention, mtl.CompileOptions.mlx());
         defer attn_lib.deinit();
         s.attn_split = try mtl.Pipeline.init(device, attn_lib, "i2_attn_split", false);

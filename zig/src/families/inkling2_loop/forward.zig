@@ -316,7 +316,7 @@ pub const Forward = struct {
             f.control(ctl, bo(s.mixout, 0), bo(got.buf, got.off + 3 * f.h * 4), bo(s.mixout, 0));
         }
         f.rms1(bo(s.mixout, 0), t(lay.mlp_norm), bo(s.xn, 0));
-        f.experts(lay, bo(s.xn, 0));
+        f.experts(lay, bo(s.xn, 0), slot);
         const slots = f.rings(slot);
         f.convolve(b(s.moe), b(s.aconv), lay.mlp_post, null, A, A, slots[3], f.h, 0, 0);
         f.copyN(b(s.ffnin), b(s.x), f.h);
@@ -453,7 +453,7 @@ pub const Forward = struct {
         f.enc.dispatchThreads(mtl.Size.of(f.heads * (extent + 1), 1, 1), mtl.Size.of(256, 1, 1));
     }
 
-    fn experts(f: Forward, lay: *const Layer, input: B) void {
+    fn experts(f: Forward, lay: *const Layer, input: B, slot: u32) void {
         const m = f.m;
         const c = &m.config;
         const s = f.s;
@@ -463,6 +463,7 @@ pub const Forward = struct {
         f.lin(lay.router, input, b(s.router));
         f.set(.route, Route{ .experts = E, .topk = K, .route_scale = c.text.route_scale }, &.{ b(s.router), t(lay.router_bias), A, b(s.picks), b(s.wts) });
         f.enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(32, 1, 1));
+        if (f.capture != null) f.copyN(b(s.picks), bo(s.capture, (c.slots() * st.trace_rows * f.h + slot * K) * 4), K);
         const codes = b(if (lay.mxfp8) m.t256 else m.t16);
         f.setExpert(lay.mxfp8, .gu, Moe{ .k = f.h, .n = inter, .rows = 2 * inter, .gate_cap = c.text.gate_cap, .up_cap = c.text.up_cap }, &.{
             input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.picks), b(s.order), A, b(s.act), codes,

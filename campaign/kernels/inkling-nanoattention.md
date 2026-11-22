@@ -1,5 +1,85 @@
 # Inkling 2 Mini: TensorFold and nanoattention
 
+## Shootout (2026-11-22)
+
+The shootout is in progress. The following state-size calculation is independent
+of the remaining timing and fidelity trials.
+
+The TensorFold raw-token runner was built from commit `86ca89451d882fd99bbfad7c7f9a86461e7c59e3`
+with Zig 0.17.1 and `-Dcpu=apple_m1`. Its SHA-256 is
+`540277e48f31197e1daa2be1d2d0b431fbab44c628556c27008576a1534a0f42`.
+Nanoattention is revision `6f782a8dace846e4e64a5a12cbdf5c0252166199`; its
+binary SHA-256 is `8340fc9c1fa944ad2d50ebcbd593597ae80c15a056c44801f5d652c9022d5152`.
+Both use the original `ed40e7da625f` checkpoint, greedy decoding and 512
+generated tokens. TensorFold allocates 32,768 tokens. Nanoattention allocates
+the prompt length plus 512 tokens. Each process performs one full warmup and
+one timed run. TTFT here starts at engine prefill and ends after its first
+argmax. It excludes loading and is not served TTFT. Decode is 511 committed
+tokens divided by decode wall time.
+
+The 1K and 4K prompts use the corresponding `campaign/prompts/dev` text,
+rendered with the checkpoint chat template and tokenizer. Inkling's actual
+token counts differ from the nominal sizes. Each 16K input takes the first
+16,380 and last four token IDs of the corresponding rendered 32K dev prompt,
+preserving its template suffix. Both engines receive the same resulting IDs.
+The trial sequence alternates engines and runs 16K cells last. Each command
+runs through `heavy.py` with `INKLING_LOAD_LIMIT_GB=26`, a 60/60 GPU admission
+gate, and the performance gate before and after. Results are busy-host. All
+initial attempts lacked in-trial GPU contention accounting and were discarded.
+The 32K-capacity nanoattention attempts also reached memory-pressure level 2,
+so the nanoattention allocation was reduced. The
+[discarded attempts](../comparators/nanoattention/runs/shootout-20261122.jsonl)
+remain available for inspection.
+
+The run uses the `shootout.py` adapter in `campaign/comparators/nanoattention`.
+Its records contain the complete engine commands, gates, accepted timings,
+predictions and charged-memory receipts. The setup commands from the worktree
+root were:
+
+```sh
+mkdir -p .work/tmp/native-build .work/tmp/zig-cache
+PATH=/opt/homebrew/bin:$PATH ZIG_GLOBAL_CACHE_DIR=/Users/josh/repos/tensorfold-m5/.work/zig-global-cache TMPDIR="$PWD/.work/tmp" zig build tf-inkling2-loop-run -Dcpu=apple_m1 --prefix "$PWD/.work/tmp/native-build" --cache-dir "$PWD/.work/tmp/zig-cache" --verbose > .work/tmp/native-build/build.log 2>&1
+PATH=/opt/homebrew/bin:$PATH ZIG_GLOBAL_CACHE_DIR=/Users/josh/repos/tensorfold-m5/.work/zig-global-cache TMPDIR="$PWD/.work/tmp" python3 -c 'import importlib.util, pathlib, subprocess; p=pathlib.Path("campaign/comparators/mlx-vlm/build_native.py").resolve(); s=importlib.util.spec_from_file_location("builder",p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); cmd=m.native_command(pathlib.Path(".work/tmp/native-build/build.log").read_text(), pathlib.Path(".work/tmp/native-build/native-compare").resolve()); print("building raw-token comparator", flush=True); subprocess.run(cmd,check=True)'
+PYTHONDONTWRITEBYTECODE=1 /Users/josh/repos/tensorfold-m5/.work/venv-mlx-lm/bin/python campaign/comparators/nanoattention/shootout.py prepare
+PATH=/opt/homebrew/bin:$PATH PYTHONDONTWRITEBYTECODE=1 /Users/josh/repos/tensorfold-m5/.work/venv-mlx-lm/bin/python -u campaign/comparators/nanoattention/shootout.py timings > .work/tmp/n5-shootout/gated-timings.log 2>&1
+```
+
+The two build commands and prompt preparation exited 0. The oracle verifier
+also exited 0 and reported 16 saved histories, including two longer than the
+sliding window:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 /Users/josh/repos/tensorfold-m5/.work/venv-ref/bin/python campaign/parity/inkling2-mini/oracle.py --histories campaign/parity/inkling2-mini/histories.json --dir /Users/josh/repos/tensorfold-m5/.work/parity/inkling2-mini/ref
+```
+
+The comparator tests exited 0 with 16 tests and three dependency-related
+skips. The skipped template and numerical regressions passed separately in
+the environment with Jinja, tokenizers and NumPy:
+
+```sh
+PATH=/opt/homebrew/bin:$PATH PYTHONDONTWRITEBYTECODE=1 UV_PROJECT_ENVIRONMENT="$PWD/.work/tmp/n5-uv-venv" make -C campaign nanoattention-tests
+PYTHONDONTWRITEBYTECODE=1 /Users/josh/repos/tensorfold-m5/.work/venv-mlx-lm/bin/python -m unittest discover -s campaign/comparators/nanoattention -p test_prompt_ids.py
+PYTHONDONTWRITEBYTECODE=1 /Users/josh/repos/tensorfold-m5/.work/venv-mlx-lm/bin/python -m unittest discover -s campaign/comparators/nanoattention -p test_shootout_fidelity.py
+```
+
+Both engines allocate **65,536 bytes per additional context token** for global
+key and value state. The checkpoint has eight global attention visits after
+expanding the loop. Each visit stores keys and values for eight 128-element
+heads as float32: `8 * 2 * 8 * 128 * 4 = 65,536`. TensorFold's
+`zig/src/families/inkling2_loop/state.zig:38-71` allocates full-capacity rows
+for global slots and fixed-window rows for local slots. Nanoattention's pinned
+`src/mega/inkling2_loop.zig:59-74,372-373,421-423`, `src/mega/ir.zig:39-45`,
+`src/mega/exec.zig:137-147`, and `src/metal.zig:154-156` allocate the same
+float32 global sequence state. Convolution and local-window state are fixed
+once the capacity exceeds the local window. Scratch and allocation overhead
+are outside this per-token figure.
+
+At 128K and 256K tokens, global KV alone would occupy 8 GiB and 16 GiB,
+respectively. Relative to TensorFold's 32K-capacity allocation, those add
+6 GiB and 14 GiB. These are allocation projections, not measured long-context
+peak memory; they assume other allocations stay fixed and do not lift the
+campaign's 32,768-token cap.
+
 Nanoattention rounds normalized activations and expert inputs to BF16 in both
 its reference and optimized configurations. Its pinned
 `src/mega/inkling2_loop.zig:343` and `:482` establish these operations.

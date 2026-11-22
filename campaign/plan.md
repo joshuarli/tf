@@ -67,6 +67,15 @@
   5. Peak memory within +0.5 GB.
   Otherwise revert and record. It runs after V3 merges, because it edits V3's files.
 - **M1 result: reverted** (`campaign/kernels/inkling-bf16-prefill.md`). Criterion 2 fails: confident top-1 is 96.37%, against the required 99.5%. Criterion 3 fails: structured greedy ids diverge at token 56, at margin 0.21. The code is parked on `lane/m1-bf16-prefill`. No mixed-precision configuration remains in this campaign.
+- **Owner steering 4 (2026-11-22): the prefill target is at least 1,000 tok/s on this host.** The owner approved a second named precision experiment, M2 "split-bf16 prefill", gated first by a microbenchmark. The criteria below were declared before any result.
+  - **Gate G0 (microbenchmark, `campaign/kernels/split-bf16-tensorops.md`).** Run at Inkling expert shapes: K 2304 and 1152, N 2304, 8/32/64/128 routed rows to one expert, NVFP4 and MXFP8 weights converted exactly to bf16. Arms: the current f32 simdgroup expert kernel, float×bf16 TensorOps, bf16×bf16→f32 TensorOps with one term, and the same with 2 and 3 split-activation terms (x = hi + mid + lo, each bf16). Record median GPU time and error against the fp64 oracle. Continue to M2 only if the 3-term split, or the 2-term split if its error fits the f32-vs-f32 bounds, beats the float×bf16 TensorOps arm by at least ×1.5 at 32 and 64 rows.
+  - **M2 keep criteria, all required.** The split stays within the f32 contract, so it can become the default rather than an opt-in:
+    1. Prefill parity at chunk 512 under the f32-vs-f32 contract, with policy string `f32-activations+split-bf16-prefill-512`, gives the same classification: 14 within contract, the same 2 explained divergences, 0 unexplained.
+    2. Greedy ids are identical to the f32 path for the first 64 tokens on the three 512-token bench prompts.
+    3. Paired prefill at 1K and 4K, control-candidate-control, is at least ×1.20.
+    4. Peak memory is within +0.5 GB.
+    5. Pi checkers are no worse than 7/8.
+  - If G0 fails, record the measured ceiling. Then 1,000 tok/s needs a looser named contract, which is the owner's decision, and the f32 path continues with ordinary candidates only.
 - **DS1 result: native drafter exact, DSpark NO-GO** (`campaign/kernels/inkling-dspark.md`, "Verdict"). Against the TF32-off MLX fixture, all greedy proposals match on 65 blocks, with logit error 1.1e-4. The drafter takes 16.7 ms at width 4 and 29.7 ms at width 8. Width 4 then projects 40.5, 35.7 and 39.4 tok/s, which beats neither ar nor served copy drafts. DS2 is not started. The code is parked on `lane/ds1-dspark-drafter`. Revisit when the four-row verify round falls to 45 ms or less.
 - **Parked:** `lane/ds1-dspark-drafter` (NO-GO), `lane/m1-bf16-prefill` (reverted), `lane/s1-skip-logits` (race), `lane/p6-prefill-gemm2`, `lane/e2-prefill-experts2`, `lane/e3-expert-tensorops` (see Prefill), `lane/d2-depth-norm` (slower), `lane/c0-ground` (superseded), `.work/wt/k2-inkling-experts` (untracked scratch).
 

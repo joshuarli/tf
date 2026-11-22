@@ -29,7 +29,11 @@ test "rollback preserves local window and convolution rings" {
     }
     const draft = [_]u32{ 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116 };
     var best: [draft.len]u32 = undefined;
+    var first: [draft.len]u32 = undefined;
+    var baseline = try Verification.begin(m, &sa, &a, &draft, &first);
+    try baseline.reset();
     var v = try Verification.begin(m, &sa, &a, &draft, &best);
+    try std.testing.expectEqualSlices(u32, &first, &best);
     try v.finish(&draft, 2);
     try prefill.prefillWant(m, &sb, &b, draft[0..2], .all);
     const vocab: usize = c.text.unpadded_vocab;
@@ -54,4 +58,5 @@ test "rollback preserves local window and convolution rings" {
     }
     std.debug.print("verify rollback max diff {e}, max abs {e}\n", .{ max_diff, max_value });
     try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(y), std.mem.sliceAsBytes(x));
+    try baseline.finish(&draft, 0);
 }

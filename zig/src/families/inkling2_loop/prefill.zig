@@ -842,6 +842,7 @@ pub fn prefillWant(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []co
     if (profiling) try rounds.next(&c, "inkling2-head");
     c.mixBlocks(b(s.x), m.weights.output_query, bo(s.mixout, 0));
     c.rmsW(.{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, t(m.weights.norm), b(s.n0), 1, 0, c.h, text.eps);
+    if (profiling) try rounds.next(&c, "inkling2-vocabulary");
     switch (want) {
         .none => {},
         .last => c.headModelLast(m.weights.unembed, bo(s.n0, (@as(usize, c.n) - 1) * c.h * 4), b(s.logits), text.unpadded_vocab),

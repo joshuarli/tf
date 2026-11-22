@@ -171,6 +171,10 @@ reported 120 tok/s it is about 26.5 times higher.
 
 ## Routed expert occupancy
 
+Open item: Inkling2 Loop kernels are not yet registered with the core kernel
+contract runner. Family-local checks do not replace that registration or its
+non-finite, repeatability, shape, accumulator and launch-limit gates.
+
 One 128-row chunk from each real code prompt: base 1024 and base 4992,
 respectively. Each of 48 execution slots routes 1,024 picks to 128 experts.
 The histogram counts expert/slot cases; it does not weight by routed rows.
@@ -451,3 +455,47 @@ Logits are byte-identical to the base runner.
 Per-round ratio against the mean of its two base runs: 1.019, 1.067, 1.056, 1.119, 1.127, 1.125; geometric
 mean 1.085 (95% t-interval 1.038-1.133). Every round favours P4. Verdict: keep. Script:
 `.work/tmp/prefill_ab.py BASE CAND IDS PAIRS` (scratch; the protocol above reproduces it).
+
+## Routed expert matrix experiment
+
+NVFP4 experts with at least 16 routed rows and MXFP8 experts with at least 8
+use a 32-row, 64-column float32 matrix product. Smaller groups retain the
+grouped row kernel. Both NVFP4 and MXFP8
+weights are decoded to float32; NVFP4's per-expert global scale is applied
+before the gate activation or down output. Selection reads the GPU's expert
+offsets and requires no host readback. A diagnostic interleaved comparison at
+8, 16 and 32 rows informed the two thresholds; the host was busy, so this is
+not a qualified performance gate and the crossover needs quiet-host validation.
+For 16 experts at production projection widths, five interleaved samples per
+path gave median grouped versus matrix GPU spans of 1.691 versus 1.368 ms for
+NVFP4 gate/up at 16 rows and 0.892 versus 0.504 ms for NVFP4 down. At eight
+rows, MXFP8 gate/up measured 1.168 versus 0.886 ms and down 0.617 versus
+0.428 ms. A separate 64-expert, 128-output diagnostic favored the NVFP4
+grouped path at eight rows. These are synthetic, busy-host observations, not
+proof of the best threshold on real routing distributions.
+
+A split timeline at base 1024, on the same 1,334-token prompt as the
+P3 sample, attributed 127.651 ms to `i2p_gu_grouped`, 99.114 ms to
+`i2p_down_grouped`, and 129.594 ms to `i2p_expert_matrix`, a total of
+356.359 ms across the three. P3 attributed 325.993 ms and 248.569 ms to
+its two grouped kernels, a total of 574.562 ms. These are separate single
+profiles with timestamp overhead and possible contention; they do not establish
+an end-to-end throughput result or a threshold crossover. The matrix dispatches
+combine gate/up and down in the timeline. The candidate profile used:
+
+```sh
+TF_METAL4_TIMELINE=1 TF_INKLING_PREFILL_PROFILE_BASE=0 python3 campaign/heavy.py -- \
+  "$WORK/tmp/e1-final-candidate" MODEL "$WORK/tmp/p3-1024.json" prefill 128 "$WORK/tmp/e1-final-profile.bin" 2>"$WORK/tmp/e1-final-profile.log"
+python3 campaign/kernels/inkling_profile.py timeline --split --log "$WORK/tmp/e1-final-profile.log"
+```
+
+The family test compares both projections and formats against host FP64 at
+occupancies 1, 3, 8, 15, 16, 32 and 128; the largest tested shapes have K 2304 for
+gate/up and 1152 for down. On the tested M5 Max the command exited 0. Compared
+with the P4 candidate's saved full-history chunk-128 logits, all 1,336
+harbour rows and 1,178 cells_code rows retained the same argmax. Their
+largest absolute differences against P4 were 0.004470 and 0.000928,
+respectively; this comparison is distinct from the reference parity gate.
+The parity target reported 14 histories within contract, two explained
+divergences and zero unexplained; it exited 2 because its overall qualification
+requires all 16 histories within contract.

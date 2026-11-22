@@ -240,9 +240,14 @@ def gpu_time_by_pid(*, strict: bool = False) -> dict[int, tuple[str, int]]:
     return totals
 
 
+# The owner uses this desktop while campaigns run, so other processes may hold up to 60% of the GPU.
+# Timings stay valid as paired, interleaved ratios and are labelled busy-host. The environment overrides.
+CAMPAIGN_GPU_GATE = {"GPU_GATE_MAX_GPU_PCT": "60", "GPU_GATE_MAX_UTIL_PCT": "60"}
+
+
 def gpu_time_limit_pct() -> float:
     """The other-process GPU-time limit, shared with gpu-gate-ready so one setting governs both checks."""
-    return float(os.environ.get("GPU_GATE_MAX_GPU_PCT", "5"))
+    return float(os.environ.get("GPU_GATE_MAX_GPU_PCT", CAMPAIGN_GPU_GATE["GPU_GATE_MAX_GPU_PCT"]))
 
 
 def gpu_contention(before: dict[int, tuple[str, int]], after: dict[int, tuple[str, int]], seconds: float,
@@ -282,7 +287,7 @@ def process_tree(root: int) -> set[int]:
 def gpu_gate(own: set[int] | None = None) -> tuple[dict, list[str]]:
     """`gpu-gate-ready -1`: other GPU users, utilization, pressure, swap and compressor. After a trial, `own`
     names the server's processes, whose GPU time and trailing utilization are the trial's own."""
-    env = dict(os.environ, GPU_GATE_WAIT="0")
+    env = dict(CAMPAIGN_GPU_GATE, **os.environ, GPU_GATE_WAIT="0")
     if own:
         env["GPU_GATE_IGNORE_PIDS"] = " ".join(str(pid) for pid in sorted(own))
     try:

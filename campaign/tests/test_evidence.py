@@ -1,6 +1,7 @@
 """CPU regression fixtures for the campaign's comparison machinery; each names the defect it pins."""
 
 import importlib.util
+import os
 import json
 import subprocess
 import sys
@@ -107,7 +108,7 @@ class GpuContention(unittest.TestCase):
     def test_other_gpu_time_over_the_limit_invalidates_the_trial(self):
         before = {10: ("server", 0), 20: ("WindowServer", 1_000)}
         after = {10: ("server", 9_000_000_000), 20: ("WindowServer", 1_000_000_000)}
-        users, reasons = harness.gpu_contention(before, after, 10.0, own={10})
+        users, reasons = harness.gpu_contention(before, after, 10.0, own={10}, limit_pct=5)
         self.assertEqual([u["pid"] for u in users], [20])
         self.assertEqual(len(reasons), 1)
         self.assertIn("10.0% GPU time", reasons[0])
@@ -125,6 +126,16 @@ class GpuContention(unittest.TestCase):
             self.assertEqual(harness.gpu_contention(before, after, 10.0, own={10})[1], [])
         with mock.patch.dict("os.environ", {"GPU_GATE_MAX_GPU_PCT": "5"}):
             self.assertEqual(len(harness.gpu_contention(before, after, 10.0, own={10})[1]), 1)
+
+    def test_the_campaign_gate_tolerates_a_desktop_in_use(self):
+        from unittest import mock
+        before = {10: ("server", 0), 20: ("WindowServer", 0)}
+        busy = {10: ("server", 9_000_000_000), 20: ("WindowServer", 5_000_000_000)}
+        saturated = {10: ("server", 9_000_000_000), 20: ("WindowServer", 7_000_000_000)}
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GPU_GATE_")}
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertEqual(harness.gpu_contention(before, busy, 10.0, own={10})[1], [])
+            self.assertEqual(len(harness.gpu_contention(before, saturated, 10.0, own={10})[1]), 1)
 
 
 class PromptLengthPins(unittest.TestCase):

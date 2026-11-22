@@ -48,6 +48,13 @@ tokens with that reply budget. Quality cases reserve 8,192 reply tokens; oversiz
 exclusions and the original suite remains incomplete. Pi uses the same 32K window and 8K output budget.
 Historical receipts keep their original context identity and do not pair with the new capped protocol.
 
+### Colab experiments
+
+`make -C campaign colab-probe` checks Colab readiness without allocating. `colab-smoke` and `colab-bench` run
+budgeted CPU, T4 or L4 experiments through the official `colab` CLI and always release the runtime. They are
+for numerical questions that do not depend on Metal; their timings are never Metal evidence. See
+[colab/README.md](colab/README.md).
+
 ### Nanoattention on Inkling
 
 The pinned nanoattention `main` now includes Inkling. Set up and compare it on the M5 with:

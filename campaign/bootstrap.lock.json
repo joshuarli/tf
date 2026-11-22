@@ -10,6 +10,16 @@
       "role": "toolchain",
       "license": "MIT",
       "purpose": "Pinned Zig 0.17.1 macOS aarch64 tarball; installed Zig must match this version"
+    },
+    {
+      "name": "zig-0.17.1-x86_64-linux",
+      "version": "0.17.1",
+      "sha256": "3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a",
+      "url": "https://ziglang.org/download/0.17.1/zig-x86_64-linux-0.17.1.tar.xz",
+      "size": 57411036,
+      "role": "colab-toolchain",
+      "license": "MIT",
+      "purpose": "Pinned Zig 0.17.1 Linux x86_64 tarball for Colab runtimes; matches ziglang.org's index.json"
     }
   ]
 }

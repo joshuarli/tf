@@ -398,3 +398,39 @@ listed. Earlier control and candidate samples were discarded because the lock
 was not held during both checks and another job could run in the gap. The
 candidate-specific state and logit checks above therefore do not verify the
 current reverted kernel; no measured improvement is claimed.
+
+## Dense projection tiling
+
+The dense prefill GEMM stages 32 activation rows and 32 K elements per
+threadgroup, with four float32 8-by-8 accumulators per simdgroup. Weights
+remain bf16 in storage and are converted directly to float32; activation and
+accumulation precision stay float32. The output tile is 32 by 64, including
+bounds checks for partial rows and columns.
+
+On the M5 Max, one split Metal 4 timeline sample of the 128-row chunk at base
+1024 attributed 253.100 ms to the original `i2p_gemm` and 153.871 ms to the
+tiled kernel. The respective sums of reported spans were 1,142.250 ms and
+1,045.760 ms. These are single profiles with timestamp overhead and possible
+host contention, not paired throughput measurements. Both traces have 49
+reported GEMM entries. The candidate used the same 1,334 token input as the P3
+profile and ran with `TF_METAL4_TIMELINE=1` and
+`TF_INKLING_PREFILL_PROFILE_BASE=0`; splitting starts at zero so each named
+round receives eight warmups before base 1024. With `WORK` set to the main
+checkout’s `.work` directory and `MODEL` to the checkpoint, the candidate
+command was:
+
+```sh
+TF_METAL4_TIMELINE=1 TF_INKLING_PREFILL_PROFILE_BASE=0 python3 campaign/heavy.py -- \
+  "$WORK/tmp/p4-candidate" MODEL "$WORK/tmp/p3-1024.json" prefill 128 "$WORK/tmp/p4-profile.bin"
+```
+
+The direct GPU comparison against the original GEMM covered every listed
+projection shape at 1, 7 and 128 rows, including strided inputs, and returned
+zero maximum difference for each case. Full-history chunk-128 logits for
+harbour and cells_code were byte-identical to the base runner. The candidate
+still requires a noise-controlled end-to-end timing comparison.
+The parity make target reported 14 histories within the f32-vs-f32 contract,
+2 explained long-history divergences, and 0 unexplained. It exited 2 because
+its overall qualification requires all 16 histories within contract. The
+first comparison's harbour diagnostic was interrupted by critical host memory
+pressure; a retry completed that diagnostic and reproduced the same counts.

@@ -358,7 +358,16 @@ family test passed with duplicate selections and byte-identical rollback continu
 | 8 | 0.588 | 97.390 | 2.643 | 1.197 | 61.215 | 0.017 | 163.107 (163.006–163.326) | 146.447 (145.845–146.797) |
 | 16 | 0.852 | 151.426 | 5.302 | 1.461 | 97.373 | 0.021 | 256.169 (256.062–256.650) | 244.775 (244.096–245.071) |
 
-The split profile remains incomplete because the four-row run failed its post-check.
+The split profile used the same five-round timeline and admission method. Two attempts at
+four rows failed post-checks and were discarded. Dense includes the separately listed head.
+
+| Rows | Summed GPU span ms | Dense ms | Expert gate/up and down ms | Attention ms | Route selection ms | Vocabulary head ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 41.987 | 11.368 | 4.687 | 11.238 | 4.892 | 1.584 |
+| 2 | 46.620 | 12.396 | 8.075 | 11.385 | 4.893 | 1.596 |
+| 4 | 64.049 | 15.681 | 19.563 | 12.620 | 4.908 | 1.721 |
+| 8 | 101.900 | 25.485 | 39.395 | 18.436 | 4.900 | 3.091 |
+| 16 | 155.485 | 53.699 | 60.462 | 18.226 | 4.896 | 2.175 |
 
 The family test passed with `TF_INKLING2_LOOP_DIR` set to the checkpoint and
 `python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1`. It compared

@@ -359,3 +359,25 @@ Rows per expert by execution slot, base 4992; each entry counts experts in that 
 | 45 | 47 | 13 | 8 | 20 | 14 | 20 | 4 | 2 |
 | 46 | 28 | 26 | 24 | 13 | 16 | 13 | 6 | 2 |
 | 47 | 27 | 26 | 15 | 16 | 23 | 13 | 8 | 0 |
+
+The profile commands used the primary checkout's locked runner, with
+`PATH=/opt/homebrew/bin:$PATH` to select Python 3.15 and `TMPDIR` set to
+`/Users/josh/repos/tensorfold-m5/.work/tmp`. After building
+`zig build tf-inkling2-loop-run -Dcpu=apple_m1`, tokenize each prompt with
+`python3 /Users/josh/repos/tensorfold-m5/campaign/heavy.py --
+./zig-out/bin/tf-inkling2-loop-run MODEL/tokenizer.json PROMPT tokenize IDS`.
+For each row set `TF_METAL4_TIMELINE=1`, `TF_INKLING_PREFILL_PROFILE_BASE`
+and `TF_INKLING_PREFILL_OCCUPANCY_BASE` as above, then run
+`python3 /Users/josh/repos/tensorfold-m5/campaign/heavy.py --
+./zig-out/bin/tf-inkling2-loop-run MODEL IDS prefill 128 OUTPUT 2>LOG`.
+
+The two-row gate/up candidate preserves float32 inputs and accumulation; it
+shares decoded weight values across a pair of rows and computes an unused
+second row when the occupancy is odd. The exact router is unchanged. With
+`zig build test-inkling2-loop -Dcpu=apple_m1` under `heavy.py`, the command
+exited 0 and the chunked state test's worst value difference was 1.1958182e-5
+against its 1.5e-5 bound. The candidate's full-history chunk-128 logits passed
+`load_contract("f32-vs-f32")` and `check` for all 14 short histories. The
+candidate and control full-history outputs were bit-identical for both
+`harbour` and `cells_code`; their documented reference divergences therefore
+did not worsen. The gated throughput comparison is pending.

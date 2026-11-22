@@ -85,6 +85,12 @@ pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.B
     dense_run.has_side_effects = true;
     step.dependOn(&dense_run.step);
     test_step.dependOn(&dense_run.step);
+    const depth = b.createModule(.{ .root_source_file = b.path("zig/src/families/inkling2_loop/depth_test.zig"), .target = target, .optimize = .Debug, .link_libc = true });
+    depth.addImport("metal", metal);
+    const depth_run = b.addRunArtifact(b.addTest(.{ .root_module = depth }));
+    depth_run.has_side_effects = true;
+    step.dependOn(&depth_run.step);
+    test_step.dependOn(&depth_run.step);
 }
 
 /// `tf-inkling2-loop-run`: every position's float32 logits, teacher-forced, for the campaign's parity check.

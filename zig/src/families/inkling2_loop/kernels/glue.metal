@@ -5,7 +5,7 @@ using namespace metal;
 
 struct i2_mv_args { uint m, k; float cap; };
 struct i2_rms_args { uint width, blocks; float eps; };
-struct i2_mix_args { uint width, depth, k; float scale; };
+struct i2_mix_args { uint width, depth, k; float scale; uint indices[5]; };
 struct i2_clip_args { uint heads, width; float threshold; };
 struct i2_conv_args { uint channels, heads, ring, pos, layout; float norm; };
 struct i2_attn_args { uint heads, kv, dim, rel, extent, window, pos, tau; float scale, floor, alpha; };
@@ -89,14 +89,14 @@ inline float i2_bf(const device bfloat* p, size_t i) { return float(p[i]); }
 
 // The depth mix: O[k] = sum_j softmax_j(S[j] . Q[k] * scale) * S[j] over `a.depth` states, each `a.width` wide.
 [[kernel]] void i2_mix(const device float* S [[buffer(0)]], const device float* Q [[buffer(1)]],
-    constant i2_mix_args& a [[buffer(2)]], device float* O [[buffer(3)]],
+    constant i2_mix_args& a [[buffer(2)]], device float* O [[buffer(3)]], const device float* C [[buffer(4)]],
     uint t [[thread_position_in_threadgroup]], uint nth [[threads_per_threadgroup]]) {
   threadgroup float part[32];
   threadgroup float w[4][5];
   for (uint k = 0; k < a.k; ++k) {
     for (uint j = 0; j < a.depth; ++j) {
       float sum = 0.0f;
-      for (uint i = t; i < a.width; i += nth) sum = fma(S[j * a.width + i], Q[k * a.width + i], sum);
+      for (uint i = t; i < a.width; i += nth) sum = fma((j + 1u == a.depth ? C[i] : S[a.indices[j] * a.width + i]), Q[k * a.width + i], sum);
       sum = simd_sum(sum);
       if (t % 32u == 0u) part[t / 32u] = sum;
       threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -115,7 +115,7 @@ inline float i2_bf(const device bfloat* p, size_t i) { return float(p[i]); }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     for (uint i = t; i < a.width; i += nth) {
       float sum = 0.0f;
-      for (uint j = 0; j < a.depth; ++j) sum = fma(w[k][j], S[j * a.width + i], sum);
+      for (uint j = 0; j < a.depth; ++j) sum = fma(w[k][j], (j + 1u == a.depth ? C[i] : S[a.indices[j] * a.width + i]), sum);
       O[k * a.width + i] = sum;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -125,7 +125,7 @@ inline float i2_bf(const device bfloat* p, size_t i) { return float(p[i]); }
 // The same with the four query rows in four buffers: Q, K, V, FFN.
 [[kernel]] void i2_mix4(const device float* S [[buffer(0)]], const device float* Q [[buffer(1)]],
     const device float* K [[buffer(2)]], const device float* V [[buffer(3)]], const device float* F [[buffer(4)]],
-    constant i2_mix_args& a [[buffer(5)]], device float* O [[buffer(6)]],
+    constant i2_mix_args& a [[buffer(5)]], device float* O [[buffer(6)]], const device float* C [[buffer(7)]],
     uint t [[thread_position_in_threadgroup]], uint nth [[threads_per_threadgroup]]) {
   threadgroup float part[32];
   threadgroup float w[4][5];
@@ -133,7 +133,7 @@ inline float i2_bf(const device bfloat* p, size_t i) { return float(p[i]); }
     const device float* q = k == 0 ? Q : k == 1 ? K : k == 2 ? V : F;
     for (uint j = 0; j < a.depth; ++j) {
       float sum = 0.0f;
-      for (uint i = t; i < a.width; i += nth) sum = fma(S[j * a.width + i], q[i], sum);
+      for (uint i = t; i < a.width; i += nth) sum = fma((j + 1u == a.depth ? C[i] : S[a.indices[j] * a.width + i]), q[i], sum);
       sum = simd_sum(sum);
       if (t % 32u == 0u) part[t / 32u] = sum;
       threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -152,7 +152,7 @@ inline float i2_bf(const device bfloat* p, size_t i) { return float(p[i]); }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     for (uint i = t; i < a.width; i += nth) {
       float sum = 0.0f;
-      for (uint j = 0; j < a.depth; ++j) sum = fma(w[k][j], S[j * a.width + i], sum);
+      for (uint j = 0; j < a.depth; ++j) sum = fma(w[k][j], (j + 1u == a.depth ? C[i] : S[a.indices[j] * a.width + i]), sum);
       O[k * a.width + i] = sum;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);

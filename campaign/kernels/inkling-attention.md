@@ -88,3 +88,11 @@ error 1.4305115e-6. The full-model 1,139-row teacher-forced logits comparison fa
 contract: maximum difference 3.582090139389038e-4, with zero argmax mismatches. The candidate was rejected
 and its kernel and partition changes reverted. End-to-end benchmarks and before/after timeline profiles were
 not run because the correctness gate failed; no speed claim is made.
+
+### Corrected correctness gate
+
+The owner corrected the full-model candidate-versus-base limit to 1e-3. Under that limit the same 1,139-row
+comparison passes: maximum absolute error 3.582090139389038e-4, with identical argmaxes on all rows. The
+candidate was restored. The campaign FP32 reference parity command exited 2 with its expected classification:
+14 histories within contract, two explained divergences and zero unexplained. The timing verdict remains
+pending until the GPU gate permits the interleaved measurements.

@@ -615,7 +615,7 @@ const Chunk = struct {
             c.copyN(t(lay.router_bias), bo(routes, (start + @as(usize, c.n) * (K + E)) * 4), E);
         }
         const slots: u32 = c.n * K;
-        if (c.n <= 2) {
+        if (c.n <= 8) {
             const codes = b(if (lay.mxfp8) m.t256 else m.t16);
             const gu = if (lay.mxfp8) s.pipes.gu_mx else s.pipes.gu_nv;
             const down = if (lay.mxfp8) s.pipes.down_mx else s.pipes.down_nv;

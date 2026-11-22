@@ -59,7 +59,7 @@ The chat samples exhausted 256 tokens while thinking, so they are not completed 
 Run from the repository root with the checkpoint installed and the native binary built using Zig 0.17.1.
 
 ```sh
-PATH=/opt/homebrew/bin:$PATH ZIG_GLOBAL_CACHE_DIR=/Users/josh/repos/tensorfold-m5/.work/zig-global-cache TMPDIR=$PWD/.work/tmp zig build native -Dcpu=apple_m1
+PATH=/opt/homebrew/bin:$PATH ZIG_GLOBAL_CACHE_DIR=$PWD/.work/zig-global-cache TMPDIR=$PWD/.work/tmp zig build native -Dcpu=apple_m1
 python3 -m unittest discover -s campaign/fx -p 'test_*.py'
 GPU_GATE_MAX_GPU_PCT=60 GPU_GATE_MAX_UTIL_PCT=60 gpu-gate-ready -1 && perf-gate-ready && sh campaign/fx/sweep-subagents.sh
 ```
@@ -91,7 +91,7 @@ mkdir -p .work/tmp/fx-subagents-repo .work/tmp/fx-subagents-home-2
 git -C .work/tmp/fx-subagents-repo init -q
 printf '%s\n' 'def clamp(value, low, high):' '    return min(high, max(low, value))' > .work/tmp/fx-subagents-repo/range_utils.py
 : > .work/tmp/fx-subagents-home-2/AGENTS.md
-GPU_GATE_MAX_GPU_PCT=60 GPU_GATE_MAX_UTIL_PCT=60 gpu-gate-ready -1 && perf-gate-ready && PATH=/opt/homebrew/bin:$PATH python3 /Users/josh/repos/tensorfold-m5/campaign/heavy.py -- python3 campaign/fx/fx-subagents-run.py
+GPU_GATE_MAX_GPU_PCT=60 GPU_GATE_MAX_UTIL_PCT=60 gpu-gate-ready -1 && perf-gate-ready && PATH=/opt/homebrew/bin:$PATH python3 campaign/heavy.py -- python3 campaign/fx/fx-subagents-run.py
 perf-gate-ready -1
 ```
 

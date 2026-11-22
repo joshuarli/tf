@@ -1,13 +1,13 @@
 #!/bin/sh
 set -eu
 export PATH=/opt/homebrew/bin:$PATH
-export ZIG_GLOBAL_CACHE_DIR=/Users/josh/repos/tensorfold-m5/.work/zig-global-cache
+export ZIG_GLOBAL_CACHE_DIR=$PWD/.work/zig-global-cache
 export TMPDIR="$PWD/.work/tmp"
 export INKLING_LOAD_LIMIT_GB=26 INKLING_COPY_DRAFTS=1 TENSORFOLD_NO_UPDATE_CHECK=1
 base="$PWD/.work/tmp/subagents"
 mkdir -p "$base"
 port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
-python3 /Users/josh/repos/tensorfold-m5/campaign/heavy.py -- sh -c 'python3 -c "import sys; sys.path.insert(0, \"campaign\"); import heavy; print(heavy.wired_bytes())" > "$1"; shift; exec "$@"' sh "$base/wired" "$PWD/zig-out/native/bin/tensorfold-native" serve "$HOME/models/Inkling-2-Mini@ed40e7da625f" --host 127.0.0.1 --port "$port" --parallel 1 --prompt-cache-gib 2 --no-update-check --context 32768 --temperature 0 >"$base/server.log" 2>&1 &
+python3 campaign/heavy.py -- sh -c 'python3 -c "import sys; sys.path.insert(0, \"campaign\"); import heavy; print(heavy.wired_bytes())" > "$1"; shift; exec "$@"' sh "$base/wired" "$PWD/zig-out/native/bin/tensorfold-native" serve "$HOME/models/Inkling-2-Mini@ed40e7da625f" --host 127.0.0.1 --port "$port" --parallel 1 --prompt-cache-gib 2 --no-update-check --context 32768 --temperature 0 >"$base/server.log" 2>&1 &
 server=$!
 stop() { kill -TERM "$server" 2>/dev/null || true; wait "$server" || true; }
 trap stop EXIT HUP INT TERM

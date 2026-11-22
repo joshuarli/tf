@@ -29,6 +29,17 @@ pub fn steps(b: *std.Build, target: std.Build.ResolvedTarget, test_step: *std.Bu
     check.dependOn(&run_tests.step);
     test_step.dependOn(&run_tests.step);
 
+    const split_exe = b.addExecutable(.{ .name = "tf-split-bf16-bench", .root_module = b.createModule(.{
+        .root_source_file = b.path(here ++ "split_bench.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "metal", .module = metal }},
+    }) });
+    const split_install = b.addInstallArtifact(split_exe, .{});
+    const split_bench = b.step("tf-split-bf16-bench", "Build the split-bf16 TensorOps experiment");
+    split_bench.dependOn(&split_install.step);
+
     const exe = b.addExecutable(.{ .name = "tf-fp4-bench", .root_module = b.createModule(.{
         .root_source_file = b.path(here ++ "fp4_bench_main.zig"),
         .target = target,

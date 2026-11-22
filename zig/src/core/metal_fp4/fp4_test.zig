@@ -165,3 +165,7 @@ test "fp4 decode variants match the fp64 reference on Inkling decode shapes" {
 test {
     _ = @import("mxfp8_probe.zig");
 }
+
+test {
+    _ = @import("split_probe.zig");
+}

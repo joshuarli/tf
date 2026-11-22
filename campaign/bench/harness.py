@@ -256,24 +256,27 @@ def process_tree(root: int) -> set[int]:
     return found
 
 
-def gpu_gate() -> tuple[dict, list[str]]:
-    """`gpu-gate-ready -1` before a trial: other GPU users, utilization, pressure, swap and compressor."""
+def gpu_gate(own: set[int] | None = None) -> tuple[dict, list[str]]:
+    """`gpu-gate-ready -1`: other GPU users, utilization, pressure, swap and compressor. After a trial, `own`
+    names the server's processes, whose GPU time and trailing utilization are the trial's own."""
+    env = dict(os.environ, GPU_GATE_WAIT="0")
+    if own:
+        env["GPU_GATE_IGNORE_PIDS"] = " ".join(str(pid) for pid in sorted(own))
     try:
-        run = subprocess.run(["gpu-gate-ready", "-1"], capture_output=True, text=True,
-                             env=dict(os.environ, GPU_GATE_WAIT="0"))
+        run = subprocess.run(["gpu-gate-ready", "-1"], capture_output=True, text=True, env=env)
     except FileNotFoundError:
         return {"status": "unavailable"}, []
     detail = (run.stderr or run.stdout).strip()
     if run.returncode == 0:
         return {"status": "quiet"}, []
     if run.returncode == 75:
-        return {"status": "contended", "detail": detail}, [f"gpu-gate-ready: {detail.splitlines()[0]}"]
+        return {"status": "contended", "detail": detail}, [detail.splitlines()[0]]
     return {"status": f"error {run.returncode}", "detail": detail}, []
 
 
-def conditions() -> dict:
+def conditions(own: set[int] | None = None) -> dict:
     level = vm_pressure_level()
-    gate, gate_reasons = gpu_gate()
+    gate, gate_reasons = gpu_gate(own)
     pressure = {"vm_pressure_level": level, "free_percent": free_percent(), "therm": therm(), "gpu_gate": gate}
     reasons = list(gate_reasons)
     if level is not None and level != 1:

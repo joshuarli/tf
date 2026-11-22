@@ -584,3 +584,74 @@ On served chat requests, copy drafts give about +9% on code and +6% on prose, an
 stay opt-in. The runner's 55 and 80 tok/s prose and structured rates describe text continuation, not chat
 answers. Records: `campaign/runs/2026-11-22/inkling2-mini-ar-1024-180358.jsonl` and
 `campaign/runs/2026-11-22/inkling2-mini-copy-1024-181920.jsonl`.
+
+## Few-row route selection
+
+The decode and verification profiles used the same 1,139-token prose fixture on the busy host.
+The decode run used chunk-512 prefill and eight decode warmups. Its timed positions therefore
+start eight tokens after the verification cache. The verification profiles use the split timeline,
+which changes command-buffer boundaries. These instrumented spans do not measure round latency.
+
+| Path | Dispatches | GPU span ms | Dense including head ms | Expert ms | Attention ms | Route selection ms | Copy ms |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Decode | 2,614 | 36.386 | 10.140 | 4.820 | 4.740 | 0.500 | 3.021 |
+| Verify, 1 row | 2,850 | 45.056 | 12.398 | 5.147 | 11.327 | 4.916 | 0.757 |
+| Verify, 4 rows | 2,886 | 62.531 | 16.678 | 16.427 | 12.939 | 5.102 | 0.818 |
+
+The listed categories leave 13.165 ms for decode, 10.511 ms for one-row verification,
+and 10.567 ms for four-row verification. These residuals include normalization, mixing,
+convolution and other small kernels, as well as any unassigned timeline span.
+Relative-bias setup accounts for 0.448, 0.384 and 0.494 ms respectively. Decode groups
+attention projections and partitions attention, while prefill dispatches projections separately
+and uses tiled attention. The different timeline boundaries limit direct attribution of gaps.
+
+Decode uses a SIMD route selector. The prefill selector previously assigned the same search to
+one lane, taking about five milliseconds regardless of row count. The selector now distributes
+that search across a SIMD group and preserves expert tie order and the order of weight additions.
+The GPU test compares picks and weight bytes with the original serial selector, including ties,
+96 and 128 experts, top-k 8 and 24, and row counts 1, 4 and 8.
+
+Five alternating control and candidate processes per width each ran fifteen rounds from the
+same restored prose history. The table reports the median of the five process medians, and the
+range of those medians, in milliseconds. The synthetic accepted prefix is half the width,
+rounded down. Each accepted run passed CPU and GPU admission at 60% GPU limits and the CPU
+post-check. Busy-host attempts that failed admission or post-check were discarded.
+
+| Rows | Control total ms (range) | Candidate total ms (range) | Control forward ms | Candidate forward ms |
+| ---: | :--- | :--- | ---: | ---: |
+| 1 | 41.908 (41.864–41.997) | 37.255 (37.156–37.325) | 40.966 | 36.298 |
+| 2 | 46.986 (46.420–47.193) | 42.232 (42.082–42.440) | 45.538 | 40.825 |
+| 4 | 59.635 (59.589–59.912) | 55.005 (54.933–55.113) | 57.347 | 52.714 |
+| 8 | 93.157 (93.100–93.251) | 88.580 (88.430–88.735) | 88.682 | 83.959 |
+| 16 | 162.301 (161.870–162.469) | 157.643 (157.496–158.187) | 154.618 | 150.294 |
+
+The four-row candidate is 4.630 ms below the control median, with non-overlapping process
+ranges. It remains above the 45.4 ms native DSpark target. The unchanged runner size was
+1,621,800 bytes. The serial family gate peaked at 22.3 GB charged under the 28 GB cap.
+
+A separate five-round split timeline at width 4 measured 2,886 dispatches in both versions.
+The control and candidate GPU spans were 62.531 and 58.555 ms. Route selection fell from
+5.102 to 0.467 ms; attention was 12.939 and 12.920 ms, expert gate/up and down totaled
+16.427 and 16.413 ms, and dense including the head was 16.678 and 17.005 ms. The candidate
+profile peaked at 20.8 GB charged. These instrumented spans are separate from the paired
+round times and include profiler effects. The control profile used the earlier 35% GPU
+admission limit; the candidate used the later 60% limit. Both passed the CPU post-check.
+
+The family command `zig build test-inkling2-loop -Dcpu=apple_m1 -j1` under `heavy.py` exited
+0 with the checkpoint set in `TF_INKLING2_LOOP_DIR`. It includes exact rollback and continuation
+checks. The f32-vs-f32 parity reports for prefill chunks 4 and 512 each reported 14 within
+contract, two explained divergences (`harbour` and `cells_code`), and zero unexplained. The
+strict comparison exits 2 for these explained divergences.
+For the full 1,139-token prose fixture, control and candidate chunk-512 prefill logits
+matched byte for byte across 911,464,248 bytes. This compares the exercised fixture, not every
+possible input.
+
+For reproduction, build the runner with `zig build tf-inkling2-loop-run -Dcpu=apple_m1`.
+Use the same checkpoint and prose fixture described above. Run each control and candidate
+binary under `campaign/heavy.py` with `INKLING_LOAD_LIMIT_GB=26`, alternating
+`<model> <prose.json> roundbench 15 <width>` for widths 1, 2, 4, 8 and 16. Run
+`GPU_GATE_MAX_GPU_PCT=60 GPU_GATE_MAX_UTIL_PCT=60 gpu-gate-ready -1` and
+`perf-gate-ready` before each process, then `perf-gate-ready -1` immediately after it.
+For the split profile, set `TF_METAL4_TIMELINE=5` and
+`TF_INKLING_PREFILL_PROFILE_BASE=1139` and use `roundbench 15 4`. Reduce its log with
+`python3 campaign/kernels/inkling_profile.py timeline --split --log <log>`.

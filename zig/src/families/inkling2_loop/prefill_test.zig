@@ -1028,3 +1028,81 @@ test "tiled attention matches fp64 and original attention" {
         }
     }
 }
+
+const serialRoute =
+    \\#include <metal_stdlib>
+    \\using namespace metal;
+    \\struct Args { uint experts, topk, rows; float route_scale; };
+    \\[[kernel]] void route(const device float* L [[buffer(0)]], const device float* bias [[buffer(1)]],
+    \\    constant Args& a [[buffer(2)]], device int* picks [[buffer(3)]], device float* wts [[buffer(4)]],
+    \\    uint t [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
+    \\  if (lane != 0u || t >= a.rows) return;
+    \\  const uint E = a.experts, K = a.topk;
+    \\  const device float* l = L + (size_t)t * E;
+    \\  float probs[128], sel[128];
+    \\  for (uint e = 0; e < E; ++e) { probs[e] = 1.0f / (1.0f + precise::exp(-l[e])); sel[e] = probs[e] + bias[e]; }
+    \\  float denom = 0.0f;
+    \\  for (uint k = 0; k < K; ++k) {
+    \\    uint best = E;
+    \\    for (uint e = 0; e < E; ++e) {
+    \\      if (isnan(sel[e])) continue;
+    \\      if (best == E || sel[e] > sel[best]) best = e;
+    \\    }
+    \\    picks[(size_t)t * K + k] = int(best);
+    \\    if (best != E) { denom += probs[best]; sel[best] = NAN; }
+    \\  }
+    \\  for (uint k = 0; k < K; ++k) wts[(size_t)t * K + k] = probs[uint(picks[(size_t)t * K + k])] / (denom + 1e-20f) * a.route_scale;
+    \\}
+;
+
+const RouteArgs = extern struct { experts: u32, topk: u32, rows: u32, route_scale: f32 };
+
+test "parallel route selection matches serial picks and weights" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, @import("kernels.zig").prefill, mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const ref_lib = try mtl.Library.fromSource(device, serialRoute, mtl.CompileOptions.mlx());
+    defer ref_lib.deinit();
+    const candidate = try mtl.Pipeline.init(device, lib, "i2p_routepick", false);
+    defer candidate.deinit();
+    const reference = try mtl.Pipeline.init(device, ref_lib, "route", false);
+    defer reference.deinit();
+    const logits = try device.buffer(8 * 128 * 4, mtl.ResourceOptions.shared);
+    defer logits.deinit();
+    const bias = try device.buffer(128 * 4, mtl.ResourceOptions.shared);
+    defer bias.deinit();
+    const actual_picks = try device.buffer(8 * 128 * 4, mtl.ResourceOptions.shared);
+    defer actual_picks.deinit();
+    const expected_picks = try device.buffer(8 * 128 * 4, mtl.ResourceOptions.shared);
+    defer expected_picks.deinit();
+    const actual_weights = try device.buffer(8 * 128 * 4, mtl.ResourceOptions.shared);
+    defer actual_weights.deinit();
+    const expected_weights = try device.buffer(8 * 128 * 4, mtl.ResourceOptions.shared);
+    defer expected_weights.deinit();
+    for ([_]usize{ 96, 128 }) |experts| for ([_]usize{ 8, 24 }) |topk| for ([_]usize{ 1, 4, 8 }) |rows| {
+        for (logits.slice(f32, rows * experts), 0..) |*v, i| v.* = if (i / experts == 0) 0 else @as(f32, @floatFromInt(@as(i32, @intCast((i * 17) % 37)) - 18)) / 8;
+        for (bias.slice(f32, experts), 0..) |*v, i| v.* = @as(f32, @floatFromInt(@as(i32, @intCast(i % 7)) - 3)) / 16;
+        const args = RouteArgs{ .experts = @intCast(experts), .topk = @intCast(topk), .rows = @intCast(rows), .route_scale = 8 };
+        for ([_]mtl.Pipeline{ candidate, reference }, [_]mtl.Buffer{ actual_picks, expected_picks }, [_]mtl.Buffer{ actual_weights, expected_weights }) |pipe, picks, weights| {
+            const cb = queue.commandBuffer();
+            const enc = cb.compute(.serial);
+            enc.setPipeline(pipe);
+            enc.setBuffer(logits, 0, 0);
+            enc.setBuffer(bias, 0, 1);
+            enc.setValue(args, 2);
+            enc.setBuffer(picks, 0, 3);
+            enc.setBuffer(weights, 0, 4);
+            enc.dispatchGroups(mtl.Size.of(rows, 1, 1), mtl.Size.of(32, 1, 1));
+            enc.end();
+            cb.commit();
+            cb.wait();
+            if (cb.failure()) |msg| { std.debug.print("route: {s}\n", .{msg}); return error.GpuFailed; }
+        }
+        try t.expectEqualSlices(i32, expected_picks.slice(i32, rows * topk), actual_picks.slice(i32, rows * topk));
+        try t.expectEqualSlices(u8, std.mem.sliceAsBytes(expected_weights.slice(f32, rows * topk)), std.mem.sliceAsBytes(actual_weights.slice(f32, rows * topk)));
+    };
+}

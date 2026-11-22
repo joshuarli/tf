@@ -125,29 +125,41 @@ struct i2p_gemm_args { uint n, k, rows, xs, xb; float cap; };
 [[kernel]] void i2p_routepick(const device float* L [[buffer(0)]], const device float* bias [[buffer(1)]],
     constant i2p_pick_args& a [[buffer(2)]], device int* picks [[buffer(3)]], device float* wts [[buffer(4)]],
     uint t [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
-  if (lane != 0u || t >= a.rows) return;
+  if (t >= a.rows) return;
   const uint E = a.experts, K = a.topk;
   const device float* l = L + (size_t)t * E;
-  float probs[128];
-  float sel[128];
-  for (uint e = 0; e < E; ++e) {
-    probs[e] = 1.0f / (1.0f + precise::exp(-l[e]));
-    sel[e] = probs[e] + bias[e];
+  float probs[4], sel[4];
+  for (uint j = 0; j < 4; ++j) {
+    const uint e = lane + 32u * j;
+    probs[j] = e < E ? 1.0f / (1.0f + precise::exp(-l[e])) : 0.0f;
+    sel[j] = e < E ? probs[j] + bias[e] : NAN;
   }
   float denom = 0.0f;
   for (uint k = 0; k < K; ++k) {
-    uint best = E;
-    for (uint e = 0; e < E; ++e) {
-      if (isnan(sel[e])) continue;
-      if (best == E || sel[e] > sel[best]) best = e;
+    float bv = 0.0f;
+    uint bi = E;
+    for (uint j = 0; j < 4; ++j) {
+      const uint e = lane + 32u * j;
+      if (e < E && !isnan(sel[j]) && (bi == E || sel[j] > bv)) { bv = sel[j]; bi = e; }
     }
-    picks[(size_t)t * K + k] = int(best);
-    if (best != E) {
-      denom += probs[best];
-      sel[best] = NAN;
+    for (ushort off = 16; off > 0; off >>= 1) {
+      const float ov = simd_shuffle_down(bv, off);
+      const uint oi = simd_shuffle_down(bi, off);
+      if (lane + off < 32u && oi != E && (bi == E || ov > bv || (ov == bv && oi < bi))) { bv = ov; bi = oi; }
+    }
+    bi = simd_broadcast_first(bi);
+    if (lane == 0) picks[(size_t)t * K + k] = int(bi);
+    if (bi != E) {
+      const uint j = bi / 32u;
+      const float p = simd_shuffle(probs[j], ushort(bi % 32u));
+      if (lane == bi % 32u) sel[j] = NAN;
+      denom += p;
+      if (lane == 0) wts[(size_t)t * K + k] = p;
+    } else {
+      if (lane == 0) wts[(size_t)t * K + k] = NAN;
     }
   }
-  for (uint k = 0; k < K; ++k) wts[(size_t)t * K + k] = probs[uint(picks[(size_t)t * K + k])] / (denom + 1e-20f) * a.route_scale;
+  if (lane == 0) for (uint k = 0; k < K; ++k) wts[(size_t)t * K + k] = wts[(size_t)t * K + k] / (denom + 1e-20f) * a.route_scale;
 }
 
 [[kernel]] void i2p_embed(const device uint* ids [[buffer(0)]], const device bfloat* W [[buffer(1)]],

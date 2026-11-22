@@ -497,6 +497,44 @@ const legacyGemm =
 
 const GemmArgs = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32, cap: f32 };
 
+test "bf16 operand gemm rounds input before f32 accumulation" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, "#define I2P_BF16_OPERANDS 1\n" ++ @import("kernels.zig").prefill, mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const pipe = try mtl.Pipeline.init(device, lib, "i2p_gemm", false);
+    defer pipe.deinit();
+    const rows = 35;
+    const n = 70;
+    const k = 40;
+    const x = try device.buffer((rows * 2 + 1) * k * 4, mtl.ResourceOptions.shared);
+    defer x.deinit();
+    for (x.slice(f32, (rows * 2 + 1) * k), 0..) |*value, i| value.* = if ((i / k) % 4 == 1) 1.003 else 1.006;
+    const w = try device.buffer(n * k * 2, mtl.ResourceOptions.shared);
+    defer w.deinit();
+    @memset(w.slice(u16, n * k), 0x3f80);
+    const out = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared);
+    defer out.deinit();
+    @memset(out.slice(f32, rows * n), std.math.nan(f32));
+    const args = GemmArgs{ .n = n, .k = k, .rows = rows, .xs = 2, .xb = 1, .cap = 0 };
+    const cb = queue.commandBuffer();
+    const enc = cb.compute(.serial);
+    enc.setPipeline(pipe);
+    enc.setBuffer(x, 0, 0);
+    enc.setBuffer(w, 0, 1);
+    enc.setValue(args, 2);
+    enc.setBuffer(out, 0, 3);
+    enc.dispatchGroups(mtl.Size.of((n + 63) / 64, (rows + 31) / 32, 1), mtl.Size.of(256, 1, 1));
+    enc.end();
+    cb.commit();
+    cb.wait();
+    if (cb.failure()) |msg| { std.debug.print("bf16 gemm: {s}\n", .{msg}); return error.GpuFailed; }
+    for (out.slice(f32, rows * n), 0..) |value, i| try t.expectEqual(if ((i / n) % 2 == 0) @as(f32, 40) else 40.3125, value);
+}
+
 test "tiled dense projections match the original gemm" {
     if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
     const device = try mtl.Device.init();
@@ -727,6 +765,69 @@ fn expertCode(code: u8, mx: bool) f64 {
     const values = [_]f64{ 0, 0.5, 1, 1.5, 2, 3, 4, 6 };
     const value = values[code & 7];
     return if (code & 8 != 0) -value else value;
+}
+
+test "bf16 routed expert matrix rounds operands before f32 accumulation" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    const queue = try device.queue();
+    defer queue.deinit();
+    for ([_]bool{ false, true }) |mx| {
+        const source = if (mx) "#define I2P_BF16_OPERANDS 1\n#define I2P_MXFP8 1\n" ++ @import("kernels.zig").prefill else "#define I2P_BF16_OPERANDS 1\n" ++ @import("kernels.zig").prefill;
+        const lib = try mtl.Library.fromSource(device, source, mtl.CompileOptions.mlx());
+        defer lib.deinit();
+        const pipe = try mtl.Pipeline.init(device, lib, "i2p_expert_matrix", false);
+        defer pipe.deinit();
+        const rows = 16;
+        const n = 64;
+        const k = 32;
+        const x = try device.buffer(rows * k * 4, mtl.ResourceOptions.shared);
+        defer x.deinit();
+        @memset(x.slice(f32, rows * k), 1.006);
+        const w = try device.buffer(n * k, mtl.ResourceOptions.shared);
+        defer w.deinit();
+        @memset(w.slice(u8, n * k), if (mx) 0x38 else 0x22);
+        const scales = try device.buffer(n * 2, mtl.ResourceOptions.shared);
+        defer scales.deinit();
+        @memset(scales.slice(u8, n * 2), if (mx) 127 else 0x38);
+        const global = try device.buffer(16, mtl.ResourceOptions.shared);
+        defer global.deinit();
+        global.slice(f32, 1)[0] = 1;
+        const off = try device.buffer(16, mtl.ResourceOptions.shared);
+        defer off.deinit();
+        off.slice(i32, 2)[0] = 0;
+        off.slice(i32, 2)[1] = rows;
+        const row_of = try device.buffer(rows * 4, mtl.ResourceOptions.shared);
+        defer row_of.deinit();
+        for (row_of.slice(i32, rows), 0..) |*value, i| value.* = @intCast(rows - 1 - i);
+        const out = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared);
+        defer out.deinit();
+        @memset(out.slice(f32, rows * n), std.math.nan(f32));
+        const codes = try device.buffer(256 * 4, mtl.ResourceOptions.shared);
+        defer codes.deinit();
+        for (codes.slice(f32, 256), 0..) |*value, i| value.* = @floatCast(expertCode(@intCast(if (mx and i % 128 == 127) 0 else i % (if (mx) @as(usize, 256) else 16)), mx));
+        const args = ExpertArgs{ .k = k, .n = n, .slots = rows, .topk = 1, .experts = 1, .gate_cap = 0, .up_cap = 0 };
+        const cb = queue.commandBuffer();
+        const enc = cb.compute(.serial);
+        enc.setPipeline(pipe);
+        enc.setBuffer(x, 0, 0);
+        enc.setBuffer(w, 0, 1);
+        enc.setBuffer(scales, 0, 2);
+        enc.setBuffer(global, 0, 3);
+        enc.setBuffer(global, 0, 4);
+        enc.setBuffer(off, 0, 5);
+        enc.setBuffer(row_of, 0, 6);
+        enc.setValue(args, 7);
+        enc.setBuffer(out, 0, 8);
+        enc.setBuffer(codes, 0, 9);
+        enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
+        enc.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |msg| { std.debug.print("bf16 expert: {s}\n", .{msg}); return error.GpuFailed; }
+        for (out.slice(f32, rows * n)) |value| try t.expectEqual(@as(f32, 32.25), value);
+    }
 }
 
 test "routed expert projections meet fp64 bounds at occupancy boundaries" {

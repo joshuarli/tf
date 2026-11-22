@@ -1,6 +1,12 @@
 #include <metal_stdlib>
 using namespace metal;
 
+#ifdef I2P_BF16_OPERANDS
+typedef bfloat i2p_operand;
+#else
+typedef float i2p_operand;
+#endif
+
 struct i2p_dense_args { uint n, k, rows, xs, xb; };
 struct i2p_cap_args { uint n, k, rows; float cap; };
 struct i2p_router_args { uint n, k, rows, xs, xb; };
@@ -79,8 +85,8 @@ struct i2p_gemm_args { uint n, k, rows, xs, xb; float cap; };
   constexpr int BM = 32, BN = 64, BK = 32, AP = 40, BP = 72;
   const int sg = int(ti) / 32;
   const int m0 = int(tg.y) * BM, n0 = int(tg.x) * BN;
-  threadgroup float x[BM * AP];
-  threadgroup float w[BK * BP];
+  threadgroup i2p_operand x[BM * AP];
+  threadgroup i2p_operand w[BK * BP];
   threadgroup float out[BM * BP];
   simdgroup_matrix<float, 8, 8> acc[4] = {simdgroup_matrix<float, 8, 8>(0.0f),
     simdgroup_matrix<float, 8, 8>(0.0f), simdgroup_matrix<float, 8, 8>(0.0f),
@@ -89,21 +95,21 @@ struct i2p_gemm_args { uint n, k, rows, xs, xb; float cap; };
     for (int e = int(ti); e < BM * BK; e += 256) {
       int r = e / BK, k = e % BK;
       int gr = m0 + r, gk = k0 + k;
-      x[r * AP + k] = gr < int(a.rows) && gk < int(a.k)
-        ? X[size_t(a.xb + uint(gr) * a.xs) * a.k + uint(gk)] : 0.0f;
+      x[r * AP + k] = i2p_operand(gr < int(a.rows) && gk < int(a.k)
+        ? X[size_t(a.xb + uint(gr) * a.xs) * a.k + uint(gk)] : 0.0f);
     }
     for (int e = int(ti); e < BK * BN; e += 256) {
       int k = e / BN, n = e % BN;
       int gn = n0 + n, gk = k0 + k;
-      w[k * BP + n] = gn < int(a.n) && gk < int(a.k)
-        ? float(W[size_t(gn) * a.k + uint(gk)]) : 0.0f;
+      w[k * BP + n] = i2p_operand(gn < int(a.n) && gk < int(a.k)
+        ? float(W[size_t(gn) * a.k + uint(gk)]) : 0.0f);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     for (int k = 0; k < BK; k += 8) {
-      simdgroup_matrix<float, 8, 8> b;
+      simdgroup_matrix<i2p_operand, 8, 8> b;
       simdgroup_load(b, w + k * BP + sg * 8, ulong(BP));
       for (int r = 0; r < 4; ++r) {
-        simdgroup_matrix<float, 8, 8> a8;
+        simdgroup_matrix<i2p_operand, 8, 8> a8;
         simdgroup_load(a8, x + r * 8 * AP + k, ulong(AP));
         simdgroup_multiply_accumulate(acc[r], a8, b, acc[r]);
       }
@@ -872,8 +878,8 @@ struct i2p_moeg_args { uint k, n, slots, topk, experts; float gate_cap, up_cap; 
   const bool gu = a.gate_cap > 0.0f;
   const uint cols = gu ? 2u * a.n : a.n;
   const uint sg = ti / 32u;
-  threadgroup float x[BM * AP];
-  threadgroup float w[BK * BP];
+  threadgroup i2p_operand x[BM * AP];
+  threadgroup i2p_operand w[BK * BP];
   threadgroup float out[BM * BP];
   simdgroup_matrix<float, 8, 8> acc[4] = {simdgroup_matrix<float, 8, 8>(0.0f),
     simdgroup_matrix<float, 8, 8>(0.0f), simdgroup_matrix<float, 8, 8>(0.0f),
@@ -884,7 +890,7 @@ struct i2p_moeg_args { uint k, n, slots, topk, experts; float gate_cap, up_cap; 
       const bool valid = m0 + r < uint(end - start) && k0 + k < a.k;
       const uint slot = valid ? uint(ROW_OF[start + int(m0 + r)]) : 0u;
       const uint xr = gu ? slot / a.topk : slot;
-      x[r * AP + k] = valid ? X[size_t(xr) * a.k + k0 + k] : 0.0f;
+      x[r * AP + k] = i2p_operand(valid ? X[size_t(xr) * a.k + k0 + k] : 0.0f);
     }
     for (uint i = ti; i < BK * BN; i += 256u) {
       const uint k = i / BN, n = n0 + i % BN, gk = k0 + k;
@@ -899,14 +905,14 @@ struct i2p_moeg_args { uint k, n, slots, topk, experts; float gate_cap, up_cap; 
 #endif
         v = CODES[code] * i2p_decode_scale(S, row * I2P_SCALE_STRIDE(a.k) + gk / I2P_GROUP);
       }
-      w[k * BP + i % BN] = v;
+      w[k * BP + i % BN] = i2p_operand(v);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     for (uint k = 0; k < BK; k += 8u) {
-      simdgroup_matrix<float, 8, 8> b;
+      simdgroup_matrix<i2p_operand, 8, 8> b;
       simdgroup_load(b, w + k * BP + sg * 8u, ulong(BP));
       for (uint r = 0; r < 4u; ++r) {
-        simdgroup_matrix<float, 8, 8> a8;
+        simdgroup_matrix<i2p_operand, 8, 8> a8;
         simdgroup_load(a8, x + r * 8u * AP + k, ulong(AP));
         simdgroup_multiply_accumulate(acc[r], a8, b, acc[r]);
       }

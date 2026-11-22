@@ -82,6 +82,9 @@ pub const Pipes = struct {
     gemm: mtl.Pipeline,
     smallrow: mtl.Pipeline,
     gemm_mpp: ?mtl.Pipeline,
+    bf16_gemm: ?mtl.Pipeline,
+    bf16_expert_nv: ?mtl.Pipeline,
+    bf16_expert_mx: ?mtl.Pipeline,
     pick: mtl.Pipeline,
     embed: mtl.Pipeline,
     rms: mtl.Pipeline,
@@ -115,6 +118,9 @@ pub const Pipes = struct {
 
     pub fn deinit(p: *Pipes) void {
         if (p.gemm_mpp) |pipe| pipe.deinit();
+        if (p.bf16_gemm) |pipe| pipe.deinit();
+        if (p.bf16_expert_nv) |pipe| pipe.deinit();
+        if (p.bf16_expert_mx) |pipe| pipe.deinit();
         inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "gemm", "smallrow", "pick", "gu_g_nv", "down_g_nv", "gu_g_mx", "down_g_mx", "expert_matrix_nv", "expert_matrix_mx", "moe_zero", "moe_count", "moe_offsets", "moe_sort", "embed", "rms", "gather", "mix", "mix4", "ctl", "clips", "clip", "conv", "cstore", "kv", "rel", "attn", "attn_tiled", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
     }
 };
@@ -307,6 +313,24 @@ pub const PrefillScratch = struct {
             break :blk try mtl.Pipeline.init(device, mpp_lib, "i2p_gemm_mpp", false);
         } else null;
         errdefer if (s.pipes.gemm_mpp) |pipe| pipe.deinit();
+        const bf16 = if (std.c.getenv("INKLING_PREFILL_BF16")) |value| std.mem.eql(u8, std.mem.span(value), "1") else false;
+        s.pipes.bf16_gemm = null;
+        s.pipes.bf16_expert_nv = null;
+        s.pipes.bf16_expert_mx = null;
+        if (bf16) {
+            const bf_lib = try mtl.Library.fromSource(device, "#define I2P_BF16_OPERANDS 1\n" ++ kernels.prefill, opts);
+            defer bf_lib.deinit();
+            const bf_mx_lib = try mtl.Library.fromSource(device, "#define I2P_BF16_OPERANDS 1\n#define I2P_MXFP8 1\n" ++ kernels.prefill, opts);
+            defer bf_mx_lib.deinit();
+            s.pipes.bf16_gemm = try mtl.Pipeline.init(device, bf_lib, "i2p_gemm", false);
+            errdefer s.pipes.bf16_gemm.?.deinit();
+            s.pipes.bf16_expert_nv = try mtl.Pipeline.init(device, bf_lib, "i2p_expert_matrix", false);
+            errdefer s.pipes.bf16_expert_nv.?.deinit();
+            s.pipes.bf16_expert_mx = try mtl.Pipeline.init(device, bf_mx_lib, "i2p_expert_matrix", false);
+        }
+        errdefer if (s.pipes.bf16_gemm) |pipe| pipe.deinit();
+        errdefer if (s.pipes.bf16_expert_nv) |pipe| pipe.deinit();
+        errdefer if (s.pipes.bf16_expert_mx) |pipe| pipe.deinit();
         s.pipes.pick = try mtl.Pipeline.init(device, lib, "i2p_routepick", false);
         errdefer s.pipes.pick.deinit();
         s.pipes.embed = try mtl.Pipeline.init(device, lib, "i2p_embed", false);
@@ -436,6 +460,9 @@ const Chunk = struct {
         if (c.n <= 8) {
             c.setP(c.s.pipes.smallrow, args, &.{ x.buf, t(w), A, out });
             c.enc.dispatchGroups(mtl.Size.of((m + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+        } else if (c.s.pipes.bf16_gemm) |pipe| {
+            c.setP(pipe, args, &.{ x.buf, t(w), A, out });
+            c.enc.dispatchGroups(mtl.Size.of((m + 63) / 64, (c.n + 31) / 32, 1), mtl.Size.of(256, 1, 1));
         } else if (c.s.pipes.gemm_mpp != null and m >= 384 and args.k >= 2304 and c.n >= 16) {
             c.setP(c.s.pipes.gemm_mpp.?, args, &.{ x.buf, t(w), A, out });
             c.enc.dispatchGroups(mtl.Size.of((m + 31) / 32, (c.n + 15) / 16, 1), mtl.Size.of(128, 1, 1));
@@ -450,6 +477,9 @@ const Chunk = struct {
         if (c.n <= 8) {
             c.setP(c.s.pipes.smallrow, args, &.{ x.buf, t(w), A, out });
             c.enc.dispatchGroups(mtl.Size.of((vocab + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+        } else if (c.s.pipes.bf16_gemm) |pipe| {
+            c.setP(pipe, args, &.{ x.buf, t(w), A, out });
+            c.enc.dispatchGroups(mtl.Size.of((vocab + 63) / 64, (c.n + 31) / 32, 1), mtl.Size.of(256, 1, 1));
         } else if (c.s.pipes.gemm_mpp != null and c.n >= 16 and args.k >= 2304) {
             c.setP(c.s.pipes.gemm_mpp.?, args, &.{ x.buf, t(w), A, out });
             c.enc.dispatchGroups(mtl.Size.of((vocab + 31) / 32, (c.n + 15) / 16, 1), mtl.Size.of(128, 1, 1));
@@ -670,7 +700,7 @@ const Chunk = struct {
         const codes = b(if (lay.mxfp8) m.t256 else m.t16);
         const gu = if (lay.mxfp8) s.pipes.gu_g_mx else s.pipes.gu_g_nv;
         const down = if (lay.mxfp8) s.pipes.down_g_mx else s.pipes.down_g_nv;
-        const matrix = if (lay.mxfp8) s.pipes.expert_matrix_mx else s.pipes.expert_matrix_nv;
+        const matrix = if (lay.mxfp8) s.pipes.bf16_expert_mx orelse s.pipes.expert_matrix_mx else s.pipes.bf16_expert_nv orelse s.pipes.expert_matrix_nv;
         c.setP(gu, Moeg{ .k = c.h, .n = inter, .slots = slots, .topk = K, .experts = E, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes });
         c.enc.dispatchGroups(mtl.Size.of(inter, E, 1), mtl.Size.of(32, 1, 1));
         c.setP(matrix, Moeg{ .k = c.h, .n = inter, .slots = slots, .topk = K, .experts = E, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes });

@@ -11,6 +11,7 @@ const usage =
     \\tf-inkling2-loop-run <model> <tokens.json> prefill <chunk> <out>  chunked prefill logits [tokens, 200058] plus tok/s
     \\tf-inkling2-loop-run <model> <tokens.json> greedy <steps> <out>  then <steps> greedy tokens, one decode a step
     \\tf-inkling2-loop-run <model> <tokens.json> greedy-prefill|greedy-copy|greedy-hybrid|greedy-decode <steps> <out>  raw u32 output IDs
+    \\  TF_INKLING_GREEDY_MARGINS=1 prints top-two margins for greedy-decode
     \\tf-inkling2-loop-run <model> <tokens.json> verifybench <min-width> <rounds>  time interleaved prefill widths
     \\tf-inkling2-loop-run <model> <tokens.json> verifycheck <accepted>  compare continuation with replay
     \\tf-inkling2-loop-run <model> <tokens.json> roundbench <rounds> [width]  time full verification rounds
@@ -117,6 +118,8 @@ pub fn main(init: std.process.Init) !void {
         var proposer = try tf.lanes.SuffixLookup.init(gpa, .{});
         defer proposer.deinit();
         var token = argmax(ps.logits.slice(f32, vocab));
+        const margins = std.mem.eql(u8, mode, "greedy-decode") and if (std.c.getenv("TF_INKLING_GREEDY_MARGINS")) |v| std.mem.eql(u8, std.mem.span(v), "1") else false;
+        if (margins) reportMargin(ps.logits.slice(f32, vocab), 0);
         var rounds: usize = 0;
         var drafted: usize = 0;
         var accepted_total: usize = 0;
@@ -136,6 +139,7 @@ pub fn main(init: std.process.Init) !void {
                 const s = &decode.?;
                 try inkling.position(m, s, &cache, token);
                 token = argmax(s.logits.slice(f32, vocab));
+                if (margins) reportMargin(s.logits.slice(f32, vocab), history.items.len - ids.value.len);
                 decode_ns += now() - decode_start;
                 rounds += 1;
                 continue;
@@ -675,6 +679,20 @@ fn argmax(x: []const f32) u32 {
         if (v > x[best]) best = i;
     }
     return @intCast(best);
+}
+
+fn reportMargin(x: []const f32, step: usize) void {
+    var first: f32 = -std.math.inf(f32);
+    var second: f32 = -std.math.inf(f32);
+    for (x) |value| {
+        if (value > first) {
+            second = first;
+            first = value;
+        } else if (value > second) {
+            second = value;
+        }
+    }
+    std.debug.print("greedy-margin step={d} top={d:.8} second={d:.8} margin={d:.8}\n", .{ step, first, second, first - second });
 }
 
 fn now() u64 {

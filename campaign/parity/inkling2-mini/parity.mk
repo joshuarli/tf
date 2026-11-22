@@ -13,16 +13,26 @@ REF_SCRIPT ?= $(CAMPAIGN_DIR)/ref/inkling2_loop_ref.py
 UV ?= ~/.local/bin/uv
 REF_UV ?= $(UV) run --frozen --project $(CAMPAIGN_DIR)/ref
 COMPARE ?= $(PARITY_DIR)compare.py
+PROVENANCE ?= $(PARITY_DIR)provenance.py
+GATE_EXCEPTIONS ?= $(PARITY_DIR)gate_exceptions.json
+GATE_CONTRACT ?= f32-vs-f32
+# The runner path under test: `logits` runs one position at a time (the decode kernels); `prefill` runs the
+# chunked prefill kernels with PREFILL_CHUNK rows a chunk. The mode is part of the receipt's policy string,
+# so a bin from one path is never reused as the other's.
+RUNNER_MODE ?= logits
+PREFILL_CHUNK ?= 128
+RUNNER_ARGS = $(if $(filter prefill,$(RUNNER_MODE)),prefill $(PREFILL_CHUNK),logits)
+ARITHMETIC_POLICY ?= f32-activations$(if $(filter prefill,$(RUNNER_MODE)),+prefill-$(PREFILL_CHUNK))
 INKLING_ORACLE ?= $(PARITY_DIR)oracle.py
 INKLING_PARITY_HISTORIES ?= $(PARITY_DIR)histories.json
 WEIGHTS_ROOT ?= $(HOME)/models
 INKLING_DIR ?= $(WEIGHTS_ROOT)/Inkling-2-Mini@ed40e7da625f
-REPORT ?= $(PARITY_DIR)report.md
+REPORT ?= $(PARITY_DIR)report$(if $(filter prefill,$(RUNNER_MODE)),-prefill).md
 REF_LOGITS ?= $(WORK)/parity/inkling2-mini/ref
-METAL_LOGITS ?= $(WORK)/parity/inkling2-mini/metal
+# Lane-scoped by default so concurrent lanes never share candidate bins.
+LANE ?= $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo local)
+METAL_LOGITS ?= $(WORK)/parity/inkling2-mini/metal-$(subst /,_,$(LANE))$(if $(filter prefill,$(RUNNER_MODE)),-prefill-$(PREFILL_CHUNK))
 RUNNER ?= $(TREE)/zig-out/bin/tf-inkling2-loop-run
-MIN_MARGIN ?= 0.1
-AGREEMENT ?= 99.5
 VOCAB ?= 200058
 
 .PHONY: parity-inkling2-mini verify-oracle metal-logits clean-parity
@@ -35,6 +45,8 @@ verify-oracle: $(INKLING_PARITY_HISTORIES) $(INKLING_ORACLE)
 	$(REF_UV) python $(INKLING_ORACLE) --histories $(INKLING_PARITY_HISTORIES) --dir $(REF_LOGITS)
 
 # The same histories through the Metal runner, one model load a time inside the campaign's memory ceiling.
+# Each candidate bin is keyed by a receipt to the runner binary, the model, the token history and the
+# arithmetic policy; a bin whose receipt names different inputs is regenerated, never reused.
 metal-logits: $(INKLING_PARITY_HISTORIES)
 	@test -x $(RUNNER) || \
 		{ echo "missing $(RUNNER); run zig build tf-inkling2-loop-run -Dcpu=apple_m1" >&2; exit 2; }
@@ -42,18 +54,20 @@ metal-logits: $(INKLING_PARITY_HISTORIES)
 	@mkdir -p $(METAL_LOGITS)
 	@set -e; for name in $$(jaq -r '.[].name' $(INKLING_PARITY_HISTORIES)); do \
 		jaq --arg n "$$name" '.[] | select(.name == $$n) | .token_ids' $(INKLING_PARITY_HISTORIES) > $(METAL_LOGITS)/$$name.tokens.json; \
-		tokens=$$(jaq 'length' $(METAL_LOGITS)/$$name.tokens.json); \
-		if [ -f $(METAL_LOGITS)/$$name.bin ] && \
-		   [ "$$(( $$(stat -f%z $(METAL_LOGITS)/$$name.bin) / 4 / $(VOCAB) ))" = "$$tokens" ]; then \
-			echo "$$name: $${tokens} tokens, already written"; continue; \
+		if python3 $(PROVENANCE) check --output $(METAL_LOGITS)/$$name.bin --runner $(RUNNER) --model $(INKLING_DIR) \
+			--tokens $(METAL_LOGITS)/$$name.tokens.json --policy $(ARITHMETIC_POLICY) --vocab $(VOCAB); then \
+			continue; \
 		fi; \
-		python3 $(HEAVY_PY) -- $(RUNNER) $(INKLING_DIR) $(METAL_LOGITS)/$$name.tokens.json logits $(METAL_LOGITS)/$$name.bin; \
+		python3 $(HEAVY_PY) -- $(RUNNER) $(INKLING_DIR) $(METAL_LOGITS)/$$name.tokens.json $(RUNNER_ARGS) $(METAL_LOGITS)/$$name.bin; \
+		python3 $(PROVENANCE) write --output $(METAL_LOGITS)/$$name.bin --runner $(RUNNER) --model $(INKLING_DIR) \
+			--tokens $(METAL_LOGITS)/$$name.tokens.json --policy $(ARITHMETIC_POLICY) --vocab $(VOCAB); \
 	done
 
 $(REPORT): $(INKLING_PARITY_HISTORIES) $(COMPARE) $(INKLING_ORACLE) | verify-oracle metal-logits
 	@test -n "$(HEAVY_PY)" || { echo "missing campaign/heavy.py: every model load runs inside its ceiling" >&2; exit 2; }
 	$(REF_UV) python $(COMPARE) --histories $(INKLING_PARITY_HISTORIES) --ref-dir $(REF_LOGITS) --metal-dir $(METAL_LOGITS) \
-		--report $(REPORT) --min-margin $(MIN_MARGIN) --agreement $(AGREEMENT) \
+		--report $(REPORT) --contract $(GATE_CONTRACT) --vocab $(VOCAB) --exceptions $(GATE_EXCEPTIONS) \
+		--arithmetic-policy $(ARITHMETIC_POLICY) \
 		--runner $(RUNNER) --model $(INKLING_DIR) --heavy $(HEAVY_PY) --ref-venv $(REF_VENV) --reference $(REF_SCRIPT)
 
 clean-parity:

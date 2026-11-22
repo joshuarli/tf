@@ -21,7 +21,7 @@ pub fn e4m3(b: u8) f64 {
 
 pub fn e8m0(b: u8) f64 {
     if (b == 0xff) return std.math.nan(f64);
-    return std.math.ldexp(@as(f64, 1), @as(i32, b & 0x7f) - 127);
+    return std.math.ldexp(@as(f64, 1), @as(i32, b) - 127);
 }
 
 pub const Net = struct {
@@ -161,4 +161,6 @@ test "the decoders agree with the reference tables" {
     try std.testing.expect(std.math.isNan(e4m3(0x7f)));
     try std.testing.expectEqual(@as(f64, 1), e8m0(127));
     try std.testing.expectEqual(@as(f64, 0.5), e8m0(126));
+    try std.testing.expectEqual(@as(f64, 2), e8m0(128));
+    try std.testing.expect(std.math.isNan(e8m0(255)));
 }

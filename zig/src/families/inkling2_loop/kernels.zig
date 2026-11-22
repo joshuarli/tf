@@ -3,12 +3,45 @@
 //! `glue` is the dense graph: one token at a time, f32 activations, the checkpoint's bf16 weights widened per read.
 //! `experts` runs the routed projections in the two stored formats, decoding the checkpoint's own bytes. Both mirror
 //! `campaign/ref/inkling2_loop_ref.py`, a transcription of llama.cpp `40b7a546`.
+//! `dense` re-runs the bf16 matvecs (`i2_mv`, `i2_mv_cap`) with the activation staged once a threadgroup and
+//! vectorized weight loads, plus a fused form for projections sharing one input. `forward.zig` compiles it beside
+//! the model library and falls back to `glue` when that compile fails.
 const std = @import("std");
+const mtl = @import("metal");
 
 pub const glue = @embedFile("kernels/glue.metal");
 
+pub const prefill = @embedFile("kernels/prefill.metal");
+
+pub fn prefillSource(comptime mxfp8: bool) []const u8 {
+    return if (mxfp8) "#define I2P_MXFP8 1\n" ++ prefill else prefill;
+}
+
 /// Split-K decode attention: the window's positions partitioned over threadgroups, then one combine pass.
 pub const attention = @embedFile("kernels/attention.metal");
+
+pub const dense = @embedFile("kernels/dense.metal");
+
+pub const dense_names = [_][:0]const u8{ "i2_dmv", "i2_dmv_cap", "i2_dmv_fused", "i2_dmv_fusedx" };
+
+pub const Dense = struct { mv: mtl.Pipeline, mv_cap: mtl.Pipeline, fused: mtl.Pipeline, fusedx: mtl.Pipeline };
+
+var dense_owner: ?mtl.Device = null;
+var dense_pipes: ?Dense = null;
+
+pub fn densePipes(device: mtl.Device) !Dense {
+    if (dense_pipes) |p| if (dense_owner.?.id == device.id) return p;
+    const lib = try mtl.Library.fromSource(device, dense, mtl.CompileOptions.mlx());
+    const pipes = Dense{
+        .mv = try mtl.Pipeline.init(device, lib, dense_names[0], false),
+        .mv_cap = try mtl.Pipeline.init(device, lib, dense_names[1], false),
+        .fused = try mtl.Pipeline.init(device, lib, dense_names[2], false),
+        .fusedx = try mtl.Pipeline.init(device, lib, dense_names[3], false),
+    };
+    dense_owner = device;
+    dense_pipes = pipes;
+    return pipes;
+}
 
 /// The routed experts' source for one stored format: MXFP8 defines its decoder, NVFP4 is the default.
 pub fn expertSource(comptime mxfp8: bool) []const u8 {
@@ -29,4 +62,18 @@ test "the sources name the kernels the model loads" {
     try std.testing.expect(std.mem.indexOf(u8, expertSource(false), "i2_down_table") != null);
     try std.testing.expect(std.mem.indexOf(u8, expertSource(true), "i2_gu_table") != null);
     try std.testing.expect(std.mem.indexOf(u8, expertSource(true), "i2_down_thread") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_dense") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_attn") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_gu") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_down") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_cap_exact") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_gemm") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_moe_sort") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_moe_offsets") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_moe_count") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_moe_zero") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_down_grouped") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefill, "i2p_gu_grouped") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prefillSource(false), "I2P_MXFP8 1") == null);
+    try std.testing.expect(std.mem.indexOf(u8, prefillSource(true), "I2P_MXFP8 1") != null);
 }

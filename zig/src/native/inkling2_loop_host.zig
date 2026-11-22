@@ -32,6 +32,7 @@ pub const Host = struct {
     model: *inkling.Model,
     cache: inkling.Cache,
     scratch: inkling.Scratch,
+    prefill: inkling.PrefillScratch,
     capacity: usize,
     eos: u32,
     info_: api.Info,
@@ -297,20 +298,26 @@ pub const Host = struct {
         }
         h.cache.len = 0;
         const vocab: usize = h.model.config.text.unpadded_vocab;
-        for (r.prompt) |id| {
+        const chunk: usize = h.prefill.chunk;
+        var at: usize = 0;
+        while (at < r.prompt.len) {
             if (h.cancelled(job)) {
                 if (!job.prefill_sent) emit(job, .{ .prefilled = 0 });
                 fin.reason = .cancelled;
                 h.cache.len = 0;
                 return;
             }
-            inkling.position(h.model, &h.scratch, &h.cache, id) catch |e| {
+            const take = @min(chunk, r.prompt.len - at);
+            const last = at + take >= r.prompt.len;
+            inkling.prefillWant(h.model, &h.prefill, &h.cache, r.prompt[at..][0..take], if (last) .last else .none) catch |e| {
                 if (!job.prefill_sent) emit(job, .{ .prefilled = 0 });
                 fin.message = @errorName(e);
                 h.cache.len = 0;
                 return;
             };
+            at += take;
         }
+        @memcpy(h.scratch.logits.slice(f32, vocab), h.prefill.logits.slice(f32, vocab));
         const done_prefill = h.now();
         h.lock();
         if (done_prefill > job.began) h.prefill_rate = @as(f64, @floatFromInt(r.prompt.len)) / (@as(f64, @floatFromInt(done_prefill - job.began)) / 1e9);
@@ -415,6 +422,8 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
     errdefer cache.deinit();
     var scratch = try inkling.Scratch.init(model.device, &model.config);
     errdefer scratch.deinit();
+    var prefill = try inkling.PrefillScratch.init(model.device, &model.config, inkling.default_chunk);
+    errdefer prefill.deinit();
     const image_token: u32 = model.config.image_token;
     h.* = .{
         .gpa = gpa,
@@ -422,6 +431,7 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
         .model = model,
         .cache = cache,
         .scratch = scratch,
+        .prefill = prefill,
         .capacity = capacity,
         .eos = eos,
         .info_ = .{
@@ -430,7 +440,7 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
             .context_window = @intCast(capacity),
             .context_fitted = true,
             .greedy_only = true,
-            .reasoning = false,
+            .reasoning = true,
             .vision = .{
                 .ctx = h,
                 .prepare = visionPrepare,
@@ -454,6 +464,7 @@ pub fn closeHost(ctx: *anyopaque) void {
     h.stop();
     h.cache.deinit();
     h.scratch.deinit();
+    h.prefill.deinit();
     h.model.deinit();
     h.gpa.destroy(h);
 }

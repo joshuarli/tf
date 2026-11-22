@@ -34,6 +34,12 @@ class LoadLimitSelection(unittest.TestCase):
         self.assertEqual(harness.load_limit_var("flint-int4"), "FLINT_LOAD_LIMIT_GB")
         self.assertEqual(harness.load_limit_var("inkling-2-mini"), "INKLING_LOAD_LIMIT_GB")
 
+    def test_wired_buffers_already_in_the_footprint_are_charged_once(self):
+        import heavy
+        gb = 10**9
+        self.assertEqual(heavy.charge([(20 * gb, 3 * gb)], 9 * gb), 20 * gb)
+        self.assertEqual(heavy.charge([(gb, 2 * gb)], 20 * gb), 21 * gb)
+
     def test_inkling_limit_fits_its_checkpoint_under_the_heavy_cap(self):
         import heavy
         self.assertEqual(heavy.INKLING_LOAD_LIMIT_GB, 26)
@@ -145,12 +151,80 @@ class ModelModes(unittest.TestCase):
 
     def test_inkling_serves_ar(self):
         self.assertIsNone(harness.model_mode_problem("inkling-2-mini", "ar"))
-        self.assertEqual(harness.default_serve_args("inkling-2-mini"), ["--no-drafts"])
+        self.assertEqual(harness.default_serve_args("inkling-2-mini"), ["--no-drafts", "--temperature", "0"])
 
     def test_flint_is_unchanged(self):
         self.assertIsNone(harness.model_mode_problem("flint-int4", "ar"))
         self.assertIsNone(harness.model_mode_problem("flint-int4", "copy"))
         self.assertEqual(harness.default_serve_args("flint-int4"), [])
+
+
+class QualityHostConditions(unittest.TestCase):
+    def test_other_gpu_users_do_not_refuse_a_quality_run_but_memory_pressure_does(self):
+        gpu = "gpu-gate-ready: contended (check 1 of 1): other processes used 103.4% GPU time (limit 5); "
+        self.assertEqual(quality_run.quality_blockers([gpu]), [])
+        self.assertEqual(quality_run.quality_blockers([gpu, "memory pressure level 2"]), ["memory pressure level 2"])
+
+
+class PiServerLoss(unittest.TestCase):
+    def test_a_server_that_exits_mid_run_fails_the_run_and_stops_it(self):
+        import tempfile
+        from unittest import mock
+
+        class Process:
+            def __init__(self):
+                self.polls = 0
+
+            def poll(self):
+                self.polls += 1
+                return 4
+
+        class Server:
+            def __init__(self, *args):
+                self.base, self.port, self.argv, self.process = "http://127.0.0.1:1", 1, ["serve"], Process()
+
+            def start(self, timeout):
+                pass
+
+            def stop(self):
+                pass
+
+        ran = []
+
+        def run_task(task_dir, name, *args):
+            ran.append(name)
+            return {"task": name, "completed": True, "checker": {"pass": False}, "turns": 1, "pi_event_errors": []}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("a-task", "b-task"):
+                (root / "tasks" / name).mkdir(parents=True)
+                (root / "tasks" / name / "prompt.txt").write_text("text task")
+            (root / "agent").mkdir()
+            (root / "agent" / "models.json").write_text("{}")
+            binary = root / "bin"
+            binary.write_text("")
+            identity = {"model_ids": ["Inkling-2-Mini@ed40e7da625f"], "models": []}
+            with mock.patch.object(pi_run, "__file__", str(root / "run.py")), \
+                    mock.patch.object(pi_run.harness, "Server", Server), \
+                    mock.patch.object(pi_run.harness, "model_dir", lambda key: root), \
+                    mock.patch.object(pi_run.harness, "model_hashes", lambda key: {}), \
+                    mock.patch.object(pi_run.harness, "host_summary", lambda key: {}), \
+                    mock.patch.object(pi_run, "served_identity", lambda base: identity), \
+                    mock.patch.object(pi_run, "identity_problems", lambda *a, **k: []), \
+                    mock.patch.object(pi_run, "render_models", lambda *a: {}), \
+                    mock.patch.object(pi_run, "metrics", lambda base: {}), \
+                    mock.patch.object(pi_run, "run_task", run_task), \
+                    mock.patch.object(sys, "argv", ["run.py", "--model", "inkling2-mini", "--bin", str(binary)]):
+                status = pi_run.main()
+            record = json.loads((root / "results" / json.loads(
+                (root / "results" / "latest-inkling2-mini.json").read_text())["result"].split("/")[-1]).read_text())
+        self.assertEqual(status, 1)
+        self.assertEqual(ran, ["a-task"])
+        self.assertEqual(record["server"]["exit"], 4)
+        self.assertFalse(record["tasks"][0]["completed"])
+        self.assertEqual(record["totals"]["tasks"], 2)
+        self.assertFalse(record["completion"]["complete"])
 
 
 if __name__ == "__main__":

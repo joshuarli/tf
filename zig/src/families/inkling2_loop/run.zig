@@ -8,12 +8,14 @@ const inkling = tf.inkling2_loop;
 
 const usage =
     \\tf-inkling2-loop-run <model> <tokens.json> logits <out>       f32 logits [tokens, 200058], teacher-forced
+    \\tf-inkling2-loop-run <model> <tokens.json> prefill <chunk> <out>  chunked prefill logits [tokens, 200058] plus tok/s
     \\tf-inkling2-loop-run <model> <tokens.json> greedy <steps> <out>  then <steps> greedy tokens, one decode a step
     \\tf-inkling2-loop-run <model> <tokens.json> trace <out> [at]  per-tensor summaries in the reference's order, the whole pass or only position <at>
     \\tf-inkling2-loop-run <model> <tokens.json> tracerow <out> <at>  the raw per-tensor rows of position <at> as f32, [slots][9][hidden]
     \\tf-inkling2-loop-run <model> <tokens.json> reset <out>        the same logits twice from a fresh cache, byte-compared
-    \\tf-inkling2-loop-run <model> <tokens.json> bench <steps> [warmup]  the prompt, warmup, then steps: wall, encode, GPU ms
+    \\tf-inkling2-loop-run <model> <tokens.json> bench <steps> [warmup] [chunk]  the prompt, warmup, then steps: wall, encode, GPU ms
     \\tf-inkling2-loop-run <tokenizer.json> <text> tokenize <out>   the text's token ids, for the modes above
+    \\tf-inkling2-loop-run <tokenizer.json> <ids.json> detokenize <out>  the ids' text
     \\
 ;
 
@@ -62,6 +64,10 @@ pub fn main(init: std.process.Init) !void {
         try tokenize(gpa, init.io, args[1], args[2], args[4]);
         return;
     }
+    if (std.mem.eql(u8, mode, "detokenize")) {
+        try detokenize(gpa, init.io, args[1], args[2], args[4]);
+        return;
+    }
     const bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, args[2], gpa, .limited(64 << 20));
     defer gpa.free(bytes);
     const ids = try std.json.parseFromSlice([]u32, gpa, bytes, .{});
@@ -103,8 +109,47 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("inkling2_loop greedy: {d} prompt tokens, {d} steps, {d} ms\n", .{ ids.value.len, steps, (now() - t0) / std.time.ns_per_ms });
         return;
     }
+    if (std.mem.eql(u8, mode, "prefill")) {
+        if (args.len != 6) {
+            std.debug.print("{s}", .{usage});
+            return error.ExpectedArgs;
+        }
+        const chunk = try std.fmt.parseInt(usize, args[4], 10);
+        if (chunk == 0) {
+            std.debug.print("{s}", .{usage});
+            return error.ExpectedArgs;
+        }
+        var cache = try inkling.Cache.init(m.device, c, ids.value.len);
+        defer cache.deinit();
+        var ps = try inkling.PrefillScratch.init(m.device, c, chunk);
+        defer ps.deinit();
+        const outp = try gpa.alloc(f32, ids.value.len * vocab);
+        defer gpa.free(outp);
+        const p0 = now();
+        var at: usize = 0;
+        while (at < ids.value.len) {
+            const take = @min(chunk, ids.value.len - at);
+            try inkling.prefill(m, &ps, &cache, ids.value[at..][0..take]);
+            @memcpy(outp[at * vocab ..][0..take * vocab], ps.logits.slice(f32, take * vocab));
+            at += take;
+        }
+        const p1 = now();
+        const ms: f64 = @as(f64, @floatFromInt(p1 - p0)) / 1e6;
+        const rate: f64 = @as(f64, @floatFromInt(ids.value.len)) / (ms / 1000.0);
+        const output = try std.Io.Dir.cwd().createFile(init.io, args[5], .{});
+        defer output.close(init.io);
+        const output_bytes = std.mem.sliceAsBytes(outp);
+        var written: usize = 0;
+        while (written < output_bytes.len) {
+            const end = @min(written + (1 << 30), output_bytes.len);
+            try output.writeStreamingAll(init.io, output_bytes[written..end]);
+            written = end;
+        }
+        std.debug.print("inkling2_loop prefill: {d} tokens in {d:.1} ms, {d:.1} tok/s chunk {d}\n", .{ ids.value.len, ms, rate, chunk });
+        return;
+    }
     if (std.mem.eql(u8, mode, "bench")) {
-        if (args.len < 5 or args.len > 6) {
+        if (args.len < 5 or args.len > 7) {
             std.debug.print("{s}", .{usage});
             return error.ExpectedArgs;
         }
@@ -113,14 +158,33 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("{s}", .{usage});
             return error.ExpectedArgs;
         }
-        const warm = if (args.len == 6) try std.fmt.parseInt(usize, args[5], 10) else 8;
+        const warm = if (args.len >= 6) try std.fmt.parseInt(usize, args[5], 10) else 8;
+        const chunk: usize = if (args.len == 7) try std.fmt.parseInt(usize, args[6], 10) else 0;
         var cache = try inkling.Cache.init(m.device, c, ids.value.len + warm + steps + 1);
         defer cache.deinit();
         var scratch = try inkling.Scratch.init(m.device, c);
         defer scratch.deinit();
         const walls = try gpa.alloc(f64, steps);
         defer gpa.free(walls);
-        try run(m, &scratch, &cache, ids.value);
+        if (chunk == 0) {
+            try run(m, &scratch, &cache, ids.value);
+        } else {
+            var ps = try inkling.PrefillScratch.init(m.device, c, chunk);
+            defer ps.deinit();
+            const p0 = now();
+            var at: usize = 0;
+            while (at < ids.value.len) {
+                const take = @min(chunk, ids.value.len - at);
+                const last = at + take >= ids.value.len;
+                try inkling.prefillWant(m, &ps, &cache, ids.value[at..][0..take], if (last) .last else .none);
+                at += take;
+            }
+            const p1 = now();
+            const ms: f64 = @as(f64, @floatFromInt(p1 - p0)) / 1e6;
+            const rate: f64 = @as(f64, @floatFromInt(ids.value.len)) / (ms / 1000.0);
+            std.debug.print("inkling2_loop prefill: {d} tokens in {d:.1} ms, {d:.1} tok/s chunk {d}\n", .{ ids.value.len, ms, rate, chunk });
+            @memcpy(scratch.logits.slice(f32, vocab), ps.logits.slice(f32, vocab));
+        }
         var tok = argmax(scratch.logits.slice(f32, vocab));
         for (0..warm) |_| {
             try inkling.position(m, &scratch, &cache, tok);
@@ -261,6 +325,19 @@ fn tokenize(gpa: std.mem.Allocator, io: std.Io, tok_path: []const u8, text_path:
     try std.json.Stringify.value(ids, .{}, &w.writer);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = w.written() });
     std.debug.print("inkling2_loop tokenize: {d} tokens\n", .{ids.len});
+}
+
+fn detokenize(gpa: std.mem.Allocator, io: std.Io, tok_path: []const u8, ids_path: []const u8, out_path: []const u8) !void {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, ids_path, gpa, .limited(64 << 20));
+    defer gpa.free(bytes);
+    const ids = try std.json.parseFromSlice([]u32, gpa, bytes, .{});
+    defer ids.deinit();
+    var tok = try tk.loadTokenizer(io, gpa, tok_path);
+    defer tok.deinit();
+    const text = try tok.decode(gpa, ids.value, false);
+    defer gpa.free(text);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = text });
+    std.debug.print("inkling2_loop detokenize: {d} tokens\n", .{ids.value.len});
 }
 
 fn run(m: *const inkling.Model, s: *inkling.Scratch, cache: *inkling.Cache, ids: []const u32) !void {

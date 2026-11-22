@@ -11,7 +11,7 @@ const Tensor = wts.Tensor;
 const Layer = wts.Layer;
 const Controller = wts.Controller;
 
-pub const default_chunk: usize = 128;
+pub const default_chunk: usize = 512;
 
 pub const WantLogits = enum { none, last, all };
 

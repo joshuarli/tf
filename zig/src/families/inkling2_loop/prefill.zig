@@ -168,6 +168,8 @@ pub const PrefillScratch = struct {
     moe_cur: mtl.Buffer,
     moe_sorted: mtl.Buffer,
     logits: mtl.Buffer,
+    capture: ?mtl.Buffer,
+    capture_row: usize,
 
     pub fn init(device: mtl.Device, c: *const cfg.Config, chunk: usize) !PrefillScratch {
         const h: usize = c.text.hidden;
@@ -183,6 +185,8 @@ pub const PrefillScratch = struct {
         const vocab: usize = c.text.unpadded_vocab;
         const S: usize = st.mix_states;
         var s: PrefillScratch = undefined;
+        s.capture = null;
+        s.capture_row = 0;
         s.chunk = chunk;
         s.h = @intCast(h);
         s.heads = c.text.local.q;
@@ -554,7 +558,7 @@ const Chunk = struct {
         c.convolve(b(s.projout), b(s.o), lay.attn_post, null, undefined, b(s.projout), ring[2], c.h, 0, 0);
     }
 
-    fn experts(c: Chunk, lay: *const Layer, input: B) void {
+    fn experts(c: Chunk, lay: *const Layer, input: B, slot: u32) void {
         const m = c.m;
         const cc = &m.config;
         const s = c.s;
@@ -565,6 +569,7 @@ const Chunk = struct {
         c.enc.dispatchGroups(mtl.Size.of((E + 31) / 32, c.n, 1), mtl.Size.of(1024, 1, 1));
         c.setP(s.pipes.pick, Pick{ .experts = E, .topk = K, .rows = c.n, .route_scale = cc.text.route_scale }, &.{ b(s.router), t(lay.router_bias), A, b(s.picks), b(s.wts) });
         c.enc.dispatchGroups(mtl.Size.of(c.n, 1, 1), mtl.Size.of(32, 1, 1));
+        if (s.capture) |capture| c.copyN(bo(s.picks, s.capture_row * K * 4), bo(capture, (cc.slots() * st.trace_rows * c.h + slot * K) * 4), K);
         const slots: u32 = c.n * K;
         c.setP(s.pipes.moe_zero, E, &.{ b(s.moe_cnt), A });
         c.enc.dispatchThreads(mtl.Size.of(E, 1, 1), mtl.Size.of(32, 1, 1));
@@ -621,6 +626,7 @@ const Chunk = struct {
             }
         }
 
+        for (0..3) |j| c.record(slot, j, ins[j]);
         if (full) {
             c.rmsW(ins[0], t(lay.q_norm), b(s.n0), 1, 0, c.h, text.eps);
             c.rmsW(ins[1], t(lay.k_norm), b(s.n1), 1, 0, c.h, text.eps);
@@ -636,24 +642,35 @@ const Chunk = struct {
             ins = .{ .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, .{ .buf = b(s.n0), .xs = 1, .xb = 0 } };
         }
 
+        for (0..3) |j| c.record(slot, 3 + j, ins[j]);
         c.attention(lay, slot, full, ins);
+        c.record(slot, 6, .{ .buf = b(s.o), .xs = 1, .xb = 0 });
         if (ip % text.block == 0) {
             c.pushBlock();
             c.copyN(b(s.o), b(s.x), @as(usize, c.n) * c.h);
         } else c.addN(b(s.x), b(s.o), @as(usize, c.n) * c.h);
 
         c.copyN(b(s.x), b(s.ffnin), @as(usize, c.n) * c.h);
+        c.record(slot, 7, .{ .buf = b(s.ffnin), .xs = 1, .xb = 0 });
         c.mixBlocks(b(s.x), m.weights.mlp_queries[index], bo(s.mixout, 0));
         if (bank) |_| {
             const ctl = lay.controllers[3] orelse return error.MissingController;
             c.control(ctl, .{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, .{ .buf = b(s.msg), .xs = 4, .xb = 3 }, bo(s.mixout, 0), 1, 0);
         }
         c.rmsW(.{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, t(lay.mlp_norm), b(s.m0), 1, 0, c.h, text.eps);
-        c.experts(lay, b(s.m0));
+        c.experts(lay, b(s.m0), slot);
         const slots = c.rings(slot);
         c.convolve(b(s.moe), b(s.aconv), lay.mlp_post, null, undefined, b(s.moe), slots[3], c.h, 0, 0);
         c.copyN(b(s.ffnin), b(s.x), @as(usize, c.n) * c.h);
         c.addN(b(s.x), b(s.aconv), @as(usize, c.n) * c.h);
+        c.record(slot, 8, .{ .buf = b(s.x), .xs = 1, .xb = 0 });
+    }
+
+    fn record(c: Chunk, slot: u32, which: usize, input: In) void {
+        if (c.s.capture) |capture| {
+            const src = bo(input.buf.buf, input.buf.off + (c.s.capture_row * input.xs + input.xb) * c.h * 4);
+            c.copyN(src, bo(capture, (@as(usize, slot) * st.trace_rows + which) * c.h * 4), c.h);
+        }
     }
 };
 

@@ -11,6 +11,7 @@ const usage =
     \\tf-inkling2-loop-run <model> <tokens.json> prefill <chunk> <out>  chunked prefill logits [tokens, 200058] plus tok/s
     \\tf-inkling2-loop-run <model> <tokens.json> greedy <steps> <out>  then <steps> greedy tokens, one decode a step
     \\tf-inkling2-loop-run <model> <tokens.json> trace <out> [at]  per-tensor summaries in the reference's order, the whole pass or only position <at>
+    \\tf-inkling2-loop-run <model> <tokens.json> prefillrow <chunk> <out> <at>  capture a chunked prefill row
     \\tf-inkling2-loop-run <model> <tokens.json> tracerow <out> <at>  the raw per-tensor rows of position <at> as f32, [slots][9][hidden]
     \\tf-inkling2-loop-run <model> <tokens.json> reset <out>        the same logits twice from a fresh cache, byte-compared
     \\tf-inkling2-loop-run <model> <tokens.json> bench <steps> [warmup] [chunk]  the prompt, warmup, then steps: wall, encode, GPU ms
@@ -107,6 +108,37 @@ pub fn main(init: std.process.Init) !void {
         }
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[5], .data = std.mem.sliceAsBytes(out) });
         std.debug.print("inkling2_loop greedy: {d} prompt tokens, {d} steps, {d} ms\n", .{ ids.value.len, steps, (now() - t0) / std.time.ns_per_ms });
+        return;
+    }
+    if (std.mem.eql(u8, mode, "prefillrow")) {
+        if (args.len != 7) return error.ExpectedArgs;
+        const chunk = try std.fmt.parseInt(usize, args[4], 10);
+        const at = try std.fmt.parseInt(usize, args[6], 10);
+        if (chunk == 0 or at >= ids.value.len) return error.ExpectedArgs;
+        var cache = try inkling.Cache.init(m.device, c, ids.value.len);
+        defer cache.deinit();
+        var ps = try inkling.PrefillScratch.init(m.device, c, chunk);
+        defer ps.deinit();
+        const count = c.slots() * (9 * c.text.hidden + c.text.topk);
+        const capture_buf = try m.device.buffer(count * 4, mtl.ResourceOptions.shared);
+        defer capture_buf.deinit();
+        var offset: usize = 0;
+        while (offset <= at) {
+            const take = @min(chunk, ids.value.len - offset);
+            if (at < offset + take) {
+                ps.capture = capture_buf;
+                ps.capture_row = at - offset;
+            }
+            try inkling.prefillWant(m, &ps, &cache, ids.value[offset..][0..take], .none);
+            offset += take;
+        }
+        const rows = c.slots() * 9 * c.text.hidden;
+        const data = capture_buf.slice(f32, count);
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[5], .data = std.mem.sliceAsBytes(data[0..rows]) });
+        const picks_path = try std.fmt.allocPrint(gpa, "{s}.picks", .{args[5]});
+        defer gpa.free(picks_path);
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = picks_path, .data = std.mem.sliceAsBytes(data[rows..]) });
+        std.debug.print("inkling2_loop prefillrow: position {d} chunk {d}\n", .{ at, chunk });
         return;
     }
     if (std.mem.eql(u8, mode, "prefill")) {
@@ -304,8 +336,12 @@ pub fn main(init: std.process.Init) !void {
             const tr: ?*inkling.Trace = if (i == at) &t else null;
             try inkling.positionTrace(m, &scratch, &cache, id, tr);
         }
-        const rows = scratch.capture.slice(f32, c.slots() * per * m.config.text.hidden);
-        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[4], .data = std.mem.sliceAsBytes(rows) });
+        const row_count = c.slots() * per * m.config.text.hidden;
+        const rows = scratch.capture.slice(f32, row_count + c.slots() * c.text.topk);
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[4], .data = std.mem.sliceAsBytes(rows[0..row_count]) });
+        const picks_path = try std.fmt.allocPrint(gpa, "{s}.picks", .{args[4]});
+        defer gpa.free(picks_path);
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = picks_path, .data = std.mem.sliceAsBytes(rows[row_count..]) });
         std.debug.print("inkling2_loop tracerow: position {d} of {d}, {d} rows in {d} ms\n", .{ at, ids.value.len, c.slots() * per, (now() - t0) / std.time.ns_per_ms });
     } else {
         std.debug.print("{s}", .{usage});

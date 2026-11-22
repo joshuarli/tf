@@ -512,7 +512,7 @@
       "size": 862878,
       "role": "comparator",
       "license": "MIT",
-      "purpose": "codegraff's nanoattention (Rach's engine: native Zig/Metal Flint inference, MIT original code) at main 6f782a8d on 2026-11-21, public and runnable",
+      "purpose": "Rach's nanoattention: native Zig/Metal Flint plus experimental Inkling 2 Mini, at main 6f782a8d on 2026-11-21; pinned nano bench comparator, upstream Inkling logit parity not established",
       "model": "nanoattention",
       "store": "src"
     }

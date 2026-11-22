@@ -156,6 +156,10 @@ def run(args) -> int:
     missing = [cell for cell, _ in cells if not by_cell.get(cell)]
     if missing:
         raise SystemExit(f"no prompts for cells {missing}")
+    for prompts in by_cell.values():
+        for prompt in prompts:
+            if problem := harness.context_problem(prompt["measured_prompt_tokens"], OUTPUT_TOKENS):
+                raise SystemExit(f"{prompt['name']}: {problem}")
     stamp = dt.datetime.now(dt.timezone.utc)
     run_id = args.run_id or f"{args.name}-{args.mode}-{'-'.join(str(c) for c, _ in cells)}-{stamp.strftime('%H%M%S')}"
     out_dir = harness.RUNS_DIR / stamp.astimezone().strftime("%Y-%m-%d")
@@ -205,7 +209,7 @@ def main() -> int:
     parser.add_argument("name", help="comparator directory under campaign/comparators")
     parser.add_argument("--model-dir", required=True)
     parser.add_argument("--mode", default="greedy")
-    parser.add_argument("--cells", default="1024,4096,32768")
+    parser.add_argument("--cells", default="1024,4096")
     parser.add_argument("--prompts", default="all")
     parser.add_argument("--pairs", default=None, help="count (default 3) or an explicit comma list")
     parser.add_argument("--ready-timeout", type=float, default=1800)

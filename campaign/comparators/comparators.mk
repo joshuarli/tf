@@ -2,7 +2,7 @@ UV ?= ~/.local/bin/uv
 CMP_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 CAMPAIGN_DIR := $(abspath $(CMP_DIR)/..)
 FLINT_DIR ?= $(HOME)/models/flint-int4@3b93f9053b53
-CMP_CELLS ?= ~1024,~4096,~32768
+CMP_CELLS ?= ~1024,~4096
 CMP_PAIRS ?= 3
 CMP_ENV := TMPDIR=$(TMPDIR) HF_HOME=$(HF_HOME) UV_CACHE_DIR=$(UV_CACHE_DIR)
 

@@ -1,7 +1,7 @@
 UV ?= ~/.local/bin/uv
 MODEL ?= flint
 MODE ?= ar
-CELLS ?= 1024,4096,32768
+CELLS ?= 1024,4096
 PROMPTS ?= all
 PAIRS ?= 1
 BIN ?= $(WORK)/wt/baseline/zig-out/native/bin/tensorfold-native

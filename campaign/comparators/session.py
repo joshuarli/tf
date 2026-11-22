@@ -75,7 +75,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="flint")
     parser.add_argument("--mode", default="ar", choices=sorted(bench.MODES))
-    parser.add_argument("--cells", default="1024,4096,32768")
+    parser.add_argument("--cells", default="1024,4096")
     parser.add_argument("--prompts", default="all")
     parser.add_argument("--session", default="B")
     parser.add_argument("--pairs-start", type=int, default=4)

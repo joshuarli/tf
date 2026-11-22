@@ -268,7 +268,7 @@ def main() -> int:
     record = {"schema": 1, "model": args.model, "recorded_at": stamp.isoformat(), "run_id": run_id,
               "host": harness.host_summary(model_key),
               "pi": {"path": str(PI), "flags": PI_FLAGS, "tools": PI_TOOLS, "provider": "tensorfold",
-                     "model_id": served_model},
+                     "model_id": served_model, "context_tokens": harness.CONTEXT_TOKENS},
               "server": {"base": base, "exit": server_exit, "port": server.port, "owned": True, "argv": server.argv,
                          "identity": live_identity,
                          "binary": {"path": str(binary), "sha256": binary_sha256}},

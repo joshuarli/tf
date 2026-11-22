@@ -18,7 +18,8 @@ import harness  # noqa: E402
 RECORDS = [
     ("exo-main", "greedy", "deferred: not needed until a competitive claim; Exo needs a single-node cluster and an npm dashboard build, then its API serves the same checkpoint but with no ignore_eos or prompt-cache size"),
     ("exo-2533", "greedy", "deferred: not needed until a competitive claim; the PR #2533 head is pinned but not built this pass"),
-    ("nanoattention", "greedy", "deferred: not needed until a competitive claim; it is public MIT Zig/Metal and built here (zig-out/bin/flint session), but this pass measured no full 512-token cell"),
+    ("nanoattention", "greedy", "Flint comparison remains deferred: no full 512-token cell measured. "
+     "Inkling has a separate nanoattention-bench target; its engine-only receipts do not qualify this served cell."),
 ]
 
 

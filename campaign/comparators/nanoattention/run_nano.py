@@ -115,6 +115,9 @@ def run(args) -> int:
     manifest = load_prompts()
     cells = [int(token.lstrip("~")) for token in args.cells.split(",") if token.strip()]
     by_cell = select(manifest, cells)
+    for cell in cells:
+        if problem := harness.context_problem(cell, OUTPUT_TOKENS):
+            raise SystemExit(problem)
     stamp = dt.datetime.now(dt.timezone.utc)
     run_id = args.run_id or f"nanoattention-{args.mode}-{'-'.join(map(str, cells))}-{stamp.strftime('%H%M%S')}"
     out_dir = harness.RUNS_DIR / stamp.astimezone().strftime("%Y-%m-%d")
@@ -143,6 +146,8 @@ def run(args) -> int:
                 for prompt in by_cell[cell]:
                     text = (harness.REPO / prompt["path"]).read_text(encoding="utf-8")
                     ids = prompt_ids(model_dir, text)
+                    if problem := harness.context_problem(len(ids), OUTPUT_TOKENS):
+                        raise ValueError(f"{prompt['name']}: {problem}")
                     cold = request(proc, ids, reset=True, timeout=args.ready_timeout)
                     warm = request(proc, ids, reset=True, timeout=args.ready_timeout)
                     natural = request(proc, ids, reset=True, timeout=args.ready_timeout)
@@ -162,7 +167,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="flint")
     parser.add_argument("--mode", default="greedy")
-    parser.add_argument("--cells", default="1024,4096,32768")
+    parser.add_argument("--cells", default="1024,4096")
     parser.add_argument("--pairs", type=int, default=3)
     parser.add_argument("--ready-timeout", type=float, default=1800)
     parser.add_argument("--run-id", default=None)

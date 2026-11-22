@@ -86,6 +86,14 @@ def verify_prompts(by_cell: dict[int, list[dict]]) -> None:
                 raise SystemExit(f"prompt {prompt['name']} hashes {digest}, not the manifest's {prompt['sha256']}")
 
 
+def verify_context(by_cell: dict[int, list[dict]]) -> None:
+    for prompts in by_cell.values():
+        for prompt in prompts:
+            count = prompt.get("expected_prompt_tokens")
+            if count is not None and (problem := harness.context_problem(count, OUTPUT_TOKENS)):
+                raise SystemExit(f"{prompt['name']}: {problem}")
+
+
 def mode_args(mode: str) -> tuple[list[str], bool, bool]:
     if mode in UNSUPPORTED_MODES:
         raise SystemExit(f"mode {mode} is unsupported: {UNSUPPORTED_MODES[mode]}")
@@ -137,7 +145,7 @@ def contract(*, key: str, hashes: dict, host: dict, mode: str, flags: list[str],
             "host_signature": {field: host.get(field) for field in (
                 "product", "os", "memory_bytes", "recommended_max_working_set_bytes",
                 "performance_cores", "efficiency_cores", "gpu_cores", "metal")},
-            "context_policy": {"parallel": PARALLEL, "cell_tokens": cell,
+            "context_policy": {"parallel": PARALLEL, "cell_tokens": cell, "max_tokens": harness.CONTEXT_TOKENS,
                                "served_model": None},
             "output_policy": {"max_tokens": OUTPUT_TOKENS, "temperature": TEMPERATURE, "seed": SEED,
                               "ignore_eos": True, "fixed_length": True},
@@ -291,6 +299,7 @@ def run(args) -> int:
         for prompt in prompts:
             prompt["expected_prompt_tokens"] = expected_prompt_tokens(key, prompt, manifest["model"])
     verify_prompts(by_cell)
+    verify_context(by_cell)
     flags, wants_drafter, copy_drafts = mode_args(args.mode)
     drafter = harness.drafter_path() if wants_drafter else None
     if wants_drafter and drafter is None:
@@ -339,6 +348,12 @@ def run(args) -> int:
                             raise RuntimeError("server listed no model id")
                         contract_value["context_policy"]["served_model"] = served[0]
                         for prompt in by_cell[cell]:
+                            content = (harness.REPO / prompt["path"]).read_text(encoding="utf-8")
+                            count = harness.rendered_prompt_tokens(server.base, {
+                                "model": served[0], "messages": [{"role": "user", "content": content}]})
+                            if problem := harness.context_problem(count, OUTPUT_TOKENS):
+                                raise ValueError(f"{prompt['name']}: {problem}")
+                        for prompt in by_cell[cell]:
                             trial(path, run_id=run_id, experiment=experiment, session=session,
                                   engine=engine, binary=identity,
                                   model_key=key, mode=args.mode, flags=server_args, cell=cell,
@@ -362,7 +377,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="flint")
     parser.add_argument("--mode", default="ar", choices=sorted([*MODES, *UNSUPPORTED_MODES]))
-    parser.add_argument("--cells", default=",".join(str(n) for n in (1024, 4096, 32768)))
+    parser.add_argument("--cells", default="1024,4096")
     parser.add_argument("--prompts", default="all", help="all (dev), heldout/holdout, or comma-separated prompt names")
     parser.add_argument("--pairs", type=int, default=1)
     parser.add_argument("--bin", default=str(harness.BASELINE_BIN), help="baseline process binary")

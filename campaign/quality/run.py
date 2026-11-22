@@ -156,6 +156,7 @@ def run(args) -> int:
               "suite": {"cases": len(cases), "manifest_sha256": harness.sha256_file(MANIFEST),
                         "cases_sha256": harness.sha256_file(CASES)},
               "protocol": {"temperature": TEMPERATURE, "seed": SEED, "max_tokens": MAX_TOKENS,
+                           "context_tokens": harness.CONTEXT_TOKENS,
                            "prompt_cache_gib": PROMPT_CACHE_GIB, "drafts": "product default",
                            "sandbox": "sandbox-exec, no network, writes only in .work/quality/<run>/<case>"},
               "host": harness.host_summary(key), "pressure_before": before["pressure"], "cases": []}
@@ -163,6 +164,7 @@ def run(args) -> int:
         record["excluded"] = excluded
     started = time.monotonic()
     failures = 0
+    context_excluded = 0
     with harness.Server(binary, model, [], PROMPT_CACHE_GIB, log_path) as server:
         served = server.models()
         if not served:
@@ -185,6 +187,16 @@ def run(args) -> int:
                 entry["request"]["tool_choice"] = body["tool_choice"]
             began = time.monotonic()
             try:
+                count = harness.rendered_prompt_tokens(server.base, body)
+                entry["prompt_tokens"] = count
+                if problem := harness.context_problem(count, MAX_TOKENS):
+                    context_excluded += 1
+                    excluded.append({"id": case["id"], "kind": case["kind"], "reason": problem,
+                                     "prompt_tokens": count, "max_tokens": MAX_TOKENS})
+                    record["excluded"] = excluded
+                    print(f"{index}/{len(cases)} {case['id']}: excluded ({problem})", file=sys.stderr, flush=True)
+                    continue
+                began = time.monotonic()
                 reply = send(server.base, body)
             except (urllib.error.URLError, OSError, KeyError, ValueError) as error:
                 detail = getattr(error, "read", lambda: b"")()
@@ -223,6 +235,7 @@ def run(args) -> int:
     record["completion"] = {"complete": len(record["cases"]) == len(cases) and failures == 0,
                             "scored": len(record["cases"]), "requested": len(cases),
                             "scoring_failures": failures,
+                            "context_excluded": context_excluded,
                             "qualification": "run `quality-qualify --result <this file> --baseline <frozen result>`"}
     out = run_dir / "result.json"
     out.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")

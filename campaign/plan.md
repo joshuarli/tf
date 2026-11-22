@@ -2,6 +2,17 @@
 
 ## Status
 
+- **Owner steering (2026-11-22):** cap campaign context at **32,768 total tokens**, including reserved output;
+  quick benchmark defaults are 1K/4K. Refuse oversized benchmark inputs before timing; preserve long fixtures
+  and report quality exclusions as incomplete coverage. Defer 128K investigations. This changes campaign
+  admission and server settings, not the model's runtime capability outside the campaign.
+- **Nanoattention setup (2026-11-22):** source `6f782a8d` is already pinned and includes experimental Inkling
+  on `main`. `nanoattention-setup`, `nanoattention-smoke` and `nanoattention-bench` compare its `nano bench`
+  CLI with current TF on identical raw prompt IDs and the original checkpoint. Its BF16 arithmetic and
+  failed upstream logit parity make it a performance investigation, not a qualified numerical oracle.
+  Source preparation and protocol tests run on Linux; Mac build/smoke/M5 receipts are pending. See
+  `comparators/nanoattention/README.md`. Use any measured advantage to select one bounded TF experiment.
+
 - **Goal:** a faster, leaner native Zig/Metal TensorFold on this M5 Max. Flint came first; the focus is now a qualified Inkling 2 Mini port (see **Acceptance**).
 - **Upstream frozen at:** `fa13df5dd1fdd23ada775510a464c9aa03a39e09` (TensorFold `main`, 2026-11-21). Work integrates on `main` (owner, 2026-11-21: `campaign/m5` was fast-forwarded into `main` and retired).
 - **Last accepted revision:** `c476dd3ed` on `main`.
@@ -90,7 +101,10 @@ The owner made the first two decisions on 2026-11-21:
    The fetch total stays under 120 GB; 621 GiB is free. Never delete files you did not create. Only one full model is resident at a time.
 8. **Prescribed: memory.** The machine has 48 GiB of RAM. C0 records the Metal device's `recommendedMaxWorkingSetSize` (W).
    - Owner cap (2026-11-21): the campaign as a whole stays under 32 GB so the host stays usable for other work. Every command that loads a model or uses more than about 2 GB runs through `campaign/heavy.py`, which takes the GPU lock and stops the process tree past 28 GB; bare `lockf` is not used. The f32 GGUF oracle cannot run under this cap and is reached only through its receipts.
-   - Every benchmark server sets `FLINT_LOAD_LIMIT_GB=27` (`heavy.FLINT_LOAD_LIMIT_GB`; or the Inkling equivalent) and an explicit `--prompt-cache-gib`. At 27 Flint keeps 1.7 GiB for caches and serves up to 56,192 tokens, enough for the 32K cells; runs recorded before the cap used 36 and pair only with runs at the same limit.
+   - Every benchmark server sets `FLINT_LOAD_LIMIT_GB=27` (`heavy.FLINT_LOAD_LIMIT_GB`; or the Inkling equivalent),
+     an explicit `--prompt-cache-gib` and `--context 32768`. The old memory-derived Flint limit was 56,192
+     tokens; the owner's total-context cap now takes precedence. Runs recorded before the memory cap used
+     36 and pair only with runs at the same memory and context limits.
    - Prompt cache is 0 for cold-prefill cells and 2 otherwise.
    - Speculation may add at most 4 GiB of draft residency, which is min(4 GiB, 10% of RAM).
    - A run that sees memory pressure or thermal throttling (`pmset -g therm`, `memory_pressure`) is recorded as an invalid trial and the workload is reduced. Never change system settings.
@@ -153,7 +167,7 @@ Host facts measured on 2026-11-21:
 
 Items run on per-model chains, and items whose owned files are disjoint run in parallel:
 
-- **Flint:** trustworthy measurement (C2, C3) and F2's divergence trace, then a profile at 1K and 32K, then one bounded O-item screened and, if promising, qualified on the promotion matrix and held-out prompts. F5 speculation branches off after the target path is qualified.
+- **Flint:** trustworthy measurement (C2, C3) and F2's divergence trace, then a profile at 1K and 4K, then one bounded O-item screened and, if promising, qualified on the promotion matrix and held-out prompts. Any near-cap fixture must reserve reply headroom. F5 speculation branches off after the target path is qualified.
 - **Inkling 2 Mini:** I2's executable native forward path, then I3 minimal serving, then the frozen first-native baseline, then profiling and O-items. I5 branches off after I3.
 - **Comparators:** one runnable strong comparator is the early anchor (F3). The full matrix is needed only before a competitive claim.
 
@@ -192,7 +206,10 @@ GPU-timed and full-model steps serialize on the GPU lock even when their code la
   **Acceptance:** `zig build test-flint-draft-host`, plus a new Flint test for the switch; under the lock, `make -C campaign smoke MODEL=flint MODE=ar` returns 512 tokens with zero proposals.
 - **C1. Benchmark harness** (M, after C0; parallel with F1). Owns `campaign/bench/`, `campaign/prompts/` and `campaign/scorecard.py`.
   - Build on `tensorfold benchmark` and `tools/bench_*.py`; do not write a new framework.
-  - **Corpus:** fixed prompts covering code, prose/reasoning and structured output, at actual token lengths 1,024, 4,096 and 32,768, built from natural varied text with no repeated filler. Add a separate held-out set. Hash every prompt.
+  - **Corpus:** preserve the original fixed 1,024-, 4,096- and 32,768-token prompts and their hashes, covering
+    code, prose/reasoning and structured output with separate held-out prompts. The active quick matrix is
+    1K/4K. The original 32K prompts cannot fit a reply under the new 32K total cap; any future near-cap cell
+    needs a separately named and hashed fixture with reply headroom, not an in-place truncation.
   - **Modes:** `ar` (`--no-drafts`), `copy`, `drafter` and `combined`.
   - **Fixed length:** `ignore_eos: true` with 512 output tokens on every engine. Natural terminations are reported separately.
   - **Records:**
@@ -285,7 +302,9 @@ I-items own the Inkling set. They may start code work parallel to F-items, and u
   Flint O-items and Inkling O-items run in parallel lanes, with the GPU serialized.
   
   **Plateau:** stop a model's optimization after re-profiling and at least eight substantive failed candidates across more than one hypothesis family, or sooner if a measured hard bound (for example, decode at about 90% of measured weight-read bandwidth) establishes the limit.
-- **S2. Secondary investigations:** 128K context and 2 or 4 concurrent streams, reported as aggregate throughput, separate from single-user speed.
+- **S2. Secondary investigations:** 128K context is deferred by the owner's 2026-11-22 cap. Any future
+  concurrency investigation uses at most 32,768 total tokens per stream and reports aggregate throughput
+  separately from single-user speed; it is not part of the current quick matrix.
 
 ### P5: close
 

@@ -13,6 +13,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from context_policy import CONTEXT_TOKENS, context_problem, rendered_prompt_tokens
+
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -164,7 +166,7 @@ def host_summary(key: str = "flint-int4") -> dict:
             "gpu_cores": record["gpu"]["gpu_cores"], "metal": record["gpu"]["metal_support"],
             "os": f"{record['sw_vers']['product_name']} {record['sw_vers']['build_version']}",
             "recommended_max_working_set_bytes": int(record["metal"]["recommendedMaxWorkingSetSize"]),
-            "load_limit_gb": load_limit_gb(key)}
+            "load_limit_gb": load_limit_gb(key), "context_tokens": CONTEXT_TOKENS}
 
 
 def vm_pressure_level() -> int | None:
@@ -208,10 +210,10 @@ GPU_CLIENT = re.compile(r'"accumulatedGPUTime"=(\d+)')
 GPU_CREATOR = re.compile(r'"IOUserClientCreator" = "pid (\d+), ([^"]*)"')
 
 
-def gpu_time_by_pid() -> dict[int, tuple[str, int]]:
+def gpu_time_by_pid(*, strict: bool = False) -> dict[int, tuple[str, int]]:
     """Every Metal client's accumulated GPU nanoseconds, summed per process, from IOKit."""
     out = subprocess.run(["ioreg", "-r", "-w", "0", "-l", "-c", "AGXDeviceUserClient"],
-                         capture_output=True, text=True).stdout
+                         capture_output=True, text=True, check=strict).stdout
     totals: dict[int, tuple[str, int]] = {}
     pending = 0
     for line in out.splitlines():
@@ -387,6 +389,8 @@ class Server:
     """A model server under the GPU lock: ready wait, log parsing, /memory sampling and a group-only stop."""
 
     def __init__(self, binary: Path, model: Path, extra_args: list[str], prompt_cache_gib: int, log_path: Path):
+        if any(arg == "--context" or arg.startswith("--context=") for arg in extra_args):
+            raise ValueError(f"campaign servers fix --context at {CONTEXT_TOKENS}; remove the override")
         self.binary, self.model, self.extra_args = Path(binary), Path(model), list(extra_args)
         self.prompt_cache_gib = prompt_cache_gib
         self.log_path = Path(log_path)
@@ -404,7 +408,7 @@ class Server:
     def argv(self) -> list[str]:
         return [sys.executable, str(HEAVY), "--", str(self.binary), "serve", str(self.model), "--host", "127.0.0.1",
                 "--port", str(self.port), "--parallel", "1", "--prompt-cache-gib", str(self.prompt_cache_gib),
-                "--no-update-check", *self.extra_args]
+                "--no-update-check", "--context", str(CONTEXT_TOKENS), *self.extra_args]
 
     def start(self, timeout: float = 1800) -> None:
         TMP.mkdir(parents=True, exist_ok=True)

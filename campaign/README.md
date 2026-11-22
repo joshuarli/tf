@@ -41,6 +41,30 @@ Read the **Status** block of [plan.md](plan.md), run `make -C campaign host`, co
 
 ## Checks and benchmarks
 
+The campaign now caps context at **32,768 total tokens, including reply headroom** (owner, 2026-11-22).
+The default quick matrix selects 1K and 4K prompts. A nominal 32K prompt plus a 512-token reply is refused;
+fixtures are not silently shortened. Explicit long-context cells must fit at most 32,256 rendered prompt
+tokens with that reply budget. Quality cases reserve 8,192 reply tokens; oversized cases are recorded as
+exclusions and the original suite remains incomplete. Pi uses the same 32K window and 8K output budget.
+Historical receipts keep their original context identity and do not pair with the new capped protocol.
+
+### Nanoattention on Inkling
+
+The pinned nanoattention `main` now includes Inkling. Set up and compare it on the M5 with:
+
+```sh
+make -C campaign nanoattention-setup
+make -C campaign nanoattention-smoke
+make -C campaign nanoattention-bench
+```
+
+This uses the original checkpoint and identical prompt token IDs, under the GPU lock and memory watchdog.
+Read [the comparator protocol](comparators/nanoattention/README.md) before interpreting its receipts:
+it measures engine timings, and upstream's experimental BF16 implementation has not passed logit parity.
+The setup and host tests are prepared; actual Mac build and M5 timings still need these commands.
+
+### Select a check tier
+
 `make -C campaign bench-list` prints every workload with its tier, area, purpose and cost. Pick the smallest tier, or the named workloads, that cover a change.
 
 | Tier | What it runs | Cost |

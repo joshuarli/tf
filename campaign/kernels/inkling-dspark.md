@@ -1,6 +1,10 @@
 # Inkling 2 Mini DSpark acceptance
 
-**NO-GO** for native DSpark on this evidence. The best projected prose rate is
+**Corrected: GO for a scoped native DSpark, decided on the served chat comparator (see "Correction" below).**
+The original verdict follows. It compared chat-prompt acceptance against runner copy rates measured on raw
+text continuation.
+
+**Original: NO-GO** for native DSpark on this evidence. The best projected prose rate is
 45.27 tok/s, 10.02 tok/s below the measured 55.288 tok/s copy hybrid. The
 zero-drafter-cost ceiling for this model is 45.91 tok/s, still 9.38 tok/s short.
 All nine MLX speculative outputs differ from the corresponding MLX AR output.
@@ -105,3 +109,21 @@ run `gpu-gate-ready -1` and `perf-gate-ready`. Then run
 `python3 campaign/heavy.py -- <mlx-vlm-venv>/bin/python campaign/comparators/mlx-vlm/dspark_accept.py <code|prose|structured>`.
 Run `perf-gate-ready -1` immediately after each process. The runner appends
 summary rows to the JSONL file. Use an empty output file for a fresh sweep.
+
+## Correction: the like-for-like comparator
+
+The acceptance above was measured on chat-templated prompts (1,349, 1,154 and 1,124 tokens). The copy-hybrid
+rates it was compared with (42.869, 55.288 and 79.844 tok/s) came from the runner on raw prompt text without
+the assistant turn (1,334, 1,139 and 1,109 IDs). There the model continues the prompt, which copy drafts predict
+well. Served copy drafts on the same chat prompts measure 44.3, 43.1 and 39.5 tok/s, against 40.7, 40.8 and
+40.9 ar (`inkling-verify.md`, "Served copy drafts after the replay-free commit").
+
+Against that comparator, the width-4 projection (51.40, 45.27 and 50.01 tok/s with the 0.814 ms drafter
+assumption) beats both ar and served copy drafts on all three prompts. With a more conservative 3 ms drafter
+round (about 0.64 GB of BF16 drafter weights read once per round, plus three sequential Markov-head steps),
+width 4 projects 3.036/61.2, 2.674/61.2 and 2.953/61.2 rounds per ms, i.e. 49.6, 43.7 and 48.2 tok/s. That is
+clear on code and structured and marginal on prose. Both gains grow with any cut in verification round cost.
+
+The decision rule is unchanged: beat both ar and copy drafts on at least code and prose. On the correct
+comparator it gives GO for a scoped native implementation at width 4. Native acceptance and drafter cost must
+be measured before any keep decision.

@@ -21,7 +21,7 @@ const Dm = extern struct { m: u32, k: u32, cap: f32 };
 const Dmg = extern struct { k: u32, m0: u32, m1: u32, m2: u32, m3: u32 };
 const Dmgx = extern struct { k0: u32, k1: u32, k2: u32, m: [8]u32, x: [8]u32 };
 const Rms = extern struct { width: u32, blocks: u32, eps: f32 };
-const Mix = extern struct { width: u32, depth: u32, k: u32, scale: f32 };
+const Mix = extern struct { width: u32, depth: u32, k: u32, scale: f32, indices: [st.mix_states]u32 };
 const Clip = extern struct { heads: u32, width: u32, threshold: f32 };
 const Conv = extern struct { channels: u32, heads: u32, ring: u32, pos: u32, layout: u32, norm: f32 };
 const Attn = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, scale: f32, floor: f32, alpha: f32 };
@@ -190,32 +190,22 @@ pub const Forward = struct {
         f.flat(.add, Pair{ .count = @intCast(count) }, &.{ dst, src, A }, count);
     }
 
-    /// The depth mix: `states` newest first, then `cur`, over `query`'s rows.
-    fn mix(f: Forward, states: []const B, cur: B, query: Tensor, out: B) void {
-        const s = f.s;
-        var depth: u32 = 0;
-        for (states) |state| {
-            f.copyN(state, bo(s.states, depth * f.h * 4), f.h);
-            depth += 1;
-        }
-        f.copyN(cur, bo(s.states, depth * f.h * 4), f.h);
-        depth += 1;
-        f.rms(b(s.states), null, b(s.mixs), depth, f.h, 1e-6);
+    fn mix(f: Forward, base: B, count: usize, cur: B, query: Tensor, out: B) void {
+        f.rms(cur, null, b(f.s.mixs), 1, f.h, 1e-6);
+        var indices: [st.mix_states]u32 = @splat(0);
+        for (0..count) |i| indices[i] = @intCast(count - 1 - i);
         const n: u32 = @intCast(nrows(query));
-        f.set(.mix, Mix{ .width = f.h, .depth = depth, .k = n, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(f.h))) }, &.{ b(s.mixs), t(query), A, out });
+        f.set(.mix, Mix{ .width = f.h, .depth = @intCast(count + 1), .k = n, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(f.h))), .indices = indices }, &.{ base, t(query), A, out, b(f.s.mixs) });
         f.enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
     }
 
-    /// The mix over this token's block states newest first, then `cur`.
     fn mixBlocks(f: Forward, cur: B, query: Tensor, out: B) void {
-        var ordered: [st.mix_states]B = undefined;
-        for (0..f.count) |i| ordered[i] = f.blocks[f.count - 1 - i];
-        f.mix(ordered[0..f.count], cur, query, out);
+        f.mix(b(f.s.blocks), f.count, cur, query, out);
     }
 
     fn pushBlock(f: *Forward, state: B) void {
         const at = bo(f.s.blocks, f.count * f.h * 4);
-        f.copyN(state, at, f.h);
+        f.rms(state, null, at, 1, f.h, 1e-6);
         f.blocks[f.count] = at;
         f.count += 1;
     }
@@ -333,24 +323,17 @@ pub const Forward = struct {
     fn messages(f: Forward, bk: Bank, ip: u32) B {
         const s = f.s;
         const at: usize = ip - f.m.config.loop.core_start;
-        var depth: u32 = 0;
-        var i: usize = bk.states.len;
-        while (i > 0) {
-            i -= 1;
-            f.copyN(bk.states[i], bo(s.states, depth * f.h * 4), f.h);
-            depth += 1;
-        }
-        f.copyN(bk.out, bo(s.states, depth * f.h * 4), f.h);
-        depth += 1;
-        f.rms(b(s.states), null, b(s.mixs), depth, f.h, 1e-6);
-        f.set(.mix4, Mix{ .width = f.h, .depth = depth, .k = 4, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(f.h))) }, &.{
-            b(s.mixs),
+        var indices: [st.mix_states]u32 = @splat(0);
+        for (0..bk.states.len) |i| indices[i] = @intCast(bk.states.len - 1 - i);
+        f.set(.mix4, Mix{ .width = f.h, .depth = @intCast(bk.states.len + 1), .k = 4, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(f.h))), .indices = indices }, &.{
+            b(s.bank),
             t(rows(f.m.weights.cross_pass_q, at * 2, 1)),
             t(rows(f.m.weights.cross_pass_kv, at * 2, 1)),
             t(rows(f.m.weights.cross_pass_kv, at * 2 + 1, 1)),
             t(rows(f.m.weights.cross_pass_q, at * 2 + 1, 1)),
             A,
             b(s.msg),
+            bk.out,
         });
         f.enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
         return b(s.msg);
@@ -538,7 +521,7 @@ pub fn positionTrace(m: *const Model, s: *Scratch, cache: *Cache, id: u32, trace
                 bank_states[n] = bo(s.bank, n * f.h * 4);
                 n += 1;
             }
-            f.copyN(b(s.x), b(s.passout), f.h);
+            f.rms(b(s.x), null, b(s.passout), 1, f.h, 1e-6);
             bank = .{ .states = bank_states[0..n], .out = b(s.passout) };
             f.count = prelude;
             f.copyN(b(s.prelude), b(s.x), f.h);

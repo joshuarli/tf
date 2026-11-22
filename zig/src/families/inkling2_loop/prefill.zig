@@ -11,7 +11,7 @@ const Tensor = wts.Tensor;
 const Layer = wts.Layer;
 const Controller = wts.Controller;
 
-pub const default_chunk: usize = 64;
+pub const default_chunk: usize = 128;
 
 pub const WantLogits = enum { none, last, all };
 
@@ -491,9 +491,7 @@ const Chunk = struct {
         c.rmsU2(msg, b(s.h2in), 2, 1, c.h, 1e-6);
         c.lin(ctl.down, .{ .buf = b(s.h2in), .xs = 1, .xb = 0 }, b(s.normed));
         c.lin(ctl.gain, .{ .buf = b(s.normed), .xs = 1, .xb = 0 }, b(s.tanhg));
-        c.flat(.tanh, Pair{ .count = c.h * c.n }, &.{ b(s.tanhg), A }, @as(usize, c.h) * c.n);
         c.lin(ctl.forget, .{ .buf = b(s.normed), .xs = 1, .xb = 0 }, b(s.tanhf));
-        c.flat(.tanh, Pair{ .count = c.h * c.n }, &.{ b(s.tanhf), A }, @as(usize, c.h) * c.n);
         c.setP(s.pipes.ctl, CtlB{ .h = c.h, .rows = c.n, .cxs = cur.xs, .cxb = cur.xb, .mxs = msg.xs, .mxb = msg.xb, .ys = ys, .yb = yb }, &.{ cur.buf, msg.buf, b(s.tanhg), b(s.tanhf), A, out });
         c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
     }

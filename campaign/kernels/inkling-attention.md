@@ -75,3 +75,16 @@ unchanged and local results are bit-identical to the full cache. Per-token bytes
 `48 * kvw * 8` to `8 * kvw * 8` (65,536 B), with the 40 rings (320 MiB) plus the convolution rings as the
 fixed cost in `Cache.fixedBytes`; `Cache.longestFitting` divides the remaining budget by the global-only
 rate. The server log and `--context` refusal name the 8-global/40-local split.
+
+## Eight-key decode experiment: rejected on correctness
+
+On base `6b2614352fe6fe55d5fe720e89e956f28a13d7d1`, an experiment assigned four lanes per key and computed
+scores for eight keys per simdgroup iteration, removing the per-row threadgroup barriers. It also used up to
+five splits at short contexts. The 521 GB/s measured read ceiling implies about 18 us for 9.3 MB of global
+K/V at roughly 1.14K positions; the baseline timeline's split kernel was about 104 us per call.
+
+The existing random attention tests passed against the serial kernel and FP64 reference, with worst pairwise
+error 1.4305115e-6. The full-model 1,139-row teacher-forced logits comparison failed the 1e-4 max-absolute
+contract: maximum difference 3.582090139389038e-4, with zero argmax mismatches. The candidate was rejected
+and its kernel and partition changes reverted. End-to-end benchmarks and before/after timeline profiles were
+not run because the correctness gate failed; no speed claim is made.

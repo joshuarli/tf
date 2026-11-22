@@ -4,6 +4,9 @@ const Model = @import("model.zig").Model;
 const Cache = @import("state.zig").Cache;
 const prefill = @import("prefill.zig");
 
+/// The most copy drafts a decode round verifies at once: a verify of 8 rows costs about four decode steps.
+pub const hybrid_drafts: usize = 7;
+
 pub const Verification = struct {
     model: *const Model,
     cache: *Cache,

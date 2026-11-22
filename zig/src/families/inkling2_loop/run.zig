@@ -10,7 +10,7 @@ const usage =
     \\tf-inkling2-loop-run <model> <tokens.json> logits <out>       f32 logits [tokens, 200058], teacher-forced
     \\tf-inkling2-loop-run <model> <tokens.json> prefill <chunk> <out>  chunked prefill logits [tokens, 200058] plus tok/s
     \\tf-inkling2-loop-run <model> <tokens.json> greedy <steps> <out>  then <steps> greedy tokens, one decode a step
-    \\tf-inkling2-loop-run <model> <tokens.json> greedy-prefill|greedy-copy|greedy-decode <steps> <out>  raw u32 output IDs
+    \\tf-inkling2-loop-run <model> <tokens.json> greedy-prefill|greedy-copy|greedy-hybrid|greedy-decode <steps> <out>  raw u32 output IDs
     \\tf-inkling2-loop-run <model> <tokens.json> verifybench <min-width> <rounds>  time interleaved prefill widths
     \\tf-inkling2-loop-run <model> <tokens.json> trace <out> [at]  per-tensor summaries in the reference's order, the whole pass or only position <at>
     \\tf-inkling2-loop-run <model> <tokens.json> prefillrow <chunk> <out> <at>  capture a chunked prefill row and router sidecars
@@ -93,14 +93,15 @@ pub fn main(init: std.process.Init) !void {
     const c = &m.config;
     const vocab: usize = c.text.unpadded_vocab;
     const t0 = now();
-    if (std.mem.eql(u8, mode, "greedy-prefill") or std.mem.eql(u8, mode, "greedy-copy") or std.mem.eql(u8, mode, "greedy-decode")) {
+    if (std.mem.eql(u8, mode, "greedy-prefill") or std.mem.eql(u8, mode, "greedy-copy") or std.mem.eql(u8, mode, "greedy-hybrid") or std.mem.eql(u8, mode, "greedy-decode")) {
         if (args.len != 6) return error.ExpectedArgs;
         const steps = try std.fmt.parseInt(usize, args[4], 10);
         var cache = try inkling.Cache.init(m.device, c, ids.value.len + steps);
         defer cache.deinit();
         var ps = try inkling.PrefillScratch.init(m.device, c, inkling.default_chunk);
         defer ps.deinit();
-        var decode: ?inkling.Scratch = if (std.mem.eql(u8, mode, "greedy-decode")) try inkling.Scratch.init(m.device, c) else null;
+        const hybrid = std.mem.eql(u8, mode, "greedy-hybrid");
+        var decode: ?inkling.Scratch = if (std.mem.eql(u8, mode, "greedy-decode") or hybrid) try inkling.Scratch.init(m.device, c) else null;
         defer if (decode) |*s| s.deinit();
         var at: usize = 0;
         while (at < ids.value.len) {
@@ -121,7 +122,8 @@ pub fn main(init: std.process.Init) !void {
         while (history.items.len < ids.value.len + steps) {
             try history.append(gpa, token);
             if (history.items.len == ids.value.len + steps) break;
-            if (decode) |*s| {
+            if (!hybrid and decode != null) {
+                const s = &decode.?;
                 try inkling.position(m, s, &cache, token);
                 token = argmax(s.logits.slice(f32, vocab));
                 rounds += 1;
@@ -133,9 +135,16 @@ pub fn main(init: std.process.Init) !void {
                 rounds += 1;
                 continue;
             }
-            const draft = if (std.mem.eql(u8, mode, "greedy-copy")) try proposer.propose(history.items, 15) else &.{};
-            const count: usize = @min(draft.len, @min(15, ids.value.len + steps - history.items.len - 1));
+            const most: usize = if (hybrid) (if (std.c.getenv("TF_INKLING_HYBRID_DRAFTS")) |v| std.fmt.parseInt(usize, std.mem.span(v), 10) catch inkling.hybrid_drafts else inkling.hybrid_drafts) else 15;
+            const draft = try proposer.propose(history.items, @intCast(most));
+            const count: usize = @min(draft.len, @min(most, ids.value.len + steps - history.items.len - 1));
             const row_count = try std.math.add(usize, count, 1);
+            if (count == 0 and hybrid) {
+                try inkling.position(m, &decode.?, &cache, token);
+                token = argmax(decode.?.logits.slice(f32, vocab));
+                rounds += 1;
+                continue;
+            }
             if (count == 0) {
                 try inkling.prefillWant(m, &ps, &cache, (&token)[0..1], .all);
                 token = argmax(ps.logits.slice(f32, vocab));

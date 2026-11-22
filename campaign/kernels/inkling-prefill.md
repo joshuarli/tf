@@ -383,3 +383,18 @@ against its 1.5e-5 bound. The candidate's full-history chunk-128 logits passed
 candidate and control full-history outputs were bit-identical for both
 `harbour` and `cells_code`; their documented reference divergences therefore
 did not worsen. The gated throughput comparison is pending.
+
+### Contention stop
+
+The 2-row candidate is not retained: the host remained contended for over an
+hour and the required throughput comparison could not be qualified. This is
+not a performance rejection and establishes no speedup. The corrected timing
+harness acquired the campaign GPU lock before `gpu-gate-ready -1` and retained
+it through the runner and the post-run check with its PID ignored. Every
+attempt stopped at the pre-run gate. The controller exited 75 after one hour;
+a representative final check reported 20.8% other GPU time and 19% device
+utilization against limits of 5% and 15%, with Ghostty and WindowServer
+listed. Earlier control and candidate samples were discarded because the lock
+was not held during both checks and another job could run in the gap. The
+candidate-specific state and logit checks above therefore do not verify the
+current reverted kernel; no measured improvement is claimed.

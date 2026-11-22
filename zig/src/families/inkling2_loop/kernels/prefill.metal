@@ -217,8 +217,8 @@ struct i2p_gemm_args { uint n, k, rows, xs, xb; float cap; };
   if (p.x >= a.h || p.y >= a.rows) return;
   const float c = CUR[(size_t)(a.cxb + p.y * a.cxs) * a.h + p.x];
   const float m = MSG[(size_t)(a.mxb + p.y * a.mxs) * a.h + p.x];
-  const float g = GAIN[(size_t)p.y * a.h + p.x];
-  const float f = FORGET[(size_t)p.y * a.h + p.x];
+  const float g = precise::tanh(GAIN[(size_t)p.y * a.h + p.x]);
+  const float f = precise::tanh(FORGET[(size_t)p.y * a.h + p.x]);
   O[(size_t)(a.yb + p.y * a.ys) * a.h + p.x] = c - f * c + g * m;
 }
 

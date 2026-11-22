@@ -37,7 +37,7 @@ inline float fp4_e4m3(uint c) {
 }
 
 inline float fp4_e8m0(uint s) {
-  return exp2(float(int(s & 127u)) - 127.0f);
+  return s == 255u ? NAN : exp2(float(int(s) - 127.0f));
 }
 
 inline float fp4_scale(const device uchar* s, ulong at) {

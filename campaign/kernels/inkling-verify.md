@@ -177,7 +177,7 @@ the resident checkpoint pages were already warm and this charge is not the model
 Split Metal 4 profiles used the same prose cache state, five timestamped rounds after eight
 warm rounds, and accepted zero rows so replay did not enter the profile. Profiling splits
 command buffers, so these GPU spans are not the unsplit wall times above. Dense includes the
-vocabulary head, which is also shown separately. The sixteen-row profile remains pending.
+vocabulary head, which is also shown separately.
 
 | Rows | Summed GPU span ms | Dense ms | Expert gate/up and down ms | Attention ms | Route selection ms | Vocabulary head ms |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -185,6 +185,7 @@ vocabulary head, which is also shown separately. The sixteen-row profile remains
 | 2 | 47.154 | 13.096 | 7.984 | 11.309 | 4.900 | 1.677 |
 | 4 | 71.075 | 20.841 | 21.355 | 12.630 | 4.893 | 3.042 |
 | 8 | 108.880 | 37.877 | 33.533 | 18.640 | 5.001 | 5.846 |
+| 16 | 154.792 | 53.584 | 60.232 | 18.091 | 4.894 | 2.181 |
 
 The profiler logs passed the same admission checks as the baseline. An eight-row attempt
 and a sixteen-row attempt failed post-checks and were discarded.

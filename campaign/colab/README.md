@@ -8,6 +8,25 @@ Use it for numerical and precision questions that do not depend on Metal. The M5
 performance platform for this campaign. CUDA timings are recorded as CUDA timings and are never Metal evidence.
 TensorFold has no Inkling 2 Mini CUDA path.
 
+## Verdict (2026-11-22): not needed for this campaign
+
+The harness works. One T4 smoke used under 0.01 CU. The campaign does not use it, for four reasons:
+
+- **The critical path is Metal-specific.** Staged bf16 expert weights for TensorOps (E4) and few-row verify
+  overheads (V4) depend on Apple GPU behaviour, and CUDA timings cannot stand in for them.
+- **Numerical studies are cheaper locally.** Operand-rounding error for fp16, bf16 and fp8 is a property of the
+  formats, so the Mac's CPU computes it at no cost. F1's per-layer sensitivity needs activations captured by
+  the Metal runner, and analysing those dumps is CPU work.
+- **Full-model checks do not fit.** The f32 oracle needs about 104 GB. Parity, quality and Pi run against the
+  native Metal engine. An L4 has 24 GB, and there is no Inkling CUDA path.
+- **The limit is GPU timing, not machine count.** Only one model timing runs on the M5 at a time, and Colab
+  cannot take that load.
+
+Revisit Colab for any of these:
+- large CUDA-portable sweeps, such as a tuned F2 fp8 activation-quantization study;
+- work on TensorFold's CUDA engine, which the measured driver 580 and CUDA 13 satisfy;
+- Linux x86_64 build checks with `env-probe`.
+
 ## Quickstart
 
 ```sh

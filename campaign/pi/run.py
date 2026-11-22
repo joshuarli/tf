@@ -92,13 +92,25 @@ def identity_problems(identity: dict, *, binary_sha256: str, model_key: str, exp
     return problems
 
 
-def render_models(template: Path, base: str, model_id: str) -> dict:
+def served_context(argv: list[str]) -> int | None:
+    """The token context a server was started with, when its argv sets one."""
+    for flag, value in zip(argv, argv[1:]):
+        if flag == "--context":
+            return int(value)
+    return None
+
+
+def render_models(template: Path, base: str, model_id: str, context: int | None = None) -> dict:
+    """Point the Pi model template at the server; a served context bounds Pi's window and output budget."""
     document = json.loads(template.read_text(encoding="utf-8"))
     provider = document["providers"]["tensorfold"]
     provider["baseUrl"] = f"{base}/v1"
     models = provider.get("models") or []
     if models:
         models[0]["id"] = model_id
+        if context is not None:
+            models[0]["contextWindow"] = min(models[0].get("contextWindow", context), context)
+            models[0]["maxTokens"] = min(models[0].get("maxTokens", context), context // 4)
     return document
 
 
@@ -126,7 +138,8 @@ def summarize(events: list[dict]) -> dict:
             message = event.get("message") or {}
             if message.get("errorMessage"):
                 errors.append({"stop": message.get("stopReason"), "error": message.get("errorMessage")})
-    completed = any(event.get("type") == "agent_end" for event in events)
+    last_turn = next((event.get("message") or {} for event in reversed(events) if event.get("type") == "turn_end"), {})
+    completed = any(event.get("type") == "agent_end" for event in events) and not last_turn.get("errorMessage")
     return {"completed": completed, "turns": len(turns), "turn_latency_ms": [t["duration_ms"] for t in turns],
             "turn_output_tokens": [t["output_tokens"] for t in turns], "pi_event_errors": errors}
 
@@ -230,7 +243,7 @@ def main() -> int:
         if not harness.served_model_matches(model_key, served_model):
             raise SystemExit(f"server at {base} serves {served_model!r}, not a {harness.served_identity_name(model_key)} "
                              "endpoint; the run cannot be attributed to this model")
-        models_document = render_models(template, base, served_model)
+        models_document = render_models(template, base, served_model, served_context(server.argv))
         before = metrics(base)
         records = []
         server_exit = None

@@ -17,7 +17,8 @@ struct i2p_small_args { uint n, k, rows, xs, xb; float cap; };
     const uint2 c = w4[base / 4u + lane];
     const float4 v = float4(as_type<float>((c.x & 0xffffu) << 16), as_type<float>(c.x & 0xffff0000u),
                             as_type<float>((c.y & 0xffffu) << 16), as_type<float>(c.y & 0xffff0000u));
-    for (uint r = 0; r < a.rows; ++r) {
+    for (uint r = 0; r < 16; ++r) {
+      if (r >= a.rows) break;
       const device float4* x = (const device float4*)(X + size_t(a.xb + r * a.xs) * a.k);
       const float4 q = x[base / 4u + lane];
       acc[r] = fma(q.x, v.x, acc[r]);
@@ -28,9 +29,13 @@ struct i2p_small_args { uint n, k, rows, xs, xb; float cap; };
   }
   for (uint i = base + lane; i < a.k; i += 32u) {
     const float v = float(w[i]);
-    for (uint r = 0; r < a.rows; ++r) acc[r] = fma(X[size_t(a.xb + r * a.xs) * a.k + i], v, acc[r]);
+    for (uint r = 0; r < 16; ++r) {
+      if (r >= a.rows) break;
+      acc[r] = fma(X[size_t(a.xb + r * a.xs) * a.k + i], v, acc[r]);
+    }
   }
-  for (uint r = 0; r < a.rows; ++r) {
+  for (uint r = 0; r < 16; ++r) {
+    if (r >= a.rows) break;
     const float v = simd_sum(acc[r]);
     if (lane == 0) O[size_t(r) * a.n + col] = a.cap > 0 ? a.cap * precise::tanh(v / a.cap) : v;
   }

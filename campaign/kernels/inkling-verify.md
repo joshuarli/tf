@@ -190,6 +190,28 @@ vocabulary head, which is also shown separately.
 The profiler logs passed the same admission checks as the baseline. An eight-row attempt
 and a sixteen-row attempt failed post-checks and were discarded.
 
+### Bounded dense row loops
+
+The small-row dense kernel now bounds each row loop at sixteen, with an early exit at the
+actual row count. This exposes the bound to the Metal compiler while retaining the source's f32
+accumulation order. Keep: the eight-row total improved outside the observed process-median
+spread. Five baseline and candidate processes alternated order. Each interleaved five rounds
+per width from the same restored prose cache state. The table reports the median of the five
+process medians, and the range of process medians for total time.
+
+| Rows | Save ms | Forward ms | Read and argmax ms | Restore ms | Replay ms | Host ms | Candidate total ms (range) | Baseline total ms (range) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.370 | 39.638 | 0.332 | 0.249 | 0 | 0.006 | 40.599 (40.415–40.708) | 40.442 (40.286–40.618) |
+| 2 | 0.393 | 44.015 | 0.657 | 0.275 | 39.606 | 0.020 | 85.057 (84.759–85.134) | 85.791 (85.735–86.140) |
+| 4 | 0.496 | 63.045 | 1.323 | 0.364 | 44.070 | 0.022 | 109.310 (109.236–109.344) | 115.981 (115.879–116.623) |
+| 8 | 0.638 | 91.051 | 2.655 | 1.138 | 63.041 | 0.023 | 158.502 (158.249–158.812) | 176.233 (176.011–176.355) |
+| 16 | 0.891 | 150.932 | 5.317 | 1.424 | 90.998 | 0.022 | 249.700 (248.972–250.042) | 261.741 (261.142–262.042) |
+
+Each run passed CPU and busy-host GPU checks before and after execution under `heavy.py`.
+Peak charged memory across the pairs was 21.0 GB. Both runner binaries were 1,604,552 bytes.
+The family test exited 0 with byte-identical rollback continuation. Kernel attribution and
+end-to-end hybrid throughput for the candidate remain pending.
+
 The family test passed with `TF_INKLING2_LOOP_DIR` set to the checkpoint and
 `python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1`. It compared
 repeated predictions after snapshot reset and continuation logits byte for byte across the local

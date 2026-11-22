@@ -120,7 +120,9 @@ Metal 4 timestamp rounds were split at execution slots and every 16 rows of
 cross-pass copies, with one command buffer per segment. One timed chunk after
 8 warm chunks is sampled at base position 1024 (1,334-token code prompt) and
 4992 (5,265-token code prompt), both with 128 rows and full-history logits.
-The sums below exclude gaps between command buffers and include timestamp and
+The long run reports the embedding segment at base 3968 because that round
+name had already passed its warmup during unsplit earlier chunks; its 0.012 ms
+is included in the sum. The sums below exclude gaps between command buffers and include timestamp and
 profiling overhead; they are not end-to-end timings. The timeline prints at
 most 25 kernel names per round, so the smallest entries may be incomplete.
 The initial long run captured every receipt but exited 1 writing the 4.2 GB

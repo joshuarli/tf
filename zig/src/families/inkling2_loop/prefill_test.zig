@@ -613,7 +613,7 @@ test "routed expert projections meet fp64 bounds at occupancy boundaries" {
             defer out.deinit();
             const grouped = try mtl.Pipeline.init(device, lib, if (gu) "i2p_gu_grouped" else "i2p_down_grouped", false);
             defer grouped.deinit();
-            for ([_]usize{ 1, 3, 8, 15, 16, 32, 128 }) |rows| {
+            for ([_]usize{ 1, 2, 3, 5, 8, 15, 16, 32, 128 }) |rows| {
                 off.slice(i32, 2)[0] = 0;
                 off.slice(i32, 2)[1] = @intCast(rows);
                 const args = ExpertArgs{ .k = @intCast(k), .n = n, .slots = 128, .topk = 8, .experts = 1, .gate_cap = if (gu) 7 else 0, .up_cap = if (gu) 7 else 0 };

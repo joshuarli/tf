@@ -739,7 +739,116 @@ struct i2p_moeg_args { uint k, n, slots, topk, experts; float gate_cap, up_cap; 
 #else
   const float global = amax[e] / den[0];
 #endif
-  for (int oi = start; oi < end; ++oi) {
+  int oi = start;
+  for (; oi + 4 <= end; oi += 4) {
+    const uint slot0 = uint(ROW_OF[oi + 0]);
+    const device float* x0 = X + (size_t)(slot0 / a.topk) * a.k;
+    float d0 = 0.0f;
+    float u0 = 0.0f;
+    const uint slot1 = uint(ROW_OF[oi + 1]);
+    const device float* x1 = X + (size_t)(slot1 / a.topk) * a.k;
+    float d1 = 0.0f;
+    float u1 = 0.0f;
+    const uint slot2 = uint(ROW_OF[oi + 2]);
+    const device float* x2 = X + (size_t)(slot2 / a.topk) * a.k;
+    float d2 = 0.0f;
+    float u2 = 0.0f;
+    const uint slot3 = uint(ROW_OF[oi + 3]);
+    const device float* x3 = X + (size_t)(slot3 / a.topk) * a.k;
+    float d3 = 0.0f;
+    float u3 = 0.0f;
+    for (uint idx = 0u, g = lane; g < groups; ++idx, g += 32u) {
+      const uint k0 = g * I2P_GROUP;
+      float p0 = 0.0f;
+      float q0 = 0.0f;
+      float p1 = 0.0f;
+      float q1 = 0.0f;
+      float p2 = 0.0f;
+      float q2 = 0.0f;
+      float p3 = 0.0f;
+      float q3 = 0.0f;
+#ifdef I2P_MXFP8
+      const ulong ag[4] = { wg_cache[idx], wg1_cache[idx], wg2_cache[idx], wg3_cache[idx] };
+      const ulong au[4] = { wu_cache[idx], wu1_cache[idx], wu2_cache[idx], wu3_cache[idx] };
+      for (uint q = 0u; q < 4u; ++q) {
+        for (uint j = 0u; j < 8u; ++j) {
+          const float weight = CODES[i2p_lane_byte(ag[q], j)];
+          const float weight_u = CODES[i2p_lane_byte(au[q], j)];
+          const float xv0 = x0[k0 + q * 8u + j];
+          p0 = fma(weight, xv0, p0);
+          q0 = fma(weight_u, xv0, q0);
+          const float xv1 = x1[k0 + q * 8u + j];
+          p1 = fma(weight, xv1, p1);
+          q1 = fma(weight_u, xv1, q1);
+          const float xv2 = x2[k0 + q * 8u + j];
+          p2 = fma(weight, xv2, p2);
+          q2 = fma(weight_u, xv2, q2);
+          const float xv3 = x3[k0 + q * 8u + j];
+          p3 = fma(weight, xv3, p3);
+          q3 = fma(weight_u, xv3, q3);
+        }
+      }
+#else
+      const ulong ag = wg_cache[idx], au = wu_cache[idx];
+      for (uint j = 0u; j < 8u; ++j) {
+        const uint code = i2p_lane_byte(ag, j);
+        const float w0 = CODES[code & 15u], w1 = CODES[code >> 4u];
+        const uint code_u = i2p_lane_byte(au, j);
+        const float u0 = CODES[code_u & 15u], u1 = CODES[code_u >> 4u];
+        const float x0a = x0[k0 + 2u * j], x0b = x0[k0 + 2u * j + 1u];
+        p0 = fma(w0, x0a, p0);
+        p0 = fma(w1, x0b, p0);
+        q0 = fma(u0, x0a, q0);
+        q0 = fma(u1, x0b, q0);
+        const float x1a = x1[k0 + 2u * j], x1b = x1[k0 + 2u * j + 1u];
+        p1 = fma(w0, x1a, p1);
+        p1 = fma(w1, x1b, p1);
+        q1 = fma(u0, x1a, q1);
+        q1 = fma(u1, x1b, q1);
+        const float x2a = x2[k0 + 2u * j], x2b = x2[k0 + 2u * j + 1u];
+        p2 = fma(w0, x2a, p2);
+        p2 = fma(w1, x2b, p2);
+        q2 = fma(u0, x2a, q2);
+        q2 = fma(u1, x2b, q2);
+        const float x3a = x3[k0 + 2u * j], x3b = x3[k0 + 2u * j + 1u];
+        p3 = fma(w0, x3a, p3);
+        p3 = fma(w1, x3b, p3);
+        q3 = fma(u0, x3a, q3);
+        q3 = fma(u1, x3b, q3);
+      }
+#endif
+      d0 = fma(scg_cache[idx], p0, d0);
+      u0 = fma(scu_cache[idx], q0, u0);
+      d1 = fma(scg_cache[idx], p1, d1);
+      u1 = fma(scu_cache[idx], q1, u1);
+      d2 = fma(scg_cache[idx], p2, d2);
+      u2 = fma(scu_cache[idx], q2, u2);
+      d3 = fma(scg_cache[idx], p3, d3);
+      u3 = fma(scu_cache[idx], q3, u3);
+    }
+    d0 = simd_sum(d0);
+    u0 = simd_sum(u0);
+    d1 = simd_sum(d1);
+    u1 = simd_sum(u1);
+    d2 = simd_sum(d2);
+    u2 = simd_sum(u2);
+    d3 = simd_sum(d3);
+    u3 = simd_sum(u3);
+    if (lane == 0u) {
+#ifdef I2P_MXFP8
+      ACT[(size_t)slot0 * a.n + c] = i2p_situ(d0, u0, a.gate_cap, a.up_cap);
+      ACT[(size_t)slot1 * a.n + c] = i2p_situ(d1, u1, a.gate_cap, a.up_cap);
+      ACT[(size_t)slot2 * a.n + c] = i2p_situ(d2, u2, a.gate_cap, a.up_cap);
+      ACT[(size_t)slot3 * a.n + c] = i2p_situ(d3, u3, a.gate_cap, a.up_cap);
+#else
+      ACT[(size_t)slot0 * a.n + c] = i2p_situ(d0 * global, u0 * global, a.gate_cap, a.up_cap);
+      ACT[(size_t)slot1 * a.n + c] = i2p_situ(d1 * global, u1 * global, a.gate_cap, a.up_cap);
+      ACT[(size_t)slot2 * a.n + c] = i2p_situ(d2 * global, u2 * global, a.gate_cap, a.up_cap);
+      ACT[(size_t)slot3 * a.n + c] = i2p_situ(d3 * global, u3 * global, a.gate_cap, a.up_cap);
+#endif
+    }
+  }
+  for (; oi < end; ++oi) {
     const uint slot = uint(ROW_OF[oi]);
     const device float* x = X + (size_t)(slot / a.topk) * a.k;
     float dg = 0.0f;

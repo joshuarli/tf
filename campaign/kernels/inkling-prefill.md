@@ -560,3 +560,32 @@ candidate the same plus P5 `f9b0bfb59`. The prefill-mode parity gate on the cand
 Per-round ratios 1.202, 1.161, 1.163, 1.263, 1.193, 1.194; geometric mean 1.196 (95% t-interval 1.158-1.235).
 Verdict: keep. The profile's larger saving at base 4992 (469 -> 93 ms) suggests a larger gain at longer prompts;
 that is not yet measured end to end.
+
+## Four-row routed gate/up experiment
+
+The grouped gate/up kernel reuses each decoded weight across four routed rows.
+Each row keeps the original FP32 accumulation order. Groups of fewer than four
+rows and the remainder use the original row loop. The matrix and down kernels
+are unchanged. The family test compares NVFP4 and MXFP8 gate/up and down against
+host FP64 at occupancies 1, 2, 3, 5, 8, 15, 16, 32 and 128. The command
+`python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1`
+exited 0 with peak charged memory 1.6 GB and pressure level 1.
+
+One split timeline on the 1,334-token P3 input, 128-row chunk at base 1024,
+reported 142.139 ms for `i2p_expert_matrix`, 127.365 ms for
+`i2p_gu_grouped` and 111.590 ms for `i2p_down_grouped`, or 381.094 ms total.
+The supplied main `b9336a1ea` sample reported 127.3, 124.0 and 98.2 ms,
+respectively, or 349.5 ms total. The unchanged matrix and down kernels were
+also slower in the candidate sample. These individual profiles do not establish
+whether the change improves performance. Paired timing remains necessary.
+
+An eight-row matrix variant with a four-row threshold reported 478.352 ms
+for the three expert kernels. A variant using eight- and sixteen-row tiles with
+an eight-row threshold reported 432.798 ms. A dynamically indexed four-row
+scalar batch for both grouped kernels reported 928.871 ms. These single split
+profiles were rejected and do not establish threshold crossovers.
+
+The prefill-mode parity target reported 14 histories within contract, two
+explained divergences and zero unexplained. It exited 2 because complete
+qualification requires all 16 histories within contract. The candidate uses
+the same two explained long-history exceptions as the baseline.

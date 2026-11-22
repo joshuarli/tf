@@ -368,3 +368,13 @@ python3 campaign/heavy.py -- "$R" "$M" "$H" prefillroutes 128 "$T/prefillroutes"
 For single-row comparisons, repeat the first two commands with rows 78 and 581–724.
 The saved history consists of the tokenized `campaign/prompts/dev/structured-1024.txt`
 prompt followed by its first 48 greedy tokens from main `ca2713cf1`.
+
+The decode parity command against the capture runner compared 3,015 positions: 14 histories
+were within contract, two were explained divergences, and none were unexplained. It exited 2
+because the parity command requires every history to be within contract, including the two
+already recorded divergences. This matches the existing decode report's qualification counts.
+The decode report did not capture the harbour onset tensor: the guard stopped that trace at
+critical host pressure. The same trace succeeded on retry during the prefill gate.
+The prefill parity command also compared 3,015 positions and returned 14 within contract,
+two explained divergences, zero unexplained, and exit 2. These counts match the existing
+prefill report. Neither command qualified the checkpoint under the current gate.

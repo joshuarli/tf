@@ -412,53 +412,46 @@ pub const Host = struct {
             }
             if (pending_at < pending_len) continue;
             if (h.copy_drafts and r.drafts) {
-                const draft = proposer.propose(history.items, 15) catch |e| {
+                const draft = proposer.propose(history.items, @intCast(inkling.hybrid_drafts)) catch |e| {
                     fin.message = @errorName(e);
                     return;
                 };
                 var rows: [16]u32 = undefined;
                 rows[0] = best;
-                const count: usize = @min(draft.len, @min(15, r.max_tokens - job.emitted.items.len - 1));
+                const count: usize = @min(draft.len, @min(inkling.hybrid_drafts, r.max_tokens - job.emitted.items.len - 1));
                 const row_count = std.math.add(usize, count, 1) catch {
                     fin.message = @errorName(error.Overflow);
                     return;
                 };
-                if (count == 0) {
-                    inkling.prefillWant(h.model, &h.prefill, &h.cache, rows[0..1], .all) catch |e| {
+                if (count > 0) {
+                    @memcpy(rows[1..][0..count], draft[0..count]);
+                    var predictions: [16]u32 = undefined;
+                    var verification = inkling.Verification.begin(h.model, &h.prefill, &h.cache, rows[0..row_count], predictions[0..row_count]) catch |e| {
                         fin.message = @errorName(e);
                         return;
                     };
-                    @memcpy(h.scratch.logits.slice(f32, vocab), h.prefill.logits.slice(f32, vocab));
+                    var accepted: usize = 0;
+                    while (accepted < count and predictions[accepted] == rows[accepted + 1]) : (accepted += 1) {}
+                    const kept = std.math.add(usize, accepted, 1) catch {
+                        fin.message = @errorName(error.Overflow);
+                        return;
+                    };
+                    verification.finish(rows[0..row_count], kept) catch |e| {
+                        fin.message = @errorName(e);
+                        return;
+                    };
+                    proposer.observe(@intCast(count), @intCast(accepted)) catch |e| {
+                        fin.message = @errorName(e);
+                        return;
+                    };
                     rounds += 1;
+                    drafted += count;
+                    accepted_total += accepted;
+                    pending_len = kept;
+                    pending_at = 0;
+                    @memcpy(pending[0..pending_len], predictions[0..pending_len]);
                     continue;
                 }
-                @memcpy(rows[1..][0..count], draft[0..count]);
-                var predictions: [16]u32 = undefined;
-                var verification = inkling.Verification.begin(h.model, &h.prefill, &h.cache, rows[0..row_count], predictions[0..row_count]) catch |e| {
-                    fin.message = @errorName(e);
-                    return;
-                };
-                var accepted: usize = 0;
-                while (accepted < count and predictions[accepted] == rows[accepted + 1]) : (accepted += 1) {}
-                const kept = std.math.add(usize, accepted, 1) catch {
-                    fin.message = @errorName(error.Overflow);
-                    return;
-                };
-                verification.finish(rows[0..row_count], kept) catch |e| {
-                    fin.message = @errorName(e);
-                    return;
-                };
-                proposer.observe(@intCast(count), @intCast(accepted)) catch |e| {
-                    fin.message = @errorName(e);
-                    return;
-                };
-                rounds += 1;
-                drafted += count;
-                accepted_total += accepted;
-                pending_len = kept;
-                pending_at = 0;
-                @memcpy(pending[0..pending_len], predictions[0..pending_len]);
-                continue;
             }
             inkling.position(h.model, &h.scratch, &h.cache, best) catch |e| {
                 fin.message = @errorName(e);

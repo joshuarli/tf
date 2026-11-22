@@ -122,3 +122,25 @@ discarded. The inputs were the development code, prose, and structured prompts, 
 to 1,334, 1,139, and 1,109 IDs. The baseline and candidate runner binaries were 1,586,760 and
 1,587,128 bytes. The measured verifybench command used `verifybench 2 5`; generation used
 `greedy-copy`, `greedy-prefill`, or `greedy-decode` with 512 steps.
+
+## Hybrid rounds
+
+Rounds without a copy draft now run the decode kernels (one `position`, ~25 ms) instead of a one-row prefill pass
+(~41 ms), and a round verifies at most `hybrid_drafts` = 7 drafts (8 rows, ~106 ms after the few-row kernels). The
+runner's `greedy-hybrid` mode does the same; `TF_INKLING_HYBRID_DRAFTS` overrides the cap for measurement only.
+Single gated runs on main b5c778934 (512 greedy tokens; decode for comparison 12.8-13.1 s); ids equal to
+`greedy-decode` on all three prompts at cap 7:
+
+| Cap | code-1024 s | prose-1024 s | structured-1024 s |
+| ---: | ---: | ---: | ---: |
+| 1 | 15.76 | 13.26 | 12.47 |
+| 2 | 15.88 | 13.52 | 11.41 |
+| 3 | 16.30 | 12.22 | 9.77 |
+| 4 | 15.97 | 13.14 | 9.26 |
+| 7 | 18.02 | 12.02 | 8.11 |
+
+Even at cap 1, where a 2-row verify (46 ms) is cheaper than two decode steps and 76% of drafts are accepted, code
+is slower than decode: each verification round also allocates a snapshot buffer, blits the convolution rings and
+the touched local KV rows in a separate command buffer, reads all rows' logits back for a CPU argmax, and on a
+partial accept re-runs the accepted prefix. Those per-round costs (~12 ms) are the next target; copy drafts stay
+opt-in until code is no slower than decode.

@@ -343,6 +343,23 @@ Dense includes the separately listed vocabulary head.
 | 8 | 89.553 | 25.457 | 30.229 | 18.408 | 4.901 | 3.088 |
 | 16 | 155.255 | 53.739 | 60.176 | 18.255 | 4.895 | 2.195 |
 
+### Compact grouped expert dispatch
+
+An experiment dispatched grouped expert work only for selected experts, keeping the first
+slot for each distinct expert and reusing its weights for other matching slots. Revert:
+five alternating pairs showed a clear regression at four and eight rows. The candidate
+family test passed with duplicate selections and byte-identical rollback continuation.
+
+| Rows | Save ms | Forward ms | Read and argmax ms | Restore ms | Replay ms | Host ms | Candidate total ms (range) | Baseline total ms (range) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.348 | 39.556 | 0.323 | 0.217 | 0 | 0.004 | 40.483 (40.358–40.677) | 40.489 (40.360–40.542) |
+| 2 | 0.362 | 43.938 | 0.659 | 0.246 | 39.487 | 0.015 | 84.686 (84.606–84.823) | 84.891 (84.751–85.132) |
+| 4 | 0.438 | 61.077 | 1.325 | 0.321 | 44.001 | 0.018 | 107.229 (107.093–107.785) | 101.708 (101.672–101.878) |
+| 8 | 0.588 | 97.390 | 2.643 | 1.197 | 61.215 | 0.017 | 163.107 (163.006–163.326) | 146.447 (145.845–146.797) |
+| 16 | 0.852 | 151.426 | 5.302 | 1.461 | 97.373 | 0.021 | 256.169 (256.062–256.650) | 244.775 (244.096–245.071) |
+
+The split profile remains incomplete because the four-row run failed its post-check.
+
 The family test passed with `TF_INKLING2_LOOP_DIR` set to the checkpoint and
 `python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1`. It compared
 repeated predictions after snapshot reset and continuation logits byte for byte across the local

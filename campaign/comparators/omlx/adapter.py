@@ -15,6 +15,12 @@ def validate_model_path(path):
     return path
 
 
+def redact_other_processes(output):
+    return '\n'.join('[unrelated process details removed]'
+                     if any(marker in line for marker in (' command=', 'GPU time users:', 'pid=', 'bundle_id=')) else line
+                     for line in output.splitlines())
+
+
 def read_prompt(path, steps):
     ids = json.loads(Path(path).read_text())
     if not isinstance(ids, list) or len(ids) < 2 or any(type(i) is not int or not 0 <= i < VOCAB for i in ids):

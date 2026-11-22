@@ -11,7 +11,7 @@ import sys
 import time
 from pathlib import Path
 
-from adapter import mtp_cycles, parse_result, read_prompt, validate_model_path
+from adapter import mtp_cycles, parse_result, read_prompt, redact_other_processes, validate_model_path
 from setup import model_entries, source_entry
 
 CAMPAIGN = Path(__file__).resolve().parents[2]
@@ -86,10 +86,9 @@ def attempt(model, prompt, steps, mtp):
     history = []
     while True:
         result = subprocess.run(outer, env=os.environ.copy(), text=True, capture_output=True)
-        stderr = '\n'.join('[unrelated process details removed]' if ' command=' in line else line
-                           for line in result.stderr.splitlines())
         row = {'command': shlex.join(outer), 'exit': result.returncode,
-               'stdout': result.stdout, 'stderr': stderr}
+               'stdout': redact_other_processes(result.stdout),
+               'stderr': redact_other_processes(result.stderr)}
         history.append(row)
         if result.returncode != 75:
             return row | {'attempts': history}

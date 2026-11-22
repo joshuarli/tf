@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from adapter import mtp_cycles, parse_result, read_prompt, validate_model_path
+from adapter import mtp_cycles, parse_result, read_prompt, redact_other_processes, validate_model_path
 from prompt_ids import prompt_ids
 import setup
 from setup import MODEL_FILES, MODEL_REVISION, REVISION, SHA256, model_entries, source_entry
@@ -39,6 +39,8 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(mtp_cycles('INFO MTP[7] finish=length tokens=512 cycles=123 tok/cycle=4'), 123)
         with self.assertRaises(ValueError):
             mtp_cycles('no speculation')
+        self.assertEqual(redact_other_processes('contended\n  GPU time users: name pid=1\nfailed'),
+                         'contended\n[unrelated process details removed]\nfailed')
 
     def test_prompt_template_and_generation_tag(self):
         from tokenizers import Tokenizer, models, pre_tokenizers

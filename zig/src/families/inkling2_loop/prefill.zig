@@ -374,12 +374,12 @@ const Chunk = struct {
     fn lin(c: Chunk, w: Tensor, x: In, out: B) void {
         const m: usize = nrows(w);
         c.setP(c.s.pipes.gemm, Gemm{ .n = @intCast(m), .k = @intCast(width(w)), .rows = c.n, .xs = x.xs, .xb = x.xb, .cap = 0 }, &.{ x.buf, t(w), A, out });
-        c.enc.dispatchGroups(mtl.Size.of((m + 63) / 64, (c.n + 7) / 8, 1), mtl.Size.of(256, 1, 1));
+        c.enc.dispatchGroups(mtl.Size.of((m + 63) / 64, (c.n + 31) / 32, 1), mtl.Size.of(256, 1, 1));
     }
 
     fn headModel(c: Chunk, w: Tensor, x: In, out: B, vocab: u32) void {
         c.setP(c.s.pipes.gemm, Gemm{ .n = vocab, .k = @intCast(width(w)), .rows = c.n, .xs = x.xs, .xb = x.xb, .cap = c.m.config.text.logit_cap }, &.{ x.buf, t(w), A, out });
-        c.enc.dispatchGroups(mtl.Size.of((vocab + 63) / 64, (c.n + 7) / 8, 1), mtl.Size.of(256, 1, 1));
+        c.enc.dispatchGroups(mtl.Size.of((vocab + 63) / 64, (c.n + 31) / 32, 1), mtl.Size.of(256, 1, 1));
     }
 
     fn headModelLast(c: Chunk, w: Tensor, xoff: B, out: B, vocab: u32) void {

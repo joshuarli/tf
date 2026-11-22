@@ -3,6 +3,8 @@
   "model": "inkling-2-mini@ed40e7da625f",
   "note": "Served prompt_tokens (chat template included) as Inkling 2 Mini's server reports them for each corpus prompt; the corpus was sized with Flint's tokenizer, so the nominal cell is not the Inkling length.",
   "prompts": {
-    "code-1024": {"prompt_tokens": 1349, "measured_by": "tensorfold-native 819b83096a28 and 3fe17ed98234, run inkling2-mini-ar-1024-222648, 2026-11-21"}
+    "code-1024": {"prompt_tokens": 1349, "measured_by": "tensorfold-native 819b83096a28 and 3fe17ed98234, run inkling2-mini-ar-1024-222648, 2026-11-21"},
+    "prose-1024": {"prompt_tokens": 1154, "measured_by": "tensorfold-native 819b83096a28 and bd4865271374, run inkling2-mini-ar-1024-053406, 2026-11-22"},
+    "structured-1024": {"prompt_tokens": 1124, "measured_by": "tensorfold-native 819b83096a28 and bd4865271374, run inkling2-mini-ar-1024-053406, 2026-11-22"}
   }
 }

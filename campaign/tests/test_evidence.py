@@ -117,6 +117,15 @@ class GpuContention(unittest.TestCase):
         after = {10: ("server", 9_000_000_000), 20: ("WindowServer", 1_000 + 100_000_000)}
         self.assertEqual(harness.gpu_contention(before, after, 10.0, own={10})[1], [])
 
+    def test_the_trial_limit_follows_the_gate_setting(self):
+        from unittest import mock
+        before = {10: ("server", 0), 20: ("WindowServer", 1_000)}
+        after = {10: ("server", 9_000_000_000), 20: ("WindowServer", 1_000_000_000)}
+        with mock.patch.dict("os.environ", {"GPU_GATE_MAX_GPU_PCT": "35"}):
+            self.assertEqual(harness.gpu_contention(before, after, 10.0, own={10})[1], [])
+        with mock.patch.dict("os.environ", {"GPU_GATE_MAX_GPU_PCT": "5"}):
+            self.assertEqual(len(harness.gpu_contention(before, after, 10.0, own={10})[1]), 1)
+
 
 class PromptLengthPins(unittest.TestCase):
     """The corpus was sized with Flint's tokenizer; an Inkling 1,349-token prompt was marked invalid against 1024."""

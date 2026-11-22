@@ -228,6 +228,7 @@ def trial(path: Path, *, run_id: str, experiment: str, session: str, engine: str
         users, gpu_reasons = harness.gpu_contention(gpu_before, harness.gpu_time_by_pid(),
                                                     time.perf_counter() - gpu_started, own)
         record["gpu_other_users"] = users
+        record["gpu_time_limit_pct"] = harness.gpu_time_limit_pct()
         after = harness.conditions(own)
         record["pressure_after"] = after["pressure"]
         record["invalid_reasons"] = before["pressure_reasons"] + gpu_reasons + after["pressure_reasons"]

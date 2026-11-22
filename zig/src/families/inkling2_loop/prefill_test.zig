@@ -519,7 +519,7 @@ test "tiled dense projections match the original gemm" {
         defer w.deinit();
         const ws = w.slice(u16, n * k);
         for (ws, 0..) |*v, i| v.* = @as(u16, @intCast(0x3e00 + ((i *% 37 + i / k *% 13) % 256))) | (if (i % 3 == 0) @as(u16, 0x8000) else 0);
-        for ([_]usize{ 1, 7, 128 }) |rows| {
+        for ([_]usize{ 1, 7, 35, 128 }) |rows| {
             const x = try device.buffer((rows * 2 + 1) * k * 4, mtl.ResourceOptions.shared);
             defer x.deinit();
             for (x.slice(f32, (rows * 2 + 1) * k), 0..) |*v, i| v.* = @as(f32, @floatFromInt(@as(i32, @intCast((i *% 17 + i / k *% 31) % 251)) - 125)) / 127.0;
@@ -548,6 +548,36 @@ test "tiled dense projections match the original gemm" {
             std.debug.print("gemm n={d} k={d} rows={d} maxdiff={e}\n", .{ n, k, rows, diff });
             const bound = @max(1.0, maxAbs(expected)) * 1.5e-5;
             for (actual, expected) |a, e| try t.expect(std.math.isFinite(a) and std.math.isFinite(e) and @abs(a - e) <= bound);
+            const gamma = @as(f64, @floatFromInt(k)) * 0x1p-24 / (1.0 - @as(f64, @floatFromInt(k)) * 0x1p-24);
+            var worst: f64 = 0;
+            for (0..rows) |r| {
+                var sums: [768]f64 = undefined;
+                var bounds: [768]f64 = undefined;
+                const period: usize = if (k % 3 == 0) 256 else 768;
+                for (0..@min(n, period)) |col| {
+                    var sum: f64 = 0;
+                    var magnitude: f64 = 0;
+                    for (0..k) |j| {
+                        const bits: u32 = @as(u32, ws[col * k + j]) << 16;
+                        const weight: f32 = @bitCast(bits);
+                        const term = @as(f64, weight) * @as(f64, x.slice(f32, (rows * 2 + 1) * k)[(1 + r * 2) * k + j]);
+                        sum += term;
+                        magnitude += @abs(term);
+                    }
+                    sums[col] = sum;
+                    bounds[col] = gamma * magnitude;
+                }
+                for (0..n) |col| {
+                    const value: f64 = actual[r * n + col];
+                    const err = @abs(value - sums[col % period]);
+                    worst = @max(worst, err);
+                    if (!std.math.isFinite(value) or err > bounds[col % period]) {
+                        std.debug.print("gemm fp64 n={d} k={d} rows={d} row={d} col={d} error={e} bound={e}\n", .{ n, k, rows, r, col, err, bounds[col % period] });
+                        return error.GemmReferenceMismatch;
+                    }
+                }
+            }
+            std.debug.print("gemm fp64 n={d} k={d} rows={d} worst={e}\n", .{ n, k, rows, worst });
         }
     }
 }

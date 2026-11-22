@@ -439,6 +439,34 @@ its overall qualification requires all 16 histories within contract. The
 first comparison's harbour diagnostic was interrupted by critical host memory
 pressure; a retry completed that diagnostic and reproduced the same counts.
 
+## Dense projection K staging
+
+The dense GEMM stages 64 K elements per iteration and converts four adjacent
+bf16 weights directly to float32 at once. It reuses the activation staging
+buffer for the output tile after the last K iteration. The output tile remains
+32 by 64, with four float32 accumulators per simdgroup.
+
+On M5 Max, the split timeline for the 128-row chunk at base 1024 attributed
+133.9 ms to `i2p_gemm` on main `b9336a1ea` and 119.550 ms to this candidate.
+Both figures are single profiles, not paired throughput measurements. The
+candidate trace reports 641 GEMM stages and 617.260 ms across all reported
+spans. The supplied baseline span was 575 ms. Other stages were slower in the
+candidate trace, so this comparison does not establish end-to-end improvement.
+The parent must run paired timing before drawing a speed conclusion.
+
+The tested alternatives were a scalar transposed weight load at 194.845 ms,
+a 32-row tile with two output fragments per simdgroup at 218.103 ms, and a
+64-row tile with two output fragments at 154.120 ms. Adding vectorized weight
+loads to the 64-row tile measured 132.045 ms. These are single split profiles
+with timestamp overhead and possible host contention.
+
+The family GEMM test checks every listed projection shape at 1, 7, 35 and 128
+rows against a host FP64 dot product and the FP32 accumulation bound. Its
+repeating weight patterns make the full vocabulary check practical; every
+output is checked. It also compares the candidate with the original GPU GEMM.
+The family command exited 0, with zero maximum difference from the original
+for these fixtures and a 1.5 GB peak charge under `heavy.py`.
+
 ## P4 end-to-end timing
 
 Runner prefill (`tf-inkling2-loop-run <model> .work/tmp/ids-1k.json bench 2 1 128`, 1,139 tokens, chunk 128),
@@ -560,3 +588,7 @@ candidate the same plus P5 `f9b0bfb59`. The prefill-mode parity gate on the cand
 Per-round ratios 1.202, 1.161, 1.163, 1.263, 1.193, 1.194; geometric mean 1.196 (95% t-interval 1.158-1.235).
 Verdict: keep. The profile's larger saving at base 4992 (469 -> 93 ms) suggests a larger gain at longer prompts;
 that is not yet measured end to end.
+
+P6 end-to-end timing (same protocol as P4/E1/P5, base `main` b9336a1ea): base median 220.3 tok/s, P6 234.0;
+per-round ratios 1.136, 1.035, 1.057, 1.062, 0.892, 1.043; geometric mean 1.035 with a 95% t-interval of
+0.952-1.125. Inconclusive at six rounds; parked on `lane/p6-prefill-gemm2`, not merged.

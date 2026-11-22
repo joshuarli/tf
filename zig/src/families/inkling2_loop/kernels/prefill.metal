@@ -76,15 +76,13 @@ struct i2p_gemm_args { uint n, k, rows, xs, xb; float cap; };
 [[kernel]] void i2p_gemm(const device float* X [[buffer(0)]], const device bfloat* W [[buffer(1)]],
     constant i2p_gemm_args& a [[buffer(2)]], device float* O [[buffer(3)]],
     uint3 tg [[threadgroup_position_in_grid]], uint ti [[thread_index_in_threadgroup]]) {
-  constexpr int BM = 32, BN = 64, BK = 32, AP = 40, BP = 72;
+  constexpr int BM = 32, BN = 64, BK = 64, AP = 72, BP = 72;
   const int sg = int(ti) / 32;
   const int m0 = int(tg.y) * BM, n0 = int(tg.x) * BN;
-  threadgroup float x[BM * AP];
+  threadgroup float x[BM * BP];
   threadgroup float w[BK * BP];
-  threadgroup float out[BM * BP];
-  simdgroup_matrix<float, 8, 8> acc[4] = {simdgroup_matrix<float, 8, 8>(0.0f),
-    simdgroup_matrix<float, 8, 8>(0.0f), simdgroup_matrix<float, 8, 8>(0.0f),
-    simdgroup_matrix<float, 8, 8>(0.0f)};
+  simdgroup_matrix<float, 8, 8> acc[4];
+  for (int r = 0; r < 4; ++r) acc[r] = simdgroup_matrix<float, 8, 8>(0.0f);
   for (int k0 = 0; k0 < int(a.k); k0 += BK) {
     for (int e = int(ti); e < BM * BK; e += 256) {
       int r = e / BK, k = e % BK;
@@ -92,11 +90,19 @@ struct i2p_gemm_args { uint n, k, rows, xs, xb; float cap; };
       x[r * AP + k] = gr < int(a.rows) && gk < int(a.k)
         ? X[size_t(a.xb + uint(gr) * a.xs) * a.k + uint(gk)] : 0.0f;
     }
-    for (int e = int(ti); e < BK * BN; e += 256) {
-      int k = e / BN, n = e % BN;
+    for (int e = int(ti); e < BK * BN / 4; e += 256) {
+      int k = (e / BN) * 4, n = e % BN;
       int gn = n0 + n, gk = k0 + k;
-      w[k * BP + n] = gn < int(a.n) && gk < int(a.k)
-        ? float(W[size_t(gn) * a.k + uint(gk)]) : 0.0f;
+      float4 v = 0.0f;
+      if (gn < int(a.n)) {
+        if ((a.k & 3u) == 0u && gk + 3 < int(a.k)) {
+          v = float4(*(const device bfloat4*)(W + size_t(gn) * a.k + uint(gk)));
+        } else {
+          for (int j = 0; j < 4; ++j)
+            if (gk + j < int(a.k)) v[j] = float(W[size_t(gn) * a.k + uint(gk + j)]);
+        }
+      }
+      for (int j = 0; j < 4; ++j) w[(k + j) * BP + n] = v[j];
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     for (int k = 0; k < BK; k += 8) {
@@ -110,12 +116,12 @@ struct i2p_gemm_args { uint n, k, rows, xs, xb; float cap; };
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
   }
-  for (int r = 0; r < 4; ++r) simdgroup_store(acc[r], out + r * 8 * BP + sg * 8, ulong(BP));
+  for (int r = 0; r < 4; ++r) simdgroup_store(acc[r], x + r * 8 * BP + sg * 8, ulong(BP));
   threadgroup_barrier(mem_flags::mem_threadgroup);
   for (int e = int(ti); e < BM * BN; e += 256) {
     int r = e / BN, n = e % BN;
     if (m0 + r < int(a.rows) && n0 + n < int(a.n)) {
-      float v = out[r * BP + n];
+      float v = x[r * BP + n];
       if (a.cap > 0.0f) v = a.cap * precise::tanh(v / a.cap);
       O[size_t(m0 + r) * a.n + uint(n0 + n)] = v;
     }

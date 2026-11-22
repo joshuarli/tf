@@ -241,7 +241,19 @@ the same component and range statistics as the preceding comparison.
 The family test passed under `heavy.py`, with 21.6 GB peak charged memory. The per-slot
 expert test checked both checkpoint formats and projections at one, two, four, and eight rows
 against FP64 bounds. Rollback continuation remained byte-identical. Both runner binaries
-were 1,604,552 bytes. The new split profile and end-to-end comparison remain pending.
+were 1,604,552 bytes. The end-to-end comparison remains pending.
+
+The split profile used five timestamped rounds after eight warm rounds per width. All
+five model runs passed the admission checks under one `heavy.py` lock, with a 20.8 GB peak
+charge. Dense includes the separately listed head.
+
+| Rows | Summed GPU span ms | Dense ms | Expert gate/up and down ms | Attention ms | Route selection ms | Vocabulary head ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 41.985 | 11.386 | 4.681 | 11.190 | 4.896 | 1.596 |
+| 2 | 46.541 | 12.408 | 8.059 | 11.362 | 4.909 | 1.601 |
+| 4 | 58.404 | 15.579 | 15.206 | 12.693 | 4.913 | 1.721 |
+| 8 | 89.106 | 25.498 | 29.929 | 18.335 | 4.892 | 3.089 |
+| 16 | 154.503 | 53.365 | 60.172 | 18.159 | 4.889 | 2.185 |
 
 The family test passed with `TF_INKLING2_LOOP_DIR` set to the checkpoint and
 `python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1`. It compared

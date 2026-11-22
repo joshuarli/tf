@@ -124,7 +124,10 @@ The sums below exclude gaps between command buffers and include timestamp and
 profiling overhead; they are not end-to-end timings. The timeline prints at
 most 25 kernel names per round, so the smallest entries may be incomplete.
 The initial long run captured every receipt but exited 1 writing the 4.2 GB
-output with a single write; its rerun is pending.
+output with a single write. A bounded-write rerun exited 0 and measured
+1,439.780 ms across 4,373 reported dispatches; its occupancy readback moves
+one copy out of the reported segments. The table retains the complete first
+trace; neither trace is a throughput measurement.
 
 | kernel | 1024 base ms | 4992 base ms |
 | --- | ---: | ---: |
@@ -163,3 +166,196 @@ fp16/bf16 GEMM rate at 50% utilization divided by approximately 2 × 4.4B
 active parameters per token gives about 3,182 tok/s. This is a compute-only
 arithmetic ceiling, not an observed prefill rate; compared with the previously
 reported 120 tok/s it is about 26.5 times higher.
+
+## Routed expert occupancy
+
+One 128-row chunk from each real code prompt: base 1024 and base 4992,
+respectively. Each of 48 execution slots routes 1,024 picks to 128 experts.
+The histogram counts expert/slot cases; it does not weight by routed rows.
+
+| rows per expert | base 1024 | base 4992 |
+| --- | ---: | ---: |
+| 0 | 1170 | 1889 |
+| 1 | 628 | 727 |
+| 2–3 | 959 | 791 |
+| 4–7 | 1308 | 909 |
+| 8–15 | 1240 | 846 |
+| 16–31 | 551 | 659 |
+| 32–63 | 246 | 224 |
+| 64–128 | 42 | 99 |
+
+All cases use `i2p_gu_grouped` and `i2p_down_grouped`, with the layer's
+NVFP4 or MXFP8 decoding. The baseline does not pad expert rows: it loops
+from each expert's start to end, gathers through `ROW_OF`, and scatters
+by the original slot. In the timeline, sort and count together cost at least
+0.266 ms and 0.291 ms, and combine costs 1.291 ms and 1.001 ms, at the short
+and long positions respectively; indirect gather and scatter inside the
+expert kernels cannot be timed separately by this instrumentation. The
+2-row experiment would perform 2,680 and 2,366 padded row computations
+respectively, or 5.45% and 4.81% of the 49,152 useful routed rows.
+
+Per-slot zero count, median and maximum of the 128 expert occupancies:
+
+| slot | base 1024: zero / median / max | base 4992: zero / median / max |
+| ---: | ---: | ---: |
+| 0 | 11 / 5 / 60 | 28 / 3 / 71 |
+| 1 | 13 / 5 / 101 | 23 / 3 / 115 |
+| 2 | 3 / 6 / 53 | 16 / 4.5 / 98 |
+| 3 | 1 / 7 / 42 | 9 / 5 / 65 |
+| 4 | 8 / 6 / 63 | 24 / 4 / 83 |
+| 5 | 6 / 6 / 58 | 12 / 5 / 59 |
+| 6 | 18 / 5 / 69 | 29 / 4 / 88 |
+| 7 | 26 / 4.5 / 66 | 39 / 3 / 118 |
+| 8 | 26 / 4 / 67 | 46 / 2 / 91 |
+| 9 | 30 / 3.5 / 76 | 48 / 1.5 / 98 |
+| 10 | 23 / 4 / 78 | 35 / 2.5 / 99 |
+| 11 | 32 / 3 / 58 | 48 / 1.5 / 99 |
+| 12 | 13 / 5 / 53 | 39 / 3 / 69 |
+| 13 | 23 / 5 / 55 | 39 / 2.5 / 101 |
+| 14 | 26 / 3.5 / 64 | 39 / 2 / 75 |
+| 15 | 35 / 3 / 100 | 57 / 1 / 99 |
+| 16 | 33 / 4 / 111 | 50 / 1.5 / 123 |
+| 17 | 72 / 0 / 128 | 78 / 0 / 128 |
+| 18 | 44 / 2 / 68 | 64 / 0.5 / 112 |
+| 19 | 26 / 3 / 97 | 49 / 1.5 / 101 |
+| 20 | 30 / 3 / 101 | 46 / 2 / 110 |
+| 21 | 21 / 3.5 / 71 | 38 / 3 / 99 |
+| 22 | 20 / 4 / 50 | 37 / 2.5 / 88 |
+| 23 | 18 / 7 / 45 | 32 / 4 / 58 |
+| 24 | 20 / 6 / 50 | 30 / 4 / 62 |
+| 25 | 24 / 3 / 74 | 35 / 3.5 / 103 |
+| 26 | 30 / 3.5 / 57 | 39 / 3 / 81 |
+| 27 | 26 / 4 / 70 | 48 / 1.5 / 88 |
+| 28 | 32 / 4 / 71 | 39 / 2 / 92 |
+| 29 | 29 / 3 / 56 | 50 / 1.5 / 98 |
+| 30 | 19 / 5 / 49 | 33 / 3.5 / 53 |
+| 31 | 22 / 4 / 59 | 37 / 2.5 / 106 |
+| 32 | 27 / 4 / 84 | 43 / 2 / 73 |
+| 33 | 31 / 3 / 68 | 56 / 1.5 / 76 |
+| 34 | 23 / 5 / 74 | 44 / 2 / 111 |
+| 35 | 54 / 1 / 128 | 64 / 0.5 / 128 |
+| 36 | 16 / 6 / 50 | 24 / 4 / 66 |
+| 37 | 25 / 4 / 80 | 40 / 3 / 86 |
+| 38 | 33 / 3 / 56 | 35 / 2 / 97 |
+| 39 | 31 / 4 / 74 | 52 / 1.5 / 97 |
+| 40 | 26 / 4 / 73 | 37 / 3 / 86 |
+| 41 | 32 / 3 / 55 | 42 / 2 / 90 |
+| 42 | 14 / 6 / 58 | 36 / 3 / 54 |
+| 43 | 21 / 4 / 58 | 42 / 2 / 107 |
+| 44 | 18 / 5 / 42 | 36 / 3 / 80 |
+| 45 | 27 / 5 / 51 | 47 / 2 / 87 |
+| 46 | 15 / 6 / 33 | 28 / 2 / 65 |
+| 47 | 17 / 5.5 / 54 | 27 / 3 / 56 |
+
+The timeline table can be reproduced with `python3 campaign/kernels/inkling_profile.py
+timeline --split --log LOG`. Set `TF_METAL4_TIMELINE=1` and
+`TF_INKLING_PREFILL_PROFILE_BASE` to the desired base minus 1024 (eight warm
+chunks), then set `TF_INKLING_PREFILL_OCCUPANCY_BASE` to the sampled base for
+the additional occupancy lines. The readback splits the corresponding layer
+rounds and must not be enabled for throughput measurement.
+
+Rows per expert by execution slot, base 1024; each entry counts experts in that bin:
+
+| slot | 0 | 1 | 2–3 | 4–7 | 8–15 | 16–31 | 32–63 | 64–128 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 11 | 9 | 16 | 48 | 30 | 9 | 5 | 0 |
+| 1 | 13 | 11 | 25 | 43 | 23 | 8 | 4 | 1 |
+| 2 | 3 | 8 | 30 | 40 | 35 | 8 | 4 | 0 |
+| 3 | 1 | 9 | 18 | 44 | 43 | 11 | 2 | 0 |
+| 4 | 8 | 7 | 24 | 39 | 38 | 9 | 3 | 0 |
+| 5 | 6 | 14 | 20 | 35 | 39 | 10 | 4 | 0 |
+| 6 | 18 | 12 | 23 | 25 | 32 | 14 | 3 | 1 |
+| 7 | 26 | 13 | 17 | 29 | 28 | 9 | 4 | 2 |
+| 8 | 26 | 17 | 15 | 31 | 20 | 11 | 7 | 1 |
+| 9 | 30 | 13 | 21 | 24 | 21 | 11 | 7 | 1 |
+| 10 | 23 | 14 | 23 | 24 | 27 | 10 | 6 | 1 |
+| 11 | 32 | 17 | 20 | 17 | 21 | 14 | 7 | 0 |
+| 12 | 13 | 13 | 28 | 33 | 20 | 15 | 6 | 0 |
+| 13 | 23 | 18 | 11 | 29 | 30 | 11 | 6 | 0 |
+| 14 | 26 | 17 | 21 | 24 | 20 | 14 | 5 | 1 |
+| 15 | 35 | 18 | 24 | 15 | 17 | 11 | 5 | 3 |
+| 16 | 33 | 6 | 21 | 29 | 25 | 8 | 4 | 2 |
+| 17 | 72 | 12 | 12 | 12 | 5 | 6 | 4 | 5 |
+| 18 | 44 | 17 | 20 | 18 | 12 | 5 | 10 | 2 |
+| 19 | 26 | 21 | 20 | 27 | 17 | 9 | 5 | 3 |
+| 20 | 30 | 17 | 22 | 22 | 15 | 14 | 7 | 1 |
+| 21 | 21 | 17 | 26 | 21 | 25 | 12 | 5 | 1 |
+| 22 | 20 | 15 | 20 | 29 | 24 | 15 | 5 | 0 |
+| 23 | 18 | 11 | 13 | 34 | 38 | 10 | 4 | 0 |
+| 24 | 20 | 11 | 16 | 31 | 32 | 15 | 3 | 0 |
+| 25 | 24 | 14 | 28 | 21 | 20 | 16 | 4 | 1 |
+| 26 | 30 | 15 | 19 | 15 | 31 | 10 | 8 | 0 |
+| 27 | 26 | 15 | 17 | 25 | 28 | 11 | 4 | 2 |
+| 28 | 32 | 7 | 19 | 23 | 26 | 15 | 5 | 1 |
+| 29 | 29 | 17 | 24 | 17 | 18 | 16 | 7 | 0 |
+| 30 | 19 | 15 | 13 | 35 | 27 | 13 | 6 | 0 |
+| 31 | 22 | 14 | 21 | 25 | 30 | 9 | 7 | 0 |
+| 32 | 27 | 8 | 24 | 28 | 23 | 11 | 6 | 1 |
+| 33 | 31 | 17 | 26 | 14 | 19 | 14 | 5 | 2 |
+| 34 | 23 | 16 | 17 | 27 | 31 | 8 | 5 | 1 |
+| 35 | 54 | 12 | 24 | 10 | 13 | 7 | 4 | 4 |
+| 36 | 16 | 8 | 18 | 35 | 36 | 11 | 4 | 0 |
+| 37 | 25 | 13 | 24 | 28 | 21 | 10 | 5 | 2 |
+| 38 | 33 | 11 | 26 | 13 | 23 | 14 | 8 | 0 |
+| 39 | 31 | 11 | 10 | 39 | 22 | 7 | 6 | 2 |
+| 40 | 26 | 11 | 21 | 20 | 30 | 16 | 3 | 1 |
+| 41 | 32 | 14 | 21 | 20 | 18 | 16 | 7 | 0 |
+| 42 | 14 | 12 | 18 | 36 | 35 | 8 | 5 | 0 |
+| 43 | 21 | 15 | 21 | 28 | 26 | 10 | 7 | 0 |
+| 44 | 18 | 15 | 12 | 37 | 25 | 15 | 6 | 0 |
+| 45 | 27 | 13 | 13 | 31 | 27 | 11 | 6 | 0 |
+| 46 | 15 | 8 | 18 | 32 | 37 | 17 | 1 | 0 |
+| 47 | 17 | 10 | 19 | 26 | 37 | 17 | 2 | 0 |
+
+Rows per expert by execution slot, base 4992; each entry counts experts in that bin:
+
+| slot | 0 | 1 | 2–3 | 4–7 | 8–15 | 16–31 | 32–63 | 64–128 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 28 | 26 | 11 | 18 | 22 | 16 | 5 | 2 |
+| 1 | 23 | 18 | 24 | 23 | 19 | 16 | 4 | 1 |
+| 2 | 16 | 22 | 19 | 27 | 29 | 10 | 3 | 2 |
+| 3 | 9 | 11 | 27 | 35 | 27 | 16 | 2 | 1 |
+| 4 | 24 | 13 | 21 | 30 | 22 | 12 | 5 | 1 |
+| 5 | 12 | 19 | 18 | 36 | 25 | 14 | 4 | 0 |
+| 6 | 29 | 10 | 21 | 21 | 26 | 19 | 1 | 1 |
+| 7 | 39 | 11 | 18 | 24 | 20 | 9 | 5 | 2 |
+| 8 | 46 | 8 | 21 | 18 | 12 | 16 | 5 | 2 |
+| 9 | 48 | 16 | 17 | 18 | 9 | 12 | 4 | 4 |
+| 10 | 35 | 19 | 16 | 16 | 22 | 13 | 6 | 1 |
+| 11 | 48 | 16 | 14 | 17 | 13 | 12 | 5 | 3 |
+| 12 | 39 | 8 | 18 | 24 | 17 | 14 | 7 | 1 |
+| 13 | 39 | 12 | 20 | 20 | 17 | 14 | 3 | 3 |
+| 14 | 39 | 20 | 11 | 17 | 19 | 17 | 4 | 1 |
+| 15 | 57 | 9 | 16 | 10 | 14 | 14 | 5 | 3 |
+| 16 | 50 | 14 | 13 | 15 | 18 | 10 | 5 | 3 |
+| 17 | 78 | 7 | 8 | 8 | 15 | 5 | 1 | 6 |
+| 18 | 64 | 15 | 12 | 9 | 11 | 7 | 5 | 5 |
+| 19 | 49 | 15 | 16 | 13 | 15 | 9 | 7 | 4 |
+| 20 | 46 | 17 | 11 | 19 | 16 | 12 | 5 | 2 |
+| 21 | 38 | 13 | 20 | 22 | 16 | 12 | 4 | 3 |
+| 22 | 37 | 17 | 21 | 17 | 15 | 14 | 4 | 3 |
+| 23 | 32 | 9 | 22 | 25 | 14 | 21 | 5 | 0 |
+| 24 | 30 | 13 | 10 | 30 | 26 | 13 | 6 | 0 |
+| 25 | 35 | 12 | 17 | 23 | 24 | 11 | 4 | 2 |
+| 26 | 39 | 12 | 21 | 22 | 14 | 12 | 5 | 3 |
+| 27 | 48 | 16 | 17 | 13 | 12 | 13 | 6 | 3 |
+| 28 | 39 | 20 | 12 | 18 | 17 | 15 | 6 | 1 |
+| 29 | 50 | 14 | 11 | 21 | 9 | 18 | 2 | 3 |
+| 30 | 33 | 14 | 17 | 22 | 18 | 19 | 5 | 0 |
+| 31 | 37 | 20 | 13 | 19 | 20 | 13 | 3 | 3 |
+| 32 | 43 | 17 | 11 | 12 | 25 | 13 | 6 | 1 |
+| 33 | 56 | 8 | 14 | 9 | 20 | 12 | 7 | 2 |
+| 34 | 44 | 17 | 18 | 11 | 20 | 11 | 5 | 2 |
+| 35 | 64 | 13 | 15 | 8 | 9 | 12 | 2 | 5 |
+| 36 | 24 | 23 | 14 | 21 | 26 | 14 | 5 | 1 |
+| 37 | 40 | 9 | 17 | 22 | 21 | 13 | 4 | 2 |
+| 38 | 35 | 23 | 18 | 20 | 12 | 13 | 4 | 3 |
+| 39 | 52 | 12 | 16 | 17 | 11 | 12 | 5 | 3 |
+| 40 | 37 | 14 | 19 | 24 | 7 | 19 | 7 | 1 |
+| 41 | 42 | 18 | 18 | 13 | 18 | 13 | 3 | 3 |
+| 42 | 36 | 12 | 20 | 17 | 18 | 21 | 4 | 0 |
+| 43 | 42 | 15 | 16 | 16 | 17 | 15 | 5 | 2 |
+| 44 | 36 | 15 | 15 | 20 | 16 | 17 | 8 | 1 |
+| 45 | 47 | 13 | 8 | 20 | 14 | 20 | 4 | 2 |
+| 46 | 28 | 26 | 24 | 13 | 16 | 13 | 6 | 2 |
+| 47 | 27 | 26 | 15 | 16 | 23 | 13 | 8 | 0 |

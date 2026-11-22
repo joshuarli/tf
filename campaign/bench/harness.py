@@ -224,9 +224,16 @@ def gpu_time_by_pid() -> dict[int, tuple[str, int]]:
     return totals
 
 
+def gpu_time_limit_pct() -> float:
+    """The other-process GPU-time limit, shared with gpu-gate-ready so one setting governs both checks."""
+    return float(os.environ.get("GPU_GATE_MAX_GPU_PCT", "5"))
+
+
 def gpu_contention(before: dict[int, tuple[str, int]], after: dict[int, tuple[str, int]], seconds: float,
-                   own: set[int], limit_pct: float = 5.0) -> tuple[list[dict], list[str]]:
+                   own: set[int], limit_pct: float | None = None) -> tuple[list[dict], list[str]]:
     """GPU time other processes used over a timed window, and the invalid reason it implies."""
+    if limit_pct is None:
+        limit_pct = gpu_time_limit_pct()
     users = []
     for pid, (name, ns) in after.items():
         if pid in own:

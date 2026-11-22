@@ -405,6 +405,7 @@ pub fn openFlashNext(a: Allocator, gpa: Allocator, io: std.Io, o: api.Open, prob
 }
 
 test {
+    _ = @import("inkling2_loop_prefix.zig");
     _ = @import("kimi_metal.zig");
     _ = metal_slide;
     _ = @import("metal_slide_test.zig");

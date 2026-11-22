@@ -10,6 +10,8 @@ const usage =
     \\tf-inkling2-loop-run <model> <tokens.json> logits <out>       f32 logits [tokens, 200058], teacher-forced
     \\tf-inkling2-loop-run <model> <tokens.json> prefill <chunk> <out>  chunked prefill logits [tokens, 200058] plus tok/s
     \\tf-inkling2-loop-run <model> <tokens.json> greedy <steps> <out>  then <steps> greedy tokens, one decode a step
+    \\tf-inkling2-loop-run <model> <tokens.json> greedy-prefill|greedy-copy|greedy-decode <steps> <out>  raw u32 output IDs
+    \\tf-inkling2-loop-run <model> <tokens.json> verifybench <min-width> <rounds>  time interleaved prefill widths
     \\tf-inkling2-loop-run <model> <tokens.json> trace <out> [at]  per-tensor summaries in the reference's order, the whole pass or only position <at>
     \\tf-inkling2-loop-run <model> <tokens.json> prefillrow <chunk> <out> <at>  capture a chunked prefill row and router sidecars
     \\tf-inkling2-loop-run <model> <tokens.json> prefillroutes <chunk> <out> <at>  capture per-chunk router picks, logits, and bias
@@ -91,6 +93,115 @@ pub fn main(init: std.process.Init) !void {
     const c = &m.config;
     const vocab: usize = c.text.unpadded_vocab;
     const t0 = now();
+    if (std.mem.eql(u8, mode, "greedy-prefill") or std.mem.eql(u8, mode, "greedy-copy") or std.mem.eql(u8, mode, "greedy-decode")) {
+        if (args.len != 6) return error.ExpectedArgs;
+        const steps = try std.fmt.parseInt(usize, args[4], 10);
+        var cache = try inkling.Cache.init(m.device, c, ids.value.len + steps);
+        defer cache.deinit();
+        var ps = try inkling.PrefillScratch.init(m.device, c, inkling.default_chunk);
+        defer ps.deinit();
+        var decode: ?inkling.Scratch = if (std.mem.eql(u8, mode, "greedy-decode")) try inkling.Scratch.init(m.device, c) else null;
+        defer if (decode) |*s| s.deinit();
+        var at: usize = 0;
+        while (at < ids.value.len) {
+            const take = @min(ps.chunk, ids.value.len - at);
+            try inkling.prefillWant(m, &ps, &cache, ids.value[at..][0..take], if (at + take == ids.value.len) .last else .none);
+            at += take;
+        }
+        var history: std.ArrayList(u32) = .empty;
+        defer history.deinit(gpa);
+        try history.appendSlice(gpa, ids.value);
+        var proposer = try tf.lanes.SuffixLookup.init(gpa, .{});
+        defer proposer.deinit();
+        var token = argmax(ps.logits.slice(f32, vocab));
+        var rounds: usize = 0;
+        var drafted: usize = 0;
+        var accepted_total: usize = 0;
+        const start = now();
+        while (history.items.len < ids.value.len + steps) {
+            try history.append(gpa, token);
+            if (history.items.len == ids.value.len + steps) break;
+            if (decode) |*s| {
+                try inkling.position(m, s, &cache, token);
+                token = argmax(s.logits.slice(f32, vocab));
+                rounds += 1;
+                continue;
+            }
+            if (std.mem.eql(u8, mode, "greedy-prefill")) {
+                try inkling.prefillWant(m, &ps, &cache, (&token)[0..1], .all);
+                token = argmax(ps.logits.slice(f32, vocab));
+                rounds += 1;
+                continue;
+            }
+            const draft = if (std.mem.eql(u8, mode, "greedy-copy")) try proposer.propose(history.items, 15) else &.{};
+            const count: usize = @min(draft.len, @min(15, ids.value.len + steps - history.items.len - 1));
+            const row_count = try std.math.add(usize, count, 1);
+            if (count == 0) {
+                try inkling.prefillWant(m, &ps, &cache, (&token)[0..1], .all);
+                token = argmax(ps.logits.slice(f32, vocab));
+                rounds += 1;
+                continue;
+            }
+            var rows: [16]u32 = undefined;
+            rows[0] = token;
+            @memcpy(rows[1..][0..count], draft[0..count]);
+            var predictions: [16]u32 = undefined;
+            var verify = try inkling.Verification.begin(m, &ps, &cache, rows[0..row_count], predictions[0..row_count]);
+            var accepted: usize = 0;
+            while (accepted < count and predictions[accepted] == rows[accepted + 1]) : (accepted += 1) {}
+            try verify.finish(rows[0..row_count], try std.math.add(usize, accepted, 1));
+            try proposer.observe(@intCast(count), @intCast(accepted));
+            try history.appendSlice(gpa, predictions[0..accepted]);
+            token = predictions[accepted];
+            rounds += 1;
+            drafted += count;
+            accepted_total += accepted;
+        }
+        const seconds = @as(f64, @floatFromInt(now() - start)) / 1e9;
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[5], .data = std.mem.sliceAsBytes(history.items[ids.value.len..]) });
+        std.debug.print("{s}: tokens={d} rounds={d} drafted={d} accepted={d} seconds={d:.3}\n", .{ mode, steps, rounds, drafted, accepted_total, seconds });
+        return;
+    }
+    if (std.mem.eql(u8, mode, "verifybench")) {
+        if (args.len != 6) return error.ExpectedArgs;
+        const width = try std.fmt.parseInt(usize, args[4], 10);
+        const rounds = try std.fmt.parseInt(usize, args[5], 10);
+        if ((width != 2 and width != 4 and width != 8 and width != 16) or rounds == 0) return error.ExpectedArgs;
+        var cache = try inkling.Cache.init(m.device, c, ids.value.len + 30 * rounds);
+        defer cache.deinit();
+        var ps = try inkling.PrefillScratch.init(m.device, c, @max(512, width));
+        defer ps.deinit();
+        var at: usize = 0;
+        while (at < ids.value.len) {
+            const take = @min(ps.chunk, ids.value.len - at);
+            try inkling.prefillWant(m, &ps, &cache, ids.value[at..][0..take], .none);
+            at += take;
+        }
+        const tokens = try gpa.alloc(u32, 16);
+        defer gpa.free(tokens);
+        for (tokens, 0..) |*token, i| token.* = ids.value[i % ids.value.len];
+        const walls = try gpa.alloc(f64, 4 * rounds);
+        defer gpa.free(walls);
+        const widths = [_]usize{ 2, 4, 8, 16 };
+        for (0..rounds) |round| {
+            for (0..widths.len) |index| {
+                const w = if (round % 2 == 0) index else widths.len - 1 - index;
+                const rows = widths[w];
+                if (rows < width) continue;
+                const start = now();
+                try inkling.prefillWant(m, &ps, &cache, tokens[0..rows], .all);
+                walls[w * rounds + round] = @as(f64, @floatFromInt(now() - start)) / 1e6;
+                std.mem.doNotOptimizeAway(argmax(ps.logits.slice(f32, vocab)));
+            }
+        }
+        for (widths, 0..) |rows, w| {
+            if (rows < width) continue;
+            const samples = walls[w * rounds ..][0..rounds];
+            std.mem.sort(f64, samples, {}, std.sort.asc(f64));
+            std.debug.print("verifybench width={d} rounds={d} median_ms={d:.3} min_ms={d:.3} max_ms={d:.3}\n", .{ rows, rounds, samples[rounds / 2], samples[0], samples[rounds - 1] });
+        }
+        return;
+    }
     if (std.mem.eql(u8, mode, "greedy")) {
         if (args.len != 6) {
             std.debug.print("{s}", .{usage});

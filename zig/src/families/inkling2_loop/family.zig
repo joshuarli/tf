@@ -18,6 +18,7 @@ pub const verify = @import("verify.zig");
 pub const hybrid_drafts = @import("verify.zig").hybrid_drafts;
 pub const refuse = @import("refuse.zig");
 pub const kernels = @import("kernels.zig");
+pub const dspark = @import("dspark.zig");
 
 pub const model_type = "inkling2_loop";
 pub const formats: []const []const u8 = &.{ "nvfp4", "mxfp8" };

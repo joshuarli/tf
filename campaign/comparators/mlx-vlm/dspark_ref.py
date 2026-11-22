@@ -1,6 +1,10 @@
 import argparse
+import os
 import struct
 from pathlib import Path
+
+# MLX enables TF32 by default (mlx/utils.h:225-227); disable it for f32 reference arithmetic.
+os.environ['MLX_ENABLE_TF32'] = '0'
 
 import mlx.core as mx
 import numpy as np

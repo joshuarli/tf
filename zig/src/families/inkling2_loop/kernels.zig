@@ -10,6 +10,7 @@ const std = @import("std");
 const mtl = @import("metal");
 
 pub const glue = @embedFile("kernels/glue.metal");
+pub const dspark = @embedFile("kernels/dspark.metal");
 
 pub const prefill = @embedFile("kernels/prefill.metal");
 pub const prefill_smallrow = @embedFile("kernels/prefill_smallrow.metal");

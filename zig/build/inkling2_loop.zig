@@ -96,8 +96,24 @@ pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.B
     d.addImport("inkling2_config", b.createModule(.{ .root_source_file = b.path("zig/src/families/inkling2/config.zig"), .target = target, .optimize = .Debug }));
     const dense_run = b.addRunArtifact(b.addTest(.{ .root_module = d }));
     dense_run.has_side_effects = true;
+    dense_run.step.dependOn(&run.step);
     step.dependOn(&dense_run.step);
     test_step.dependOn(&dense_run.step);
+    const ds = b.createModule(.{
+        .root_source_file = b.path("zig/src/families/inkling2_loop/dspark_test.zig"),
+        .target = target,
+        .optimize = .fast,
+        .link_libc = true,
+    });
+    ds.addImport("metal", metal);
+    ds.addImport("core", core);
+    ds.addImport("inkling2_config", b.createModule(.{ .root_source_file = b.path("zig/src/families/inkling2/config.zig"), .target = target, .optimize = .fast }));
+    const ds_test = b.addTest(.{ .root_module = ds });
+    const ds_run = b.addRunArtifact(ds_test);
+    ds_run.has_side_effects = true;
+    ds_run.step.dependOn(&dense_run.step);
+    step.dependOn(&ds_run.step);
+    test_step.dependOn(&ds_run.step);
 }
 
 /// `tf-inkling2-loop-run`: every position's float32 logits, teacher-forced, for the campaign's parity check.

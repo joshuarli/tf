@@ -233,6 +233,7 @@ def main() -> int:
         models_document = render_models(template, base, served_model)
         before = metrics(base)
         records = []
+        server_exit = None
         for task_dir in tasks:
             record = run_task(task_dir, task_dir.name, harness.WORK / "pi", models_document, sandbox, served_model)
             after = metrics(base)
@@ -246,13 +247,21 @@ def main() -> int:
                                                + record["parse_errors"]["pi_events"])
             before = after
             records.append(record)
+            server_exit = server.process.poll()
+            if server_exit is not None:
+                record["completed"] = False
+                record["server_exit"] = server_exit
             print(f"{record['task']}: completed={record['completed']} checker={record['checker']['pass']} "
                   f"turns={record['turns']} parse_errors={record['parse_errors']['total']}", file=sys.stderr)
+            if server_exit is not None:
+                print(f"server exited with status {server_exit} during {record['task']} (see {log_path}); "
+                      "stopping the run", file=sys.stderr)
+                break
         live_identity = served_identity(base)
     finally:
         server.stop()
 
-    totals = {"tasks": len(records), "completed": sum(1 for r in records if r["completed"]),
+    totals = {"tasks": len(tasks), "completed": sum(1 for r in records if r["completed"]),
               "checker_passed": sum(1 for r in records if r["checker"]["pass"]),
               "parse_errors": sum(r["parse_errors"]["total"] for r in records),
               "server_log_parse_errors": count_log_parse_errors(log_path)}
@@ -260,7 +269,7 @@ def main() -> int:
               "host": harness.host_summary(model_key),
               "pi": {"path": str(PI), "flags": PI_FLAGS, "tools": PI_TOOLS, "provider": "tensorfold",
                      "model_id": served_model},
-              "server": {"base": base, "port": server.port, "owned": True, "argv": server.argv,
+              "server": {"base": base, "exit": server_exit, "port": server.port, "owned": True, "argv": server.argv,
                          "identity": live_identity,
                          "binary": {"path": str(binary), "sha256": binary_sha256}},
               "model": {"key": model_key, "dir": str(model), "hashes": harness.model_hashes(model_key)},
@@ -278,7 +287,7 @@ def main() -> int:
     latest.write_text(json.dumps({"run_id": run_id, "result": str(out.relative_to(campaign))}, sort_keys=True) + "\n",
                       encoding="utf-8")
     print(json.dumps(totals, sort_keys=True))
-    failed = [r["task"] for r in records if not r["completed"]]
+    failed = [r["task"] for r in records if not r["completed"]] + [t.name for t in tasks[len(records):]]
     print(f"incomplete: {failed}" if failed else "all task runs completed", file=sys.stderr)
     return 0 if totals["completed"] == totals["tasks"] else 1
 

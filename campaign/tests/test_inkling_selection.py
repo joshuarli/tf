@@ -159,5 +159,66 @@ class ModelModes(unittest.TestCase):
         self.assertEqual(harness.default_serve_args("flint-int4"), [])
 
 
+class PiServerLoss(unittest.TestCase):
+    def test_a_server_that_exits_mid_run_fails_the_run_and_stops_it(self):
+        import tempfile
+        from unittest import mock
+
+        class Process:
+            def __init__(self):
+                self.polls = 0
+
+            def poll(self):
+                self.polls += 1
+                return 4
+
+        class Server:
+            def __init__(self, *args):
+                self.base, self.port, self.argv, self.process = "http://127.0.0.1:1", 1, ["serve"], Process()
+
+            def start(self, timeout):
+                pass
+
+            def stop(self):
+                pass
+
+        ran = []
+
+        def run_task(task_dir, name, *args):
+            ran.append(name)
+            return {"task": name, "completed": True, "checker": {"pass": False}, "turns": 1, "pi_event_errors": []}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("a-task", "b-task"):
+                (root / "tasks" / name).mkdir(parents=True)
+                (root / "tasks" / name / "prompt.txt").write_text("text task")
+            (root / "agent").mkdir()
+            (root / "agent" / "models.json").write_text("{}")
+            binary = root / "bin"
+            binary.write_text("")
+            identity = {"model_ids": ["Inkling-2-Mini@ed40e7da625f"], "models": []}
+            with mock.patch.object(pi_run, "__file__", str(root / "run.py")), \
+                    mock.patch.object(pi_run.harness, "Server", Server), \
+                    mock.patch.object(pi_run.harness, "model_dir", lambda key: root), \
+                    mock.patch.object(pi_run.harness, "model_hashes", lambda key: {}), \
+                    mock.patch.object(pi_run.harness, "host_summary", lambda key: {}), \
+                    mock.patch.object(pi_run, "served_identity", lambda base: identity), \
+                    mock.patch.object(pi_run, "identity_problems", lambda *a, **k: []), \
+                    mock.patch.object(pi_run, "render_models", lambda *a: {}), \
+                    mock.patch.object(pi_run, "metrics", lambda base: {}), \
+                    mock.patch.object(pi_run, "run_task", run_task), \
+                    mock.patch.object(sys, "argv", ["run.py", "--model", "inkling2-mini", "--bin", str(binary)]):
+                status = pi_run.main()
+            record = json.loads((root / "results" / json.loads(
+                (root / "results" / "latest-inkling2-mini.json").read_text())["result"].split("/")[-1]).read_text())
+        self.assertEqual(status, 1)
+        self.assertEqual(ran, ["a-task"])
+        self.assertEqual(record["server"]["exit"], 4)
+        self.assertFalse(record["tasks"][0]["completed"])
+        self.assertEqual(record["totals"]["tasks"], 2)
+        self.assertFalse(record["completion"]["complete"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

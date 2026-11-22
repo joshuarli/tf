@@ -174,6 +174,21 @@ GPU limits were 35% for time and utilization. This is one process, not an interl
 baseline/candidate comparison. Peak charged memory was 1.4 GB as reported by `heavy.py`;
 the resident checkpoint pages were already warm and this charge is not the model's footprint.
 
+Split Metal 4 profiles used the same prose cache state, five timestamped rounds after eight
+warm rounds, and accepted zero rows so replay did not enter the profile. Profiling splits
+command buffers, so these GPU spans are not the unsplit wall times above. Dense includes the
+vocabulary head, which is also shown separately. The sixteen-row profile remains pending.
+
+| Rows | Summed GPU span ms | Dense ms | Expert gate/up and down ms | Attention ms | Route selection ms | Vocabulary head ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 41.699 | 11.110 | 4.587 | 11.174 | 4.920 | 1.580 |
+| 2 | 47.154 | 13.096 | 7.984 | 11.309 | 4.900 | 1.677 |
+| 4 | 71.075 | 20.841 | 21.355 | 12.630 | 4.893 | 3.042 |
+| 8 | 108.880 | 37.877 | 33.533 | 18.640 | 5.001 | 5.846 |
+
+The profiler logs passed the same admission checks as the baseline. An eight-row attempt
+and a sixteen-row attempt failed post-checks and were discarded.
+
 The family test passed with `TF_INKLING2_LOOP_DIR` set to the checkpoint and
 `python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1`. It compared
 repeated predictions after snapshot reset and continuation logits byte for byte across the local

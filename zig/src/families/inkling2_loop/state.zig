@@ -14,9 +14,8 @@ pub const attn_chunk = 64;
 /// Split-K decode attention: the most chunks one window splits into.
 pub const attn_splits = 16;
 
-/// The split of `n` window positions into contiguous chunks: the fewest chunks of at most attn_chunk positions.
 pub fn attnPartition(n: usize) struct { splits: u32, chunk: u32 } {
-    const splits: u32 = @intCast(@max(1, @min(attn_splits, (n + attn_chunk - 1) / attn_chunk)));
+    const splits: u32 = @intCast(@min(n, @max(5, @min(attn_splits, (n + attn_chunk - 1) / attn_chunk))));
     return .{ .splits = splits, .chunk = @intCast((n + splits - 1) / splits) };
 }
 
@@ -256,8 +255,8 @@ test "the state's rings and mix lists carry the graph's widths" {
     try std.testing.expectEqual(@as(usize, 5), mix_states);
     for ([_]struct { n: usize, splits: u32, chunk: u32 }{
         .{ .n = 1, .splits = 1, .chunk = 1 },
-        .{ .n = 64, .splits = 1, .chunk = 64 },
-        .{ .n = 65, .splits = 2, .chunk = 33 },
+        .{ .n = 64, .splits = 5, .chunk = 13 },
+        .{ .n = 65, .splits = 5, .chunk = 13 },
         .{ .n = 1024, .splits = 16, .chunk = 64 },
         .{ .n = 1335, .splits = 16, .chunk = 84 },
     }) |c| {

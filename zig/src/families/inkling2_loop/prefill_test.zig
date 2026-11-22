@@ -568,18 +568,166 @@ fn expertCode(code: u8, mx: bool) f64 {
     return if (code & 8 != 0) -value else value;
 }
 
+test "finite nvfp4 codes and e4m3 scales have exact half products" {
+    var minimum: f64 = std.math.inf(f64);
+    var maximum: f64 = 0;
+    for (0..16) |code| for (0..256) |scale| {
+        if (scale & 127 == 127) continue;
+        const exact = expertCode(@intCast(code), false) * expertE4(@intCast(scale));
+        const half: f16 = @floatCast(exact);
+        try std.testing.expectEqual(exact, @as(f64, half));
+        if (exact != 0) minimum = @min(minimum, @abs(exact));
+        maximum = @max(maximum, @abs(exact));
+    };
+    try std.testing.expectEqual(@as(f64, 0x1p-10), minimum);
+    try std.testing.expectEqual(@as(f64, 2688), maximum);
+}
+
+test "routed expert tensor operation retains both reduction blocks" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    if (!device.tensorUnits() or !device.hasMetal4()) return error.SkipZigTest;
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, @import("kernels.zig").prefillMppSource(false), mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const pipe = try mtl.Pipeline.init(device, lib, "i2p_expert_mpp", false);
+    defer pipe.deinit();
+    const k = 64;
+    const n = 64;
+    const rows = 16;
+    const x = try device.buffer(rows * k * 4, mtl.ResourceOptions.shared);
+    defer x.deinit();
+    @memset(x.slice(f32, rows * k), 1);
+    const w = try device.buffer(n * k / 2, mtl.ResourceOptions.shared);
+    defer w.deinit();
+    @memset(w.slice(u8, n * k / 2), 0);
+    w.slice(u8, n * k / 2)[0] = 2;
+    w.slice(u8, n * k / 2)[k / 2 + 16] = 2;
+    const scales = try device.buffer(n * k / 16, mtl.ResourceOptions.shared);
+    defer scales.deinit();
+    @memset(scales.slice(u8, n * k / 16), 0x38);
+    const global = try device.buffer(16, mtl.ResourceOptions.shared);
+    defer global.deinit();
+    global.slice(f32, 1)[0] = 1;
+    const den = try device.buffer(16, mtl.ResourceOptions.shared);
+    defer den.deinit();
+    den.slice(f32, 1)[0] = 1;
+    const off = try device.buffer(16, mtl.ResourceOptions.shared);
+    defer off.deinit();
+    off.slice(i32, 2)[0] = 0;
+    off.slice(i32, 2)[1] = rows;
+    const row_of = try device.buffer(rows * 4, mtl.ResourceOptions.shared);
+    defer row_of.deinit();
+    for (row_of.slice(i32, rows), 0..) |*v, i| v.* = @intCast(rows - 1 - i);
+    const out = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared);
+    defer out.deinit();
+    @memset(out.slice(f32, rows * n), -99);
+    const codes = try device.buffer(256 * 4, mtl.ResourceOptions.shared);
+    defer codes.deinit();
+    for (codes.slice(f32, 256), 0..) |*v, i| v.* = @floatCast(expertCode(@intCast(i % 16), false));
+    const args = ExpertArgs{ .k = k, .n = n, .slots = rows, .topk = 1, .experts = 1, .gate_cap = 0, .up_cap = 0 };
+    const cb = queue.commandBuffer();
+    const enc = cb.compute(.serial);
+    enc.setPipeline(pipe);
+    enc.setBuffer(x, 0, 0); enc.setBuffer(w, 0, 1); enc.setBuffer(scales, 0, 2);
+    enc.setBuffer(global, 0, 3); enc.setBuffer(den, 0, 4); enc.setBuffer(off, 0, 5);
+    enc.setBuffer(row_of, 0, 6); enc.setValue(args, 7); enc.setBuffer(out, 0, 8); enc.setBuffer(codes, 0, 9);
+    enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(128, 1, 1));
+    enc.end(); cb.commit(); cb.wait();
+    if (cb.failure()) |msg| { std.debug.print("expert: {s}\n", .{msg}); return error.GpuFailed; }
+    for (0..rows) |row| for (0..n) |col| {
+        const got = out.slice(f32, rows * n)[row * n + col];
+        const want: f32 = if (col < 2) 1 else 0;
+        if (got != want) {
+            std.debug.print("expert block row={d} col={d} got={d} expected={d}; first={d} second={d}\n", .{ row, col, got, want, out.slice(f32, rows * n)[row * n], out.slice(f32, rows * n)[row * n + 1] });
+            return error.ExpertBlockMismatch;
+        }
+    };
+}
+
+test "routed expert tensor weights retain scale extremes" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    if (!device.tensorUnits() or !device.hasMetal4()) return error.SkipZigTest;
+    const queue = try device.queue();
+    defer queue.deinit();
+    const k = 64;
+    const n = 64;
+    const rows = 16;
+    for ([_]bool{ false, true }) |mx| {
+        const source = if (mx) @import("kernels.zig").prefillMppSource(true) else @import("kernels.zig").prefillMppSource(false);
+        const lib = try mtl.Library.fromSource(device, source, mtl.CompileOptions.mlx());
+        defer lib.deinit();
+        const pipe = try mtl.Pipeline.init(device, lib, "i2p_expert_mpp", false);
+        defer pipe.deinit();
+        const x = try device.buffer(rows * k * 4, mtl.ResourceOptions.shared);
+        defer x.deinit();
+        @memset(x.slice(f32, rows * k), 1);
+        const stride: usize = if (mx) k else k / 2;
+        const group: usize = if (mx) 32 else 16;
+        const w = try device.buffer(n * stride, mtl.ResourceOptions.shared);
+        defer w.deinit();
+        @memset(w.slice(u8, n * stride), 0);
+        w.slice(u8, n * stride)[0] = if (mx) 0x38 else 0x01;
+        w.slice(u8, n * stride)[stride] = if (mx) 0x01 else 0x07;
+        const scales = try device.buffer(n * k / group, mtl.ResourceOptions.shared);
+        defer scales.deinit();
+        @memset(scales.slice(u8, n * k / group), if (mx) 127 else 0x38);
+        scales.slice(u8, n * k / group)[0] = if (mx) 146 else 0x01;
+        scales.slice(u8, n * k / group)[k / group] = if (mx) 107 else 0x7e;
+        const global = try device.buffer(16, mtl.ResourceOptions.shared);
+        defer global.deinit();
+        global.slice(f32, 1)[0] = 1;
+        const den = try device.buffer(16, mtl.ResourceOptions.shared);
+        defer den.deinit();
+        den.slice(f32, 1)[0] = 1;
+        const off = try device.buffer(16, mtl.ResourceOptions.shared);
+        defer off.deinit();
+        off.slice(i32, 2)[0] = 0;
+        off.slice(i32, 2)[1] = rows;
+        const row_of = try device.buffer(rows * 4, mtl.ResourceOptions.shared);
+        defer row_of.deinit();
+        for (row_of.slice(i32, rows), 0..) |*v, i| v.* = @intCast(rows - 1 - i);
+        const out = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared);
+        defer out.deinit();
+        const codes = try device.buffer(256 * 4, mtl.ResourceOptions.shared);
+        defer codes.deinit();
+        for (codes.slice(f32, 256), 0..) |*v, i| v.* = @floatCast(expertCode(@intCast(if (mx and i % 128 == 127) 0 else i % (if (mx) @as(usize, 256) else 16)), mx));
+        const args = ExpertArgs{ .k = k, .n = n, .slots = rows, .topk = 1, .experts = 1, .gate_cap = 0, .up_cap = 0 };
+        const cb = queue.commandBuffer();
+        const enc = cb.compute(.serial);
+        enc.setPipeline(pipe);
+        enc.setBuffer(x, 0, 0); enc.setBuffer(w, 0, 1); enc.setBuffer(scales, 0, 2);
+        enc.setBuffer(global, 0, 3); enc.setBuffer(den, 0, 4); enc.setBuffer(off, 0, 5);
+        enc.setBuffer(row_of, 0, 6); enc.setValue(args, 7); enc.setBuffer(out, 0, 8); enc.setBuffer(codes, 0, 9);
+        enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(128, 1, 1));
+        enc.end(); cb.commit(); cb.wait();
+        if (cb.failure()) |msg| { std.debug.print("expert: {s}\n", .{msg}); return error.GpuFailed; }
+        for (0..rows) |r| {
+            try std.testing.expectEqual(if (mx) @as(f32, 0x1p19) else 0x1p-10, out.slice(f32, rows * n)[r * n]);
+            try std.testing.expectEqual(if (mx) @as(f32, 0x1p-29) else 2688, out.slice(f32, rows * n)[r * n + 1]);
+        }
+    }
+}
+
 test "routed expert projections meet fp64 bounds at occupancy boundaries" {
     if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
     const device = try mtl.Device.init();
     defer device.deinit();
+    const expert_mpp = device.tensorUnits() and device.hasMetal4();
     const queue = try device.queue();
     defer queue.deinit();
     for ([_]bool{ false, true }) |mx| {
-        const source = if (mx) @import("kernels.zig").prefillSource(true) else @import("kernels.zig").prefillSource(false);
+        const source = if (expert_mpp) (if (mx) @import("kernels.zig").prefillMppSource(true) else @import("kernels.zig").prefillMppSource(false)) else (if (mx) @import("kernels.zig").prefillSource(true) else @import("kernels.zig").prefill);
         const lib = try mtl.Library.fromSource(device, source, mtl.CompileOptions.mlx());
         defer lib.deinit();
-        const matrix = try mtl.Pipeline.init(device, lib, "i2p_expert_matrix", false);
+        const matrix = try mtl.Pipeline.init(device, lib, if (expert_mpp) "i2p_expert_mpp" else "i2p_expert_matrix", false);
         defer matrix.deinit();
+        const legacy = try mtl.Pipeline.init(device, lib, "i2p_expert_matrix", false);
+        defer legacy.deinit();
         const codes = try device.buffer(256 * 4, mtl.ResourceOptions.shared);
         defer codes.deinit();
         for (codes.slice(f32, 256), 0..) |*v, i| v.* = @floatCast(expertCode(@intCast(if (mx and i % 128 == 127) 0 else i % (if (mx) @as(usize, 256) else 16)), mx));
@@ -591,9 +739,9 @@ test "routed expert projections meet fp64 bounds at occupancy boundaries" {
         den.slice(f32, 1)[0] = 1.3;
         const off = try device.buffer(16, mtl.ResourceOptions.shared);
         defer off.deinit();
-        const row_of = try device.buffer(128 * 4, mtl.ResourceOptions.shared);
+        const row_of = try device.buffer(512 * 4, mtl.ResourceOptions.shared);
         defer row_of.deinit();
-        for (row_of.slice(i32, 128), 0..) |*v, i| v.* = @intCast(127 - i);
+        for (row_of.slice(i32, 512), 0..) |*v, i| v.* = @intCast(511 - i);
         for ([_]bool{ true, false }) |gu| {
             const k: usize = if (gu) 2304 else 1152;
             const n: usize = 64;
@@ -606,17 +754,19 @@ test "routed expert projections meet fp64 bounds at occupancy boundaries" {
             defer scales.deinit();
             for (w.slice(u8, cols * code_stride), 0..) |*v, i| v.* = if (mx) @intCast((i *% 13 + i / code_stride *% 7) % 112 + 128 * ((i / 5 + i / code_stride) % 2)) else @intCast((i *% 37 + i / code_stride *% 13) % 256);
             for (scales.slice(u8, cols * (k / group)), 0..) |*v, i| v.* = if (mx) @intCast(123 + i % 5) else @intCast(40 + i % 16);
-            const x = try device.buffer(128 * k * 4, mtl.ResourceOptions.shared);
+            const x = try device.buffer(512 * k * 4, mtl.ResourceOptions.shared);
             defer x.deinit();
-            for (x.slice(f32, 128 * k), 0..) |*v, i| v.* = @as(f32, @floatFromInt(@as(i32, @intCast((i *% 17 + i / k *% 31) % 251)) - 125)) / 127.0;
-            const out = try device.buffer(128 * n * 4, mtl.ResourceOptions.shared);
+            for (x.slice(f32, 512 * k), 0..) |*v, i| v.* = @as(f32, @floatFromInt(@as(i32, @intCast((i *% 17 + i / k *% 31) % 251)) - 125)) / 127.0;
+            const out = try device.buffer(512 * n * 4, mtl.ResourceOptions.shared);
             defer out.deinit();
+            const baseline = try device.buffer(512 * n * 4, mtl.ResourceOptions.shared);
+            defer baseline.deinit();
             const grouped = try mtl.Pipeline.init(device, lib, if (gu) "i2p_gu_grouped" else "i2p_down_grouped", false);
             defer grouped.deinit();
-            for ([_]usize{ 1, 3, 8, 15, 16, 32, 128 }) |rows| {
+            for ([_]usize{ 1, 3, 8, 15, 16, 32, 128, 512 }) |rows| {
                 off.slice(i32, 2)[0] = 0;
                 off.slice(i32, 2)[1] = @intCast(rows);
-                const args = ExpertArgs{ .k = @intCast(k), .n = n, .slots = 128, .topk = 8, .experts = 1, .gate_cap = if (gu) 7 else 0, .up_cap = if (gu) 7 else 0 };
+                const args = ExpertArgs{ .k = @intCast(k), .n = n, .slots = 512, .topk = 8, .experts = 1, .gate_cap = if (gu) 7 else 0, .up_cap = if (gu) 7 else 0 };
                 const cb = queue.commandBuffer();
                 const enc = cb.compute(.serial);
                 for ([_]mtl.Pipeline{ grouped, matrix }, 0..) |pipe, p| {
@@ -631,15 +781,24 @@ test "routed expert projections meet fp64 bounds at occupancy boundaries" {
                     enc.setValue(args, 7);
                     enc.setBuffer(out, 0, 8);
                     enc.setBuffer(codes, 0, 9);
-                    if (p == 0) enc.dispatchGroups(mtl.Size.of(n, 1, 1), mtl.Size.of(32, 1, 1)) else enc.dispatchGroups(mtl.Size.of((cols + 63) / 64, 1, (rows + 31) / 32), mtl.Size.of(256, 1, 1));
+                    if (p == 0) enc.dispatchGroups(mtl.Size.of(n, 1, 1), mtl.Size.of(32, 1, 1)) else enc.dispatchGroups(mtl.Size.of((cols + 63) / 64, 1, (rows + 31) / 32), mtl.Size.of(if (expert_mpp) 128 else 256, 1, 1));
+                }
+                if (expert_mpp and rows >= (if (mx) @as(usize, 8) else 16)) {
+                    enc.setPipeline(legacy);
+                    enc.setBuffer(x, 0, 0); enc.setBuffer(w, 0, 1); enc.setBuffer(scales, 0, 2);
+                    enc.setBuffer(globals, 0, 3); enc.setBuffer(den, 0, 4); enc.setBuffer(off, 0, 5);
+                    enc.setBuffer(row_of, 0, 6); enc.setValue(args, 7); enc.setBuffer(baseline, 0, 8); enc.setBuffer(codes, 0, 9);
+                    enc.dispatchGroups(mtl.Size.of((cols + 63) / 64, 1, (rows + 31) / 32), mtl.Size.of(256, 1, 1));
                 }
                 enc.end();
                 cb.commit();
                 cb.wait();
                 if (cb.failure()) |msg| { std.debug.print("expert: {s}\n", .{msg}); return error.GpuFailed; }
                 var worst: f64 = 0;
+                var worst_column: usize = 0;
+                var legacy_worst: f64 = 0;
                 for (0..rows) |r| {
-                    const slot = 127 - r;
+                    const slot = 511 - r;
                     for (0..n) |c| {
                         var sums = [_]f64{ 0, 0 };
                         var magnitudes = [_]f64{ 0, 0 };
@@ -651,7 +810,7 @@ test "routed expert projections meet fp64 bounds at occupancy boundaries" {
                                 const sc = scales.slice(u8, cols * (k / group))[wr * (k / group) + j / group];
                                 const scale = if (mx) std.math.pow(f64, 2, @as(f64, @floatFromInt(sc)) - 127) else expertE4(sc);
                                 const input_row = if (gu) slot / 8 else slot;
-                                const term = expertCode(code, mx) * scale * @as(f64, x.slice(f32, 128 * k)[input_row * k + j]);
+                                const term = expertCode(code, mx) * scale * @as(f64, x.slice(f32, 512 * k)[input_row * k + j]);
                                 sums[part] += term;
                                 magnitudes[part] += @abs(term);
                             }
@@ -661,16 +820,21 @@ test "routed expert projections meet fp64 bounds at occupancy boundaries" {
                         const up = sums[1] * global;
                         const expected = if (gu) (7.0 * std.math.tanh(gate / 7.0) / (1.0 + @exp(-gate))) * (7.0 * std.math.tanh(up / 7.0)) else gate;
                         const bound = (if (gu) @as(f64, 16.0) else 1.0) * (@as(f64, @floatFromInt(k)) * 0x1p-24 / (1.0 - @as(f64, @floatFromInt(k)) * 0x1p-24)) * (magnitudes[0] + magnitudes[1]) * global + 1e-6;
-                        const actual: f64 = out.slice(f32, 128 * n)[slot * n + c];
+                        const actual: f64 = out.slice(f32, 512 * n)[slot * n + c];
                         const err = @abs(actual - expected);
-                        worst = @max(worst, err);
+                        if (err > worst) { worst = err; worst_column = c; }
+                        if (expert_mpp and rows >= (if (mx) @as(usize, 8) else 16)) {
+                            const old: f64 = baseline.slice(f32, 512 * n)[slot * n + c];
+                            legacy_worst = @max(legacy_worst, @abs(old - expected));
+                        }
                         if (!std.math.isFinite(actual) or err > bound) {
                             std.debug.print("expert mx={} gu={} rows={d} slot={d} col={d} got={e} ref={e} error={e} bound={e}\n", .{ mx, gu, rows, slot, c, actual, expected, err, bound });
                             return error.ExpertReferenceMismatch;
                         }
                     }
                 }
-                std.debug.print("expert mx={} gu={} rows={d} worst={e}\n", .{ mx, gu, rows, worst });
+                std.debug.print("expert mx={} gu={} rows={d} worst={e} column={d} legacy_worst={e}\n", .{ mx, gu, rows, worst, worst_column, legacy_worst });
+                if (expert_mpp and rows >= (if (mx) @as(usize, 8) else 16)) try std.testing.expect(worst <= legacy_worst);
             }
         }
     }

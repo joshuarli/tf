@@ -575,3 +575,66 @@ f6d8f83f0): TTFT on code-1024 (1,349 tokens) 5.65/5.97 -> 4.04/4.14 s, prose-102
 structured-1024 4.69/4.64 -> 3.59/3.42 s; greedy outputs byte-identical; server peak device bytes 3.99 -> 4.54 GB
 (the prefill scratch scales with the chunk, mostly its all-rows logits buffer). One baseline trial was marked
 invalid by the harness; the rest are valid at the busy-host limits.
+
+## Tensor operations for routed experts
+
+On devices with tensor units and Metal 4, the TensorOps experiment uses
+`i2p_expert_mpp` for experts at the existing matrix thresholds and keeps the
+grouped kernels below those thresholds. Other devices use `i2p_expert_matrix`. It
+stages routed activations as float32. NVFP4 weights use half after decoding
+E2M1 times E4M3. Every finite product is exactly representable in half: the
+smallest nonzero magnitude is 2^-10 and the largest is 2,688. MXFP8 weights
+use float32 after applying their block scale, because the scale can place a
+weight outside half's range. The operation accumulates into float32 and applies
+NVFP4's expert global after the reduction.
+
+The family test uses the existing per-column FP64 bound `factor * gamma_k *
+sum(abs(w*x)) * global + 1e-6`, with `gamma_k = k * 2^-24 / (1 - k * 2^-24)`.
+The down projection uses factor 1 and gate/up uses factor 16 for the nonlinear
+activation. This bounds float32 accumulation for the tested finite values;
+activation conversion and NVFP4 half-weight conversion add no error. The
+family gate passed for both projections and formats at routed occupancies 1,
+3, 8, 15, 16, 32, 128, and 512. MXFP8's random scale bytes were 123 through
+127. The test also exhausts finite NVFP4 code and scale pairs for half
+representability. A GPU fixture checks the NVFP4 extremes and MXFP8 values
+2^19 and 2^-29, which exceed half's maximum and fall below its smallest
+nonzero value, respectively. The FP64 fixture also runs the legacy matrix
+kernel at matrix occupancies and requires the new worst error to be no larger.
+At 512 rows, both kernels have the same worst absolute error: NVFP4 gate/up
+2.024e-4 at column 48 and down 6.253e-5 at column 15; MXFP8 gate/up 3.237e-3
+at column 19 and down 1.552e-3 at column 51.
+
+A single instrumented M5 Max profile used the 5,265-token input, chunk 512,
+and base 4096. The baseline supplied for main `77d023f9d` reports 699.3 ms
+for `i2p_expert_matrix`, 78.5 ms for `i2p_gu_grouped`, and 59.3 ms for
+`i2p_down_grouped`. The final candidate reports 679.590 ms, 79.228 ms, and 58.880 ms
+respectively. An earlier candidate profile reported 656.995 ms, 76.838 ms,
+and 56.537 ms. These are individual split profiles, not paired measurements,
+and do not establish a speedup. The final run peaked at 21.2 GB charged
+under the 28 GB guard. Host pressure reached level 2 and swap rose 2.176 GB
+during that run.
+
+A separate one-expert NVFP4 experiment compared the three operand choices at
+16, 64, and 128 routed rows. Gate/up used K=2304 and 2304 weight rows; down
+used K=1152 and 2304 weight rows. Every weight code was 1 with block scale 1.
+Input element `i` was `0.5 + (i % 256)/1024 + (i / K)/1048576`, with integer
+division. Each arm used 32 × 64 × 32 tiles, two warmups, and seven rotated GPU
+command-buffer samples. The half-split arm made two matmul calls per K tile
+and accumulated both products in float. The fixture checked edge outputs
+against FP64 within the FP32 accumulation bound. For 64 rows, down medians
+were 319.458 µs for float × half, 304.375 µs for split half × half, and
+317.833 µs for float × float. Their ranges were 293.375–330.875,
+280.458–305.708, and 288.583–324.042 µs. Gate/up medians were 578.250,
+543.875, and 574.458 µs, with ranges 570.250–626.625, 517.208–596.125,
+and 565.958–622.917 µs. The ranges overlap, and these results do not establish
+an end-to-end winner. The split fixture used bounded inputs whose high and low
+halves reconstruct the float exactly. Two half values cannot represent every
+float, including 2^-149, so the split is not a valid general replacement for
+float activations. Pre- and post-run host-load checks passed.
+
+The final candidate's chunk-512 parity target compared 3,015 positions across
+16 histories and exited 2 with 14 within contract, two recorded exceptions,
+and zero unexplained. The comparator observed `harbour` onset at 557 and
+`cells_code` onset at 688, while the existing exception records name 556 and
+304. Those recorded explanations are evidence, not a full qualification of
+this candidate. Decode-mode parity was not changed or rerun.

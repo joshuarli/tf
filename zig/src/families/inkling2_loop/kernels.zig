@@ -13,6 +13,10 @@ pub const glue = @embedFile("kernels/glue.metal");
 
 pub const prefill = @embedFile("kernels/prefill.metal");
 
+pub fn prefillMppSource(comptime mxfp8: bool) []const u8 {
+    return comptime prefillSource(mxfp8) ++ @embedFile("kernels/prefill_experts_mpp.metal");
+}
+
 pub fn prefillSource(comptime mxfp8: bool) []const u8 {
     return if (mxfp8) "#define I2P_MXFP8 1\n" ++ prefill else prefill;
 }

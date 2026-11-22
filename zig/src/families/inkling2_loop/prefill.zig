@@ -118,6 +118,7 @@ pub const Pipes = struct {
 
 pub const PrefillScratch = struct {
     pipes: Pipes,
+    expert_threads: u32,
     chunk: usize,
     h: u32,
     heads: u32,
@@ -189,6 +190,8 @@ pub const PrefillScratch = struct {
         s.capture = null;
         s.capture_row = 0;
         s.routes = null;
+        const expert_mpp = device.tensorUnits() and device.hasMetal4();
+        s.expert_threads = if (expert_mpp) 128 else 256;
         s.chunk = chunk;
         s.h = @intCast(h);
         s.heads = c.text.local.q;
@@ -249,9 +252,9 @@ pub const PrefillScratch = struct {
         errdefer s.ids.deinit();
         s.logits = try device.buffer(@max(chunk * vocab * 4, 16), mtl.ResourceOptions.shared);
         const opts = mtl.CompileOptions.mlx();
-        const lib = try mtl.Library.fromSource(device, kernels.prefill, opts);
+        const lib = try mtl.Library.fromSource(device, if (expert_mpp) kernels.prefillMppSource(false) else kernels.prefill, opts);
         defer lib.deinit();
-        const libmx = try mtl.Library.fromSource(device, kernels.prefillSource(true), opts);
+        const libmx = try mtl.Library.fromSource(device, if (expert_mpp) kernels.prefillMppSource(true) else kernels.prefillSource(true), opts);
         defer libmx.deinit();
         s.pipes.dense = try mtl.Pipeline.init(device, lib, "i2p_dense", false);
         errdefer s.pipes.dense.deinit();
@@ -309,9 +312,9 @@ pub const PrefillScratch = struct {
         errdefer s.pipes.gu_g_mx.deinit();
         s.pipes.down_g_mx = try mtl.Pipeline.init(device, libmx, "i2p_down_grouped", false);
         errdefer s.pipes.down_g_mx.deinit();
-        s.pipes.expert_matrix_nv = try mtl.Pipeline.init(device, lib, "i2p_expert_matrix", false);
+        s.pipes.expert_matrix_nv = try mtl.Pipeline.init(device, lib, if (expert_mpp) "i2p_expert_mpp" else "i2p_expert_matrix", false);
         errdefer s.pipes.expert_matrix_nv.deinit();
-        s.pipes.expert_matrix_mx = try mtl.Pipeline.init(device, libmx, "i2p_expert_matrix", false);
+        s.pipes.expert_matrix_mx = try mtl.Pipeline.init(device, libmx, if (expert_mpp) "i2p_expert_mpp" else "i2p_expert_matrix", false);
         errdefer s.pipes.expert_matrix_mx.deinit();
         s.pipes.moe_zero = try mtl.Pipeline.init(device, lib, "i2p_moe_zero", false);
         errdefer s.pipes.moe_zero.deinit();
@@ -599,11 +602,11 @@ const Chunk = struct {
         c.setP(gu, Moeg{ .k = c.h, .n = inter, .slots = slots, .topk = K, .experts = E, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes });
         c.enc.dispatchGroups(mtl.Size.of(inter, E, 1), mtl.Size.of(32, 1, 1));
         c.setP(matrix, Moeg{ .k = c.h, .n = inter, .slots = slots, .topk = K, .experts = E, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes });
-        c.enc.dispatchGroups(mtl.Size.of((inter * 2 + 63) / 64, E, (c.n + 31) / 32), mtl.Size.of(256, 1, 1));
+        c.enc.dispatchGroups(mtl.Size.of((inter * 2 + 63) / 64, E, (c.n + 31) / 32), mtl.Size.of(s.expert_threads, 1, 1));
         c.setP(down, Moeg{ .k = inter, .n = c.h, .slots = slots, .topk = K, .experts = E, .gate_cap = 0, .up_cap = 0 }, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.moe_off), b(s.moe_sorted), A, b(s.down), codes });
         c.enc.dispatchGroups(mtl.Size.of(c.h, E, 1), mtl.Size.of(32, 1, 1));
         c.setP(matrix, Moeg{ .k = inter, .n = c.h, .slots = slots, .topk = K, .experts = E, .gate_cap = 0, .up_cap = 0 }, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.moe_off), b(s.moe_sorted), A, b(s.down), codes });
-        c.enc.dispatchGroups(mtl.Size.of((c.h + 63) / 64, E, (c.n + 31) / 32), mtl.Size.of(256, 1, 1));
+        c.enc.dispatchGroups(mtl.Size.of((c.h + 63) / 64, E, (c.n + 31) / 32), mtl.Size.of(s.expert_threads, 1, 1));
         c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = K, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
         c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
     }

@@ -499,3 +499,18 @@ respectively; this comparison is distinct from the reference parity gate.
 The parity target reported 14 histories within contract, two explained
 divergences and zero unexplained; it exited 2 because its overall qualification
 requires all 16 histories within contract.
+
+## E1 end-to-end timing
+
+Same protocol as P4 (runner `bench 2 1 128` on `.work/tmp/ids-1k.json`, six base-candidate-base rounds inside
+`heavy.py` between `gpu-gate-ready -1` checks, busy-host limits of 35% GPU time and utilization; memory pressure
+normal). Base `main` 206faa4f5 (P4), candidate E1 `36f1311b9`.
+
+| | median tok/s | samples |
+| --- | ---: | --- |
+| base | 135.4 | 116.9, 134.9, 128.3, 113.2, 129.0, 135.9, 144.5, 146.8, 131.5, 149.7, 139.5, 136.2 |
+| E1 | 191.3 | 201.0, 171.9, 186.5, 196.1, 183.1, 198.5 |
+
+Per-round ratios 1.597, 1.424, 1.408, 1.346, 1.302, 1.440; geometric mean 1.417 (95% t-interval 1.317-1.524).
+Logits are not byte-identical to P4 (max abs 4.5e-3 on harbour, 9.3e-4 on cells_code, argmax identical on
+every row) and the parity gate is unchanged at 14 within contract, 2 explained, 0 unexplained. Verdict: keep.

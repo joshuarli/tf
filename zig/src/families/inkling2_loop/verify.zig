@@ -2,6 +2,7 @@ const std = @import("std");
 const mtl = @import("metal");
 const Model = @import("model.zig").Model;
 const Cache = @import("state.zig").Cache;
+const ring = @import("state.zig").ring;
 const prefill = @import("prefill.zig");
 
 /// The most copy drafts a decode round verifies at once: a verify of 8 rows costs about four decode steps.
@@ -21,6 +22,7 @@ pub const Verification = struct {
     cache: *Cache,
     scratch: *prefill.PrefillScratch,
     snapshot: mtl.Buffer,
+    conv: prefill.ConvCapture,
     start: usize,
     rows: usize,
 
@@ -33,9 +35,14 @@ pub const Verification = struct {
         const bytes = conv_bytes + Cache.localSlots(c) * ids.len * row_bytes * 2;
         const snapshot = try model.device.buffer(@max(bytes, 16), mtl.ResourceOptions.private);
         errdefer snapshot.deinit();
-        var v = Verification{ .model = model, .scratch = scratch, .cache = cache, .snapshot = snapshot, .start = cache.len, .rows = ids.len };
+        var conv = try prefill.ConvCapture.init(model.device, c, ids.len);
+        errdefer conv.deinit();
+        if (scratch.verify_conv != null) return error.VerificationActive;
+        var v = Verification{ .model = model, .scratch = scratch, .cache = cache, .snapshot = snapshot, .conv = conv, .start = cache.len, .rows = ids.len };
         try v.copy(true);
         const saved = if (round_times != null) now() else 0;
+        scratch.verify_conv = &v.conv;
+        defer scratch.verify_conv = null;
         try prefill.prefillWant(model, scratch, cache, ids, .all);
         const forwarded = if (round_times != null) now() else 0;
         const vocab: usize = c.text.unpadded_vocab;
@@ -56,17 +63,64 @@ pub const Verification = struct {
 
     pub fn finish(v: *Verification, ids: []const u32, accepted: usize) !void {
         defer v.snapshot.deinit();
+        defer v.conv.deinit();
         if (ids.len != v.rows or accepted > ids.len) return error.BadAcceptedPrefix;
         if (accepted == ids.len) return;
         const started = if (round_times != null) now() else 0;
-        try v.copy(false);
-        v.cache.len = v.start;
+        if (accepted == 0) {
+            try v.copy(false);
+            v.cache.len = v.start;
+        } else {
+            try v.commit(accepted);
+        }
         const restored = if (round_times != null) now() else 0;
-        if (accepted != 0) try prefill.prefillWant(v.model, v.scratch, v.cache, ids[0..accepted], .all);
         if (round_times) |t| {
             t.restore = restored - started;
             t.replay = now() - restored;
         }
+    }
+
+    fn commit(v: *Verification, accepted: usize) !void {
+        const c = &v.model.config;
+        const row_bytes: usize = c.text.local.kv * c.text.local.dim * 4;
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
+        const cb = v.model.queue.commandBuffer();
+        const blit = cb.blit();
+        const rings = [_]mtl.Buffer{ v.cache.k_conv, v.cache.v_conv, v.cache.attn_conv, v.cache.mlp_conv };
+        const sites = [_]prefill.ConvSite{ .key, .value, .attention, .mlp };
+        var at: usize = 0;
+        for (rings) |buf| {
+            blit.copy(v.snapshot, at, buf, 0, buf.length());
+            at += buf.length();
+        }
+        for (0..c.slots()) |slot| {
+            if (!Cache.isLocalSlot(c, slot)) continue;
+            for (0..v.rows) |row| {
+                const off = v.cache.row(c, slot, v.start + row);
+                for ([_]mtl.Buffer{ v.cache.keys, v.cache.values }) |buf| {
+                    if (row >= accepted) blit.copy(v.snapshot, at, buf, off, row_bytes);
+                    at += row_bytes;
+                }
+            }
+        }
+        for (0..c.slots()) |slot| {
+            for (rings, sites) |buf, site| {
+                const width = v.conv.width(site);
+                for (accepted - @min(accepted, ring)..accepted) |row| {
+                    const off = v.cache.convAt(slot, width) + ((v.start + row) % ring) * width * 4;
+                    blit.copy(v.conv.buffer, v.conv.offset(slot, site, row), buf, off, width * 4);
+                }
+            }
+        }
+        blit.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |message| {
+            std.log.err("inkling verify commit: {s}", .{message});
+            return error.GpuFailed;
+        }
+        v.cache.len = v.start + accepted;
     }
 
     pub fn reset(v: *Verification) !void {

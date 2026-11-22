@@ -5,12 +5,13 @@
 The shootout is in progress. The following state-size calculation is independent
 of the remaining timing and fidelity trials.
 
-The completed cells are code at 1,349 prompt tokens, prose at 1,154 and
-structured at 1,124. Values are medians and ranges across three pairs; peak
+The completed cells are code at 1,349 and 5,280 prompt tokens, prose at 1,154,
+and structured at 1,124. Values are medians and ranges across three pairs; peak
 memory is the largest charged value. Both engines' outputs were stable across
 the three runs. The
-first different generated indices were 204 for code, 323 for prose and 29
-for structured in every pair. Three pairs and differing engine configurations
+first different generated indices were 204 for 1K code, 323 for prose and 29
+for structured in every pair. The 5,280-token code outputs first differed at
+index 87 in every pair. Three pairs and differing engine configurations
 do not establish a general performance verdict.
 
 | Engine | TTFT seconds | Prefill tok/s | Decode tok/s | Peak charged GB |
@@ -21,6 +22,8 @@ do not establish a general performance verdict.
 | nanoattention, prose | 2.028 (1.991–2.048) | 569.02 (563.61–579.63) | 40.38 (40.25–40.84) | 24.6 |
 | TensorFold, structured | 2.635 (2.627–2.658) | 426.64 (422.82–427.90) | 39.11 (39.05–39.16) | 23.0 |
 | nanoattention, structured | 1.823 (1.819–2.106) | 616.42 (533.82–617.84) | 40.39 (39.83–40.63) | 23.9 |
+| TensorFold, code 5,280 | 18.543 (17.851–20.423) | 284.74 (258.54–295.78) | 32.41 (29.56–32.75) | 23.0 |
+| nanoattention, code 5,280 | 13.247 (12.416–14.410) | 398.59 (366.42–425.25) | 33.47 (31.90–34.57) | 24.3 |
 
 The [gated records](../comparators/nanoattention/runs/shootout-20261122-gated.jsonl)
 retain successful and rejected attempts. The remaining cells and oracle

@@ -87,7 +87,7 @@ def identity_problems(identity: dict, *, binary_sha256: str, model_key: str, exp
     served = identity.get("model_ids") or []
     if expected_model and served and expected_model not in served:
         problems.append(f"endpoint serves {served}, not the requested {expected_model!r}")
-    if model_key and not any(str(model_id or "").startswith(model_key) for model_id in served):
+    if model_key and not any(harness.served_model_matches(model_key, model_id) for model_id in served):
         problems.append(f"endpoint model ids {served} do not name model {model_key!r}")
     return problems
 

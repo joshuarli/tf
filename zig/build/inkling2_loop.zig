@@ -34,7 +34,11 @@ pub fn tests(b: *std.Build, target: std.Build.ResolvedTarget, test_step: *std.Bu
     run.has_side_effects = true; // the tokenizer test reads the checkpoint outside the build's inputs
     const step = b.step("test-inkling2-loop-host", "Inkling 2 Mini family package: config, quant geometry, weight map, chat template, tokenizer and refusals");
     step.dependOn(&run.step);
+    const prefix_tests = module(b, target, "zig/src/native/inkling2_loop_prefix.zig");
+    const prefix_run = b.addRunArtifact(b.addTest(.{ .root_module = prefix_tests }));
+    step.dependOn(&prefix_run.step);
     test_step.dependOn(&run.step);
+    test_step.dependOn(&prefix_run.step);
     if (target.result.os.tag == .macos) {
         const metal = b.createModule(.{
             .root_source_file = b.path("zig/src/metal/metal.zig"),
@@ -67,6 +71,15 @@ pub fn engineModule(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std
 /// The family's GPU-side tests, which open the real checkpoint only when `TF_INKLING2_LOOP_DIR` names it.
 pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.Build.Module, core: *std.Build.Module, test_step: *std.Build.Step) void {
     const m = engineModule(b, target, metal, core);
+    const check = b.createModule(.{
+        .root_source_file = b.path("zig/src/native/inkling2_loop_prefix_check.zig"),
+        .target = target,
+        .optimize = .fast,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "metal", .module = metal }, .{ .name = "inkling", .module = m } },
+    });
+    const exe = b.addExecutable(.{ .name = "tf-inkling2-prefix-check", .root_module = check });
+    b.step("tf-inkling2-prefix-check", "Compare retained state to identical replay and full prefill").dependOn(&b.addInstallArtifact(exe, .{}).step);
     const run = b.addRunArtifact(b.addTest(.{ .root_module = m }));
     run.has_side_effects = true;
     const step = b.step("test-inkling2-loop", "Inkling 2 Mini's native Metal forward against the checkpoint and its own state");

@@ -18,6 +18,13 @@ fn copyDrafts(text: ?[]const u8) error{BadCopyDrafts}!bool {
     return error.BadCopyDrafts;
 }
 
+fn prefixReuse(text: ?[]const u8) error{BadPrefixReuse}!bool {
+    const value = text orelse return true;
+    if (std.mem.eql(u8, value, "0")) return false;
+    if (std.mem.eql(u8, value, "1")) return true;
+    return error.BadPrefixReuse;
+}
+
 fn loadLimit(ram: u64, working_set: u64, text: ?[]const u8) error{BadLoadLimit}!u64 {
     const t = std.mem.trim(u8, text orelse "", " \t");
     if (t.len == 0) return @as(u64, @intFromFloat(@as(f64, @floatFromInt(ram)) * 0.75));
@@ -52,6 +59,11 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
         problem.* = "INKLING_COPY_DRAFTS must be 0 or 1";
         return null;
     });
+    const prefix_env: ?[]const u8 = if (std.c.getenv("INKLING_PREFIX_REUSE")) |v| std.mem.span(v) else null;
+    const prefix_reuse = prefixReuse(prefix_env) catch {
+        problem.* = "INKLING_PREFIX_REUSE must be 0 or 1";
+        return null;
+    };
     const pool = mtl.objc.Pool.push();
     defer pool.pop();
     const m = inkling.Model.load(gpa, io, o.dir) catch |err| {
@@ -87,7 +99,7 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
     }
     std.log.info("inkling2_loop: {d:.1} GiB for caches ({d:.1} GiB in {d} local rings, {d} KiB a token over {d} global slots), context up to {d} tokens", .{ @as(f64, @floatFromInt(budget)) / (1 << 30), @as(f64, @floatFromInt(inkling.Cache.fixedBytes(&m.config))) / (1 << 30), inkling.Cache.localSlots(&m.config), inkling.Cache.bytesPerToken(&m.config) >> 10, inkling.Cache.globalSlots(&m.config), window });
     const eos = readEos(a, io, o.dir, m.config.eos);
-    const h = host_mod.openHost(gpa, io, m, @intCast(window), eos, limit, copy_drafts) catch |err| {
+    const h = host_mod.openHost(gpa, io, m, @intCast(window), eos, limit, copy_drafts, prefix_reuse) catch |err| {
         m.deinit();
         problem.* = try std.fmt.allocPrint(a, "the native Inkling 2 Mini engine cannot hold {d} tokens of cache ({s})", .{ window, @errorName(err) });
         return null;
@@ -97,7 +109,7 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
 
 test "the registry's open refuses --vision by name before any weight is read" {
     var problem: []const u8 = "";
-    const o = api.Open{ .dir = "no-weights", .model_type = "inkling2_loop", .vision = .{ .dir = "no-weights" } };
+    const o = api.Open{ .dir = "no-weights", .model_type = "inkling2_loop", .vision = .{} };
     try std.testing.expectEqual(null, try open(std.testing.allocator, std.testing.allocator, std.testing.io, o, &problem));
     try std.testing.expectEqualStrings(tf.inkling2_loop_refuse.vision, problem);
 }
@@ -119,4 +131,11 @@ test "copy drafts require an explicit valid opt-in" {
     try std.testing.expect(!try copyDrafts("0"));
     try std.testing.expect(try copyDrafts("1"));
     try std.testing.expectError(error.BadCopyDrafts, copyDrafts("yes"));
+}
+
+test "prefix reuse defaults on and requires a valid value" {
+    try std.testing.expect(try prefixReuse(null));
+    try std.testing.expect(!try prefixReuse("0"));
+    try std.testing.expect(try prefixReuse("1"));
+    try std.testing.expectError(error.BadPrefixReuse, prefixReuse("yes"));
 }

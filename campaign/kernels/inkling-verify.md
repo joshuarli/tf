@@ -151,14 +151,14 @@ opt-in until code is no slower than decode.
 restore, and accepted-prefix replay. It restores the initial cache before each width and alternates
 width order. The benchmark accepts half the rows, rounded down. A timeline run accepts zero rows
 to keep replay kernels out of the target-forward profile. Hybrid generation also reports round
-costs. Hybrid throughput comparisons are not yet measured.
+costs. Hybrid throughput comparisons appear below.
 
 One busy-host baseline process ran five rounds per width in alternating order from the same
 1,139-token prose cache state. The table gives median milliseconds for each component and the
 range of total round time. The round has no drafter; accepted rows are half the width rounded
 down. CPU argmax includes access to the shared logits buffer. Host time is the median of the
 total less the measured components; independently rounded component medians need not sum to it.
-The forward includes the vocabulary head. Kernel attribution remains to be measured separately.
+The forward includes the vocabulary head; separate kernel attribution follows.
 
 | Rows | Accepted | Save ms | Forward ms | Read and argmax ms | Restore ms | Replay ms | Host ms | Total ms (range) |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -455,3 +455,112 @@ two explained divergences, and zero unexplained. The 512 comparison's runner bin
 during the trace diagnostics. The rebuild changed runner instrumentation, not prefill arithmetic,
 but the receipt does not pin a single binary for the entire comparison. One chunk-4 candidate
 run observed memory pressure level 2 during execution. Neither result establishes throughput.
+
+### Commit the verified prefix without replay
+
+Keep. The verified rows are causal. This change retains their local and global KV for the
+accepted prefix, restores rejected local-ring positions, and reconstructs the four convolution
+rings from the pre-round snapshot and the captured convolution inputs of the accepted rows.
+The verified logits remain available. The target contract is the mixed path: verified rows use
+the full-width prefill kernels and undrafted rows use decode kernels. This is a change from
+recomputing accepted rows at a shorter prefill width; it does not assert universal equivalence
+to ordinary greedy decode. Activations remain f32 and copy speculation remains opt-in.
+
+Five alternating baseline/candidate process pairs each measured five interleaved rounds per
+width from the same restored cache state. Busy-host admission used `perf-gate-ready` and
+`gpu-gate-ready` before, and both with `-1` immediately after, each timed process; GPU and
+utilization limits were 35%. Entries are medians of process medians in milliseconds. The
+synthetic accepted prefix is half the width, rounded down: width one measures full rollback.
+Readback and CPU argmax are included together; restore includes reconstruction on the candidate.
+Host is the residual after the instrumented components. Ranges are the five process totals.
+
+| Rows | Version | Save | Forward | Read/argmax | Restore | Replay | Host | Total (range) |
+| ---: | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |
+| 1 | baseline | .329 | 39.541 | .340 | .217 | 0 | .003 | 40.416 (40.401–40.498) |
+| 1 | candidate | .325 | 39.790 | .337 | .211 | 0 | .007 | 40.660 (40.648–40.739) |
+| 2 | baseline | .350 | 43.938 | .665 | .244 | 39.538 | .013 | 84.752 (84.736–84.887) |
+| 2 | candidate | .353 | 44.232 | .652 | .312 | 0 | .004 | 45.599 (45.506–45.638) |
+| 4 | baseline | .437 | 55.742 | 1.333 | .301 | 43.918 | .012 | 101.731 (101.574–101.770) |
+| 4 | candidate | .422 | 56.034 | 1.337 | .414 | 0 | .004 | 58.241 (58.153–58.830) |
+| 8 | baseline | .565 | 86.230 | 2.652 | 1.170 | 55.712 | .012 | 146.377 (146.206–146.641) |
+| 8 | candidate | .572 | 86.645 | 2.646 | 1.393 | 0 | .008 | 91.239 (91.130–91.363) |
+| 16 | baseline | .827 | 150.921 | 5.299 | 1.485 | 86.285 | .022 | 244.915 (244.451–245.126) |
+| 16 | candidate | .834 | 151.732 | 5.303 | 1.445 | 0 | .008 | 159.291 (158.927–159.401) |
+
+Five-round split timelines attribute the forward GPU span below. Dense includes the separately
+listed vocabulary head. Expert is gate/up plus down. Copy includes capture and other copies;
+the measured CPU read/argmax is in the table above, not a GPU argmax. Timeline spans are
+instrumented separately and need not equal the uninstrumented forward times.
+
+| Rows | GPU span ms | Dense ms | Expert ms | Attention ms | Route selection ms | Head ms | Copy ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 42.613 | 11.467 | 4.667 | 11.188 | 4.903 | 1.590 | .707 |
+| 2 | 46.977 | 12.325 | 8.046 | 11.373 | 4.926 | 1.596 | .754 |
+| 4 | 58.876 | 15.640 | 15.194 | 12.672 | 4.916 | 1.722 | .869 |
+| 8 | 90.894 | 25.398 | 29.912 | 18.466 | 4.909 | 3.089 | 1.073 |
+| 16 | 156.728 | 53.687 | 60.114 | 18.239 | 6.248 | 2.162 | 1.324 |
+
+The eight-row half-acceptance round is about 91 ms, still above the roughly 67 ms needed for
+120 tokens/s at eight committed tokens per round. Replay elimination nevertheless makes the
+measured hybrid competitive with ordinary decode. Five alternating pairs per workload used
+512 output IDs and chunked prompt prefill; timing excludes the first ID obtained from prompt
+prefill, so throughput is 511 committed IDs divided by the entire subsequent generation
+interval. The interval includes drafting, save, forward, readback/argmax, restoration, ordinary
+decode, replay, and host time. The ranges are the five individual samples, busy-host.
+
+| 1024-token prompt | Decode tok/s median (range) | Hybrid tok/s median (range) | Decode s | Hybrid s | Output IDs |
+| :--- | :--- | :--- | ---: | ---: | :--- |
+| code | 39.895 (35.620–40.062) | 42.869 (37.950–43.666) | 12.809 | 11.920 | 5/5 pairs equal |
+| prose | 40.238 (38.388–40.281) | 55.288 (55.111–55.350) | 12.699 | 9.243 | 5/5 pairs equal |
+| structured | 40.279 (40.247–40.343) | 79.844 (79.616–79.966) | 12.687 | 6.400 | 5/5 pairs equal |
+
+Each code pair favored hybrid; decode/hybrid elapsed ratios were 1.090, 1.073, 1.077,
+1.047 and 1.069. The code ranges overlap, so this is evidence for these paired workloads,
+not a general speed guarantee. No output differences occurred in the 15 pairs, so there
+is no differing token to classify as a near tie. The measured agreement is not a universal
+claim. Median hybrid component seconds follow; the decode column is ordinary decode within
+hybrid, and replay rounds to zero.
+
+| Prompt | Draft | Save | Forward | Read/argmax | Restore | Replay | Decode | Host |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| code | .0003 | .0758 | 8.9523 | .2616 | .0908 | 0 | 2.5469 | .0017 |
+| prose | .0002 | .0542 | 5.4120 | .1634 | .0394 | 0 | 3.5678 | .0011 |
+| structured | .0001 | .0760 | 6.1152 | .1753 | .0065 | 0 | .0264 | .0011 |
+
+A separate width-16 versus width-2 diagnostic found 384,450 differing prefix-logit values
+(maximum absolute difference 4.386902e-5) before commit, and 911,678 differing continuation
+values (maximum 1.335144e-5) against the old shorter-width replay. Therefore the exact
+reference is an independently reconstructed state from a fresh full-width forward, not the
+shorter-width replay. The family test compares the rings and relevant KV bytes and five-row
+continuation logits exactly, starting at position 1023, across widths 1/2/4/8/16 and accepted
+prefixes covering both ring and local-window boundaries. It also checks the old short-replay
+prediction for the exercised prefix. The family test exited 0 with 22.6 GB peak charged
+against the 28 GB cap. Round and end-to-end measurements peaked at 21.0 GB. The runner grew
+from 1,604,648 to 1,621,800 bytes, including the diagnostic mode.
+
+Reproduction uses the checkpoint and rendered 1024-token prompts specified at the start of
+this record. Build the runner with `zig build tf-inkling2-loop-run -Dcpu=apple_m1`. Under
+`python3 campaign/heavy.py --`, run the baseline and candidate binaries alternately with
+`<model> <prose.json> roundbench 5`; for the split timelines use
+`TF_METAL4_TIMELINE=5 TF_INKLING_PREFILL_PROFILE_BASE=1139` and
+`<model> <prose.json> roundbench 15 <width>`. Use `campaign/kernels/inkling_profile.py
+timeline --split --log <log>` to attribute dispatches. For each workload alternate
+`<model> <prompt.json> greedy-decode 512 <output>` and the same command with
+`greedy-hybrid`, compare the raw u32 output files, and use the runner's elapsed and component
+counters. `verifycheck 2` on the prose prompt reproduces the width comparison. These commands
+require the pressure and admission checks described above; model runs use `heavy.py`.
+
+After the replay-free change, the family gate ran with `TF_INKLING2_LOOP_DIR` set to the
+checkpoint: `python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1`
+exited 0. The new exact test covers accepted zero and full widths as well as partial prefixes.
+Both final parity commands below exited 2 with the expected 14 within contract, two explained
+(`harbour` and `cells_code`), zero unexplained:
+
+```sh
+make -C campaign -f parity/inkling2-mini/parity.mk parity-inkling2-mini RUNNER_MODE=prefill PREFILL_CHUNK=4 LANE=v3-commit-final REPORT=/Users/josh/repos/tensorfold-m5/.work/tmp/v3-commit-parity-4.md
+make -C campaign -f parity/inkling2-mini/parity.mk parity-inkling2-mini RUNNER_MODE=prefill PREFILL_CHUNK=512 LANE=v3-commit-final REPORT=/Users/josh/repos/tensorfold-m5/.work/tmp/v3-commit-parity-512.md
+```
+
+Both commands used the lane runner built from this change, the established saved oracle, and
+`heavy.py` for the model loads. The comparison's trace diagnostics are a tool-level check,
+not a performance measurement.

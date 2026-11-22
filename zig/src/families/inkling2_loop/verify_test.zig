@@ -1,22 +1,125 @@
 const std = @import("std");
+const mtl = @import("metal");
 const model = @import("model.zig");
 const state = @import("state.zig");
 const prefill = @import("prefill.zig");
 const Verification = @import("verify.zig").Verification;
 
-test "rollback preserves local window and convolution rings" {
+fn readback(m: *const model.Model, source: mtl.Buffer) !mtl.Buffer {
+    const out = try m.device.buffer(source.length(), mtl.ResourceOptions.shared);
+    errdefer out.deinit();
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const cb = m.queue.commandBuffer();
+    const blit = cb.blit();
+    blit.copy(source, 0, out, 0, source.length());
+    blit.end();
+    cb.commit();
+    cb.wait();
+    if (cb.failure()) |_| return error.GpuFailed;
+    return out;
+}
+
+fn reconstructReference(v: *Verification, accepted: usize) !void {
+    const m = v.model;
+    const config = &m.config;
+    const snapshot = try readback(m, v.snapshot);
+    defer snapshot.deinit();
+    const capture = try readback(m, v.conv.buffer);
+    defer capture.deinit();
+    const saved = snapshot.slice(u8, snapshot.length());
+    const inputs = capture.slice(u8, capture.length());
+    const rings = [_]mtl.Buffer{ v.cache.k_conv, v.cache.v_conv, v.cache.attn_conv, v.cache.mlp_conv };
+    const sites = [_]prefill.ConvSite{ .key, .value, .attention, .mlp };
+    var ring_base: usize = 0;
+    for (rings, sites) |buf, site| {
+        const width = v.conv.width(site);
+        for (0..config.slots()) |slot| {
+            for (accepted - @min(accepted, state.ring)..accepted) |row| {
+                const dst = ring_base + v.cache.convAt(slot, width) + ((v.start + row) % state.ring) * width * 4;
+                const src = v.conv.offset(slot, site, row);
+                @memcpy(saved[dst..][0 .. width * 4], inputs[src..][0 .. width * 4]);
+            }
+        }
+        ring_base += buf.length();
+    }
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const cb = m.queue.commandBuffer();
+    const blit = cb.blit();
+    var at: usize = 0;
+    for (rings) |buf| {
+        blit.copy(snapshot, at, buf, 0, buf.length());
+        at += buf.length();
+    }
+    const row_bytes: usize = config.text.local.kv * config.text.local.dim * 4;
+    for (0..config.slots()) |slot| {
+        if (!state.Cache.isLocalSlot(config, slot)) continue;
+        for (0..v.rows) |row| {
+            for ([_]mtl.Buffer{ v.cache.keys, v.cache.values }) |buf| {
+                if (row >= accepted) blit.copy(snapshot, at, buf, v.cache.row(config, slot, v.start + row), row_bytes);
+                at += row_bytes;
+            }
+        }
+    }
+    blit.end();
+    cb.commit();
+    cb.wait();
+    if (cb.failure()) |_| return error.GpuFailed;
+    v.cache.len = v.start + accepted;
+}
+
+fn expectCacheEqual(m: *const model.Model, a: *state.Cache, b: *state.Cache, start: usize, rows: usize, accepted: usize) !void {
+    const config = &m.config;
+    try std.testing.expectEqual(a.len, b.len);
+    for ([_]mtl.Buffer{ a.k_conv, a.v_conv, a.attn_conv, a.mlp_conv }, [_]mtl.Buffer{ b.k_conv, b.v_conv, b.attn_conv, b.mlp_conv }) |lhs, rhs| {
+        const x = try readback(m, lhs);
+        defer x.deinit();
+        const y = try readback(m, rhs);
+        defer y.deinit();
+        try std.testing.expectEqualSlices(u8, x.slice(u8, x.length()), y.slice(u8, y.length()));
+    }
+    const row_bytes: usize = config.text.local.kv * config.text.local.dim * 4;
+    const bytes = config.slots() * rows * row_bytes * 2;
+    const x = try m.device.buffer(bytes, mtl.ResourceOptions.shared);
+    defer x.deinit();
+    const y = try m.device.buffer(bytes, mtl.ResourceOptions.shared);
+    defer y.deinit();
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const cb = m.queue.commandBuffer();
+    const blit = cb.blit();
+    var at: usize = 0;
+    for (0..config.slots()) |slot| {
+        for (0..rows) |row| {
+            if (row >= accepted and !state.Cache.isLocalSlot(config, slot)) continue;
+            for ([_]mtl.Buffer{ a.keys, a.values }, [_]mtl.Buffer{ b.keys, b.values }) |lhs, rhs| {
+                blit.copy(lhs, a.row(config, slot, start + row), x, at, row_bytes);
+                blit.copy(rhs, b.row(config, slot, start + row), y, at, row_bytes);
+                at += row_bytes;
+            }
+        }
+    }
+    blit.end();
+    cb.commit();
+    cb.wait();
+    if (cb.failure()) |_| return error.GpuFailed;
+    try std.testing.expectEqualSlices(u8, x.slice(u8, at), y.slice(u8, at));
+}
+
+test "verification commits the same width prefix across cache boundaries" {
     const path = std.c.getenv("TF_INKLING2_LOOP_DIR") orelse return error.SkipZigTest;
     const m = try model.Model.load(std.testing.allocator, std.testing.io, std.mem.span(path));
     defer m.deinit();
-    const c = &m.config;
-    const base: usize = c.text.window - 1;
-    var a = try state.Cache.init(m.device, c, base + 24);
+    const config = &m.config;
+    const base: usize = config.text.window - 1;
+    var a = try state.Cache.init(m.device, config, base + 40);
     defer a.deinit();
-    var b = try state.Cache.init(m.device, c, base + 24);
+    var b = try state.Cache.init(m.device, config, base + 40);
     defer b.deinit();
-    var sa = try prefill.PrefillScratch.init(m.device, c, 512);
+    var sa = try prefill.PrefillScratch.init(m.device, config, 512);
     defer sa.deinit();
-    var sb = try prefill.PrefillScratch.init(m.device, c, 512);
+    var sb = try prefill.PrefillScratch.init(m.device, config, 512);
     defer sb.deinit();
     var tokens: [512]u32 = undefined;
     for (&tokens, 0..) |*token, i| token.* = @intCast(100 + i % 71);
@@ -28,35 +131,43 @@ test "rollback preserves local window and convolution rings" {
         at += take;
     }
     const draft = [_]u32{ 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116 };
-    var best: [draft.len]u32 = undefined;
-    var first: [draft.len]u32 = undefined;
-    var baseline = try Verification.begin(m, &sa, &a, &draft, &first);
-    try baseline.reset();
-    var v = try Verification.begin(m, &sa, &a, &draft, &best);
-    try std.testing.expectEqualSlices(u32, &first, &best);
-    try v.finish(&draft, 2);
+    var anchors: [32]u32 = undefined;
+    for (&anchors, 0..) |*token, i| token.* = @intCast(101 + i);
+    var anchor_predictions: [32]u32 = undefined;
+    var initial_a = try Verification.begin(m, &sa, &a, &anchors, &anchor_predictions);
+    var initial_b = try Verification.begin(m, &sb, &b, &anchors, &anchor_predictions);
+    var replay_best: [2]u32 = undefined;
+    for ([_]usize{ 1, 2, 4, 8, 16 }) |width| for ([_]usize{ 0, 1, 2, 3, 4, 5, 7, 8, 15, 16 }) |accepted| {
+        if (accepted > width) continue;
+        try initial_a.reset();
+        try initial_b.reset();
+        var actual_best: [draft.len]u32 = undefined;
+        var reference_best: [draft.len]u32 = undefined;
+        var actual = try Verification.begin(m, &sa, &a, draft[0..width], actual_best[0..width]);
+        var reference = try Verification.begin(m, &sb, &b, draft[0..width], reference_best[0..width]);
+        try std.testing.expectEqualSlices(u32, actual_best[0..width], reference_best[0..width]);
+        if (width == 16 and accepted == 2) @memcpy(&replay_best, actual_best[0..2]);
+        try actual.finish(draft[0..width], accepted);
+        try reconstructReference(&reference, accepted);
+        try reference.finish(draft[0..width], width);
+        try expectCacheEqual(m, &a, &b, base, width, accepted);
+        const continuation = [_]u32{ 109, 110, 111, 112, 113 };
+        try prefill.prefillWant(m, &sa, &a, &continuation, .all);
+        try prefill.prefillWant(m, &sb, &b, &continuation, .all);
+        const n = continuation.len * config.text.unpadded_vocab;
+        try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(sa.logits.slice(f32, n)), std.mem.sliceAsBytes(sb.logits.slice(f32, n)));
+        std.debug.print("verify same-width commit width={d} accepted={d} exact\n", .{ width, accepted });
+    };
+    try initial_b.reset();
     try prefill.prefillWant(m, &sb, &b, draft[0..2], .all);
-    const vocab: usize = c.text.unpadded_vocab;
-    const reference = sb.logits.slice(f32, 2 * vocab);
+    const vocab: usize = config.text.unpadded_vocab;
+    const logits = sb.logits.slice(f32, 2 * vocab);
     for (0..2) |row| {
-        const logits = reference[row * vocab ..][0..vocab];
-        var top: usize = 0;
-        for (logits[1..], 1..) |value, i| if (value > logits[top]) { top = i; };
-        try std.testing.expectEqual(@as(u32, @intCast(top)), best[row]);
+        const values = logits[row * vocab ..][0..vocab];
+        var best: usize = 0;
+        for (values[1..], 1..) |value, i| if (value > values[best]) { best = i; };
+        try std.testing.expectEqual(@as(u32, @intCast(best)), replay_best[row]);
     }
-    const continuation = [_]u32{ 109, 110, 111, 112, 113 };
-    try prefill.prefillWant(m, &sa, &a, &continuation, .all);
-    try prefill.prefillWant(m, &sb, &b, &continuation, .all);
-    const n = continuation.len * c.text.unpadded_vocab;
-    const x = sa.logits.slice(f32, n);
-    const y = sb.logits.slice(f32, n);
-    var max_value: f32 = 0;
-    var max_diff: f32 = 0;
-    for (x, y) |lhs, rhs| {
-        max_value = @max(max_value, @abs(rhs));
-        max_diff = @max(max_diff, @abs(lhs - rhs));
-    }
-    std.debug.print("verify rollback max diff {e}, max abs {e}\n", .{ max_diff, max_value });
-    try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(y), std.mem.sliceAsBytes(x));
-    try baseline.finish(&draft, 0);
+    try initial_a.finish(&anchors, 0);
+    try initial_b.finish(&anchors, 0);
 }

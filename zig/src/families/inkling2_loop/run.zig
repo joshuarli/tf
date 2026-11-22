@@ -12,6 +12,7 @@ const usage =
     \\tf-inkling2-loop-run <model> <tokens.json> greedy <steps> <out>  then <steps> greedy tokens, one decode a step
     \\tf-inkling2-loop-run <model> <tokens.json> greedy-prefill|greedy-copy|greedy-hybrid|greedy-decode <steps> <out>  raw u32 output IDs
     \\tf-inkling2-loop-run <model> <tokens.json> verifybench <min-width> <rounds>  time interleaved prefill widths
+    \\tf-inkling2-loop-run <model> <tokens.json> verifycheck <accepted>  compare continuation with replay
     \\tf-inkling2-loop-run <model> <tokens.json> roundbench <rounds> [width]  time full verification rounds
     \\tf-inkling2-loop-run <model> <tokens.json> trace <out> [at]  per-tensor summaries in the reference's order, the whole pass or only position <at>
     \\tf-inkling2-loop-run <model> <tokens.json> prefillrow <chunk> <out> <at>  capture a chunked prefill row and router sidecars
@@ -193,6 +194,54 @@ pub fn main(init: std.process.Init) !void {
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[5], .data = std.mem.sliceAsBytes(history.items[ids.value.len..]) });
         std.debug.print("{s}: tokens={d} rounds={d} drafted={d} accepted={d} seconds={d:.3}\n", .{ mode, steps, rounds, drafted, accepted_total, seconds });
         std.debug.print("roundcost draft_ns={d} save_ns={d} forward_ns={d} argmax_ns={d} restore_ns={d} replay_ns={d} decode_ns={d} elapsed_ns={d}\n", .{ draft_ns, save_ns, forward_ns, argmax_ns, restore_ns, replay_ns, decode_ns, elapsed_ns });
+        return;
+    }
+    if (std.mem.eql(u8, mode, "verifycheck")) {
+        if (args.len != 5 or ids.value.len < c.text.window + 21) return error.ExpectedArgs;
+        const accepted = try std.fmt.parseInt(usize, args[4], 10);
+        if (accepted == 0 or accepted >= 16) return error.ExpectedArgs;
+        const base: usize = c.text.window - 1;
+        var a = try inkling.Cache.init(m.device, c, base + 32);
+        defer a.deinit();
+        var bcache = try inkling.Cache.init(m.device, c, base + 32);
+        defer bcache.deinit();
+        var sa = try inkling.PrefillScratch.init(m.device, c, 512);
+        defer sa.deinit();
+        var sb = try inkling.PrefillScratch.init(m.device, c, 512);
+        defer sb.deinit();
+        var at: usize = 0;
+        while (at < base) {
+            const take = @min(sa.chunk, base - at);
+            try inkling.prefillWant(m, &sa, &a, ids.value[at..][0..take], .none);
+            try inkling.prefillWant(m, &sb, &bcache, ids.value[at..][0..take], .none);
+            at += take;
+        }
+        const draft = ids.value[base..][0..16];
+        var predictions: [16]u32 = undefined;
+        var v = try inkling.Verification.begin(m, &sa, &a, draft, &predictions);
+        const prefix = try gpa.dupe(f32, sa.logits.slice(f32, accepted * vocab));
+        defer gpa.free(prefix);
+        try v.finish(draft, accepted);
+        try inkling.prefillWant(m, &sb, &bcache, draft[0..accepted], .all);
+        var prefix_changed: usize = 0;
+        var prefix_maximum: f32 = 0;
+        for (prefix, sb.logits.slice(f32, accepted * vocab)) |lhs, rhs| {
+            if (@as(u32, @bitCast(lhs)) != @as(u32, @bitCast(rhs))) prefix_changed += 1;
+            prefix_maximum = @max(prefix_maximum, @abs(lhs - rhs));
+        }
+        const continuation = ids.value[base + 16 ..][0..5];
+        try inkling.prefillWant(m, &sa, &a, continuation, .all);
+        try inkling.prefillWant(m, &sb, &bcache, continuation, .all);
+        const n = continuation.len * vocab;
+        const x = sa.logits.slice(f32, n);
+        const y = sb.logits.slice(f32, n);
+        var changed: usize = 0;
+        var maximum: f32 = 0;
+        for (x, y) |lhs, rhs| {
+            if (@as(u32, @bitCast(lhs)) != @as(u32, @bitCast(rhs))) changed += 1;
+            maximum = @max(maximum, @abs(lhs - rhs));
+        }
+        std.debug.print("verifycheck accepted={d} prefix_changed={d} prefix_max_diff={e} continuation_changed={d} continuation_max_diff={e}\n", .{ accepted, prefix_changed, prefix_maximum, changed, maximum });
         return;
     }
     if (std.mem.eql(u8, mode, "roundbench")) {

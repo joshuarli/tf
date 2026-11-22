@@ -72,6 +72,29 @@ python3 tools/bench_concurrent.py "http://127.0.0.1:$PORT" "$MODEL" --levels 1,2
 
 ## fx and parallel probes
 
-The first fx run started one `fixer` subagent against the local provider, and the subagent changed and tested the scratch file.
-Its post-run timing gate returned 75 with 5.23 busy CPU cores. Its timing is busy-host evidence and is not qualified.
-A clean fx retry and the `--parallel 2` and `--parallel 4` probes are pending.
+The clean fx run started one `fixer` subagent on the local provider. The subagent edited the scratch file and both agents checked the result. The fx process and post-run timing gate exited 0.
+The wall time was 225.48 seconds including startup and lock wait. The server committed 2,444 tokens across 13 requests, or 10.84 tokens/s over that wall time.
+The fx session recorded 1,676 main-agent tokens and 768 subagent tokens. The subagent emitted 12.18 tokens/s over its 63.08-second turn.
+The main-agent rate is approximately 9.58 tokens/s over 174.99 seconds, estimating its first request start from the first usage timestamp and server elapsed time.
+The server recorded 64,996 reused and 37,676 prefilled prompt tokens. Prefix and completion arrays below follow server log order.
+The sampled peak charge was 3.73 GB. The memory baseline was taken before the launcher acquired the GPU lock and may include another model's wired pages, so this figure can undercount this run's model memory and is not comparable to the synthetic sweep peaks.
+The first fx attempt also completed functionally, but its post-run timing gate exited 75 with 5.23 busy CPU cores. Its timings are busy-host evidence and excluded.
+
+```json
+{"prefix":[{"reused":0,"prefilled":7085},{"reused":0,"prefilled":7527},{"reused":7571,"prefilled":57},{"reused":8269,"prefilled":57},{"reused":0,"prefilled":6614},{"reused":0,"prefilled":6818},{"reused":6853,"prefilled":57},{"reused":7120,"prefilled":165},{"reused":7521,"prefilled":175},{"reused":0,"prefilled":8806},{"reused":8892,"prefilled":92},{"reused":9224,"prefilled":180},{"reused":9546,"prefilled":43}],"done":[{"id":"chatcmpl-e79c8ee9f82ba507ba2dc4a50b46c101","tokens":196,"ttft":18.96,"elapsed":24.018,"queued":0.0},{"id":"chatcmpl-0239405a1b0d774e7d5f395b9df3a641","tokens":45,"ttft":21.248,"elapsed":22.727,"queued":0.0},{"id":"chatcmpl-9781a6cd79b6ae3e5718e0ab27c5b704","tokens":642,"ttft":0.326,"elapsed":18.665,"queued":0.0},{"id":"chatcmpl-c2c634823026ed7801be2e1728c81c41","tokens":63,"ttft":0.32,"elapsed":1.902,"queued":0.0},{"id":"chatcmpl-aea5b8124241fa04034b9c429adedc23","tokens":75,"ttft":20.393,"elapsed":22.515,"queued":1.899},{"id":"chatcmpl-f8b58e96c7fe94d549512092211635d2","tokens":36,"ttft":19.401,"elapsed":20.547,"queued":0.0},{"id":"chatcmpl-9655df440bb2cf5ce6cd33b20fe79278","tokens":211,"ttft":0.327,"elapsed":5.906,"queued":0.0},{"id":"chatcmpl-7aa1e28a5180e46f34b98326f91eebd4","tokens":236,"ttft":0.658,"elapsed":6.978,"queued":0.0},{"id":"chatcmpl-33d23b9a5afe4dffa1c793c0ccdf832b","tokens":210,"ttft":0.644,"elapsed":6.81,"queued":0.0},{"id":"chatcmpl-039ed5a7ad17e37ecc36d43f4251bd6d","tokens":87,"ttft":25.583,"elapsed":27.741,"queued":0.0},{"id":"chatcmpl-32d45979fa580f100744dc1acb421130","tokens":241,"ttft":0.448,"elapsed":6.886,"queued":0.0},{"id":"chatcmpl-1e5a3aae3428717d274b658551dff91e","tokens":143,"ttft":0.673,"elapsed":4.611,"queued":0.0},{"id":"chatcmpl-eefdde6486d0afdcf5ea47621272ba72","tokens":259,"ttft":0.282,"elapsed":6.872,"queued":0.0}]}
+```
+
+To repeat the fx run, create the fixture and isolated profile, then run the fx monitor from the repository root.
+
+```sh
+mkdir -p .work/tmp/fx-subagents-repo .work/tmp/fx-subagents-home-2
+git -C .work/tmp/fx-subagents-repo init -q
+printf '%s\n' 'def clamp(value, low, high):' '    return min(high, max(low, value))' > .work/tmp/fx-subagents-repo/range_utils.py
+: > .work/tmp/fx-subagents-home-2/AGENTS.md
+GPU_GATE_MAX_GPU_PCT=60 GPU_GATE_MAX_UTIL_PCT=60 gpu-gate-ready -1 && perf-gate-ready && PATH=/opt/homebrew/bin:$PATH python3 campaign/fx/fx-subagents-run.py
+perf-gate-ready -1
+```
+
+The monitor invokes `campaign/fx/fx-local-inkling ask` with output limit 2048, `--effort minimal`, and `--full-access`. fx reported that the profile does not advertise minimal effort and omitted it.
+
+The `--parallel 2` and `--parallel 4` probes are pending.

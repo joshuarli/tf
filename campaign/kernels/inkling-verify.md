@@ -56,3 +56,69 @@ With `INKLING_COPY_DRAFTS=1`, a served 128-token structured request reported 75 
 20 accepted, and 107 rounds. The same request with `--no-drafts` reported zero drafts
 and 127 rounds. Both completed. Server shutdown reported allocator leaks in both the
 drafts-off check and the base server's existing benchmark logs.
+
+## Few-row prefill
+
+The few-row dense kernel shares each bf16 weight load across up to eight f32 activation rows.
+For one or two rows, the per-slot expert kernels avoid sorting and grouped dispatches.
+Larger chunks retain the existing dense and grouped expert paths.
+
+The family test ran with the checkpoint under `heavy.py` and exited 0. It compared the dense
+projection shapes against sampled host FP64 values for 1, 2, 4, 8 and 16 rows, and tested
+both direct expert formats and projections against FP64 for 1 and 2 rows. The checkpoint
+rollback test reported a maximum logit difference of zero. Peak charged memory was 21.3 GB.
+The prefill parity commands for chunk sizes 4 and 512 each exited 2 with 14 histories within
+contract, 2 explained divergences and 0 unexplained. Reference divergence diagnostics exceeded the 28 GB watchdog cap at 28.6 GB for chunk 4
+and 28.5 GB for chunk 512. Candidate inference did not exceed the cap.
+
+The split Metal 4 timeline for two rows reported 38.4 ms summed GPU span: 13.8 ms in the
+few-row dense kernel, 5.0 ms in expert gate and up, 3.5 ms in expert down, and 4.9 ms in
+route selection. At eight rows the dense-only timeline reported 91.4 ms, including 37.5 ms
+in dense and 33.8 ms in grouped experts. At sixteen rows it reported 140.4 ms, including
+54.2 ms in dense GEMMs and 58.1 ms in grouped experts. Timeline instrumentation is separate
+from the timing measurements below.
+
+### Busy-host measurements
+
+On Apple M5 Max and macOS 27.2, the `verifybench` runs used the 1,139-token prose fixture
+and the same checkpoint. Five baseline and candidate processes alternated. Each process
+interleaved five calls per width. The table gives the median and range of the five process
+medians in milliseconds. The supplied earlier baseline medians were 123.4, 130.8, 152.6,
+and 153.4 ms for 2, 4, 8, and 16 rows respectively.
+
+| Rows | Baseline median (range) ms | Candidate median (range) ms |
+| ---: | ---: | ---: |
+| 2 | 122.906 (122.501–123.725) | 46.357 (46.163–46.416) |
+| 4 | 129.514 (129.192–129.751) | 70.345 (70.269–70.584) |
+| 8 | 151.947 (151.138–152.282) | 105.549 (105.360–105.681) |
+| 16 | 152.617 (152.421–152.939) | 152.972 (152.921–153.297) |
+
+The greedy runner generated 512 tokens with EOS disabled. Five baseline and candidate
+processes alternated for each prompt and mode. Rates count the 511 tokens after the initial
+prompt prediction. Values are median tokens per second, with the five-sample range in
+parentheses. Candidate copy and prefill output IDs matched in every sample.
+
+| Prompt | Mode | Baseline tok/s (range) | Candidate tok/s (range) |
+| --- | --- | ---: | ---: |
+| code-1024 | decode | 39.01 (35.29–39.20) | 39.02 (35.41–39.18) |
+| code-1024 | prefill | 8.18 (8.17–8.18) | 24.08 (24.06–24.11) |
+| code-1024 | copy | 14.71 (13.77–14.72) | 23.38 (20.97–23.75) |
+| prose-1024 | decode | 39.30 (39.22–39.33) | 39.29 (39.18–39.37) |
+| prose-1024 | prefill | 8.20 (8.19–8.22) | 24.39 (24.35–24.42) |
+| prose-1024 | copy | 17.94 (17.94–17.96) | 33.95 (33.93–33.96) |
+| structured-1024 | decode | 39.37 (39.28–40.16) | 39.33 (39.17–39.37) |
+| structured-1024 | prefill | 8.20 (8.20–8.21) | 24.37 (24.27–24.38) |
+| structured-1024 | copy | 55.38 (55.32–55.42) | 71.76 (71.62–73.16) |
+
+Copy used 183 rounds with 328 of 1,071 drafts accepted for code, 187 rounds with 324 of
+596 accepted for prose, and 59 rounds with 452 of 482 accepted for structured. The runner
+excludes prompt prefill from generation timing. These are busy-host runner measurements, not
+served throughput. Copy still trails decode for code and prose.
+
+Each model run used `python3 campaign/heavy.py --` with the 28 GB cap. Before and immediately
+after each measurement, `perf-gate-ready` and `gpu-gate-ready -1` checked admission with
+`GPU_GATE_MAX_GPU_PCT=35` and `GPU_GATE_MAX_UTIL_PCT=35`. Runs that failed a post-check were
+discarded. The inputs were the development code, prose, and structured prompts, tokenized
+to 1,334, 1,139, and 1,109 IDs. The baseline and candidate runner binaries were 1,586,760 and
+1,587,128 bytes. The measured verifybench command used `verifybench 2 5`; generation used
+`greedy-copy`, `greedy-prefill`, or `greedy-decode` with 512 steps.

@@ -544,3 +544,19 @@ Single split-timeline profiles measured 300.099 ms in base attention and
 60.936 ms in the tiled kernel at base 1024, and 469.065 ms and 92.515 ms at
 base 4992. These are load-sensitive profiler samples, not a timing gate. The
 host failed `perf-gate-ready`; a controlled comparison remains outstanding.
+
+## P5 end-to-end timing
+
+Same protocol as P4 and E1 (runner `bench 2 1 128` on `.work/tmp/ids-1k.json`, six base-candidate-base rounds
+inside `heavy.py` between `gpu-gate-ready -1` checks, busy-host limits of 35%). Base `main` 73df69de6 (P4 + E1),
+candidate the same plus P5 `f9b0bfb59`. The prefill-mode parity gate on the candidate reports 14 within contract,
+2 explained, 0 unexplained.
+
+| | median tok/s | samples |
+| --- | ---: | --- |
+| base | 185.8 | 203.9, 191.0, 187.3, 186.6, 187.3, 186.0, 185.5, 160.1, 167.6, 160.7, 156.8, 155.8 |
+| P5 | 217.1 | 237.3, 217.1, 217.0, 218.3, 195.8, 186.7 |
+
+Per-round ratios 1.202, 1.161, 1.163, 1.263, 1.193, 1.194; geometric mean 1.196 (95% t-interval 1.158-1.235).
+Verdict: keep. The profile's larger saving at base 4992 (469 -> 93 ms) suggests a larger gain at longer prompts;
+that is not yet measured end to end.

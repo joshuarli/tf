@@ -1,11 +1,11 @@
 # Inkling 2 Mini long-history divergence: explained verdict
 
-Diagnosis only. No forward or kernel changes were made.
+Diagnosis only. The row and router captures do not change inference arithmetic.
 
 ## Verdict
 
 Both long-history divergences are **accumulation order**, not a defect. No kernel fix is
-needed, and no forward code was changed.
+needed, and no kernel arithmetic was changed.
 
 - `harbour` position 556: the first tensor where Metal departs from the float32 reference is
   **l_out-38** (execution slot 38: second extra pass over the core, core position 8, physical
@@ -265,3 +265,116 @@ ranks 153966 first at 26.91493 and 150161 second at 26.82265, a 0.092 margin, so
 reference's and v0's was the error. On the last row, main's chunked prefill path (`prefill 128`) is within
 1.5e-4 of the reference and its one-position decode path (`logits`) within 1.5e-2. Peak charged memory for the
 reference run was 24.7 GB.
+
+
+## Decode drift
+
+For the 1,172-token structured history above, the decode and 128-token prefill paths take
+different sides of a router near-tie at row 581, slot 38. This is their first difference in
+the set of eight selected experts in rows 0–723, across all 48 slots in execution order.
+The prefill sets match the full-history float32 router report throughout those rows.
+The first ordered-pick difference is earlier, at row 288, slot 28, where both select
+the same experts but swap experts 54 and 84 in the second and third positions.
+
+| Path | Eighth expert and selection score | Ninth expert and selection score | Gap |
+| --- | --- | --- | --- |
+| Decode | 28, 0.15397964 | 98, 0.15397863 | 1.01e-6 |
+| Prefill | 98, 0.15398206 | 28, 0.15397675 | 5.30e-6 |
+| Float32 reference | 98 | 28 | 5.47e-6 |
+
+Selection scores are sigmoid router logits plus the router bias. The scores in the first
+two rows come from the native router inputs and bias captured at the slot. The reference
+report records the gap and picks, rather than individual selection scores. Both native
+choices are consistent with rounding a near-tie. No kernel arithmetic was changed.
+
+At row 581, the decode and prefill captures differ by at most 1.82e-4 at slot 38
+`ffn_inp`, then by 0.43284 at `l_out` after the different expert selection. The first
+difference above 1e-4 in execution order is slot 28 `mixin-2`, at 1.41e-4. The first
+above 1e-2 is slot 38 `l_out`. The full-history reference supports prefill at this
+routing decision: its row-581 maximum logit error is 6.98e-4 for prefill and 0.48634
+for decode. The native logit difference stays above 0.00333 on every row 581–723,
+consistent with the recurrent state carrying the divergent expert output.
+
+At row 723, the first captured decode/prefill tensor difference above 1e-4 in execution
+order is slot 26 `mixin-2`, at 1.75e-4. The first above 1e-2 is slot 39 `attn_out`,
+at 0.01674. Slot 44 then changes its eighth expert from prefill's 98 to decode's 95.
+The full-history reference selects 98 over 95 at that slot, with a 0.004518 gap. The
+slot-44 `l_out` values differ by 1.8566, and later captured rows differ by up to 18.167.
+The full-history logits at row 723 differ from reference by 6.21e-4 for prefill and
+3.33951 for decode. The reference router and logits support prefill at the amplified
+slot and final output. They do not establish which path is closer elementwise at the
+first small slot-26 tensor difference.
+
+At row 719, slot 41, decode chooses 98 over 93 with scores 0.34984463 and 0.34945092.
+Prefill chooses 93 over 98 with scores 0.35049203 and 0.34970510. The full-history
+reference also chooses 93, with a 7.88e-4 gap. This later flip amplifies already
+divergent inputs; its slot output differs by 3.499. At row 78 all expert sets agree.
+There, slot 17 `l_out` is the first captured tensor above 1e-4 between the native paths
+(1.37e-4). Against the saved 79-token float32 row, decode is closer at that tensor
+(4.58e-5 versus 9.16e-5); prefill is closer at slot 27 `mixin-1` and slot 47 `l_out`.
+
+The table lists every slot with a different expert set at rows 718–724. Each cell
+shows the eighth and ninth experts and their selection scores. Rows 718 and 721
+have no expert-set differences.
+
+| Row | Slot | Decode eighth, ninth | Prefill eighth, ninth |
+| --- | --- | --- | --- |
+| 719 | 41 | 98: 0.349845, 93: 0.349451 | 93: 0.350492, 98: 0.349705 |
+| 720 | 19 | 51: 0.125924, 101: 0.124600 | 101: 0.124714, 51: 0.124107 |
+| 722 | 19 | 19: 0.137427, 127: 0.134696 | 75: 0.135809, 19: 0.135451 |
+| 722 | 20 | 110: 0.099619, 44: 0.097536 | 110: 0.100187, 57: 0.100036 |
+| 723 | 44 | 95: 0.228757, 98: 0.227050 | 98: 0.231004, 95: 0.226462 |
+| 723 | 45 | 72: 0.210731, 26: 0.206078 | 58: 0.286283, 60: 0.279431 |
+| 723 | 46 | 21: 0.247345, 89: 0.238643 | 89: 0.135493, 51: 0.115357 |
+| 723 | 47 | 75: 0.220142, 120: 0.218454 | 20: 0.265750, 33: 0.211796 |
+| 723 | 21 | 126: 0.066777, 77: 0.064408 | 41: 0.073492, 39: 0.069943 |
+| 723 | 23 | 9: 0.020294, 50: 0.018988 | 50: 0.018968, 68: 0.017356 |
+| 724 | 43 | 46: 0.339391, 42: 0.339296 | 42: 0.339312, 46: 0.339062 |
+| 724 | 44 | 75: 0.152590, 54: 0.146208 | 121: 0.143021, 89: 0.141110 |
+| 724 | 45 | 29: 0.214998, 20: 0.209988 | 20: 0.221270, 29: 0.206304 |
+
+A separate 724-token reference prefix cannot substitute for the full-history report:
+its first expert-set difference from prefill is row 504, slot 36, where the prefix
+reference's eighth/ninth gap is 2.68e-7. Its row-723 logits differ from the saved
+full-history reference by 0.983. The prefix run used `--expert-cache-gib 4`,
+`--trace-row 723`, and `--router-report`, without a row dump. It exited 0 and charged
+27.5 GB at peak. An earlier prefix attempt with cache 10 and a row dump exceeded the
+28 GB cap and was stopped; it supplied no result.
+
+Reproduction uses the model and `structured-48.json` history named above, with
+`campaign/heavy.py` around every runner invocation. `tracerow <out> <row>` captures
+decode tensors. `prefillrow 128 <out> <row>` captures the same `[slots][9][hidden]`
+layout for prefill. Both write `.picks` and `.router` sidecars. `routes <out> 723`
+and `prefillroutes 128 <out> 723` capture router inputs and choices for the full
+comparison. Compare expert sets in execution order, then compute the scores from the
+captured logits and bias. The saved full-history router report and logits supply the
+reference picks, gaps and final-output errors. Each `.picks` sidecar holds
+`[slots][topk]` 32-bit integers. Each `.router` sidecar holds float32
+`[slots][2][experts]`, with logits followed by bias. The decode `routes` file stores
+one picks block and one router block per position. Each `prefillroutes` file is suffixed
+with its chunk's first position and stores, per slot, `[rows][topk]` picks,
+`[rows][experts]` logits and `[experts]` bias.
+
+For example, with `M` set to the checkpoint, `H` to the history, `R` to the runner,
+and `T` to the campaign scratch directory, the native captures use:
+
+```sh
+python3 campaign/heavy.py -- "$R" "$M" "$H" tracerow "$T/decode723.bin" 723
+python3 campaign/heavy.py -- "$R" "$M" "$H" prefillrow 128 "$T/prefill723.bin" 723
+python3 campaign/heavy.py -- "$R" "$M" "$H" routes "$T/decoderoutes.bin" 723
+python3 campaign/heavy.py -- "$R" "$M" "$H" prefillroutes 128 "$T/prefillroutes" 723
+```
+
+For single-row comparisons, repeat the first two commands with rows 78 and 581–724.
+The saved history consists of the tokenized `campaign/prompts/dev/structured-1024.txt`
+prompt followed by its first 48 greedy tokens from main `ca2713cf1`.
+
+The decode parity command against the capture runner compared 3,015 positions: 14 histories
+were within contract, two were explained divergences, and none were unexplained. It exited 2
+because the parity command requires every history to be within contract, including the two
+already recorded divergences. This matches the existing decode report's qualification counts.
+The decode report did not capture the harbour onset tensor: the guard stopped that trace at
+critical host pressure. The same trace succeeded on retry during the prefill gate.
+The prefill parity command also compared 3,015 positions and returned 14 within contract,
+two explained divergences, zero unexplained, and exit 2. These counts match the existing
+prefill report. Neither command qualified the checkpoint under the current gate.

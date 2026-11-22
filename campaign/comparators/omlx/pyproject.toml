@@ -1,0 +1,19 @@
+[project]
+name = "tensorfold-omlx-comparator"
+version = "0.1.0"
+requires-python = ">=3.13,<3.14"
+dependencies = ["omlx @ git+https://github.com/jundot/omlx@e72868dac12df4be4ced2dc8355f031686283974"]
+
+[tool.uv]
+override-dependencies = ["mlx==0.32.4", "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@0d4d3d04f8ab7ce4a51e7209e8615755a48ba94d"]
+build-constraint-dependencies = [
+    { requirement = "setuptools==84.2.1", hashes = ["sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"] },
+    { requirement = "wheel==0.48.0", hashes = ["sha256:3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab"] },
+    { requirement = "cmake==4.4.5", hashes = ["sha256:e07a5716b4233dc9c69d6ca6993f4405eefc7687e718d9f6eebbb6cc1be304ef"] },
+    { requirement = "nanobind==3.1.0", hashes = ["sha256:96984dbe8154ffb86e653b1b60aaeed6985c710c5e75ad0279eb87943c66292d"] },
+    { requirement = "setuptools-scm==10.3.4", hashes = ["sha256:82f34c3e3084fc2b57d397200637cc13f2338004052d2fee47baa5f0e902464e"] },
+    { requirement = "vcs-versioning==2.6.0", hashes = ["sha256:f8bebd1302ebc12e67ceb30fc7dd698ec969414b6fa43b30c3f14ac9b1e72c41"] },
+    { requirement = "packaging==26.3", hashes = ["sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"] },
+    { requirement = "mlx==0.32.4", hashes = ["sha256:ef130e3da895c85374b11a6c389acb122893f2ffcbed826b8b62fd45a20b7ad6"] },
+    { requirement = "mlx-metal==0.32.4", hashes = ["sha256:514df92d41a286895d2564b4b18f4da45096bd7a4a0c47e1042f345ad5a7f936"] },
+]

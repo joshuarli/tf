@@ -2,8 +2,8 @@
 
 Generated from `campaign/runs/` by `make -C campaign scorecard`. Rates are medians; brackets are descriptive ranges across process-pair medians (or across prompts when only one pair ran). Repeatability is measured only by the six-pair, two-session protocol; otherwise it is marked "unmeasured" even when a range is shown.
 
-- Run files: 24
-- Trials recorded: 261 (221 valid, 40 invalid)
+- Run files: 25
+- Trials recorded: 264 (224 valid, 40 invalid)
 - Unavailable cell records: 5
 - Malformed lines skipped: 0
 
@@ -28,6 +28,7 @@ Same model, engine, mode, cell and prompt-cache size. Sampled request peak is th
 | flint-int4@unpinned | rec | greedy | 1024 | 0 | 3 | 3 | 215.3 [211.0–227.8] | 230.6 [203.4–236.9] | — | 499.4 [352.7–538.6] | 2.86 [2.60–2.95] | — | — | — | — | unmeasured |
 | flint-int4@unpinned | rec | greedy | 4096 | 0 | 3 | 3 | 182.1 [181.0–198.9] | 194.1 [180.4–215.8] | — | 3602.9 [1379.6–7797.0] | 6.42 [3.85–10.62] | — | — | — | — | unmeasured |
 | flint-int4@unpinned | rec | greedy | 32768 | 0 | 3 | 3 | 129.0 [126.7–131.7] | 130.7 [126.5–132.5] | — | 19112.4 [17046.1–20830.2] | 23.07 [21.01–24.66] | — | — | — | — | unmeasured |
+| inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@3123528ea30b | ar | 1024 | 2 | 3 | 1 | 40.8 [40.7–40.9] | 40.8 [40.6–40.8] | 401.2 [394.7–402.0] | 2973.8 [2846.0–3412.9] | 15.50 [15.35–15.97] | 4.22 [4.22–4.22] | 4.24 [4.23–4.24] | — | 1.00 [1.00–1.00] | unmeasured |
 | inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@4025bce7f0ed | ar | 1024 | 2 | 2 | 2 | 39.6 [39.6–39.7] | 39.6 [39.6–39.6] | 385.6 [383.3–388.0] | 3086.4 [3075.9–3096.9] | 15.94 [15.89–15.99] | 4.22 [4.22–4.22] | 4.25 [4.25–4.26] | — | 1.00 [1.00–1.00] | unmeasured |
 | inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@4b43535dfeea | ar | 1024 | 2 | 2 | 2 | 38.5 [37.8–39.1] | 37.8 [37.1–38.5] | 324.5 [318.0–331.1] | 3663.8 [3624.6–3703.0] | 16.91 [16.68–17.14] | 4.22 [4.22–4.22] | 4.25 [4.24–4.26] | — | 1.00 [1.00–1.00] | unmeasured |
 | inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@819b83096a28 | ar | 1024 | 2 | 4 | 4 | 24.9 [24.8–24.9] | 24.9 [24.7–24.9] | 25.3 [25.3–25.3] | 45617.0 [45455.1–49385.5] | 66.18 [65.92–69.92] | 3.54 [3.54–3.54] | 3.54 [3.54–3.54] | — | 1.00 [1.00–1.00] | unmeasured |
@@ -95,6 +96,7 @@ These process pairs were not combined into a matched result.
 | flint-copy-1024-4096-32768-sB-135530 | flint-copy-1024-4096-32768-sB-135530:4096:copy:6 | missing candidate counterpart |
 | inkling2-mini-ar-1024-080205 | inkling2-mini-ar-1024-080205:ar:1024:1 | prompt counterparts differ: [('code-1024', 'c5a63fccf2c9866ac60e5b13ec268e2a56546fbed3b1b4d2cbfa5b808b0de4aa')] |
 | inkling2-mini-ar-1024-092408 | inkling2-mini-ar-1024-092408:ar:1024:1 | prompt counterparts differ: [('structured-1024', '12d86f119aa7aaa6c18892daaad2c39a7e187330f8c6ef24eb9066d4e945e5a6')] |
+| inkling2-mini-ar-1024-180358 | inkling2-mini-ar-1024-180358:ar:1024:1 | missing candidate counterpart |
 
 ## Best useful
 
@@ -113,7 +115,7 @@ The fastest measured configuration per model and cell, among engines, modes and 
 | flint-int4@unpinned | 1024 | 0 | rec | greedy | 215.3 | 3 | — |
 | flint-int4@unpinned | 4096 | 0 | rec | greedy | 182.1 | 3 | — |
 | flint-int4@unpinned | 32768 | 0 | rec | greedy | 129.0 | 3 | — |
-| inkling-2-mini@ed40e7da625f (7c656207d3ce) | 1024 | 2 | tensorfold-native@bd4865271374 | ar | 39.8 | 4 | tensorfold-native@4025bce7f0ed ar 39.6, tensorfold-native@4b43535dfeea ar 38.5, tensorfold-native@819b83096a28 ar 24.9 |
+| inkling-2-mini@ed40e7da625f (7c656207d3ce) | 1024 | 2 | tensorfold-native@3123528ea30b | ar | 40.8 | 3 | tensorfold-native@bd4865271374 ar 39.8, tensorfold-native@4025bce7f0ed ar 39.6, tensorfold-native@4b43535dfeea ar 38.5, tensorfold-native@819b83096a28 ar 24.9 |
 
 ## Natural termination
 
@@ -136,6 +138,7 @@ Requests sent without `ignore_eos` (they do not enter the fixed-length rates abo
 | flint-int4@unpinned | rec | greedy | 1024 | 0 | truncated 9 | length 9 | 512.0 |
 | flint-int4@unpinned | rec | greedy | 4096 | 0 | truncated 15 | length 15 | 512.0 |
 | flint-int4@unpinned | rec | greedy | 32768 | 0 | truncated 9 | length 9 | 512.0 |
+| inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@3123528ea30b | ar | 1024 | 2 | truncated 3 | length 3 | 512.0 |
 | inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@3fe17ed98234 | ar | 1024 | 2 | truncated 1 | length 1 | 512.0 |
 | inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@4025bce7f0ed | ar | 1024 | 2 | truncated 6 | length 6 | 512.0 |
 | inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@4b43535dfeea | ar | 1024 | 2 | truncated 6 | length 6 | 512.0 |

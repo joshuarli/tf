@@ -20,6 +20,11 @@ The [gated records](../comparators/nanoattention/runs/shootout-20261122-gated.js
 retain successful and rejected attempts. The remaining cells and oracle
 comparison are not yet complete.
 
+The 1,154-token prose cell has one completed pair, with its first generated
+difference at index 323. The second nanoattention trial passed; its TensorFold
+partner is waiting on the GPU lock. These partial trials do not establish a
+cell result.
+
 The TensorFold raw-token runner was built from commit `86ca89451d882fd99bbfad7c7f9a86461e7c59e3`
 with Zig 0.17.1 and `-Dcpu=apple_m1`. Its SHA-256 is
 `540277e48f31197e1daa2be1d2d0b431fbab44c628556c27008576a1534a0f42`.

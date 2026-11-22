@@ -419,3 +419,135 @@ test "chunked prefill matches per-token position on the tiny fixture" {
     @memcpy(got_logits[0..vocab], ps.logits.slice(f32, vocab));
     try t.expect(maxAbsDiff(ref_logits[0..vocab], got_logits[0..vocab]) <= @max(1.0, maxAbs(ref_logits[0..vocab])) * 1.5e-5);
 }
+
+const legacyGemm =
+    \\#include <metal_stdlib>
+    \\using namespace metal;
+    \\struct i2p_gemm_args { uint n, k, rows, xs, xb; float cap; };
+    \\[[kernel]] void i2p_gemm(const device float* X [[buffer(0)]], const device bfloat* W [[buffer(1)]],
+    \\    constant i2p_gemm_args& a [[buffer(2)]], device float* O [[buffer(3)]],
+    \\    uint3 tg [[threadgroup_position_in_grid]], uint ti [[thread_index_in_threadgroup]]) {
+    \\  constexpr int BM = 8;
+    \\  constexpr int BN = 64;
+    \\  constexpr int SG_N = BN / 8;
+    \\  constexpr int TG_THREADS = SG_N * 32;
+    \\  constexpr int A_PAD = 16;
+    \\  constexpr int B_PAD = BN + 8;
+    \\  constexpr int W_PAD = BN + 8;
+    \\  if (TG_THREADS > 256) return;
+    \\  const int sg_id = int(ti) / 32;
+    \\  const int sg_n = sg_id % SG_N;
+    \\  const int m0 = int(tg.y) * BM;
+    \\  const int n_base = int(tg.x) * BN;
+    \\  threadgroup float xs_pad[BM * A_PAD];
+    \\  threadgroup float ws_pad[8 * B_PAD];
+    \\  threadgroup float wb[BM * W_PAD];
+    \\  simdgroup_matrix<float, 8, 8> acc(0.0f);
+    \\  const bool m_in = m0 < int(a.rows);
+    \\  if (m_in) {
+    \\    for (int k0 = 0; k0 < int(a.k); k0 += 8) {
+    \\      for (int e = int(ti); e < BM * 8; e += TG_THREADS) {
+    \\        const int r = e / 8;
+    \\        const int c = e % 8;
+    \\        const int gr = m0 + r;
+    \\        const int gc = k0 + c;
+    \\        float v = 0.0f;
+    \\        if (gr < int(a.rows) && gc < int(a.k)) {
+    \\          const uint xr = a.xb + uint(gr) * a.xs;
+    \\          v = X[size_t(xr) * size_t(a.k) + uint(gc)];
+    \\        }
+    \\        xs_pad[r * A_PAD + c] = v;
+    \\      }
+    \\      for (int e = int(ti); e < 8 * BN; e += TG_THREADS) {
+    \\        const int kk = e / BN;
+    \\        const int nn = e % BN;
+    \\        const int gn = n_base + nn;
+    \\        const int gk = k0 + kk;
+    \\        float v = 0.0f;
+    \\        if (gn < int(a.n) && gk < int(a.k)) v = float(W[size_t(gn) * size_t(a.k) + uint(gk)]);
+    \\        ws_pad[kk * B_PAD + nn] = v;
+    \\      }
+    \\      threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\      simdgroup_matrix<float, 8, 8> amat;
+    \\      simdgroup_matrix<float, 8, 8> bmat;
+    \\      simdgroup_load(amat, xs_pad, ulong(A_PAD));
+    \\      simdgroup_load(bmat, ws_pad + sg_n * 8, ulong(B_PAD), ulong2(0, 0), false);
+    \\      simdgroup_multiply_accumulate(acc, amat, bmat, acc);
+    \\      threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\    }
+    \\    simdgroup_store(acc, wb + sg_n * 8, ulong(W_PAD));
+    \\  }
+    \\  threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\  if (m_in) {
+    \\    for (int e = int(ti); e < BM * BN; e += TG_THREADS) {
+    \\      const int rr = e / BN;
+    \\      const int cc = e % BN;
+    \\      const int om = int(tg.y) * BM + rr;
+    \\      const int on = int(tg.x) * BN + cc;
+    \\      if (om < int(a.rows) && on < int(a.n)) {
+    \\        float v = wb[rr * W_PAD + cc];
+    \\        if (a.cap > 0.0f) v = a.cap * precise::tanh(v / a.cap);
+    \\        O[size_t(om) * size_t(a.n) + uint(on)] = v;
+    \\      }
+    \\    }
+    \\  }
+    \\}
+    \\
+;
+
+const GemmArgs = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32, cap: f32 };
+
+test "tiled dense projections match the original gemm" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, @import("kernels.zig").prefill, mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const ref_lib = try mtl.Library.fromSource(device, legacyGemm, mtl.CompileOptions.mlx());
+    defer ref_lib.deinit();
+    const candidate = try mtl.Pipeline.init(device, lib, "i2p_gemm", false);
+    defer candidate.deinit();
+    const reference = try mtl.Pipeline.init(device, ref_lib, "i2p_gemm", false);
+    defer reference.deinit();
+    const shapes = [_][2]usize{ .{ 3072, 2304 }, .{ 384, 2304 }, .{ 24, 2304 }, .{ 1024, 2304 }, .{ 32, 2304 }, .{ 2304, 3072 }, .{ 128, 2304 }, .{ 64, 4608 }, .{ 2304, 64 }, .{ 200058, 2304 } };
+    for (shapes) |shape| {
+        const n = shape[0];
+        const k = shape[1];
+        const w = try device.buffer(n * k * 2, mtl.ResourceOptions.shared);
+        defer w.deinit();
+        const ws = w.slice(u16, n * k);
+        for (ws, 0..) |*v, i| v.* = @as(u16, @intCast(0x3e00 + ((i *% 37 + i / k *% 13) % 256))) | (if (i % 3 == 0) @as(u16, 0x8000) else 0);
+        for ([_]usize{ 1, 7, 128 }) |rows| {
+            const x = try device.buffer((rows * 2 + 1) * k * 4, mtl.ResourceOptions.shared);
+            defer x.deinit();
+            for (x.slice(f32, (rows * 2 + 1) * k), 0..) |*v, i| v.* = @as(f32, @floatFromInt(@as(i32, @intCast((i *% 17 + i / k *% 31) % 251)) - 125)) / 127.0;
+            const got = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared);
+            defer got.deinit();
+            const ref = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared);
+            defer ref.deinit();
+            const args = GemmArgs{ .n = @intCast(n), .k = @intCast(k), .rows = @intCast(rows), .xs = 2, .xb = 1, .cap = 0 };
+            for ([_]mtl.Pipeline{ candidate, reference }, [_]mtl.Buffer{ got, ref }, [_]usize{ 32, 8 }) |pipe, output, bm| {
+                const cb = queue.commandBuffer();
+                const enc = cb.compute(.serial);
+                enc.setPipeline(pipe);
+                enc.setBuffer(x, 0, 0);
+                enc.setBuffer(w, 0, 1);
+                enc.setValue(args, 2);
+                enc.setBuffer(output, 0, 3);
+                enc.dispatchGroups(mtl.Size.of((n + 63) / 64, (rows + bm - 1) / bm, 1), mtl.Size.of(256, 1, 1));
+                enc.end();
+                cb.commit();
+                cb.wait();
+                if (cb.failure()) |msg| { std.debug.print("gemm: {s}\n", .{msg}); return error.GpuFailed; }
+            }
+            const actual = got.slice(f32, rows * n);
+            const expected = ref.slice(f32, rows * n);
+            const diff = maxAbsDiff(actual, expected);
+            std.debug.print("gemm n={d} k={d} rows={d} maxdiff={e}\n", .{ n, k, rows, diff });
+            const bound = @max(1.0, maxAbs(expected)) * 1.5e-5;
+            for (actual, expected) |a, e| try t.expect(std.math.isFinite(a) and std.math.isFinite(e) and @abs(a - e) <= bound);
+        }
+    }
+}

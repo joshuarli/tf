@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Start fx against a local TensorFold server running Inkling 2 Mini, and stop the server when fx exits.
+#
+# The server runs under campaign/heavy.py, which holds the campaign GPU lock and the 28 GB memory cap: it waits for
+# any campaign model run to finish, and campaign runs wait for it. fx uses its own profile (FX_HOME, default
+# ~/.fx-local-inkling) so ~/.fx/settings.json is never touched. Extra arguments go to fx.
+#
+# Environment: FX_INKLING_CONTEXT (default 32768), FX_INKLING_MAX_OUTPUT (default 8192),
+# FX_INKLING_COPY_DRAFTS (default 1), FX_INKLING_MODEL (default ~/models/Inkling-2-Mini@ed40e7da625f),
+# FX_HOME (default ~/.fx-local-inkling).
+set -euo pipefail
+
+repo=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../.." && pwd)
+main=$(cd "$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)
+model=${FX_INKLING_MODEL:-$HOME/models/Inkling-2-Mini@ed40e7da625f}
+context=${FX_INKLING_CONTEXT:-32768}
+max_output=${FX_INKLING_MAX_OUTPUT:-8192}
+export FX_HOME=${FX_HOME:-$HOME/.fx-local-inkling}
+logs=$main/.work/logs/fx-local-inkling
+bin=$repo/zig-out/native/bin/tensorfold-native
+
+[[ -d $model ]] || { echo "fx-local-inkling: no checkpoint at $model (make -C campaign fetch NAMES=inkling-2-mini)" >&2; exit 1; }
+(( max_output < context )) || { echo "fx-local-inkling: FX_INKLING_MAX_OUTPUT must be below FX_INKLING_CONTEXT" >&2; exit 2; }
+command -v fx >/dev/null || { echo "fx-local-inkling: fx is not on PATH" >&2; exit 1; }
+
+mkdir -p "$logs" "$main/.work/tmp"
+export TMPDIR=$main/.work/tmp ZIG_GLOBAL_CACHE_DIR=$main/.work/zig-global-cache
+echo "fx-local-inkling: building tensorfold-native (no-op when current)" >&2
+(cd "$repo" && PATH=/opt/homebrew/bin:$PATH zig build native -Dcpu=apple_m1) >"$logs/build.log" 2>&1 \
+  || { echo "fx-local-inkling: build failed, see $logs/build.log" >&2; exit 1; }
+
+port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+log=$logs/server-$(date -u +%Y%m%dT%H%M%SZ).log
+INKLING_LOAD_LIMIT_GB=26 INKLING_COPY_DRAFTS=${FX_INKLING_COPY_DRAFTS:-1} TENSORFOLD_NO_UPDATE_CHECK=1 \
+  python3 "$repo/campaign/heavy.py" -- "$bin" serve "$model" --host 127.0.0.1 --port "$port" --parallel 1 \
+  --prompt-cache-gib 2 --no-update-check --context "$context" --temperature 0 >"$log" 2>&1 &
+server=$!
+stop() {
+  kill -TERM "$server" 2>/dev/null || true
+  wait "$server" 2>/dev/null || true
+}
+trap stop EXIT
+trap 'exit 130' INT TERM
+
+base=http://127.0.0.1:$port/v1
+echo "fx-local-inkling: starting the server on port $port (waits for the GPU lock; log $log)" >&2
+model_id=
+until model_id=$(curl -fsS "$base/models" 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["data"][0]["id"])' 2>/dev/null); do
+  kill -0 "$server" 2>/dev/null || { echo "fx-local-inkling: the server exited; last lines of $log:" >&2; tail -20 "$log" >&2; exit 1; }
+  sleep 2
+done
+echo "fx-local-inkling: serving $model_id, context $context, output up to $max_output" >&2
+
+mkdir -p "$FX_HOME"
+chmod 700 "$FX_HOME"
+[[ -e $FX_HOME/AGENTS.md || ! -e $HOME/.fx/AGENTS.md ]] || ln -s "$HOME/.fx/AGENTS.md" "$FX_HOME/AGENTS.md"
+python3 - "$FX_HOME/settings.json" "$base" "$model_id" "$context" "$max_output" <<'EOF'
+import json, sys
+from pathlib import Path
+path, base, model_id, context, max_output = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5])
+settings = json.loads(Path(path).read_text()) if Path(path).exists() else {"permission_mode": "auto", "auto_upgrade": False}
+settings["provider"] = "tensorfold"
+settings.setdefault("providers", {})["tensorfold"] = {
+    "protocol": "openai-chat-completions",
+    "base_url": base,
+    "auth": {"type": "none"},
+    "model_metadata": {model_id: {"context_window": context, "max_output_tokens": max_output, "supports_tool_use": True}},
+}
+settings.setdefault("models", {})["tensorfold"] = model_id
+Path(path).write_text(json.dumps(settings, indent=2) + "\n")
+EOF
+
+fx "$@"

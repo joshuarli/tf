@@ -514,3 +514,33 @@ normal). Base `main` 206faa4f5 (P4), candidate E1 `36f1311b9`.
 Per-round ratios 1.597, 1.424, 1.408, 1.346, 1.302, 1.440; geometric mean 1.417 (95% t-interval 1.317-1.524).
 Logits are not byte-identical to P4 (max abs 4.5e-3 on harbour, 9.3e-4 on cells_code, argmax identical on
 every row) and the parity gate is unchanged at 14 within contract, 2 explained, 0 unexplained. Verdict: keep.
+
+## Tiled prefill attention
+
+For 24 query heads, eight KV heads and 128 channels, each threadgroup handles
+eight query rows and the three heads sharing one KV head. It stages eight K/V
+rows at a time and preserves the original per-query dot-product reduction and
+online softmax order, including the zero-logit sink. Other attention shapes
+retain the original kernel.
+
+The family test covers global and 1024-slot ring caches at bases 0, 900 and
+5000, with 1, 7 and 128 query rows, plus 9, 17, 33, 35, 63 and 100 rows at
+bases 0 and 900. It compares with the original attention and an FP64 reference.
+The original tiled matrix candidate passed an absolute-error kernel bound but
+failed `structured` prefill: maximum logit error was 0.552188 against the
+oracle, versus 0.0000992 for the baseline. Preserving the original arithmetic
+order produces identical logits to the baseline on that history.
+The 35-row attention regression test rejects the first candidate's 5.96e-8
+change from the original kernel and passes with the order-preserving kernel.
+
+All 14 short-history `prefill 128` logits passed the f32-vs-f32 oracle gate;
+the largest absolute difference was 0.000132. Harbour and cells_code retained
+the base runner's argmax on all 1,336 and 1,178 rows respectively.
+The ordinary `logits` parity report lists 14 within contract, two explained
+divergences and zero unexplained; its command exits 2 for incomplete overall
+qualification because the two explained divergences remain.
+
+Single split-timeline profiles measured 300.099 ms in base attention and
+60.936 ms in the tiled kernel at base 1024, and 469.065 ms and 92.515 ms at
+base 4992. These are load-sensitive profiler samples, not a timing gate. The
+host failed `perf-gate-ready`; a controlled comparison remains outstanding.

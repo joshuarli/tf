@@ -214,11 +214,23 @@ afterwards, so the returned logits have 200,058 columns (`src/models/inkling2.cp
 
 `mtp_config` (`config.json:90-117`) and `mtp.safetensors` define a 3-layer draft head: the same 24/8 head geometry,
 dense FFN 9216, local (sliding) layers 0 and 2, `block_size 8`, a 256-rank `rnn_hidden` Markov head, and
-`target_layer_ids [5, 23, 41, 48]`. Those four indices address *executed* hidden states: prelude end (5), mid-cycle
-in the first extra pass (23), loop end (41) and final (48 = after the last block). The head fuses the four states
-with `fuse_weight [4,4]`, then runs its layers and the Markov head. llama.cpp does not load or execute it, so the
-reference does not either. **The tap interpretation is inferred from the index arithmetic and is not yet exercised
-against a reference implementation.**
+`target_layer_ids [5, 23, 41, 48]`. The indices count execution visits. Intermediate taps capture the raw partial
+state entering the visit, after any loop rewind, before the layer runs; they are neither completed-layer outputs nor
+sums of residual-history banks. Tap 5 enters physical layer 5, tap 23 enters layer 11 in pass 1, and tap 41 enters
+layer 17 in pass 2. Tap 48 is the final depth-mixed, normalized output. TokenSpeed captures before the layer and
+appends its normalized output (`tokenspeed@947b25bc92d7/python/tokenspeed/runtime/models/inkling2.py:640-671`);
+its CPU capture test distinguishes the raw partial from the residual sum
+(`tokenspeed@947b25bc92d7/test/runtime/models/test_inkling2_capture.py:81-127`). MLX-VLM independently captures
+`x` before the layer and the normalized final state (`mlx-vlm@f1618d6d52be/mlx_vlm/models/inkling2/language.py:688-712`);
+its visit ordering is in `mlx_vlm/models/inkling2/config.py:74-83`.
+
+The head mixes the four taps with `fuse_weight [4,4]` for its layers and recurrent head
+(`tokenspeed@947b25bc92d7/python/tokenspeed/runtime/models/inkling2_mtp.py:557-559,618-629`). Its block has one
+anchor and seven proposal rows (`tokenspeed@947b25bc92d7/python/tokenspeed/runtime/models/inkling2_mtp.py:715-733`),
+and the next round uses the last accepted target features
+(`tokenspeed@947b25bc92d7/python/tokenspeed/runtime/execution/drafter/inkling2.py:197-229`). See
+[campaign/ref/dspark_taps.md](../../campaign/ref/dspark_taps.md) for the later drafter's contract. llama.cpp does
+not load or execute the head.
 
 ## Conversion and the pinned llama.cpp oracle
 
@@ -297,5 +309,5 @@ order.
 - **Long context.** Positions ≥ 8192 exercise `tau`; the histories stop far below it. The native family must still
   implement it from `src/models/inkling2.cpp:258-261`.
 - **Vision.** The encoder and projector are not covered; the plan refuses image input.
-- **MTP numerics.** Only the shapes and the tap indices are recorded; no reference implementation was run.
+- **MTP numerics.** Capture semantics are source-verified; native draft arithmetic and end-to-end output remain untested.
 - **Model quality.** The logits agreement is a numerical check, not a capability check.

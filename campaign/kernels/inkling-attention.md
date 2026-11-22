@@ -75,3 +75,51 @@ unchanged and local results are bit-identical to the full cache. Per-token bytes
 `48 * kvw * 8` to `8 * kvw * 8` (65,536 B), with the 40 rings (320 MiB) plus the convolution rings as the
 fixed cost in `Cache.fixedBytes`; `Cache.longestFitting` divides the remaining budget by the global-only
 rate. The server log and `--context` refusal name the 8-global/40-local split.
+
+## Eight-key decode experiment: rejected on correctness
+
+On base `6b2614352fe6fe55d5fe720e89e956f28a13d7d1`, an experiment assigned four lanes per key and computed
+scores for eight keys per simdgroup iteration, removing the per-row threadgroup barriers. It also used up to
+five splits at short contexts. The 521 GB/s measured read ceiling implies about 18 us for 9.3 MB of global
+K/V at roughly 1.14K positions; the baseline timeline's split kernel was about 104 us per call.
+
+The existing random attention tests passed against the serial kernel and FP64 reference, with worst pairwise
+error 1.4305115e-6. The full-model 1,139-row teacher-forced logits comparison failed the 1e-4 max-absolute
+contract: maximum difference 3.582090139389038e-4, with zero argmax mismatches. The candidate was rejected
+and its kernel and partition changes reverted. End-to-end benchmarks and before/after timeline profiles were
+not run because the correctness gate failed; no speed claim is made.
+
+### Corrected correctness gate
+
+The owner corrected the full-model candidate-versus-base limit to 1e-3. Under that limit the same 1,139-row
+comparison passes: maximum absolute error 3.582090139389038e-4, with identical argmaxes on all rows. The
+candidate was restored. The campaign FP32 reference parity command exited 2 with its expected classification:
+14 histories within contract, two explained divergences and zero unexplained. The timing verdict remains
+pending until the GPU gate permits the interleaved measurements.
+
+The gated benchmark stopped after 30 minutes of contention before the first baseline sample. The last gate
+reported 26.2% other-process GPU time against the 5% limit, mainly Ghostty and WindowServer. No interleaved
+medians or before/after timeline profiles were collected. The restored candidate remains an unmeasured
+experiment; its keep/revert verdict requires a quiet GPU and the specified three-context comparison.
+
+### Long-context diagnosis and revert
+
+The owner measured `bench 14 2` with a raised other-process GPU threshold for the desktop: at 83 tokens,
+12 base samples had median 23.424 ms/step (range 23.38–23.52), and six candidate samples had median
+22.432 ms/step (22.39–22.44). At 1,139 tokens, the first two quiet pairs gave base 25.12, 25.16, 25.00,
+25.39 ms and candidate 26.69, 26.41 ms. Later samples were disturbed; the run ended on critical host memory
+pressure. These figures are not a completed long-context performance gate.
+
+Separate `TF_METAL4_TIMELINE=4` profiles at 1,139 tokens measured the following per call (48 calls per step):
+
+| Kernel | Base | Eight-key candidate | Full-simdgroup long-chunk variant |
+| --- | ---: | ---: | ---: |
+| `i2_attn_split` | 83.1 us | 109.8 us | 163.7 us |
+| `i2_attn_combine` | 17.1 us | 15.7 us | 16.4 us |
+
+The eight-key path loads query vectors again for every eight-row block and reads K/V independently for each
+query head. The long-chunk variant instead removed the threadgroup barriers and used full-simdgroup dots,
+but its timeline was slower still. The base and long-chunk runs saw elevated memory pressure and swapping,
+so these stamped profiles are diagnostic rather than clean end-to-end timings. Neither variant beat the base
+in this profile. Verdict: revert the experiment; the restored runner is the base binary. No 8K timing or
+short-context timing for the long-chunk variant was collected.

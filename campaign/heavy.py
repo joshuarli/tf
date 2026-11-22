@@ -5,9 +5,11 @@ usage: heavy.py [--cap-gb N] -- COMMAND [ARG...]
 The command runs as `lockf -k <gpu.lock> COMMAND` in its own process group.
 Once a second, each process in the tree is charged the larger of its physical
 footprint and its resident size, plus the growth of host-wide wired memory since
-the command started (Metal wires mapped weight files outside any process's
-footprint or resident size; other processes' wiring is charged too, which errs
-toward stopping), and the total is compared against the cap. On a breach the
+the command started beyond the tree's footprint (Metal wires mapped weight files
+outside any process's footprint or resident size, while the Metal buffers a
+process allocates are wired and already in its footprint; other processes'
+wiring is charged too, which errs toward stopping), and the total is compared
+against the cap. On a breach the
 whole group gets SIGTERM, then SIGKILL after 10 s, and heavy.py exits 3;
 critical host memory pressure stops it the same way with exit 4. Otherwise it
 exits with the command's status. The final receipt line separates the charged
@@ -58,6 +60,12 @@ def usage(pid: int) -> tuple[int, int]:
         return 0, 0
     resident, phys = struct.unpack_from("<QQ", buf.raw, RESIDENT_SIZE_OFFSET)
     return phys, resident
+
+
+def charge(samples: list[tuple[int, int]], wired_growth: int) -> int:
+    """Bytes charged to a tree of (footprint, resident) samples given the host's wired growth."""
+    footprint = sum(phys for phys, _ in samples)
+    return sum(max(phys, resident) for phys, resident in samples) + max(0, wired_growth - footprint)
 
 
 def pressure_level() -> int:
@@ -164,7 +172,7 @@ def main() -> int:
         resident_total = sum(resident for _, resident in samples)
         wired_growth = max(0, wired_bytes() - wired_start)
         peak_wired_growth = max(peak_wired_growth, wired_growth)
-        charged = sum(max(phys, resident) for phys, resident in samples) + wired_growth
+        charged = charge(samples, wired_growth)
         peak_footprint = max(peak_footprint, footprint_total)
         peak_resident = max(peak_resident, resident_total)
         peak_charged = max(peak_charged, charged)

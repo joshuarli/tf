@@ -34,6 +34,12 @@ class LoadLimitSelection(unittest.TestCase):
         self.assertEqual(harness.load_limit_var("flint-int4"), "FLINT_LOAD_LIMIT_GB")
         self.assertEqual(harness.load_limit_var("inkling-2-mini"), "INKLING_LOAD_LIMIT_GB")
 
+    def test_wired_buffers_already_in_the_footprint_are_charged_once(self):
+        import heavy
+        gb = 10**9
+        self.assertEqual(heavy.charge([(20 * gb, 3 * gb)], 9 * gb), 20 * gb)
+        self.assertEqual(heavy.charge([(gb, 2 * gb)], 20 * gb), 21 * gb)
+
     def test_inkling_limit_fits_its_checkpoint_under_the_heavy_cap(self):
         import heavy
         self.assertEqual(heavy.INKLING_LOAD_LIMIT_GB, 26)

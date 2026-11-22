@@ -80,6 +80,7 @@ pub const Pipes = struct {
     capexact: mtl.Pipeline,
     router: mtl.Pipeline,
     gemm: mtl.Pipeline,
+    smallrow: mtl.Pipeline,
     gemm_mpp: ?mtl.Pipeline,
     pick: mtl.Pipeline,
     embed: mtl.Pipeline,
@@ -114,7 +115,7 @@ pub const Pipes = struct {
 
     pub fn deinit(p: *Pipes) void {
         if (p.gemm_mpp) |pipe| pipe.deinit();
-        inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "gemm", "pick", "gu_g_nv", "down_g_nv", "gu_g_mx", "down_g_mx", "expert_matrix_nv", "expert_matrix_mx", "moe_zero", "moe_count", "moe_offsets", "moe_sort", "embed", "rms", "gather", "mix", "mix4", "ctl", "clips", "clip", "conv", "cstore", "kv", "rel", "attn", "attn_tiled", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
+        inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "gemm", "smallrow", "pick", "gu_g_nv", "down_g_nv", "gu_g_mx", "down_g_mx", "expert_matrix_nv", "expert_matrix_mx", "moe_zero", "moe_count", "moe_offsets", "moe_sort", "embed", "rms", "gather", "mix", "mix4", "ctl", "clips", "clip", "conv", "cstore", "kv", "rel", "attn", "attn_tiled", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
     }
 };
 
@@ -265,6 +266,10 @@ pub const PrefillScratch = struct {
         errdefer s.pipes.router.deinit();
         s.pipes.gemm = try mtl.Pipeline.init(device, lib, "i2p_gemm", false);
         errdefer s.pipes.gemm.deinit();
+        const small_lib = try mtl.Library.fromSource(device, kernels.prefill_smallrow, opts);
+        defer small_lib.deinit();
+        s.pipes.smallrow = try mtl.Pipeline.init(device, small_lib, "i2p_small", false);
+        errdefer s.pipes.smallrow.deinit();
         s.pipes.gemm_mpp = if (device.tensorUnits()) blk: {
             const mpp_lib = try mtl.Library.fromSource(device, kernels.prefill_gemm_mpp, opts);
             defer mpp_lib.deinit();
@@ -397,7 +402,10 @@ const Chunk = struct {
     fn lin(c: Chunk, w: Tensor, x: In, out: B) void {
         const m: usize = nrows(w);
         const args = Gemm{ .n = @intCast(m), .k = @intCast(width(w)), .rows = c.n, .xs = x.xs, .xb = x.xb, .cap = 0 };
-        if (c.s.pipes.gemm_mpp != null and m >= 384 and args.k >= 2304 and c.n >= 16) {
+        if (c.n <= 8) {
+            c.setP(c.s.pipes.smallrow, args, &.{ x.buf, t(w), A, out });
+            c.enc.dispatchGroups(mtl.Size.of((m + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+        } else if (c.s.pipes.gemm_mpp != null and m >= 384 and args.k >= 2304 and c.n >= 16) {
             c.setP(c.s.pipes.gemm_mpp.?, args, &.{ x.buf, t(w), A, out });
             c.enc.dispatchGroups(mtl.Size.of((m + 31) / 32, (c.n + 15) / 16, 1), mtl.Size.of(128, 1, 1));
         } else {
@@ -408,7 +416,10 @@ const Chunk = struct {
 
     fn headModel(c: Chunk, w: Tensor, x: In, out: B, vocab: u32) void {
         const args = Gemm{ .n = vocab, .k = @intCast(width(w)), .rows = c.n, .xs = x.xs, .xb = x.xb, .cap = c.m.config.text.logit_cap };
-        if (c.s.pipes.gemm_mpp != null and c.n >= 16 and args.k >= 2304) {
+        if (c.n <= 8) {
+            c.setP(c.s.pipes.smallrow, args, &.{ x.buf, t(w), A, out });
+            c.enc.dispatchGroups(mtl.Size.of((vocab + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+        } else if (c.s.pipes.gemm_mpp != null and c.n >= 16 and args.k >= 2304) {
             c.setP(c.s.pipes.gemm_mpp.?, args, &.{ x.buf, t(w), A, out });
             c.enc.dispatchGroups(mtl.Size.of((vocab + 31) / 32, (c.n + 15) / 16, 1), mtl.Size.of(128, 1, 1));
         } else {
@@ -604,6 +615,18 @@ const Chunk = struct {
             c.copyN(t(lay.router_bias), bo(routes, (start + @as(usize, c.n) * (K + E)) * 4), E);
         }
         const slots: u32 = c.n * K;
+        if (c.n <= 2) {
+            const codes = b(if (lay.mxfp8) m.t256 else m.t16);
+            const gu = if (lay.mxfp8) s.pipes.gu_mx else s.pipes.gu_nv;
+            const down = if (lay.mxfp8) s.pipes.down_mx else s.pipes.down_nv;
+            c.setP(gu, MoeB{ .k = c.h, .n = inter, .slots = slots, .topk = K, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.picks), A, b(s.act), codes });
+            c.enc.dispatchGroups(mtl.Size.of(inter, slots, 1), mtl.Size.of(32, 1, 1));
+            c.setP(down, MoeB{ .k = inter, .n = c.h, .slots = slots, .topk = K, .gate_cap = 0, .up_cap = 0 }, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.picks), A, b(s.down), codes });
+            c.enc.dispatchGroups(mtl.Size.of(c.h, slots, 1), mtl.Size.of(32, 1, 1));
+            c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = K, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
+            c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
+            return;
+        }
         c.setP(s.pipes.moe_zero, E, &.{ b(s.moe_cnt), A });
         c.enc.dispatchThreads(mtl.Size.of(E, 1, 1), mtl.Size.of(32, 1, 1));
         c.setP(s.pipes.moe_count, slots, &.{ b(s.picks), b(s.moe_cnt), A });

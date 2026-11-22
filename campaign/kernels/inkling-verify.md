@@ -259,6 +259,39 @@ After both retained changes, the prefill parity commands at chunks 4 and 512 eac
 with 14 histories within contract, two explained divergences, and zero unexplained. The
 candidate inference runs stayed below the 28 GB `heavy.py` cap.
 
+### Hybrid against ordinary decode
+
+Five pairs per workload alternated `greedy-hybrid` and `greedy-decode`, using chunked
+prefill and the same prompt IDs. Each emitted 512 tokens with EOS disabled. Timing starts
+after the prompt prediction, so throughput counts the 511 subsequently generated tokens.
+Each process passed CPU and busy-host GPU admission checks before and after execution under
+`heavy.py`. Hybrid uses the mixed target: verified rows use prefill kernels and undrafted
+rows use decode kernels. Output IDs matched the decode control in every pair. This does not
+establish universal greedy equivalence.
+
+| Workload | Decode tok/s median (range) | Hybrid tok/s median (range) | Hybrid seconds median |
+| --- | ---: | ---: | ---: |
+| code-1024 | 39.03 (35.99–39.99) | 33.83 (30.39–34.07) | 15.106 |
+| prose-1024 | 40.08 (40.06–40.20) | 47.72 (47.64–47.75) | 10.708 |
+| structured-1024 | 40.19 (40.17–40.22) | 76.58 (76.45–76.72) | 6.673 |
+
+Hybrid effective throughput is committed tokens divided by draft, snapshot, verification,
+restore, replay, ordinary decode, and remaining host time. The code median includes 8.742 s
+in verification forward, 3.392 s in replay, 0.274 s in logits read and argmax, 0.079 s in
+save, and 0.076 s in restore. The original receipt did not separate undrafted decode from
+remaining host time. Code remains below the decode control.
+
+| Workload | Draft ms | Save s | Verify forward s | Read and argmax s | Restore s | Replay s | Undrafted decode and host s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| code-1024 | 0.270 | 0.079 | 8.742 | 0.274 | 0.076 | 3.392 | 2.552 |
+| prose-1024 | 0.257 | 0.054 | 5.388 | 0.171 | 0.031 | 1.486 | 3.578 |
+| structured-1024 | 0.171 | 0.074 | 6.090 | 0.183 | 0.005 | 0.293 | 0.028 |
+
+Each component is the median across processes. The last column is the median per-process
+residual after subtracting the measured components from generation time; rounded medians
+do not necessarily sum to the median total. The runner now separately measures undrafted
+decode for subsequent comparisons.
+
 The family test passed with `TF_INKLING2_LOOP_DIR` set to the checkpoint and
 `python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1`. It compared
 repeated predictions after snapshot reset and continuation logits byte for byte across the local

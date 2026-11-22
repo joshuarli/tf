@@ -125,14 +125,17 @@ pub fn main(init: std.process.Init) !void {
         var argmax_ns: u64 = 0;
         var restore_ns: u64 = 0;
         var replay_ns: u64 = 0;
+        var decode_ns: u64 = 0;
         const start = now();
         while (history.items.len < ids.value.len + steps) {
             try history.append(gpa, token);
             if (history.items.len == ids.value.len + steps) break;
             if (!hybrid and decode != null) {
+                const decode_start = now();
                 const s = &decode.?;
                 try inkling.position(m, s, &cache, token);
                 token = argmax(s.logits.slice(f32, vocab));
+                decode_ns += now() - decode_start;
                 rounds += 1;
                 continue;
             }
@@ -149,8 +152,10 @@ pub fn main(init: std.process.Init) !void {
             const count: usize = @min(draft.len, @min(most, ids.value.len + steps - history.items.len - 1));
             const row_count = try std.math.add(usize, count, 1);
             if (count == 0 and hybrid) {
+                const decode_start = now();
                 try inkling.position(m, &decode.?, &cache, token);
                 token = argmax(decode.?.logits.slice(f32, vocab));
+                decode_ns += now() - decode_start;
                 rounds += 1;
                 continue;
             }
@@ -183,10 +188,11 @@ pub fn main(init: std.process.Init) !void {
             drafted += count;
             accepted_total += accepted;
         }
-        const seconds = @as(f64, @floatFromInt(now() - start)) / 1e9;
+        const elapsed_ns = now() - start;
+        const seconds = @as(f64, @floatFromInt(elapsed_ns)) / 1e9;
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[5], .data = std.mem.sliceAsBytes(history.items[ids.value.len..]) });
         std.debug.print("{s}: tokens={d} rounds={d} drafted={d} accepted={d} seconds={d:.3}\n", .{ mode, steps, rounds, drafted, accepted_total, seconds });
-        std.debug.print("roundcost draft_ns={d} save_ns={d} forward_ns={d} argmax_ns={d} restore_ns={d} replay_ns={d}\n", .{ draft_ns, save_ns, forward_ns, argmax_ns, restore_ns, replay_ns });
+        std.debug.print("roundcost draft_ns={d} save_ns={d} forward_ns={d} argmax_ns={d} restore_ns={d} replay_ns={d} decode_ns={d} elapsed_ns={d}\n", .{ draft_ns, save_ns, forward_ns, argmax_ns, restore_ns, replay_ns, decode_ns, elapsed_ns });
         return;
     }
     if (std.mem.eql(u8, mode, "roundbench")) {

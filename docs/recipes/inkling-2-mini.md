@@ -1,5 +1,9 @@
 # Inkling 2 Mini (`inkling2_loop`)
 
+Set `INKLING_COPY_DRAFTS=1` to opt in to greedy copy drafts on the native Metal server. `--no-drafts` disables them.
+Copy verification uses prefill arithmetic, which can choose a different token from the decode path at a near-tie.
+See the [copy verification receipt](../../campaign/kernels/inkling-verify.md) for the measured workloads.
+
 This page records the graph of `thinkingmachines/Inkling-2-Mini` as read from the pinned llama.cpp reference
 (commit `40b7a546defe1f60edd1338c719552ffc58c89a0`), the checkpoint's own config, index, quantization config and
 chat template, together with the CPU float32 reference in `campaign/ref/inkling2_loop_ref.py` and its measured

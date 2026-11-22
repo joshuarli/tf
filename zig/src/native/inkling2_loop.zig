@@ -11,6 +11,13 @@ pub const formats = inkling.formats;
 const load_margin: u64 = 2 << 30;
 const scratch_reserve: u64 = 1 << 30;
 
+fn copyDrafts(text: ?[]const u8) error{BadCopyDrafts}!bool {
+    const value = text orelse return false;
+    if (std.mem.eql(u8, value, "0")) return false;
+    if (std.mem.eql(u8, value, "1")) return true;
+    return error.BadCopyDrafts;
+}
+
 fn loadLimit(ram: u64, working_set: u64, text: ?[]const u8) error{BadLoadLimit}!u64 {
     const t = std.mem.trim(u8, text orelse "", " \t");
     if (t.len == 0) return @as(u64, @intFromFloat(@as(f64, @floatFromInt(ram)) * 0.75));
@@ -40,6 +47,11 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
         problem.* = "Inkling 2 Mini has no served drafter in this campaign (its mtp.safetensors head is not wired); run mode ar";
         return null;
     }
+    const env: ?[]const u8 = if (std.c.getenv("INKLING_COPY_DRAFTS")) |v| std.mem.span(v) else null;
+    const copy_drafts = o.drafts and (copyDrafts(env) catch {
+        problem.* = "INKLING_COPY_DRAFTS must be 0 or 1";
+        return null;
+    });
     const pool = mtl.objc.Pool.push();
     defer pool.pop();
     const m = inkling.Model.load(gpa, io, o.dir) catch |err| {
@@ -75,7 +87,7 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
     }
     std.log.info("inkling2_loop: {d:.1} GiB for caches ({d:.1} GiB in {d} local rings, {d} KiB a token over {d} global slots), context up to {d} tokens", .{ @as(f64, @floatFromInt(budget)) / (1 << 30), @as(f64, @floatFromInt(inkling.Cache.fixedBytes(&m.config))) / (1 << 30), inkling.Cache.localSlots(&m.config), inkling.Cache.bytesPerToken(&m.config) >> 10, inkling.Cache.globalSlots(&m.config), window });
     const eos = readEos(a, io, o.dir, m.config.eos);
-    const h = host_mod.openHost(gpa, io, m, @intCast(window), eos, limit) catch |err| {
+    const h = host_mod.openHost(gpa, io, m, @intCast(window), eos, limit, copy_drafts) catch |err| {
         m.deinit();
         problem.* = try std.fmt.allocPrint(a, "the native Inkling 2 Mini engine cannot hold {d} tokens of cache ({s})", .{ window, @errorName(err) });
         return null;
@@ -100,4 +112,11 @@ test "the registry's open refuses a drafter by name before any weight is read" {
 test "a bad INKLING_LOAD_LIMIT_GB names the variable" {
     try std.testing.expectError(error.BadLoadLimit, loadLimit(64 << 30, 64 << 30, "lots"));
     try std.testing.expectError(error.BadLoadLimit, loadLimit(64 << 30, 64 << 30, "900"));
+}
+
+test "copy drafts require an explicit valid opt-in" {
+    try std.testing.expect(!try copyDrafts(null));
+    try std.testing.expect(!try copyDrafts("0"));
+    try std.testing.expect(try copyDrafts("1"));
+    try std.testing.expectError(error.BadCopyDrafts, copyDrafts("yes"));
 }

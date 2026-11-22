@@ -35,6 +35,7 @@ pub const Host = struct {
     prefill: inkling.PrefillScratch,
     capacity: usize,
     eos: u32,
+    copy_drafts: bool,
     info_: api.Info,
     load_limit: u64 = 0,
     vision_markers: [1]u32 = undefined,
@@ -334,10 +335,29 @@ pub const Host = struct {
             h.cache.len = 0;
             return;
         }
+        var proposer = tf.lanes.SuffixLookup.init(h.gpa, .{}) catch {
+            fin.message = @errorName(error.OutOfMemory);
+            return;
+        };
+        defer proposer.deinit();
+        var history: std.ArrayList(u32) = .empty;
+        defer history.deinit(h.gpa);
+        if (h.copy_drafts and r.drafts) {
+            history.appendSlice(h.gpa, r.prompt) catch {
+                fin.message = @errorName(error.OutOfMemory);
+                return;
+            };
+        }
+        var pending: [16]u32 = undefined;
+        var pending_at: usize = 0;
+        var pending_len: usize = 0;
+        var rounds: u64 = 0;
+        var drafted: u64 = 0;
+        var accepted_total: u64 = 0;
         while (job.emitted.items.len < r.max_tokens) {
             if (h.cancelled(job)) {
                 fin.reason = .cancelled;
-                fin.stats = .{ .rounds = if (job.emitted.items.len > 0) @as(u64, @intCast(job.emitted.items.len)) - 1 else 0, .drafted = 0, .accepted = 0, .min_rows = 1, .prefill_seconds = prefill_s, .queued_seconds = queued_s };
+                fin.stats = .{ .rounds = rounds, .drafted = drafted, .accepted = accepted_total, .min_rows = 1, .prefill_seconds = prefill_s, .queued_seconds = queued_s };
                 h.cache.len = 0;
                 return;
             }
@@ -350,11 +370,22 @@ pub const Host = struct {
                     best = @intCast(i);
                 }
             }
+            if (pending_at < pending_len) {
+                best = pending[pending_at];
+                pending_at += 1;
+            }
             job.emitted.append(h.gpa, best) catch {
                 fin.message = @errorName(error.OutOfMemory);
                 h.cache.len = 0;
                 return;
             };
+            if (h.copy_drafts and r.drafts) {
+                history.append(h.gpa, best) catch {
+                    fin.message = @errorName(error.OutOfMemory);
+                    h.cache.len = 0;
+                    return;
+                };
+            }
             var one: [1]u32 = .{best};
             emit(job, .{ .tokens = &one });
             h.lock();
@@ -369,24 +400,75 @@ pub const Host = struct {
             const hit_gen_eos = r.eos.len > 0 and best == h.eos;
             if (stop_hit or is_eos or hit_gen_eos) {
                 fin.reason = .stop;
-                fin.stats = .{ .rounds = if (job.emitted.items.len > 0) @as(u64, @intCast(job.emitted.items.len)) - 1 else 0, .drafted = 0, .accepted = 0, .min_rows = 1, .prefill_seconds = prefill_s, .queued_seconds = queued_s };
+                fin.stats = .{ .rounds = rounds, .drafted = drafted, .accepted = accepted_total, .min_rows = 1, .prefill_seconds = prefill_s, .queued_seconds = queued_s };
                 h.cache.len = 0;
                 return;
             }
             if (job.emitted.items.len >= r.max_tokens) {
                 fin.reason = .length;
-                fin.stats = .{ .rounds = if (job.emitted.items.len > 0) @as(u64, @intCast(job.emitted.items.len)) - 1 else 0, .drafted = 0, .accepted = 0, .min_rows = 1, .prefill_seconds = prefill_s, .queued_seconds = queued_s };
+                fin.stats = .{ .rounds = rounds, .drafted = drafted, .accepted = accepted_total, .min_rows = 1, .prefill_seconds = prefill_s, .queued_seconds = queued_s };
                 h.cache.len = 0;
                 return;
+            }
+            if (pending_at < pending_len) continue;
+            if (h.copy_drafts and r.drafts) {
+                const draft = proposer.propose(history.items, 15) catch |e| {
+                    fin.message = @errorName(e);
+                    return;
+                };
+                var rows: [16]u32 = undefined;
+                rows[0] = best;
+                const count: usize = @min(draft.len, @min(15, r.max_tokens - job.emitted.items.len - 1));
+                const row_count = std.math.add(usize, count, 1) catch {
+                    fin.message = @errorName(error.Overflow);
+                    return;
+                };
+                if (count == 0) {
+                    inkling.prefillWant(h.model, &h.prefill, &h.cache, rows[0..1], .all) catch |e| {
+                        fin.message = @errorName(e);
+                        return;
+                    };
+                    @memcpy(h.scratch.logits.slice(f32, vocab), h.prefill.logits.slice(f32, vocab));
+                    rounds += 1;
+                    continue;
+                }
+                @memcpy(rows[1..][0..count], draft[0..count]);
+                var predictions: [16]u32 = undefined;
+                var verification = inkling.Verification.begin(h.model, &h.prefill, &h.cache, rows[0..row_count], predictions[0..row_count]) catch |e| {
+                    fin.message = @errorName(e);
+                    return;
+                };
+                var accepted: usize = 0;
+                while (accepted < count and predictions[accepted] == rows[accepted + 1]) : (accepted += 1) {}
+                const kept = std.math.add(usize, accepted, 1) catch {
+                    fin.message = @errorName(error.Overflow);
+                    return;
+                };
+                verification.finish(rows[0..row_count], kept) catch |e| {
+                    fin.message = @errorName(e);
+                    return;
+                };
+                proposer.observe(@intCast(count), @intCast(accepted)) catch |e| {
+                    fin.message = @errorName(e);
+                    return;
+                };
+                rounds += 1;
+                drafted += count;
+                accepted_total += accepted;
+                pending_len = kept;
+                pending_at = 0;
+                @memcpy(pending[0..pending_len], predictions[0..pending_len]);
+                continue;
             }
             inkling.position(h.model, &h.scratch, &h.cache, best) catch |e| {
                 fin.message = @errorName(e);
                 h.cache.len = 0;
                 return;
             };
+            rounds += 1;
         }
         fin.reason = .length;
-        fin.stats = .{ .rounds = if (job.emitted.items.len > 0) @as(u64, @intCast(job.emitted.items.len)) - 1 else 0, .drafted = 0, .accepted = 0, .min_rows = 1, .prefill_seconds = prefill_s, .queued_seconds = queued_s };
+        fin.stats = .{ .rounds = rounds, .drafted = drafted, .accepted = accepted_total, .min_rows = 1, .prefill_seconds = prefill_s, .queued_seconds = queued_s };
         h.cache.len = 0;
     }
 };
@@ -415,7 +497,7 @@ pub fn longestFitting(model: *const inkling.Model, budget: u64, most: usize) usi
     return @min(most, avail / per);
 }
 
-pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usize, eos: u32, load_limit: u64) !*Host {
+pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usize, eos: u32, load_limit: u64, copy_drafts: bool) !*Host {
     const h = try gpa.create(Host);
     errdefer gpa.destroy(h);
     var cache = try inkling.Cache.init(model.device, &model.config, capacity);
@@ -434,6 +516,7 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
         .prefill = prefill,
         .capacity = capacity,
         .eos = eos,
+        .copy_drafts = copy_drafts,
         .info_ = .{
             .name = "inkling2-loop",
             .lanes = 1,

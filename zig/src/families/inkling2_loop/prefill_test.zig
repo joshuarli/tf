@@ -552,6 +552,88 @@ test "tiled dense projections match the original gemm" {
     }
 }
 
+
+test "dense projections match fp64" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    if (!device.tensorUnits()) return error.SkipZigTest;
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, @embedFile("kernels/prefill_gemm_mpp.metal"), mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const ref_lib = try mtl.Library.fromSource(device, legacyGemm, mtl.CompileOptions.mlx());
+    defer ref_lib.deinit();
+    const candidate = try mtl.Pipeline.init(device, lib, "i2p_gemm_mpp", false);
+    defer candidate.deinit();
+    const reference = try mtl.Pipeline.init(device, ref_lib, "i2p_gemm", false);
+    defer reference.deinit();
+    const shapes = [_][2]usize{ .{ 3072, 2304 }, .{ 384, 2304 }, .{ 24, 2304 }, .{ 1024, 2304 }, .{ 32, 2304 }, .{ 2304, 3072 }, .{ 128, 2304 }, .{ 64, 4608 }, .{ 2304, 64 }, .{ 200058, 2304 } };
+    for (shapes) |shape| {
+        const n = shape[0];
+        const k = shape[1];
+        const w = try device.buffer(n * k * 2, mtl.ResourceOptions.shared);
+        defer w.deinit();
+        const ws = w.slice(u16, n * k);
+        for (ws, 0..) |*v, i| v.* = @as(u16, @intCast(0x3e00 + ((i *% 37 + i / k *% 13) % 256))) | (if (i % 3 == 0) @as(u16, 0x8000) else 0);
+        for ([_]usize{ 1, 7, 35, 128, 512 }) |rows| {
+            const x = try device.buffer((rows * 2 + 1) * k * 4, mtl.ResourceOptions.shared);
+            defer x.deinit();
+            for (x.slice(f32, (rows * 2 + 1) * k), 0..) |*v, i| v.* = @as(f32, @floatFromInt(@as(i32, @intCast((i *% 17 + i / k *% 31) % 251)) - 125)) / 127.0;
+            const got = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared);
+            defer got.deinit();
+            const ref = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared);
+            defer ref.deinit();
+            @memset(got.slice(f32, rows * n), std.math.nan(f32));
+            @memset(ref.slice(f32, rows * n), std.math.nan(f32));
+            const args = GemmArgs{ .n = @intCast(n), .k = @intCast(k), .rows = @intCast(rows), .xs = 2, .xb = 1, .cap = if (n == 200058) 30 else 0 };
+            for ([_]mtl.Pipeline{ candidate, reference }, [_]mtl.Buffer{ got, ref }, [_]usize{ 16, 8 }) |pipe, output, bm| {
+                const cb = queue.commandBuffer();
+                const enc = cb.compute(.serial);
+                enc.setPipeline(pipe);
+                enc.setBuffer(x, 0, 0);
+                enc.setBuffer(w, 0, 1);
+                enc.setValue(args, 2);
+                enc.setBuffer(output, 0, 3);
+                enc.dispatchGroups(mtl.Size.of((n + (if (bm == 16) @as(usize, 31) else 63)) / (if (bm == 16) @as(usize, 32) else 64), (rows + bm - 1) / bm, 1), mtl.Size.of(if (bm == 16) 128 else 256, 1, 1));
+                enc.end();
+                cb.commit();
+                cb.wait();
+                if (cb.failure()) |msg| { std.debug.print("gemm: {s}\n", .{msg}); return error.GpuFailed; }
+            }
+            const actual = got.slice(f32, rows * n);
+            const expected = ref.slice(f32, rows * n);
+            const diff = maxAbsDiff(actual, expected);
+            std.debug.print("gemm n={d} k={d} rows={d} maxdiff={e}\n", .{ n, k, rows, diff });
+            const bound = @max(1.0, maxAbs(expected)) * 1.5e-5;
+            for (actual, expected) |a, e| try t.expect(std.math.isFinite(a) and std.math.isFinite(e) and @abs(a - e) <= bound);
+            const xs = x.slice(f32, (rows * 2 + 1) * k);
+            var worst: f64 = 0;
+            for (0..@min(rows, 5)) |ri| {
+                const row = if (rows <= 5) ri else ri * (rows - 1) / 4;
+                for (0..@min(n, 64)) |ni| {
+                    const col = if (n <= 64) ni else ni * (n - 1) / 63;
+                    var sum: f64 = 0;
+                    var magnitude: f64 = 0;
+                    for (0..k) |ki| {
+                        const bits: u32 = @as(u32, ws[col * k + ki]) << 16;
+                        const weight: f32 = @bitCast(bits);
+                        const product = @as(f64, xs[(1 + row * 2) * k + ki]) * @as(f64, weight);
+                        sum += product;
+                        magnitude += @abs(product);
+                    }
+                    const result = if (args.cap > 0) @as(f64, args.cap) * std.math.tanh(sum / @as(f64, args.cap)) else sum;
+                    const error_value = @abs(@as(f64, actual[row * n + col]) - result);
+                    const fp32_bound = 4.0 * @as(f64, @floatFromInt(k + 64)) * 0x1p-24 * magnitude + 8.0 * 0x1p-24 * @max(1.0, @abs(result));
+                    worst = @max(worst, error_value / @max(fp32_bound, 1e-30));
+                    try t.expect(error_value <= fp32_bound);
+                }
+            }
+            std.debug.print("gemm fp64 n={d} k={d} rows={d} worst_bound_ratio={e}\n", .{ n, k, rows, worst });
+        }
+    }
+}
+
 const ExpertArgs = extern struct { k: u32, n: u32, slots: u32, topk: u32, experts: u32, gate_cap: f32, up_cap: f32 };
 
 fn expertE4(code: u8) f64 {

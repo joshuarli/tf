@@ -80,6 +80,7 @@ pub const Pipes = struct {
     capexact: mtl.Pipeline,
     router: mtl.Pipeline,
     gemm: mtl.Pipeline,
+    gemm_mpp: ?mtl.Pipeline,
     pick: mtl.Pipeline,
     embed: mtl.Pipeline,
     rms: mtl.Pipeline,
@@ -112,6 +113,7 @@ pub const Pipes = struct {
     combine: mtl.Pipeline,
 
     pub fn deinit(p: *Pipes) void {
+        if (p.gemm_mpp) |pipe| pipe.deinit();
         inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "gemm", "pick", "gu_g_nv", "down_g_nv", "gu_g_mx", "down_g_mx", "expert_matrix_nv", "expert_matrix_mx", "moe_zero", "moe_count", "moe_offsets", "moe_sort", "embed", "rms", "gather", "mix", "mix4", "ctl", "clips", "clip", "conv", "cstore", "kv", "rel", "attn", "attn_tiled", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
     }
 };
@@ -263,6 +265,12 @@ pub const PrefillScratch = struct {
         errdefer s.pipes.router.deinit();
         s.pipes.gemm = try mtl.Pipeline.init(device, lib, "i2p_gemm", false);
         errdefer s.pipes.gemm.deinit();
+        s.pipes.gemm_mpp = if (device.tensorUnits()) blk: {
+            const mpp_lib = try mtl.Library.fromSource(device, kernels.prefill_gemm_mpp, opts);
+            defer mpp_lib.deinit();
+            break :blk try mtl.Pipeline.init(device, mpp_lib, "i2p_gemm_mpp", false);
+        } else null;
+        errdefer if (s.pipes.gemm_mpp) |pipe| pipe.deinit();
         s.pipes.pick = try mtl.Pipeline.init(device, lib, "i2p_routepick", false);
         errdefer s.pipes.pick.deinit();
         s.pipes.embed = try mtl.Pipeline.init(device, lib, "i2p_embed", false);
@@ -388,13 +396,25 @@ const Chunk = struct {
 
     fn lin(c: Chunk, w: Tensor, x: In, out: B) void {
         const m: usize = nrows(w);
-        c.setP(c.s.pipes.gemm, Gemm{ .n = @intCast(m), .k = @intCast(width(w)), .rows = c.n, .xs = x.xs, .xb = x.xb, .cap = 0 }, &.{ x.buf, t(w), A, out });
-        c.enc.dispatchGroups(mtl.Size.of((m + 63) / 64, (c.n + 31) / 32, 1), mtl.Size.of(256, 1, 1));
+        const args = Gemm{ .n = @intCast(m), .k = @intCast(width(w)), .rows = c.n, .xs = x.xs, .xb = x.xb, .cap = 0 };
+        if (c.s.pipes.gemm_mpp != null and m >= 384 and args.k >= 2304 and c.n >= 16) {
+            c.setP(c.s.pipes.gemm_mpp.?, args, &.{ x.buf, t(w), A, out });
+            c.enc.dispatchGroups(mtl.Size.of((m + 31) / 32, (c.n + 15) / 16, 1), mtl.Size.of(128, 1, 1));
+        } else {
+            c.setP(c.s.pipes.gemm, args, &.{ x.buf, t(w), A, out });
+            c.enc.dispatchGroups(mtl.Size.of((m + 63) / 64, (c.n + 31) / 32, 1), mtl.Size.of(256, 1, 1));
+        }
     }
 
     fn headModel(c: Chunk, w: Tensor, x: In, out: B, vocab: u32) void {
-        c.setP(c.s.pipes.gemm, Gemm{ .n = vocab, .k = @intCast(width(w)), .rows = c.n, .xs = x.xs, .xb = x.xb, .cap = c.m.config.text.logit_cap }, &.{ x.buf, t(w), A, out });
-        c.enc.dispatchGroups(mtl.Size.of((vocab + 63) / 64, (c.n + 31) / 32, 1), mtl.Size.of(256, 1, 1));
+        const args = Gemm{ .n = vocab, .k = @intCast(width(w)), .rows = c.n, .xs = x.xs, .xb = x.xb, .cap = c.m.config.text.logit_cap };
+        if (c.s.pipes.gemm_mpp != null and c.n >= 16 and args.k >= 2304) {
+            c.setP(c.s.pipes.gemm_mpp.?, args, &.{ x.buf, t(w), A, out });
+            c.enc.dispatchGroups(mtl.Size.of((vocab + 31) / 32, (c.n + 15) / 16, 1), mtl.Size.of(128, 1, 1));
+        } else {
+            c.setP(c.s.pipes.gemm, args, &.{ x.buf, t(w), A, out });
+            c.enc.dispatchGroups(mtl.Size.of((vocab + 63) / 64, (c.n + 31) / 32, 1), mtl.Size.of(256, 1, 1));
+        }
     }
 
     fn headModelLast(c: Chunk, w: Tensor, xoff: B, out: B, vocab: u32) void {

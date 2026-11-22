@@ -145,6 +145,7 @@ pub const Server = struct {
     markers: reply_text.Markers = reply_text.think_markers,
     /// Replies are messages to recipients (`to=self` reasoning, `to=user` answer, a tool's name a call).
     recipients: bool = false,
+    inkling: bool = false,
     close_id: ?u32 = null, // the close marker's own token, when the marker is one token
     chunks: chunk_plan.Plan = .{},
     effort_levels: []const []const u8 = &.{},
@@ -233,6 +234,7 @@ pub const Server = struct {
         if (minimax) srv.markers = reply_text.mm_markers;
         srv.close_id = text.tokenId(srv.markers.close);
         srv.recipients = recipient_reply.detect(text);
+        srv.inkling = @import("inkling_reply.zig").detect(text);
         const source = text.templateSource();
         srv.effort_levels = try fields.effortLevels(a, source);
         if (srv.recipients and srv.effort_levels.len > 0) srv.off_effort = fields.coerceEffort("minimal", srv.effort_levels);
@@ -354,10 +356,11 @@ pub const Server = struct {
         const required = if (f.get("tool_call_required")) |r| r.truthy() else false;
         const one_call = if (f.get("tool_call_single")) |x| x.truthy() else false;
         const all = has_tools and !required and (tool_grammar.autoAllEnv() catch return cx.fail(.server, "invalid TF_DSV41_TOOL_GRAMMAR: expected 0 or 1", .{}));
+        if (has_tools and required and srv.inkling) return cx.refuse("Inkling does not support grammar-constrained tool_choice required or named functions; send auto or none");
         if (has_tools and required) {
             if (!srv.info.capability(.structures)) return cx.fail(.request, "backend '{s}' cannot enforce tool_choice \"required\" or a named function: it has no token grammar support; send \"auto\" or \"none\"", .{srv.backendName()});
             request.structure = try tool_grammar.structure(srv, cx, tools, !one_call, thinking);
-        } else if (has_tools and srv.info.capability(.structures) and tool_grammar.autoWanted(tools, all) and srv.grammarCompiler() != null) {
+        } else if (has_tools and !srv.inkling and srv.info.capability(.structures) and tool_grammar.autoWanted(tools, all) and srv.grammarCompiler() != null) {
             // auto with a strict tool (any, TENSORFOLD_TOOL_GRAMMAR=1): text or calls; no grammar library, no grammar
             request.structure = try tool_grammar.optionalStructure(srv, cx, tools, all, !one_call, thinking);
         }

@@ -440,7 +440,7 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
             .context_window = @intCast(capacity),
             .context_fitted = true,
             .greedy_only = true,
-            .reasoning = false,
+            .reasoning = true,
             .vision = .{
                 .ctx = h,
                 .prepare = visionPrepare,

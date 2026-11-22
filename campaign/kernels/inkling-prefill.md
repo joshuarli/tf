@@ -560,3 +560,18 @@ candidate the same plus P5 `f9b0bfb59`. The prefill-mode parity gate on the cand
 Per-round ratios 1.202, 1.161, 1.163, 1.263, 1.193, 1.194; geometric mean 1.196 (95% t-interval 1.158-1.235).
 Verdict: keep. The profile's larger saving at base 4992 (469 -> 93 ms) suggests a larger gain at longer prompts;
 that is not yet measured end to end.
+
+## Chunk size
+
+With P4, E1 and P5 merged, larger chunks raise expert occupancy (more experts reach the matrix path) and
+enlarge every dense GEMM. Runner prefill on `.work/tmp/ids-1k.json`, one run each on main b9336a1ea: chunk 128
+184 tok/s, 256 225, 512 348, 1024 361 (peak charged ~21 GB throughout). Six base-candidate-base rounds of 128
+against 512 on the same binary (protocol as above): medians 241.4 and 337.9 tok/s, per-round ratios 1.418, 1.426,
+1.370, 1.429, 1.420, 1.445, geometric mean 1.418 (95% t-interval 1.391-1.445). The prefill-mode parity gate at
+`PREFILL_CHUNK=512` reports 14 within contract, 2 explained, 0 unexplained. `default_chunk` is now 512.
+
+Served (`campaign/runs/2026-11-22/inkling2-mini-ar-1024-080205.jsonl`, two interleaved pairs against main
+f6d8f83f0): TTFT on code-1024 (1,349 tokens) 5.65/5.97 -> 4.04/4.14 s, prose-1024 5.23/5.12 -> 3.70/3.62 s,
+structured-1024 4.69/4.64 -> 3.59/3.42 s; greedy outputs byte-identical; server peak device bytes 3.99 -> 4.54 GB
+(the prefill scratch scales with the chunk, mostly its all-rows logits buffer). One baseline trial was marked
+invalid by the harness; the rest are valid at the busy-host limits.

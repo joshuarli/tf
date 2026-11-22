@@ -63,7 +63,9 @@ metal-logits: $(INKLING_PARITY_HISTORIES)
 			--tokens $(METAL_LOGITS)/$$name.tokens.json --policy $(ARITHMETIC_POLICY) --vocab $(VOCAB); \
 	done
 
-$(REPORT): $(INKLING_PARITY_HISTORIES) $(COMPARE) $(INKLING_ORACLE) | verify-oracle metal-logits
+# metal-logits is phony and reuses receipts that still match the runner, so the comparison reruns on every
+# invocation and the report always describes the bins the current runner produced.
+$(REPORT): $(INKLING_PARITY_HISTORIES) $(COMPARE) $(INKLING_ORACLE) metal-logits | verify-oracle
 	@test -n "$(HEAVY_PY)" || { echo "missing campaign/heavy.py: every model load runs inside its ceiling" >&2; exit 2; }
 	$(REF_UV) python $(COMPARE) --histories $(INKLING_PARITY_HISTORIES) --ref-dir $(REF_LOGITS) --metal-dir $(METAL_LOGITS) \
 		--report $(REPORT) --contract $(GATE_CONTRACT) --vocab $(VOCAB) --exceptions $(GATE_EXCEPTIONS) \

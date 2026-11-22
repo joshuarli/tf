@@ -5,26 +5,27 @@
 The shootout is in progress. The following state-size calculation is independent
 of the remaining timing and fidelity trials.
 
-The first completed cell is code at 1,349 prompt tokens. Values are medians
-and ranges across three pairs; peak memory is the largest charged value.
-Both engines' outputs were stable across the three runs. Their first
-different generated index was 204 in each pair. Three pairs and differing
-engine configurations do not establish a general performance verdict.
+The completed cells are code at 1,349 prompt tokens and prose at 1,154.
+Values are medians and ranges across three pairs; peak memory is the largest
+charged value. Both engines' outputs were stable across the three runs. The
+first different generated indices were 204 for code and 323 for prose in
+every pair. Three pairs and differing engine configurations do not establish
+a general performance verdict.
 
 | Engine | TTFT seconds | Prefill tok/s | Decode tok/s | Peak charged GB |
 | --- | ---: | ---: | ---: | ---: |
-| TensorFold | 4.039 (3.356–4.127) | 333.99 (326.90–402.01) | 38.77 (38.47–39.08) | 23.0 |
-| nanoattention | 2.671 (2.298–3.276) | 505.11 (411.81–587.10) | 40.00 (38.83–40.16) | 24.5 |
+| TensorFold, code | 4.039 (3.356–4.127) | 333.99 (326.90–402.01) | 38.77 (38.47–39.08) | 23.0 |
+| nanoattention, code | 2.671 (2.298–3.276) | 505.11 (411.81–587.10) | 40.00 (38.83–40.16) | 24.5 |
+| TensorFold, prose | 2.778 (2.771–2.782) | 415.37 (414.77–416.46) | 39.08 (39.00–39.11) | 23.1 |
+| nanoattention, prose | 2.028 (1.991–2.048) | 569.02 (563.61–579.63) | 40.38 (40.25–40.84) | 24.6 |
 
 The [gated records](../comparators/nanoattention/runs/shootout-20261122-gated.jsonl)
 retain successful and rejected attempts. The remaining cells and oracle
 comparison are not yet complete.
 
-The 1,154-token prose cell has one completed pair, with its first generated
-difference at index 323. The second nanoattention trial passed. Its TensorFold
-partner completed but the driver redacted its entire receipt and exited 1,
-so that trial was discarded. The driver now redacts individual diagnostic
-lines. These partial trials do not establish a cell result.
+The initial second prose TensorFold trial completed but the driver redacted
+its entire receipt and exited 1, so that trial was discarded. The driver
+now redacts individual diagnostic lines, and its replacement trial passed.
 
 The TensorFold raw-token runner was built from commit `86ca89451d882fd99bbfad7c7f9a86461e7c59e3`
 with Zig 0.17.1 and `-Dcpu=apple_m1`. Its SHA-256 is

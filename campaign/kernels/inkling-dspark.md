@@ -127,3 +127,71 @@ clear on code and structured and marginal on prose. Both gains grow with any cut
 The decision rule is unchanged: beat both ar and copy drafts on at least code and prose. On the correct
 comparator it gives GO for a scoped native implementation at width 4. Native acceptance and drafter cost must
 be measured before any keep decision.
+
+## Native drafter
+
+The Metal drafter consumes captured tap rows and constructs the normalized anchor embedding from its token ID. It
+retains per-layer context keys and values across blocks and resets the Markov recurrence for each block. The f32 computation reads BF16
+weights from `mtp.safetensors` and the target embedding, embedding norm, and unembedding tensors. The full trained
+block has eight rows even when the requested width is four.
+
+MLX 0.32.4 enables TF32 by default (`mlx/utils.h:225-227`), including float32 matrix products on the NAX path
+(`mlx/backend/metal/matmul.cpp:964-966`). The reference script sets `MLX_ENABLE_TF32=0` before importing MLX. On the
+first captured query projection, the default MLX output was 0.33485273, while native f32 and an independent f64 dot
+product gave 0.33504700 and 0.33504684. MLX without TF32 gave 0.33504700.
+
+The f32 fixture comparison covered 65 blocks from code, prose, and structured chat prompts, including 35 width-four
+and 25 width-eight blocks. Every greedy proposal matched. The maximum absolute logit error was 0.000114441, and the
+maximum error divided by `max(abs(reference), 1)` was 0.000087679. The test bounds that scaled error by 0.001 for
+every logit and requires exact proposal IDs. The floor of one gives near-zero logits an absolute tolerance, while
+the relative component scales for larger logits. The observed maximum remains more than ten times below the bound.
+
+The binary fixture starts with `DSPARK01` and a little-endian u32 group count. Each group begins with a u32 block
+count. Each block contains u32 anchor, width, context-row count, and vocabulary size, followed by f32 packed context
+rows `[rows, 4, 2304]`, f32 proposal logits `[width-1, vocab]`, and i32 proposal IDs `[width-1]`. Groups reset the
+context cache. The first block holds the prompt context; later blocks hold the target rows accepted since the prior
+round. The fixture is disposable and is not committed.
+
+To reproduce, set `MODEL` to the checkpoint directory, `MLX_VLM` to the pinned source checkout, and `MLX_PYTHON`
+to the pinned virtual environment's Python. Set `TMPDIR=$PWD/.work/tmp`, `HF_HOME=$PWD/.work/tmp/hf`,
+`XDG_CACHE_HOME=$PWD/.work/tmp/cache`, `PYTHONDONTWRITEBYTECODE=1`, `HF_HUB_OFFLINE=1`, `INKLING_LOAD_LIMIT_GB=26`,
+and `PYTHONPATH=$MLX_VLM`.
+Then run:
+
+```sh
+set -o pipefail
+python3 campaign/heavy.py -- "$MLX_PYTHON" campaign/comparators/mlx-vlm/dspark_ref.py "$MODEL" .work/tmp/dspark.bin
+TF_INKLING2_LOOP_DIR="$MODEL" TF_INKLING2_DSPARK_FIXTURE="$PWD/.work/tmp/dspark.bin" \
+  python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1 2>&1 | tee .work/tmp/dspark-test.log
+```
+
+Use Zig 0.17.1 with `PATH=/opt/homebrew/bin:$PATH` and the campaign's shared `ZIG_GLOBAL_CACHE_DIR`. The test skips
+the fixture comparison if `TF_INKLING2_DSPARK_FIXTURE` is absent.
+
+For timing, compile and run the checkpoint test first. Set `DSPARK_TEST` to the last `.zig-cache/o/.../test`
+executable named in `.work/tmp/dspark-test.log`. Run the following commands after both admission checks pass:
+
+```sh
+GPU_GATE_MAX_GPU_PCT=35 GPU_GATE_MAX_UTIL_PCT=35 gpu-gate-ready -1
+perf-gate-ready
+TF_INKLING2_LOOP_DIR="$MODEL" TF_INKLING2_DSPARK_FIXTURE="$PWD/.work/tmp/dspark.bin" \
+  TF_INKLING2_DSPARK_TIMING=1 python3 campaign/heavy.py -- "$DSPARK_TEST"
+perf-gate-ready -1
+```
+
+The timing path warms each width for three rounds, then reports the median and range of 21 rounds with a fixed
+context and one new target row. It includes dispatch, synchronization, and per-round buffer allocation. The same
+model process measures both widths.
+
+On Apple M5 Max with macOS 27.2, the admitted run used 1,349 cached context rows, one new context row, the same
+checkpoint and MLX-VLM revision as above, and a `.fast` Zig build. The GPU and host admission checks passed before
+the run, and the host check passed afterward. The heavy guard reported a peak charged 20.4 GB against the 28 GB cap.
+
+| Width | Median of 21 | Range | Compared with 0.814 ms | Compared with 3 ms |
+| ---: | ---: | ---: | ---: | ---: |
+| 4 | 16.675 ms | 16.476–16.841 ms | 20.49× | 5.56× |
+| 8 | 29.747 ms | 29.541–30.049 ms | 36.54× | 9.92× |
+
+These measured round costs exceed both projection assumptions. They do not establish a served decoding rate or a
+keep decision for native speculation. An earlier admitted run using the identical worktree copy of `heavy.py` gave
+16.769 ms and 29.820 ms medians for widths four and eight respectively.

@@ -102,6 +102,8 @@ pub const Pipes = struct {
     down_g_nv: mtl.Pipeline,
     gu_g_mx: mtl.Pipeline,
     down_g_mx: mtl.Pipeline,
+    expert_matrix_nv: mtl.Pipeline,
+    expert_matrix_mx: mtl.Pipeline,
     moe_zero: mtl.Pipeline,
     moe_count: mtl.Pipeline,
     moe_offsets: mtl.Pipeline,
@@ -109,7 +111,7 @@ pub const Pipes = struct {
     combine: mtl.Pipeline,
 
     pub fn deinit(p: *Pipes) void {
-        inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "gemm", "pick", "gu_g_nv", "down_g_nv", "gu_g_mx", "down_g_mx", "moe_zero", "moe_count", "moe_offsets", "moe_sort", "embed", "rms", "gather", "mix", "mix4", "ctl", "clips", "clip", "conv", "cstore", "kv", "rel", "attn", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
+        inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "gemm", "pick", "gu_g_nv", "down_g_nv", "gu_g_mx", "down_g_mx", "expert_matrix_nv", "expert_matrix_mx", "moe_zero", "moe_count", "moe_offsets", "moe_sort", "embed", "rms", "gather", "mix", "mix4", "ctl", "clips", "clip", "conv", "cstore", "kv", "rel", "attn", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
     }
 };
 
@@ -298,6 +300,10 @@ pub const PrefillScratch = struct {
         errdefer s.pipes.gu_g_mx.deinit();
         s.pipes.down_g_mx = try mtl.Pipeline.init(device, libmx, "i2p_down_grouped", false);
         errdefer s.pipes.down_g_mx.deinit();
+        s.pipes.expert_matrix_nv = try mtl.Pipeline.init(device, lib, "i2p_expert_matrix", false);
+        errdefer s.pipes.expert_matrix_nv.deinit();
+        s.pipes.expert_matrix_mx = try mtl.Pipeline.init(device, libmx, "i2p_expert_matrix", false);
+        errdefer s.pipes.expert_matrix_mx.deinit();
         s.pipes.moe_zero = try mtl.Pipeline.init(device, lib, "i2p_moe_zero", false);
         errdefer s.pipes.moe_zero.deinit();
         s.pipes.moe_count = try mtl.Pipeline.init(device, lib, "i2p_moe_count", false);
@@ -567,10 +573,15 @@ const Chunk = struct {
         const codes = b(if (lay.mxfp8) m.t256 else m.t16);
         const gu = if (lay.mxfp8) s.pipes.gu_g_mx else s.pipes.gu_g_nv;
         const down = if (lay.mxfp8) s.pipes.down_g_mx else s.pipes.down_g_nv;
+        const matrix = if (lay.mxfp8) s.pipes.expert_matrix_mx else s.pipes.expert_matrix_nv;
         c.setP(gu, Moeg{ .k = c.h, .n = inter, .slots = slots, .topk = K, .experts = E, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes });
         c.enc.dispatchGroups(mtl.Size.of(inter, E, 1), mtl.Size.of(32, 1, 1));
+        c.setP(matrix, Moeg{ .k = c.h, .n = inter, .slots = slots, .topk = K, .experts = E, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes });
+        c.enc.dispatchGroups(mtl.Size.of((inter * 2 + 63) / 64, E, (c.n + 31) / 32), mtl.Size.of(256, 1, 1));
         c.setP(down, Moeg{ .k = inter, .n = c.h, .slots = slots, .topk = K, .experts = E, .gate_cap = 0, .up_cap = 0 }, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.moe_off), b(s.moe_sorted), A, b(s.down), codes });
         c.enc.dispatchGroups(mtl.Size.of(c.h, E, 1), mtl.Size.of(32, 1, 1));
+        c.setP(matrix, Moeg{ .k = inter, .n = c.h, .slots = slots, .topk = K, .experts = E, .gate_cap = 0, .up_cap = 0 }, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.moe_off), b(s.moe_sorted), A, b(s.down), codes });
+        c.enc.dispatchGroups(mtl.Size.of((c.h + 63) / 64, E, (c.n + 31) / 32), mtl.Size.of(256, 1, 1));
         c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = K, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
         c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
     }

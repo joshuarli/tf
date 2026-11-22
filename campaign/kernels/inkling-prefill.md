@@ -638,3 +638,49 @@ and zero unexplained. The comparator observed `harbour` onset at 557 and
 `cells_code` onset at 688, while the existing exception records name 556 and
 304. Those recorded explanations are evidence, not a full qualification of
 this candidate. Decode-mode parity was not changed or rerun.
+
+## Guarded two-half expert experiment
+
+The parent measured the float TensorOps candidate at 1.018× end to end over
+six rounds, with a 95% interval of 1.014–1.022. A follow-up tested two half
+activation operands with float accumulation. NVFP4 used the exact half
+weight. MXFP8 used the half E4M3 value and applied its power-of-two scale
+outside the half operand for each 32-value block. A threadgroup fell back to
+the float operation when any activation was non-finite, exceeded 65,504, or
+could not be reconstructed exactly from the two halves. MXFP8 also fell back
+for incompatible cooperative layouts and extreme or non-finite scales.
+
+The split is not exact for every float: 2^-30 converts to zero in both halves,
+so the proposed relative error bound cannot hold without a fallback. For an
+admitted exact split the representation error is zero. Two half products per
+term add more float rounding steps than the original dot product. Under finite,
+non-underflowing intermediate arithmetic, a conservative sum bound must
+account for up to `2*k` products and, for MXFP8, one scale accumulation per
+32-value block. The existing `gamma_k` bound does not follow from the split
+alone. The temporary family test nevertheless passed that existing FP64 bound
+for both formats and all requested occupancies, and did not exceed the legacy
+kernel's worst fixture error. It exercised the float fallback with 65,520,
+2^-30 and infinity. A separate half × half TensorOps fixture preserved
+residuals 2^-23 and 2^-24. A host representation check confirmed fallback for
+the smallest float32 normal and subnormal values; float32 subnormal behavior
+on the GPU was not independently established.
+
+Five rotated split timeline profiles used the same 5,265-token input,
+chunk 512 and base 4096. The legacy runner selected `i2p_expert_matrix`; the
+float runner was the prior TensorOps candidate. Each run used `heavy.py`, with
+host-load checks immediately before and after. All returned zero, peak charged
+memory was 21.3 GB, and the worst pressure level was 1. Times below are the
+median and full range of summed GPU time in milliseconds:
+
+| Variant | Expert kernel | Expert plus grouped kernels |
+| --- | ---: | ---: |
+| Legacy matrix | 733.817 (690.927–752.105) | 877.505 (827.152–899.998) |
+| Float TensorOps | 691.272 (661.501–707.850) | 831.668 (797.320–853.039) |
+| Guarded half split | 1,253.466 (1,244.227–1,287.202) | 1,388.713 (1,377.812–1,425.117) |
+
+The guarded split is slower than both comparisons, with non-overlapping ranges.
+The result includes guarding, fallback, and MXFP8 scale handling; it is not a
+measurement of an unguarded split. Path usage was not counted. The split
+kernel and its temporary tests were discarded, and no split parity run was
+made. The earlier float TensorOps implementation remains on the lane for the
+parent's decision.

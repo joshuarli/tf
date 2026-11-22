@@ -65,6 +65,7 @@ test {
     _ = @import("reply_text.zig");
     _ = @import("reply_incremental_test.zig");
     _ = @import("recipient_reply_test.zig");
+    _ = @import("inkling_reply_test.zig");
     _ = @import("recipient_cut_test.zig");
     _ = @import("tool_parse.zig");
     _ = @import("tool_lfm2.zig");

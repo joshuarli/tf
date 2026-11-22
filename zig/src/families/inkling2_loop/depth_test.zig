@@ -148,14 +148,18 @@ test "published depth and rewound pass banks match packed_rows normalization bit
     const enc = cb.compute(.serial);
     const row = width * 4;
     var result: usize = 0;
+    norm(enc, rms, raw, 12 * row, blocks, 0, 1);
     for (0..3) |pass| {
         if (pass > 0) {
-            for (1..3) |j| copy(enc, cp, blocks, j * row, bank, (j - 1) * row);
-            norm(enc, rms, raw, ((pass - 1) * 4 + 3) * row, bank, 2 * row, 1);
+            copy(enc, cp, blocks, 2 * row, bank, 0);
+            norm(enc, rms, raw, ((pass - 1) * 4 + 3) * row, bank, row, 1);
         }
         for (0..3) |j| {
-            norm(enc, rms, raw, (pass * 4 + j) * row, blocks, j * row, 1);
-            for (0..j + 1) |k| copy(enc, cp, raw, (pass * 4 + j - k) * row, packed_rows, k * row);
+            if (j > 0) norm(enc, rms, raw, (pass * 4 + j - 1) * row, blocks, j * row, 1);
+            for (0..j + 1) |k| {
+                const raw_index = if (j == k) 12 else pass * 4 + j - k - 1;
+                copy(enc, cp, raw, raw_index * row, packed_rows, k * row);
+            }
             copy(enc, cp, raw, (pass * 4 + 3) * row, packed_rows, (j + 1) * row);
             norm(enc, rms, packed_rows, 0, normed, 0, j + 2);
             norm(enc, rms, raw, (pass * 4 + 3) * row, current, 0, 1);
@@ -170,16 +174,16 @@ test "published depth and rewound pass banks match packed_rows normalization bit
             result += 1;
         }
         if (pass > 0) {
-            for (0..2) |j| copy(enc, cp, raw, ((pass - 1) * 4 + 2 - j) * row, packed_rows, j * row);
-            copy(enc, cp, raw, ((pass - 1) * 4 + 3) * row, packed_rows, 2 * row);
-            norm(enc, rms, packed_rows, 0, normed, 0, 3);
+            copy(enc, cp, raw, ((pass - 1) * 4 + 1) * row, packed_rows, 0);
+            copy(enc, cp, raw, ((pass - 1) * 4 + 3) * row, packed_rows, row);
+            norm(enc, rms, packed_rows, 0, normed, 0, 2);
             enc.setPipeline(old4); enc.setBuffer(normed, 0, 0);
             for (0..4) |j| enc.setBuffer(query, j * row, j + 1);
-            enc.setValue(OldMix{ .depth = 3 }, 5); enc.setBuffer(want, result * 4 * row, 6);
+            enc.setValue(OldMix{ .depth = 2 }, 5); enc.setBuffer(want, result * 4 * row, 6);
             enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
             enc.setPipeline(mix4); enc.setBuffer(bank, 0, 0);
             for (0..4) |j| enc.setBuffer(query, j * row, j + 1);
-            enc.setValue(Mix{ .depth = 3, .indices = .{ 1, 0, 0, 0, 0 } }, 5); enc.setBuffer(got, result * 4 * row, 6); enc.setBuffer(bank, 2 * row, 7);
+            enc.setValue(Mix{ .depth = 2, .indices = .{ 0, 0, 0, 0, 0 } }, 5); enc.setBuffer(got, result * 4 * row, 6); enc.setBuffer(bank, row, 7);
             enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
             result += 1;
         }

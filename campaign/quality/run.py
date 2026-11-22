@@ -139,8 +139,9 @@ def run(args) -> int:
             raise SystemExit(f"{library} is missing; run `make -C campaign quality-grammar` to build libtfgrammar "
                              "from the pinned xgrammar checkout")
     before = harness.conditions()
-    if before["pressure_reasons"]:
-        raise SystemExit(f"host is not in a measurable state: {before['pressure_reasons']}")
+    blocking = quality_blockers(before["pressure_reasons"])
+    if blocking:
+        raise SystemExit(f"host cannot hold a quality run: {blocking}")
     stamp = dt.datetime.now(dt.timezone.utc)
     run_id = args.run_id or f"{args.model}-{args.set}-{stamp.strftime('%Y%m%dT%H%M%SZ')}"
     run_dir = RESULTS / run_id
@@ -233,6 +234,12 @@ def run(args) -> int:
           ", ".join(f"{kind} {block['passed']}/{block['cases']}" for kind, block in sorted(kinds.items())) +
           f"; wrote {out}")
     return 0 if record["completion"]["complete"] else 1
+
+
+def quality_blockers(reasons: list[str]) -> list[str]:
+    """The host conditions that refuse a quality run. Greedy outputs do not depend on GPU timing, so other
+    GPU users are recorded but do not refuse it; memory pressure, which can stop the server, does."""
+    return [reason for reason in reasons if not reason.startswith("gpu-gate-ready")]
 
 
 def main() -> int:

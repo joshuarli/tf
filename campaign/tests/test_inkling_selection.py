@@ -143,21 +143,35 @@ class ServedIdentity(unittest.TestCase):
 
 
 class ModelModes(unittest.TestCase):
-    def test_inkling_refuses_copy_and_drafter_with_a_reason(self):
-        for mode in ("copy", "drafter"):
-            reason = harness.model_mode_problem("inkling-2-mini", mode)
-            self.assertIsNotNone(reason, f"{mode} must be refused for Inkling")
-            self.assertTrue(reason)
+    def test_inkling_refuses_the_drafter_with_a_reason_and_serves_copy_drafts(self):
+        reason = harness.model_mode_problem("inkling-2-mini", "drafter")
+        self.assertTrue(reason, "drafter must be refused for Inkling")
+        self.assertIsNone(harness.model_mode_problem("inkling-2-mini", "copy"))
+        self.assertEqual(harness.copy_draft_env("inkling-2-mini"), {"INKLING_COPY_DRAFTS": "1"})
+        self.assertEqual(harness.copy_draft_env("flint-int4"), {})
 
     def test_inkling_serves_ar(self):
         self.assertIsNone(harness.model_mode_problem("inkling-2-mini", "ar"))
-        self.assertEqual(harness.default_serve_args("inkling-2-mini"),
-                         ["--no-drafts", "--temperature", "0", "--context", "32768"])
+        self.assertEqual(harness.default_serve_args("inkling-2-mini"), ["--no-drafts"])
+
+    def test_every_inkling_server_gets_the_context_cap_whatever_its_caller_passes(self):
+        from unittest import mock
+        with mock.patch.object(harness, "model_key_for_dir", lambda path: "inkling-2-mini"):
+            for extra in ([], ["--no-drafts"]):
+                server = harness.Server(Path("bin"), Path("model"), extra, 2, Path("log"), {"INKLING_COPY_DRAFTS": "1"})
+                server.port = 1
+                argv = server.argv
+                self.assertEqual(argv[argv.index("--context") + 1], "32768")
+                self.assertEqual(argv[argv.index("--temperature") + 1], "0")
+                self.assertEqual(server.env["INKLING_COPY_DRAFTS"], "1")
+        with mock.patch.object(harness, "model_key_for_dir", lambda path: None):
+            self.assertNotIn("--context", harness.Server(Path("bin"), Path("model"), [], 2, Path("log")).extra_args)
 
     def test_flint_is_unchanged(self):
         self.assertIsNone(harness.model_mode_problem("flint-int4", "ar"))
         self.assertIsNone(harness.model_mode_problem("flint-int4", "copy"))
         self.assertEqual(harness.default_serve_args("flint-int4"), [])
+        self.assertEqual(harness.model_serve_args("flint-int4"), [])
 
 
 class QualityHostConditions(unittest.TestCase):

@@ -342,7 +342,8 @@ def run(args) -> int:
                 server_args = list(flags) + (["--drafter", str(drafter)] if drafter else [])
                 log_path = harness.TMP / f"bench-{run_id}-{cell}-{args.mode}-{pair}-{role}.log"
                 try:
-                    with harness.Server(binary, model, server_args, cache_gib, log_path) as server:
+                    env = harness.copy_draft_env(key) if copy_drafts else {}
+                    with harness.Server(binary, model, server_args, cache_gib, log_path, env) as server:
                         served = server.models()
                         if not served:
                             raise RuntimeError("server listed no model id")

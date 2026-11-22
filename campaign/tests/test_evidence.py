@@ -726,6 +726,20 @@ class PiServerIdentity(unittest.TestCase):
         self.assertEqual([model["id"] for model in provider["models"]], ["flint-int4@3b93f9053b53"])
         self.assertNotIn("127.0.0.1:8888", json.dumps(rendered))
 
+    def test_a_served_context_bounds_the_pi_window_and_output_budget(self):
+        template = CAMPAIGN / "pi" / "agent" / "models.json"
+        context = pi_run.served_context(["serve", "--no-drafts", "--context", "32768"])
+        model = pi_run.render_models(template, "http://127.0.0.1:1", "m", context)["providers"]["tensorfold"]["models"][0]
+        self.assertEqual(model["contextWindow"], 32768)
+        self.assertLess(model["maxTokens"] + 1800, 32768)
+
+    def test_a_task_whose_last_turn_errored_is_not_completed(self):
+        events = [{"type": "turn_end", "message": {"errorMessage": "context length exceeded", "stopReason": "error"}},
+                  {"type": "agent_end"}]
+        self.assertFalse(pi_run.summarize(events)["completed"])
+        events[0]["message"] = {"usage": {"output": 3}}
+        self.assertTrue(pi_run.summarize(events)["completed"])
+
 
 class Memory(unittest.TestCase):
     def record(self, *, peak, lifetime, samples):

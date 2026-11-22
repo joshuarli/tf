@@ -16,16 +16,22 @@ COMPARE ?= $(PARITY_DIR)compare.py
 PROVENANCE ?= $(PARITY_DIR)provenance.py
 GATE_EXCEPTIONS ?= $(PARITY_DIR)gate_exceptions.json
 GATE_CONTRACT ?= f32-vs-f32
-ARITHMETIC_POLICY ?= f32-activations
+# The runner path under test: `logits` runs one position at a time (the decode kernels); `prefill` runs the
+# chunked prefill kernels with PREFILL_CHUNK rows a chunk. The mode is part of the receipt's policy string,
+# so a bin from one path is never reused as the other's.
+RUNNER_MODE ?= logits
+PREFILL_CHUNK ?= 128
+RUNNER_ARGS = $(if $(filter prefill,$(RUNNER_MODE)),prefill $(PREFILL_CHUNK),logits)
+ARITHMETIC_POLICY ?= f32-activations$(if $(filter prefill,$(RUNNER_MODE)),+prefill-$(PREFILL_CHUNK))
 INKLING_ORACLE ?= $(PARITY_DIR)oracle.py
 INKLING_PARITY_HISTORIES ?= $(PARITY_DIR)histories.json
 WEIGHTS_ROOT ?= $(HOME)/models
 INKLING_DIR ?= $(WEIGHTS_ROOT)/Inkling-2-Mini@ed40e7da625f
-REPORT ?= $(PARITY_DIR)report.md
+REPORT ?= $(PARITY_DIR)report$(if $(filter prefill,$(RUNNER_MODE)),-prefill).md
 REF_LOGITS ?= $(WORK)/parity/inkling2-mini/ref
 # Lane-scoped by default so concurrent lanes never share candidate bins.
 LANE ?= $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo local)
-METAL_LOGITS ?= $(WORK)/parity/inkling2-mini/metal-$(subst /,_,$(LANE))
+METAL_LOGITS ?= $(WORK)/parity/inkling2-mini/metal-$(subst /,_,$(LANE))$(if $(filter prefill,$(RUNNER_MODE)),-prefill-$(PREFILL_CHUNK))
 RUNNER ?= $(TREE)/zig-out/bin/tf-inkling2-loop-run
 VOCAB ?= 200058
 
@@ -52,7 +58,7 @@ metal-logits: $(INKLING_PARITY_HISTORIES)
 			--tokens $(METAL_LOGITS)/$$name.tokens.json --policy $(ARITHMETIC_POLICY) --vocab $(VOCAB); then \
 			continue; \
 		fi; \
-		python3 $(HEAVY_PY) -- $(RUNNER) $(INKLING_DIR) $(METAL_LOGITS)/$$name.tokens.json logits $(METAL_LOGITS)/$$name.bin; \
+		python3 $(HEAVY_PY) -- $(RUNNER) $(INKLING_DIR) $(METAL_LOGITS)/$$name.tokens.json $(RUNNER_ARGS) $(METAL_LOGITS)/$$name.bin; \
 		python3 $(PROVENANCE) write --output $(METAL_LOGITS)/$$name.bin --runner $(RUNNER) --model $(INKLING_DIR) \
 			--tokens $(METAL_LOGITS)/$$name.tokens.json --policy $(ARITHMETIC_POLICY) --vocab $(VOCAB); \
 	done

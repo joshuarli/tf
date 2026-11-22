@@ -53,5 +53,5 @@ test "rollback preserves local window and convolution rings" {
         max_diff = @max(max_diff, @abs(lhs - rhs));
     }
     std.debug.print("verify rollback max diff {e}, max abs {e}\n", .{ max_diff, max_value });
-    try std.testing.expect(max_diff <= 1.5e-5 * @max(1, max_value));
+    try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(y), std.mem.sliceAsBytes(x));
 }

@@ -1,0 +1,13 @@
+[project]
+name = "inkling-comparator-mlx-vlm"
+version = "0.1.0"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+    "mlx-vlm",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+mlx-vlm = { path = "../../../../../src/mlx-vlm@f1618d6d52be/mlx-vlm-f1618d6d52be4ef25d3fe65270f7528a59c55df3.tar.gz" }

@@ -2,6 +2,30 @@
   "schema_version": 1,
   "inputs": [
     {
+      "name": "tokenspeed/tokenspeed-947b25bc92d794f6127f6ae7fbdfdf1aaf3f6ba2.tar.gz",
+      "version": "947b25bc92d794f6127f6ae7fbdfdf1aaf3f6ba2",
+      "sha256": "ea92495021128209cbf61ba0db017e93fdfd74342365ce67557053d894c262f4",
+      "url": "https://codeload.github.com/lightseekorg/tokenspeed/tar.gz/947b25bc92d794f6127f6ae7fbdfdf1aaf3f6ba2",
+      "size": 16121456,
+      "role": "reference",
+      "license": "MIT",
+      "purpose": "Inkling 2 MTP capture and drafter reference",
+      "model": "tokenspeed",
+      "store": "src"
+    },
+    {
+      "name": "mlx-vlm/mlx-vlm-f1618d6d52be4ef25d3fe65270f7528a59c55df3.tar.gz",
+      "version": "f1618d6d52be4ef25d3fe65270f7528a59c55df3",
+      "sha256": "c922997df3e41b071df76d01d47698d76a3cd2e784ec32e2e35b14203d0b8f9b",
+      "url": "https://codeload.github.com/Neywa-Labs/mlx-vlm/tar.gz/f1618d6d52be4ef25d3fe65270f7528a59c55df3",
+      "size": 27786736,
+      "role": "reference",
+      "license": "MIT",
+      "purpose": "Inkling 2 loop and MTP capture reference",
+      "model": "mlx-vlm",
+      "store": "src"
+    },
+    {
       "name": "llama.cpp/llama.cpp-40b7a546defe1f60edd1338c719552ffc58c89a0.tar.gz",
       "version": "40b7a546defe1f60edd1338c719552ffc58c89a0",
       "sha256": "04ee9574a84722e6488f579c7007a2bddb20886f5eecb8090c54adf4dcd78d87",

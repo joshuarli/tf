@@ -36,7 +36,8 @@
 - **Measurement:** the desktop (ghostty, WindowServer) holds ~20% device utilization and ~25% accumulated GPU time, so the default gate never passes; timings use GPU_GATE_MAX_GPU_PCT=35 GPU_GATE_MAX_UTIL_PCT=35 with interleaving and are labelled busy-host (USR-134 filed for the gate). The bench's in-trial check now reads the same setting. Only one GPU timing runs at a time: two lanes timing at once invalidated each other.
 - **Host:** 48 GB; other work keeps swap at ~15 of 16 GB and has pushed pressure to critical several times; heavy runs wait for pressure level 1.
 - **Workers:** Command Code and OpenCode Go are exhausted and Muse is intermittent; lanes run on Codex. Fallback happens only on `worker_status`.
-- **In flight:** none. Next: served measurement on main after chunk 512 and P7; short multi-token verification on the prefill path (owner order: then DSpark).
+- **Served, v0 against main `23793959f`** (`campaign/runs/2026-11-22/inkling2-mini-ar-1024-092408.jsonl`): code-1024 TTFT 53.3 -> 3.53 s (15x), request 73.8 -> 16.4 s, decode 24.8 -> 39.6 tok/s, server peak device bytes 3.8 -> 4.5 GB; prose 45.5 -> 3.1 s TTFT, structured 44.4 -> 2.96 s.
+- **In flight:** V1 `v1-inkling-verify` (`usrw_3a034a5f-451d-44b9-aea5-528260900953`): greedy copy-draft verification on the prefill path with exact rollback. Next: served measurement on main after chunk 512 and P7; short multi-token verification on the prefill path (owner order: then DSpark).
 - **Parked:** `lane/s1-skip-logits` (race), `lane/p6-prefill-gemm2`, `lane/e2-prefill-experts2`, `lane/e3-expert-tensorops` (see Prefill), `lane/d2-depth-norm` (slower), `lane/c0-ground` (superseded), `.work/wt/k2-inkling-experts` (untracked scratch).
 
 ## Charter

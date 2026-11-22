@@ -76,68 +76,48 @@ struct i2p_gemm_args { uint n, k, rows, xs, xb; float cap; };
 [[kernel]] void i2p_gemm(const device float* X [[buffer(0)]], const device bfloat* W [[buffer(1)]],
     constant i2p_gemm_args& a [[buffer(2)]], device float* O [[buffer(3)]],
     uint3 tg [[threadgroup_position_in_grid]], uint ti [[thread_index_in_threadgroup]]) {
-  constexpr int BM = 8;
-  constexpr int BN = 64;
-  constexpr int SG_N = BN / 8;
-  constexpr int TG_THREADS = SG_N * 32;
-  constexpr int A_PAD = 16;
-  constexpr int B_PAD = BN + 8;
-  constexpr int W_PAD = BN + 8;
-  if (TG_THREADS > 256) return;
-  const int sg_id = int(ti) / 32;
-  const int sg_n = sg_id % SG_N;
-  const int m0 = int(tg.y) * BM;
-  const int n_base = int(tg.x) * BN;
-  threadgroup float xs_pad[BM * A_PAD];
-  threadgroup float ws_pad[8 * B_PAD];
-  threadgroup float wb[BM * W_PAD];
-  simdgroup_matrix<float, 8, 8> acc(0.0f);
-  const bool m_in = m0 < int(a.rows);
-  if (m_in) {
-    for (int k0 = 0; k0 < int(a.k); k0 += 8) {
-      for (int e = int(ti); e < BM * 8; e += TG_THREADS) {
-        const int r = e / 8;
-        const int c = e % 8;
-        const int gr = m0 + r;
-        const int gc = k0 + c;
-        float v = 0.0f;
-        if (gr < int(a.rows) && gc < int(a.k)) {
-          const uint xr = a.xb + uint(gr) * a.xs;
-          v = X[size_t(xr) * size_t(a.k) + uint(gc)];
-        }
-        xs_pad[r * A_PAD + c] = v;
-      }
-      for (int e = int(ti); e < 8 * BN; e += TG_THREADS) {
-        const int kk = e / BN;
-        const int nn = e % BN;
-        const int gn = n_base + nn;
-        const int gk = k0 + kk;
-        float v = 0.0f;
-        if (gn < int(a.n) && gk < int(a.k)) v = float(W[size_t(gn) * size_t(a.k) + uint(gk)]);
-        ws_pad[kk * B_PAD + nn] = v;
-      }
-      threadgroup_barrier(mem_flags::mem_threadgroup);
-      simdgroup_matrix<float, 8, 8> amat;
-      simdgroup_matrix<float, 8, 8> bmat;
-      simdgroup_load(amat, xs_pad, ulong(A_PAD));
-      simdgroup_load(bmat, ws_pad + sg_n * 8, ulong(B_PAD), ulong2(0, 0), false);
-      simdgroup_multiply_accumulate(acc, amat, bmat, acc);
-      threadgroup_barrier(mem_flags::mem_threadgroup);
+  constexpr int BM = 32, BN = 64, BK = 32, AP = 40, BP = 72;
+  const int sg = int(ti) / 32;
+  const int m0 = int(tg.y) * BM, n0 = int(tg.x) * BN;
+  threadgroup float x[BM * AP];
+  threadgroup float w[BK * BP];
+  threadgroup float out[BM * BP];
+  simdgroup_matrix<float, 8, 8> acc[4] = {simdgroup_matrix<float, 8, 8>(0.0f),
+    simdgroup_matrix<float, 8, 8>(0.0f), simdgroup_matrix<float, 8, 8>(0.0f),
+    simdgroup_matrix<float, 8, 8>(0.0f)};
+  for (int k0 = 0; k0 < int(a.k); k0 += BK) {
+    for (int e = int(ti); e < BM * BK; e += 256) {
+      int r = e / BK, k = e % BK;
+      int gr = m0 + r, gk = k0 + k;
+      x[r * AP + k] = gr < int(a.rows) && gk < int(a.k)
+        ? X[size_t(a.xb + uint(gr) * a.xs) * a.k + uint(gk)] : 0.0f;
     }
-    simdgroup_store(acc, wb + sg_n * 8, ulong(W_PAD));
-  }
-  threadgroup_barrier(mem_flags::mem_threadgroup);
-  if (m_in) {
-    for (int e = int(ti); e < BM * BN; e += TG_THREADS) {
-      const int rr = e / BN;
-      const int cc = e % BN;
-      const int om = int(tg.y) * BM + rr;
-      const int on = int(tg.x) * BN + cc;
-      if (om < int(a.rows) && on < int(a.n)) {
-        float v = wb[rr * W_PAD + cc];
-        if (a.cap > 0.0f) v = a.cap * precise::tanh(v / a.cap);
-        O[size_t(om) * size_t(a.n) + uint(on)] = v;
+    for (int e = int(ti); e < BK * BN; e += 256) {
+      int k = e / BN, n = e % BN;
+      int gn = n0 + n, gk = k0 + k;
+      w[k * BP + n] = gn < int(a.n) && gk < int(a.k)
+        ? float(W[size_t(gn) * a.k + uint(gk)]) : 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (int k = 0; k < BK; k += 8) {
+      simdgroup_matrix<float, 8, 8> b;
+      simdgroup_load(b, w + k * BP + sg * 8, ulong(BP));
+      for (int r = 0; r < 4; ++r) {
+        simdgroup_matrix<float, 8, 8> a8;
+        simdgroup_load(a8, x + r * 8 * AP + k, ulong(AP));
+        simdgroup_multiply_accumulate(acc[r], a8, b, acc[r]);
       }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  for (int r = 0; r < 4; ++r) simdgroup_store(acc[r], out + r * 8 * BP + sg * 8, ulong(BP));
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (int e = int(ti); e < BM * BN; e += 256) {
+    int r = e / BN, n = e % BN;
+    if (m0 + r < int(a.rows) && n0 + n < int(a.n)) {
+      float v = out[r * BP + n];
+      if (a.cap > 0.0f) v = a.cap * precise::tanh(v / a.cap);
+      O[size_t(m0 + r) * a.n + uint(n0 + n)] = v;
     }
   }
 }

@@ -613,3 +613,16 @@ make -C campaign -f parity/inkling2-mini/parity.mk parity-inkling2-mini RUNNER_M
 TF_METAL4_TIMELINE=1 TF_INKLING_PREFILL_PROFILE_BASE=0 python3 campaign/heavy.py -- "$WORK/tmp/p7-candidate" MODEL "$WORK/tmp/p3-4096.json" prefill 512 "$WORK/tmp/p7-profile.bin" >"$WORK/tmp/p7-profile.log" 2>&1
 python3 campaign/kernels/inkling_profile.py timeline --split --log "$WORK/tmp/p7-profile.log"
 ```
+
+## P7 and E3 end-to-end timing
+
+Runner prefill (`bench 2 1 512`, `.work/tmp/ids-1k.json`), base-candidate-base rounds inside `heavy.py` between
+`gpu-gate-ready -1` checks at the busy-host limits, base `main` 77d023f9d.
+
+- P7 (dense GEMM through TensorOps, float x bfloat -> float): twelve rounds, base median ~350, candidate ~382 tok/s;
+  ratios 0.911 (disturbed first round), 1.308, 1.198, then nine rounds at 1.085-1.095; geometric mean 1.100 (95%
+  t-interval 1.044-1.158). Prefill parity at chunk 512: 14 within contract, 2 explained, 0 unexplained. Kept.
+- E3 (routed-expert matrix through TensorOps, float activations; lane/e3-expert-tensorops `d28b261d6`): six rounds,
+  base median 350.0, candidate 355.3; ratios 1.014-1.023, geometric mean 1.018 (1.014-1.022). Real but small for a
+  second expert kernel and device-dependent dispatch; parked, not merged. Float activations appear to keep the
+  expert product off the fast path; an exact-enough hi/lo half split of the activations is the untested next step.

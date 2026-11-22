@@ -97,4 +97,17 @@ perf-gate-ready -1
 
 The monitor invokes `campaign/fx/fx-local-inkling ask` with output limit 2048, `--effort minimal`, and `--full-access`. fx reported that the profile does not advertise minimal effort and omitted it.
 
-The `--parallel 2` and `--parallel 4` probes are pending.
+Both `--parallel 2` and `--parallel 4` started and completed the standard code and chat probes with zero failed requests. Each probe used 32 output tokens and one repetition, and its post-run timing check passed.
+The two-request code probe reported 37.12 end-to-end tokens/s. Its second request spent 0.860 seconds queued.
+The four-request code probe reported 37.20 end-to-end tokens/s. Its four requests spent 0.000, 0.861, 1.720, and 2.581 seconds queued.
+The flags did not make these requests decode concurrently. These short one-repetition probes are functional observations, not a comparison of performance settings.
+
+```sh
+sh campaign/fx/probe-subagents-parallel.sh
+```
+
+The probe runs the following command against each server, with `N` set to 2 or 4.
+
+```sh
+python3 tools/bench_concurrent.py "http://127.0.0.1:$PORT" "$MODEL" --levels "$N" --tokens 32 --reps 1 --temperatures 0 --output "$PWD/.work/tmp/subagents/parallel-$N.json"
+```

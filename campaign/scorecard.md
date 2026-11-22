@@ -2,8 +2,8 @@
 
 Generated from `campaign/runs/` by `make -C campaign scorecard`. Rates are medians; brackets are descriptive ranges across process-pair medians (or across prompts when only one pair ran). Repeatability is measured only by the six-pair, two-session protocol; otherwise it is marked "unmeasured" even when a range is shown.
 
-- Run files: 21
-- Trials recorded: 225 (187 valid, 38 invalid)
+- Run files: 24
+- Trials recorded: 261 (221 valid, 40 invalid)
 - Unavailable cell records: 5
 - Malformed lines skipped: 0
 
@@ -28,6 +28,10 @@ Same model, engine, mode, cell and prompt-cache size. Sampled request peak is th
 | flint-int4@unpinned | rec | greedy | 1024 | 0 | 3 | 3 | 215.3 [211.0–227.8] | 230.6 [203.4–236.9] | — | 499.4 [352.7–538.6] | 2.86 [2.60–2.95] | — | — | — | — | unmeasured |
 | flint-int4@unpinned | rec | greedy | 4096 | 0 | 3 | 3 | 182.1 [181.0–198.9] | 194.1 [180.4–215.8] | — | 3602.9 [1379.6–7797.0] | 6.42 [3.85–10.62] | — | — | — | — | unmeasured |
 | flint-int4@unpinned | rec | greedy | 32768 | 0 | 3 | 3 | 129.0 [126.7–131.7] | 130.7 [126.5–132.5] | — | 19112.4 [17046.1–20830.2] | 23.07 [21.01–24.66] | — | — | — | — | unmeasured |
+| inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@4025bce7f0ed | ar | 1024 | 2 | 2 | 2 | 39.6 [39.6–39.7] | 39.6 [39.6–39.6] | 385.6 [383.3–388.0] | 3086.4 [3075.9–3096.9] | 15.94 [15.89–15.99] | 4.22 [4.22–4.22] | 4.25 [4.25–4.26] | — | 1.00 [1.00–1.00] | unmeasured |
+| inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@4b43535dfeea | ar | 1024 | 2 | 2 | 2 | 38.5 [37.8–39.1] | 37.8 [37.1–38.5] | 324.5 [318.0–331.1] | 3663.8 [3624.6–3703.0] | 16.91 [16.68–17.14] | 4.22 [4.22–4.22] | 4.25 [4.24–4.26] | — | 1.00 [1.00–1.00] | unmeasured |
+| inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@819b83096a28 | ar | 1024 | 2 | 4 | 4 | 24.9 [24.8–24.9] | 24.9 [24.7–24.9] | 25.3 [25.3–25.3] | 45617.0 [45455.1–49385.5] | 66.18 [65.92–69.92] | 3.54 [3.54–3.54] | 3.54 [3.54–3.54] | — | 1.00 [1.00–1.00] | unmeasured |
+| inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@bd4865271374 | ar | 1024 | 2 | 4 | 4 | 39.8 [39.7–39.8] | 39.7 [39.7–39.8] | 236.7 [228.1–242.5] | 4901.6 [4810.5–5116.1] | 17.76 [17.64–17.95] | 3.71 [3.71–3.71] | 3.71 [3.71–3.71] | — | 1.00 [1.00–1.00] | unmeasured |
 
 ### Paired baseline/candidate
 
@@ -36,6 +40,9 @@ Speedup is candidate cold decode throughput over baseline; a value above 1.0 is 
 | Experiment | Mode | Cell | Cache GiB | Baseline | Candidate | Pairs | Sessions | Speedup (cand/base) | 95% CI | Repeatability |
 | --- | --- | ---: | ---: | --- | --- | ---: | ---: | ---: | --- | --- |
 | flint-ar-1024-151350 | ar | 1024 | 2 | tensorfold-native@8c2c8e6f4fd9 | tensorfold-native@8c2c8e6f4fd9 | 2 | 1 | 1.001 | 0.975–1.028 | unmeasured |
+| inkling2-mini-ar-1024-060122 | ar | 1024 | 2 | tensorfold-native@819b83096a28 | tensorfold-native@bd4865271374 | 2 | 1 | 1.599 | 1.587–1.610 | unmeasured |
+| inkling2-mini-ar-1024-080205 | ar | 1024 | 2 | tensorfold-native@bd4865271374 | tensorfold-native@4b43535dfeea | 1 | 1 | 0.983 | — | unmeasured |
+| inkling2-mini-ar-1024-092408 | ar | 1024 | 2 | tensorfold-native@819b83096a28 | tensorfold-native@4025bce7f0ed | 1 | 1 | 1.596 | — | unmeasured |
 
 #### Rejected pairs
 
@@ -86,6 +93,8 @@ These process pairs were not combined into a matched result.
 | flint-copy-1024-4096-32768-sB-135530 | flint-copy-1024-4096-32768-sB-135530:4096:copy:4 | missing candidate counterpart |
 | flint-copy-1024-4096-32768-sB-135530 | flint-copy-1024-4096-32768-sB-135530:4096:copy:5 | missing candidate counterpart |
 | flint-copy-1024-4096-32768-sB-135530 | flint-copy-1024-4096-32768-sB-135530:4096:copy:6 | missing candidate counterpart |
+| inkling2-mini-ar-1024-080205 | inkling2-mini-ar-1024-080205:ar:1024:1 | prompt counterparts differ: [('code-1024', 'c5a63fccf2c9866ac60e5b13ec268e2a56546fbed3b1b4d2cbfa5b808b0de4aa')] |
+| inkling2-mini-ar-1024-092408 | inkling2-mini-ar-1024-092408:ar:1024:1 | prompt counterparts differ: [('structured-1024', '12d86f119aa7aaa6c18892daaad2c39a7e187330f8c6ef24eb9066d4e945e5a6')] |
 
 ## Best useful
 
@@ -104,6 +113,7 @@ The fastest measured configuration per model and cell, among engines, modes and 
 | flint-int4@unpinned | 1024 | 0 | rec | greedy | 215.3 | 3 | — |
 | flint-int4@unpinned | 4096 | 0 | rec | greedy | 182.1 | 3 | — |
 | flint-int4@unpinned | 32768 | 0 | rec | greedy | 129.0 | 3 | — |
+| inkling-2-mini@ed40e7da625f (7c656207d3ce) | 1024 | 2 | tensorfold-native@bd4865271374 | ar | 39.8 | 4 | tensorfold-native@4025bce7f0ed ar 39.6, tensorfold-native@4b43535dfeea ar 38.5, tensorfold-native@819b83096a28 ar 24.9 |
 
 ## Natural termination
 
@@ -127,8 +137,11 @@ Requests sent without `ignore_eos` (they do not enter the fixed-length rates abo
 | flint-int4@unpinned | rec | greedy | 4096 | 0 | truncated 15 | length 15 | 512.0 |
 | flint-int4@unpinned | rec | greedy | 32768 | 0 | truncated 9 | length 9 | 512.0 |
 | inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@3fe17ed98234 | ar | 1024 | 2 | truncated 1 | length 1 | 512.0 |
+| inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@4025bce7f0ed | ar | 1024 | 2 | truncated 6 | length 6 | 512.0 |
+| inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@4b43535dfeea | ar | 1024 | 2 | truncated 6 | length 6 | 512.0 |
 | inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@58948065b070 | ar | 1024 | 2 | truncated 2 | length 2 | 512.0 |
-| inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@819b83096a28 | ar | 1024 | 2 | truncated 3 | length 3 | 512.0 |
+| inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@819b83096a28 | ar | 1024 | 2 | truncated 15 | length 15 | 512.0 |
+| inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@bd4865271374 | ar | 1024 | 2 | truncated 12 | length 12 | 512.0 |
 
 ## Unavailable
 
@@ -164,6 +177,7 @@ Host pressure, throttling or a short reply marked these out of the rates.
 | tensorfold-native@58948065b070 | ar | 1024 | 2 | gpu-gate-ready: gpu-gate-ready: contended (check 1 of 1): device utilization 97% (limit 15);  |
 | tensorfold-native@819b83096a28 | ar | 1024 | 1 | TimeoutError: server did not report healthy before the startup timeout |
 | tensorfold-native@819b83096a28 | ar | 1024 | 1 | cold prompt_tokens 1349 != cell 1024; warm prompt_tokens 1349 != cell 1024 |
+| tensorfold-native@819b83096a28 | ar | 1024 | 1 | gpu-gate-ready: contended (check 1 of 1): swapping 147 pages/s (limit 100);  |
 | tensorfold-native@819b83096a28 | ar | 1024 | 1 | gpu-gate-ready: gpu-gate-ready: contended (check 1 of 1): compressor 5218 pages/s (limit 5000); ; gpu-gate-ready: gpu-gate-ready: contended (check 1 of 1): device utilization 97% (limit 15);  |
 | tensorfold-native@819b83096a28 | ar | 1024 | 2 | gpu-gate-ready: gpu-gate-ready: contended (check 1 of 1): device utilization 100% (limit 15);  |
 | tensorfold-native@8c2c8e6f4fd9 | ar | 1024 | 1 | memory pressure level 2; memory pressure level 2 |
@@ -184,3 +198,4 @@ Host pressure, throttling or a short reply marked these out of the rates.
 | tensorfold-native@8c2c8e6f4fd9 | ar | 32768 | 4 | HTTPError: HTTP Error 503: Service Unavailable |
 | tensorfold-native@8c2c8e6f4fd9 | ar | 32768 | 4 | HTTPError: HTTP Error 503: Service Unavailable |
 | tensorfold-native@8c2c8e6f4fd9 | ar | 32768 | 5 | memory pressure level 2 |
+| tensorfold-native@bd4865271374 | ar | 1024 | 1 | gpu-gate-ready: contended (check 1 of 1): swapping 262 pages/s (limit 100);  |

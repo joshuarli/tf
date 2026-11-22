@@ -437,6 +437,59 @@ struct i2p_gemm_args { uint n, k, rows, xs, xb; float cap; };
   for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) O[(size_t)t * a.heads * D + h * D + lane + 32u * u] = acc[u] / mass;
 }
 
+[[kernel]] void i2p_attn_tiled(const device float* Q [[buffer(0)]], const device float* KEYS [[buffer(1)]],
+    const device float* VALUES [[buffer(2)]], const device float* B [[buffer(3)]], const device float* sink [[buffer(4)]],
+    constant i2p_attn_args& a [[buffer(5)]], device float* O [[buffer(6)]],
+    const device float* KC [[buffer(7)]], const device float* VC [[buffer(8)]],
+    uint2 tg [[threadgroup_position_in_grid]], uint ti [[thread_index_in_threadgroup]]) {
+  const uint sg = ti / 32u, lane = ti % 32u, kv = tg.x, row0 = tg.y * 8u;
+  const uint t = row0 + sg % 8u, h = kv * 3u + sg / 8u;
+  const uint pos = a.base + t;
+  const float tau = 1.0f + a.alpha * precise::log(max(1.0f, (float(pos) + 1.0f) / a.floor));
+  const float use_tau = a.window ? 1.0f : tau;
+  float qv[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+  if (t < a.rows) for (uint u = 0; u < 4u; ++u)
+    qv[u] = Q[((size_t)t * a.heads + h) * 128u + lane + 32u * u] * a.scale * use_tau;
+  const float sk = t < a.rows ? sink[(size_t)t * a.heads + h] : 0.0f;
+  const uint lo = a.window && pos + 1u > a.window ? pos + 1u - a.window : 0u;
+  const uint first = a.base + row0;
+  const uint lo0 = a.window && first + 1u > a.window ? first + 1u - a.window : 0u;
+  const uint last = a.base + min(row0 + 7u, a.rows - 1u);
+  float top = 0.0f, mass = 1.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+  threadgroup float keys[8 * 128], values[8 * 128];
+  for (uint j0 = lo0 / 8u * 8u; j0 <= last; j0 += 8u) {
+    for (uint e = ti; e < 8u * 128u; e += 768u) {
+      const uint j = j0 + e / 128u, d = e % 128u;
+      float kk = 0.0f, vv = 0.0f;
+      if (j <= last) {
+        const uint rj = a.rmode && a.window ? j % a.window : j;
+        const size_t at = ((j < a.base ? (size_t)rj : (size_t)(j - a.base)) * a.kv + kv) * 128u + d;
+        kk = j < a.base ? KEYS[at] : KC[at];
+        vv = j < a.base ? VALUES[at] : VC[at];
+      }
+      keys[e] = kk; values[e] = vv;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (t < a.rows) for (uint x = 0; x < 8u; ++x) {
+      const uint j = j0 + x;
+      if (j < lo || j > pos) continue;
+      float dot = 0.0f;
+      for (uint u = 0; u < 4u; ++u) dot = fma(qv[u], keys[x * 128u + lane + 32u * u], dot);
+      const uint col = min(pos - j, a.extent);
+      const float score = simd_sum(dot) + B[((size_t)t * a.heads + h) * (a.extent + 1u) + col] - sk;
+      const float peak = max(top, score);
+      const float rescale = precise::exp(top - peak);
+      const float w = precise::exp(score - peak);
+      mass = mass * rescale + w;
+      for (uint u = 0; u < 4u; ++u) acc[u] = acc[u] * rescale + w * values[x * 128u + lane + 32u * u];
+      top = peak;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  if (t < a.rows) for (uint u = 0; u < 4u; ++u)
+    O[((size_t)t * a.heads + h) * 128u + lane + 32u * u] = acc[u] / mass;
+}
+
 #ifdef I2P_MXFP8
 #define I2P_GROUP 32u
 #define I2P_CODE_STRIDE(k) (k)

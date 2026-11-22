@@ -10,6 +10,7 @@ const warm = 5;
 const runs = 50;
 
 pub fn main() !void {
+    if (std.c.getenv("TF_MXFP8_TENSOROPS") != null) return @import("mxfp8_bench.zig").main();
     const pool = mtl.objc.Pool.push();
     defer pool.pop();
     const device = try mtl.Device.init();

@@ -9,13 +9,26 @@ import json
 import sys
 from pathlib import Path
 
-from jinja2 import Environment
+from jinja2 import Environment, nodes
+from jinja2.ext import Extension
 from tokenizers import Tokenizer
+
+
+class Generation(Extension):
+    tags = {"generation"}
+
+    def parse(self, parser):
+        line = next(parser.stream).lineno
+        body = parser.parse_statements(("name:endgeneration",), drop_needle=True)
+        return nodes.CallBlock(self.call_method("render"), [], [], body).set_lineno(line)
+
+    def render(self, caller):
+        return caller()
 
 
 def prompt_ids(model_dir: Path, text: str) -> list[int]:
     tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
-    template = Environment().from_string((model_dir / "chat_template.jinja").read_text())
+    template = Environment(extensions=[Generation]).from_string((model_dir / "chat_template.jinja").read_text())
     rendered = template.render(messages=[{"role": "user", "content": text}], add_generation_prompt=True)
     return tokenizer.encode(rendered).ids
 

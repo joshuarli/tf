@@ -658,6 +658,8 @@ pub fn prefillWant(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []co
     const ring = cache.keys.length() != linear;
     const pool = mtl.objc.Pool.push();
     defer pool.pop();
+    m.queue.roundBegin("inkling2-prefill");
+    defer m.queue.roundEnd();
     const cb = m.queue.commandBuffer();
     const config = &m.config;
     const text = &config.text;

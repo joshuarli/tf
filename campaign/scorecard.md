@@ -2,8 +2,8 @@
 
 Generated from `campaign/runs/` by `make -C campaign scorecard`. Rates are medians; brackets are descriptive ranges across process-pair medians (or across prompts when only one pair ran). Repeatability is measured only by the six-pair, two-session protocol; otherwise it is marked "unmeasured" even when a range is shown.
 
-- Run files: 18
-- Trials recorded: 218 (187 valid, 31 invalid)
+- Run files: 21
+- Trials recorded: 225 (187 valid, 38 invalid)
 - Unavailable cell records: 5
 - Malformed lines skipped: 0
 
@@ -126,6 +126,9 @@ Requests sent without `ignore_eos` (they do not enter the fixed-length rates abo
 | flint-int4@unpinned | rec | greedy | 1024 | 0 | truncated 9 | length 9 | 512.0 |
 | flint-int4@unpinned | rec | greedy | 4096 | 0 | truncated 15 | length 15 | 512.0 |
 | flint-int4@unpinned | rec | greedy | 32768 | 0 | truncated 9 | length 9 | 512.0 |
+| inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@3fe17ed98234 | ar | 1024 | 2 | truncated 1 | length 1 | 512.0 |
+| inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@58948065b070 | ar | 1024 | 2 | truncated 2 | length 2 | 512.0 |
+| inkling-2-mini@ed40e7da625f (7c656207d3ce) | tensorfold-native@819b83096a28 | ar | 1024 | 2 | truncated 3 | length 3 | 512.0 |
 
 ## Unavailable
 
@@ -156,6 +159,13 @@ Host pressure, throttling or a short reply marked these out of the rates.
 | rec | greedy | 4096 | 2 | memory pressure level 2 |
 | rec | greedy | 4096 | 2 | memory pressure level 2 |
 | rec | greedy | 4096 | 2 | memory pressure level 2 |
+| tensorfold-native@3fe17ed98234 | ar | 1024 | 1 | cold prompt_tokens 1349 != cell 1024; warm prompt_tokens 1349 != cell 1024 |
+| tensorfold-native@58948065b070 | ar | 1024 | 1 | gpu-gate-ready: gpu-gate-ready: contended (check 1 of 1): device utilization 96% (limit 15);  |
+| tensorfold-native@58948065b070 | ar | 1024 | 2 | gpu-gate-ready: gpu-gate-ready: contended (check 1 of 1): device utilization 97% (limit 15);  |
+| tensorfold-native@819b83096a28 | ar | 1024 | 1 | TimeoutError: server did not report healthy before the startup timeout |
+| tensorfold-native@819b83096a28 | ar | 1024 | 1 | cold prompt_tokens 1349 != cell 1024; warm prompt_tokens 1349 != cell 1024 |
+| tensorfold-native@819b83096a28 | ar | 1024 | 1 | gpu-gate-ready: gpu-gate-ready: contended (check 1 of 1): compressor 5218 pages/s (limit 5000); ; gpu-gate-ready: gpu-gate-ready: contended (check 1 of 1): device utilization 97% (limit 15);  |
+| tensorfold-native@819b83096a28 | ar | 1024 | 2 | gpu-gate-ready: gpu-gate-ready: contended (check 1 of 1): device utilization 100% (limit 15);  |
 | tensorfold-native@8c2c8e6f4fd9 | ar | 1024 | 1 | memory pressure level 2; memory pressure level 2 |
 | tensorfold-native@8c2c8e6f4fd9 | ar | 1024 | 1 | memory pressure level 2; memory pressure level 2 |
 | tensorfold-native@8c2c8e6f4fd9 | ar | 1024 | 1 | memory pressure level 2; memory pressure level 2 |

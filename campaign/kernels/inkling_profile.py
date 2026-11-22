@@ -236,8 +236,39 @@ def parse_timeline(text: str) -> dict:
     return out
 
 
+def cmd_split_timeline(text: str) -> int:
+    blocks = re.split(r"(?=^(?:info: )?metal 4 timeline: \S+, \d+ rounds after)", text, flags=re.MULTILINE)
+    totals: dict[str, list[float]] = {}
+    span = 0.0
+    dispatches = 0
+    rounds = 0
+    for block in blocks[1:]:
+        part = parse_timeline(block)
+        if not part["kernels"]:
+            continue
+        rounds += 1
+        span += part["ms"]
+        dispatches += part["dispatches"]
+        for kernel in part["kernels"]:
+            entry = totals.setdefault(kernel["name"], [0.0, 0.0])
+            entry[0] += kernel["ms"]
+            entry[1] += kernel["calls"]
+    if not rounds:
+        print("no split timeline receipts", file=sys.stderr)
+        return 1
+    print(f"{rounds} segments, {dispatches} dispatches, {span:.3f} ms summed GPU span")
+    print("kernel                              ms   stages")
+    for name, (ms, stages) in sorted(totals.items(), key=lambda item: -item[1][0]):
+        print(f"{name:<30}{ms:>8.3f}{stages:>9.0f}")
+    print("Per-segment reports retain only the 25 largest kernel entries; small totals can be incomplete.")
+    return 0
+
+
 def cmd_timeline(args: argparse.Namespace) -> int:
-    parsed = parse_timeline(Path(args.log).read_text(errors="replace"))
+    contents = Path(args.log).read_text(errors="replace")
+    if args.split:
+        return cmd_split_timeline(contents)
+    parsed = parse_timeline(contents)
     if not parsed["kernels"]:
         print("no metal 4 timeline receipt in the log (set TF_METAL4_TIMELINE and run the bench)", file=sys.stderr)
         return 1
@@ -396,6 +427,7 @@ def main() -> int:
     w.set_defaults(func=cmd_weights)
     t = sub.add_parser("timeline", help="reduce the runner's Metal 4 timeline receipt")
     t.add_argument("--log", required=True)
+    t.add_argument("--split", action="store_true")
     t.set_defaults(func=cmd_timeline)
     r = sub.add_parser("trace", help="reduce one Metal System Trace window")
     r.add_argument("--trace", required=True)

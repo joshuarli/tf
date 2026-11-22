@@ -642,6 +642,37 @@ const Chunk = struct {
     }
 };
 
+const ProfileRounds = struct {
+    queue: mtl.Queue,
+    cb: mtl.CommandBuffer,
+    enabled: bool,
+
+    fn next(p: *ProfileRounds, c: *Chunk, name: []const u8) !void {
+        if (!p.enabled) return;
+        c.enc.end();
+        p.cb.commit();
+        p.cb.wait();
+        if (p.cb.failure()) |msg| {
+            std.log.err("inkling2_loop prefill: {s}", .{msg});
+            return error.GpuFailed;
+        }
+        p.queue.roundEnd();
+        p.queue.roundBegin(name);
+        p.cb = p.queue.commandBuffer();
+        c.enc = p.cb.compute(.serial);
+    }
+};
+
+fn profileOccupancy(rounds: *ProfileRounds, c: *Chunk, slot: u32, name: []const u8) !void {
+    const requested = std.c.getenv("TF_INKLING_PREFILL_OCCUPANCY_BASE") orelse return;
+    const base = std.fmt.parseInt(usize, std.mem.span(requested), 10) catch return;
+    if (!rounds.enabled or c.base != base) return;
+    try rounds.next(c, name);
+    std.debug.print("inkling2 occupancy base={d} slot={d} rows={d} counts=", .{ c.base, slot, c.n });
+    for (c.s.moe_cnt.slice(u32, c.m.config.text.experts)) |count| std.debug.print("{d},", .{count});
+    std.debug.print("\n", .{});
+}
+
 pub const Bank = struct { states: B, out: B, n: usize };
 
 pub fn prefill(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32) !void {
@@ -660,14 +691,16 @@ pub fn prefillWant(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []co
     defer pool.pop();
     m.queue.roundBegin("inkling2-prefill");
     defer m.queue.roundEnd();
-    const cb = m.queue.commandBuffer();
+    const threshold = if (std.c.getenv("TF_INKLING_PREFILL_PROFILE_BASE")) |v| std.fmt.parseInt(usize, std.mem.span(v), 10) catch 0 else null;
+    const profiling = if (threshold) |base| cache.len >= base else false;
+    var rounds = ProfileRounds{ .queue = m.queue, .cb = m.queue.commandBuffer(), .enabled = profiling };
     const config = &m.config;
     const text = &config.text;
     var c = Chunk{
         .m = m,
         .s = s,
         .cache = cache,
-        .enc = cb.compute(.serial),
+        .enc = rounds.cb.compute(.serial),
         .n = @intCast(ids.len),
         .base = @intCast(cache.len),
         .h = s.h,
@@ -681,7 +714,12 @@ pub fn prefillWant(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []co
     };
     c.setP(s.pipes.embed, EmbedA{ .width = s.h, .rows = c.n, .eps = text.eps }, &.{ b(s.ids), t(m.weights.embed), t(m.weights.embed_norm), A, b(s.x) });
     c.enc.dispatchGroups(mtl.Size.of(c.n, 1, 1), mtl.Size.of(256, 1, 1));
-    for (0..config.loop.core_start) |i| try c.layer(@intCast(i), @intCast(i), null);
+    var profile_name: [64]u8 = undefined;
+    for (0..config.loop.core_start) |i| {
+        if (profiling) try rounds.next(&c, try std.fmt.bufPrint(&profile_name, "inkling2-slot-{d}", .{i}));
+        try c.layer(@intCast(i), @intCast(i), null);
+        try profileOccupancy(&rounds, &c, @intCast(i), "inkling2-occupancy");
+    }
     const prelude = c.count;
     c.copyN(b(s.x), b(s.prelude), @as(usize, c.n) * c.h);
     const span = config.loop.core_end - config.loop.core_start;
@@ -692,6 +730,7 @@ pub fn prefillWant(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []co
         if (pass > 0) {
             const bn = c.count - (prelude + 1);
             for (0..c.n) |tt| {
+                if (profiling and tt % 16 == 0) try rounds.next(&c, try std.fmt.bufPrint(&profile_name, "inkling2-pass-{d}-copy-{d}", .{ pass, tt / 16 }));
                 for (0..bn) |i| c.copyN(bo(s.blocks, (tt * st.mix_states + prelude + 1 + i) * c.h * 4), bo(s.bank, (tt * st.mix_states + i) * c.h * 4), c.h);
                 c.copyN(bo(s.x, tt * c.h * 4), bo(s.passout, tt * c.h * 4), c.h);
             }
@@ -702,10 +741,17 @@ pub fn prefillWant(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []co
         }
         for (config.loop.core_start..config.loop.core_end) |ip| {
             const slot: u32 = if (pass == 0) @intCast(ip) else @intCast(text.layers + (pass - 1) * span + (ip - config.loop.core_start));
+            if (profiling) try rounds.next(&c, try std.fmt.bufPrint(&profile_name, "inkling2-slot-{d}", .{slot}));
             try c.layer(slot, @intCast(ip), bk);
+            try profileOccupancy(&rounds, &c, slot, "inkling2-occupancy");
         }
     }
-    for (config.loop.core_end..text.layers) |i| try c.layer(@intCast(i), @intCast(i), null);
+    for (config.loop.core_end..text.layers) |i| {
+        if (profiling) try rounds.next(&c, try std.fmt.bufPrint(&profile_name, "inkling2-slot-{d}", .{i}));
+        try c.layer(@intCast(i), @intCast(i), null);
+        try profileOccupancy(&rounds, &c, @intCast(i), "inkling2-occupancy");
+    }
+    if (profiling) try rounds.next(&c, "inkling2-head");
     c.mixBlocks(b(s.x), m.weights.output_query, bo(s.mixout, 0));
     c.rmsW(.{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, t(m.weights.norm), b(s.n0), 1, 0, c.h, text.eps);
     switch (want) {
@@ -714,9 +760,9 @@ pub fn prefillWant(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []co
         .all => c.headModel(m.weights.unembed, .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, b(s.logits), text.unpadded_vocab),
     }
     c.enc.end();
-    cb.commit();
-    cb.wait();
-    if (cb.failure()) |msg| {
+    rounds.cb.commit();
+    rounds.cb.wait();
+    if (rounds.cb.failure()) |msg| {
         std.log.err("inkling2_loop prefill: {s}", .{msg});
         return error.GpuFailed;
     }

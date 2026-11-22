@@ -12,6 +12,7 @@ const mtl = @import("metal");
 pub const glue = @embedFile("kernels/glue.metal");
 
 pub const prefill = @embedFile("kernels/prefill.metal");
+pub const prefill_gemm_mpp = @embedFile("kernels/prefill_gemm_mpp.metal");
 
 pub fn prefillSource(comptime mxfp8: bool) []const u8 {
     return if (mxfp8) "#define I2P_MXFP8 1\n" ++ prefill else prefill;

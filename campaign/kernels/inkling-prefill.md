@@ -575,3 +575,41 @@ f6d8f83f0): TTFT on code-1024 (1,349 tokens) 5.65/5.97 -> 4.04/4.14 s, prose-102
 structured-1024 4.69/4.64 -> 3.59/3.42 s; greedy outputs byte-identical; server peak device bytes 3.99 -> 4.54 GB
 (the prefill scratch scales with the chunk, mostly its all-rows logits buffer). One baseline trial was marked
 invalid by the harness; the rest are valid at the busy-host limits.
+
+## Dense TensorOps experiment
+
+On M5 and later, the dense prefill projections use MetalPerformancePrimitives
+`matmul2d` with float32 activations, checkpoint bf16 weights and float32
+accumulators. The tensor retains the input row stride and offset. A 16-by-32
+output tile handles partial rows and columns; the full-history vocabulary head
+applies its existing tanh cap before storing. Short chunks (fewer than 16 rows),
+small projections (N below 384) and K below 2304 keep the existing GEMM. Other
+GPUs keep it for every shape. These selection thresholds are provisional and
+have not been separately timed by shape.
+
+The family test covers N/K shapes 3072/2304, 384/2304, 24/2304, 1024/2304,
+32/2304, 2304/3072, 128/2304, 64/4608, 2304/64 and 200058/2304 at 1, 7,
+35, 128 and 512 rows, with a row stride of two and a one-row input offset. It
+compares all outputs to the earlier GEMM and samples up to five rows and 64
+columns per shape against an independently accumulated FP64 dot product; the
+vocabulary shape also exercises the cap. The bound is
+`4 * (K + 64) * 2^-24 * sum(abs(x*w)) + 8 * 2^-24 * max(1, abs(result))`.
+The FP64 check is sampled, not exhaustive. The family command returned zero.
+
+The prefill-512 parity make target returned 2 with 14 histories within the
+f32-vs-f32 contract, two explained long-history divergences and zero
+unexplained. A split timeline on the 5265-token `p3-4096.json` prompt, with
+`TF_METAL4_TIMELINE=1` and `TF_INKLING_PREFILL_PROFILE_BASE=0`, reported
+133.862 ms for 289 `i2p_gemm_mpp` stages and 49.308 ms for 352 retained
+`i2p_gemm` stages (183.170 ms combined), versus 333.6 ms for 641 stages in the
+supplied main baseline at base 4096. These are separate single instrumented
+profiles, not a paired timing result; the candidate observed pressure level 2
+and 1.6 GB swap growth during the guarded run. The parent must perform the
+paired end-to-end timing and assess the per-shape dispatch choices.
+
+```sh
+python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1
+make -C campaign -f parity/inkling2-mini/parity.mk parity-inkling2-mini RUNNER_MODE=prefill PREFILL_CHUNK=512 RUNNER="$WORK/tmp/p7-candidate" LANE=p7 REPORT="$WORK/tmp/p7-parity.md"
+TF_METAL4_TIMELINE=1 TF_INKLING_PREFILL_PROFILE_BASE=0 python3 campaign/heavy.py -- "$WORK/tmp/p7-candidate" MODEL "$WORK/tmp/p3-4096.json" prefill 512 "$WORK/tmp/p7-profile.bin" >"$WORK/tmp/p7-profile.log" 2>&1
+python3 campaign/kernels/inkling_profile.py timeline --split --log "$WORK/tmp/p7-profile.log"
+```

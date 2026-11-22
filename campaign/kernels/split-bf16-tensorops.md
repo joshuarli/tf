@@ -2,7 +2,7 @@
 
 ## Verdict
 
-**G0 fails.** This is a busy-host standalone microbenchmark on an Apple M5 Max with macOS 27.2 and Xcode 27.2. It measures one synthetic expert, not end-to-end model throughput. The declared gate requires a qualifying split arm to beat float × bf16 by at least 1.5× for every K and weight format at both 32 and 64 rows. The 8- and 128-row cases are reported but do not gate. The qualifying arm is three-term, or two-term when every measured result fits `sumBound`. Both arms are reported. The preconverted two-term result fits the bound in every measured case, but neither split reaches 1.5× across the gate. The in-kernel packed variants also miss the gate. The largest observed gated preconverted two-term median ratio is 1.244×; this is the measured ceiling of this configuration, not an end-to-end projection. Some ranges are broad, and the kernels were not tuned or profiled to identify a limiter.
+**G0 fails.** This is a busy-host standalone microbenchmark on an Apple M5 Max with macOS 27.2 and Xcode 27.2. It measures one synthetic expert, not end-to-end model throughput. The declared gate requires a qualifying split arm to beat float × bf16 by at least 1.5× for every K and weight format at both 32 and 64 rows. The 8- and 128-row cases are reported but do not gate. The qualifying arm is three-term, or two-term when every measured result fits `sumBound`. Both arms are reported. The preconverted two-term result fits the bound in every measured case, but neither split reaches 1.5× across the gate. The in-kernel packed variants also miss the gate. The largest gated preconverted two-term median ratio in the original G0 run is 1.244×; this is the measured ceiling of this configuration, not an end-to-end projection. Some ranges are broad, and the kernels were not tuned or profiled to identify a limiter.
 
 The owner ruled that the eight-row NVFP4 baseline must use the kernel the engine actually dispatches. Those cells use `i2p_down_grouped`; every other baseline cell uses `i2p_expert_matrix`. The latter is selected at eight rows for MXFP8 and at 32 or more rows for NVFP4. Both baseline kernels are copies of the engine kernels, with one expert and raw down-projection output.
 
@@ -188,3 +188,67 @@ GPU_GATE_MAX_GPU_PCT=35 GPU_GATE_MAX_UTIL_PCT=35 python3 "$CAMPAIGN/heavy.py" --
 ```
 
 The wrapper exited 0 and printed `bench_exit=0 post_cpu_exit=0`. The prechecks therefore both exited 0. Peak charged memory was 1.1 GB; worst host pressure was 1. Shader libraries were precompiled, and no full model was loaded.
+
+## Exploratory fast-precision arms
+
+A second busy-host run interleaved all original arms with four untuned exploratory arms. It does not change the G0 rule or verdict. Three warmups and 20 timed command buffers per supported arm used the same shapes, data, reference, error definitions, and timing method. The float column is the float × bf16 control from this second run. The largest gated two-term preconverted median ratio in this second run was 1.254×, still below 1.5×. These are microbenchmark configurations, not proven performance ceilings or end-to-end speedups.
+
+`half_half` converts f32 activations to half inside the command buffer and reads half weights converted before timing. The host compared every weight to the fp64 decoded weight: all 16 cases had **zero** non-representable weights in the generated range. `half_mxfp8` converts activations to half, multiplies the original E4M3 bytes in 32-value blocks, and applies the original E8M0 scale after each TensorOp. `fp8_mxfp8` quantizes each activation row-block to E4M3 with a float maximum-based scale and applies both activation and weight scales after each block's TensorOp. The quantization and scale application are timed. `half_nvfp4` masks two 16-value activation halves, multiplies the original E2M1 codes, and applies each original E4M3 scale after its TensorOp. Its K=1152 packed rows are copied with padding from 576 to 640 bytes to meet the 128-byte format-tensor stride alignment; K=2304 rows need no padding. The bytes and scale values are not requantized. Format-specific arms are reported only for the matching checkpoint format.
+
+The expanded test checks half arms on bf16-exact inputs against the original fp64 bound. It also checks the E4M3 result against a separate fp64 calculation using the reconstructed quantized activations, and bounds the input quantization error. These checks do not make the lower-precision arms part of the G0 contract. The E4M3 activation quantization is a simple untuned block kernel; no limiter was profiled.
+
+| format | K | rows | arm | median µs (range) | float control median µs (range) | exact max abs | exact max rel | random max abs | random max rel | random bound failures |
+| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| nvfp4 | 1152 | 8 | half_half | 15.604 (13.500–44.833) | 22.063 (21.583–70.917) | 1.015663e-4 | 6.839945e-4 | 9.426851e-2 | 4.705434e0 | 0 |
+| nvfp4 | 1152 | 8 | half_nvfp4 | 70.375 (70.083–146.750) | 22.063 (21.583–70.917) | 8.583069e-5 | 6.839945e-4 | 9.429903e-2 | 4.708117e0 | 0 |
+| nvfp4 | 1152 | 32 | half_half | 26.917 (14.375–43.750) | 19.604 (19.125–39.000) | 1.068115e-4 | 4.608295e-3 | 1.089593e-1 | 1.863433e1 | 0 |
+| nvfp4 | 1152 | 32 | half_nvfp4 | 73.250 (71.417–146.292) | 19.604 (19.125–39.000) | 9.500980e-5 | 1.964637e-3 | 1.089593e-1 | 1.863124e1 | 0 |
+| nvfp4 | 1152 | 64 | half_half | 17.667 (15.958–41.667) | 30.750 (30.375–71.958) | 1.029670e-4 | 1.614907e-2 | 9.085594e-2 | 1.853016e1 | 0 |
+| nvfp4 | 1152 | 64 | half_nvfp4 | 92.021 (91.583–95.083) | 30.750 (30.375–71.958) | 1.068115e-4 | 1.614907e-2 | 9.085594e-2 | 1.853016e1 | 0 |
+| nvfp4 | 1152 | 128 | half_half | 26.062 (25.500–39.250) | 51.979 (51.667–54.375) | 1.103878e-4 | 2.941176e-2 | 9.737391e-2 | 6.878374e0 | 0 |
+| nvfp4 | 1152 | 128 | half_nvfp4 | 162.458 (162.000–223.125) | 51.979 (51.667–54.375) | 1.177788e-4 | 3.610108e-3 | 9.739489e-2 | 6.878815e0 | 0 |
+| nvfp4 | 2304 | 8 | half_half | 41.542 (29.958–61.792) | 55.312 (40.000–88.500) | 1.611710e-4 | 3.291639e-3 | 1.237318e-1 | 5.698845e0 | 0 |
+| nvfp4 | 2304 | 8 | half_nvfp4 | 137.500 (134.792–210.750) | 55.312 (40.000–88.500) | 3.395081e-4 | 3.291639e-3 | 1.237013e-1 | 5.697917e0 | 0 |
+| nvfp4 | 2304 | 32 | half_half | 32.729 (28.750–66.250) | 37.729 (35.833–83.417) | 4.196167e-4 | 1.620300e-2 | 1.294150e-1 | 2.451048e0 | 0 |
+| nvfp4 | 2304 | 32 | half_nvfp4 | 139.042 (138.208–163.125) | 37.729 (35.833–83.417) | 1.926422e-4 | 1.620300e-2 | 1.294036e-1 | 2.453272e0 | 0 |
+| nvfp4 | 2304 | 64 | half_half | 52.146 (44.375–68.333) | 104.542 (85.625–145.750) | 2.597570e-4 | 3.464948e-2 | 1.357099e-1 | 5.955640e1 | 0 |
+| nvfp4 | 2304 | 64 | half_nvfp4 | 328.896 (270.250–458.750) | 104.542 (85.625–145.750) | 2.231598e-4 | 2.175665e-2 | 1.357099e-1 | 5.957948e1 | 0 |
+| nvfp4 | 2304 | 128 | half_half | 59.167 (51.875–94.125) | 100.917 (100.375–129.625) | 3.490448e-4 | 3.153962e-2 | 1.477353e-1 | 2.527899e1 | 0 |
+| nvfp4 | 2304 | 128 | half_nvfp4 | 320.729 (320.375–377.708) | 100.917 (100.375–129.625) | 2.300739e-4 | 1.568154e-2 | 1.477391e-1 | 2.527168e1 | 0 |
+| mxfp8 | 1152 | 8 | half_half | 61.146 (60.167–61.667) | 92.104 (90.583–95.375) | 5.736947e-6 | 4.349928e-3 | 2.776240e-3 | 7.309729e0 | 0 |
+| mxfp8 | 1152 | 8 | half_mxfp8 | 152.042 (150.708–154.500) | 92.104 (90.583–95.375) | 2.577901e-6 | 1.953091e-3 | 2.776360e-3 | 7.313218e0 | 0 |
+| mxfp8 | 1152 | 8 | fp8_mxfp8 | 166.188 (164.750–170.250) | 92.104 (90.583–95.375) | 3.617603e-1 | 2.007979e3 | 3.688133e-1 | 2.697614e3 | 15896 |
+| mxfp8 | 1152 | 32 | half_half | 62.646 (61.750–63.333) | 88.875 (87.750–91.417) | 7.565133e-6 | 1.734721e-3 | 2.976374e-3 | 7.486910e2 | 0 |
+| mxfp8 | 1152 | 32 | half_mxfp8 | 157.563 (154.375–162.167) | 88.875 (87.750–91.417) | 3.561378e-6 | 1.257862e-3 | 2.976851e-3 | 7.489901e2 | 0 |
+| mxfp8 | 1152 | 32 | fp8_mxfp8 | 220.292 (217.542–222.417) | 88.875 (87.750–91.417) | 4.315925e-1 | 6.632571e2 | 4.357942e-1 | 2.525144e5 | 63474 |
+| mxfp8 | 1152 | 64 | half_half | 28.938 (28.500–30.417) | 61.083 (60.292–61.792) | 8.963048e-6 | 7.356431e-2 | 3.395435e-3 | 2.414584e1 | 0 |
+| mxfp8 | 1152 | 64 | half_mxfp8 | 71.750 (70.792–73.125) | 61.083 (60.292–61.792) | 3.992580e-6 | 1.531729e-2 | 3.395435e-3 | 2.415004e1 | 0 |
+| mxfp8 | 1152 | 64 | fp8_mxfp8 | 103.167 (102.583–103.833) | 61.083 (60.292–61.792) | 4.182357e-1 | 7.726625e3 | 4.122048e-1 | 5.849651e3 | 127337 |
+| mxfp8 | 1152 | 128 | half_half | 30.437 (25.958–39.750) | 65.375 (51.875–84.250) | 1.006527e-5 | 1.652893e-2 | 3.807458e-3 | 1.774310e2 | 0 |
+| mxfp8 | 1152 | 128 | half_mxfp8 | 77.646 (65.875–98.042) | 65.375 (51.875–84.250) | 4.447997e-6 | 1.652893e-2 | 3.807935e-3 | 1.774310e2 | 0 |
+| mxfp8 | 1152 | 128 | fp8_mxfp8 | 110.312 (93.708–139.125) | 65.375 (51.875–84.250) | 4.851465e-1 | 2.218242e3 | 5.328316e-1 | 2.632042e4 | 254854 |
+| mxfp8 | 2304 | 8 | half_half | 30.125 (28.500–38.625) | 40.000 (39.292–40.125) | 9.967946e-6 | 9.942377e-4 | 3.519730e-3 | 3.480334e0 | 0 |
+| mxfp8 | 2304 | 8 | half_mxfp8 | 63.771 (63.417–64.208) | 40.000 (39.292–40.125) | 5.956739e-6 | 8.910387e-4 | 3.519730e-3 | 3.469261e0 | 0 |
+| mxfp8 | 2304 | 8 | fp8_mxfp8 | 67.042 (66.125–68.250) | 40.000 (39.292–40.125) | 5.591085e-1 | 1.200828e2 | 6.183425e-1 | 1.299420e3 | 11845 |
+| mxfp8 | 2304 | 32 | half_half | 31.458 (28.292–40.417) | 37.188 (35.250–43.917) | 1.387578e-5 | 2.574236e-2 | 4.682115e-3 | 1.353326e1 | 0 |
+| mxfp8 | 2304 | 32 | half_mxfp8 | 65.250 (64.750–93.958) | 37.188 (35.250–43.917) | 6.187474e-6 | 4.665459e-3 | 4.682592e-3 | 1.347449e1 | 0 |
+| mxfp8 | 2304 | 32 | fp8_mxfp8 | 87.250 (86.542–102.500) | 37.188 (35.250–43.917) | 5.226501e-1 | 2.026442e3 | 5.620029e-1 | 1.823111e3 | 47276 |
+| mxfp8 | 2304 | 64 | half_half | 30.479 (30.000–36.125) | 57.812 (57.250–68.500) | 1.518056e-5 | 1.342616e-2 | 4.305291e-3 | 3.127749e2 | 0 |
+| mxfp8 | 2304 | 64 | half_mxfp8 | 69.479 (69.125–81.167) | 57.812 (57.250–68.500) | 6.819144e-6 | 2.900713e-2 | 4.303145e-3 | 3.119137e2 | 0 |
+| mxfp8 | 2304 | 64 | fp8_mxfp8 | 97.979 (96.500–114.625) | 57.812 (57.250–68.500) | 6.061427e-1 | 3.513896e4 | 5.855727e-1 | 4.233749e5 | 94126 |
+| mxfp8 | 2304 | 128 | half_half | 73.625 (55.875–144.375) | 101.187 (100.417–110.083) | 2.235547e-5 | 7.053607e-2 | 4.395104e-3 | 5.299479e1 | 0 |
+| mxfp8 | 2304 | 128 | half_mxfp8 | 126.625 (126.125–137.875) | 101.187 (100.417–110.083) | 7.786322e-6 | 4.164027e-2 | 4.393673e-3 | 5.303631e1 | 0 |
+| mxfp8 | 2304 | 128 | fp8_mxfp8 | 185.521 (183.750–234.125) | 101.187 (100.417–110.083) | 7.259706e-1 | 1.979939e4 | 6.424018e-1 | 6.880839e3 | 187773 |
+
+The exploratory shaders were compiled with Metal 4.1 and linked before timing:
+
+```sh
+xcrun -sdk macosx metal -std=metal4.1 -c zig/src/core/metal_fp4/split_fast.metal -o .work/tmp/split_fast.air
+xcrun -sdk macosx metal -std=metal4.1 -c zig/src/core/metal_fp4/split_more.metal -o .work/tmp/split_more.air
+xcrun -sdk macosx metallib .work/tmp/split_fast.air -o .work/tmp/split_fast.metallib
+xcrun -sdk macosx metallib .work/tmp/split_more.air -o .work/tmp/split_more.metallib
+zig build test-fp4-kernels -Dcpu=apple_m1
+zig build tf-split-bf16-bench -Dcpu=apple_m1
+```
+
+The combined build and test exited 0 under `heavy.py`. The measurement used the same wrapper as above with `GPU_GATE_MAX_GPU_PCT=60 GPU_GATE_MAX_UTIL_PCT=60`. Its third attempt exited 0 and printed `bench_exit=0 post_cpu_exit=0`; the first two attempts were discarded because the immediate post-run CPU check returned 75. Peak charged memory in the accepted attempt was 0.8 GB and worst host pressure was 2.

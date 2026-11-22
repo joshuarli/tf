@@ -572,3 +572,12 @@ these layers of Hugging Face transformers' `src/transformers/models/inkling2/mod
 `Inkling2NormedEmbedding`, `Inkling2BlockAttentionResidual`, `Inkling2ShortConvolution`,
 `Inkling2DynamicShortConvolution`, `Inkling2TopKRouter`, `Inkling2SoftcappedSwiGLU` and `Inkling2Softcap`. The kernels
 are TensorFold's own.
+
+## Sybil Solutions inference-optimisation skill
+
+`skills/inference-optimisation/` is a verbatim copy of the skill directory from
+[sybil-solutions/inference-optimisation-skill](https://github.com/sybil-solutions/inference-optimisation-skill)
+at commit `fda968e7fc1996aa23c67139c755fe541c9d4be0`, including its references, examples and executable scripts.
+Copyright (c) 2026 Sybil Solutions contributors. MIT License.
+See [the upstream license text](LICENSES/sybil-inference-optimisation-MIT.txt).
+These are developer/agent materials, not part of the native TensorFold runtime.

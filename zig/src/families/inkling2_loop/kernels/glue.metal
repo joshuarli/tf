@@ -320,18 +320,14 @@ inline float i2_bf(const device bfloat* p, size_t i) { return float(p[i]); }
 }
 
 // tanh in place, for a controller's width-wide gates.
-[[kernel]] void i2_tanh(device float* A [[buffer(0)]], constant i2_pair_args& a [[buffer(1)]],
-    uint i [[thread_position_in_grid]]) {
-  if (i >= a.count) return;
-  A[i] = precise::tanh(A[i]);
-}
-
-// A loop controller's output: cur - forget * cur + gain * message.
+// A loop controller's output from its raw gain and forget projections: cur - tanh(forget) * cur + tanh(gain) * message.
 [[kernel]] void i2_ctl(const device float* CUR [[buffer(0)]], const device float* MSG [[buffer(1)]],
     const device float* GAIN [[buffer(2)]], const device float* FORGET [[buffer(3)]],
     constant i2_pair_args& a [[buffer(4)]], device float* O [[buffer(5)]], uint i [[thread_position_in_grid]]) {
   if (i >= a.count) return;
-  O[i] = CUR[i] - FORGET[i] * CUR[i] + GAIN[i] * MSG[i];
+  const float gain = precise::tanh(GAIN[i]);
+  const float forget = precise::tanh(FORGET[i]);
+  O[i] = CUR[i] - forget * CUR[i] + gain * MSG[i];
 }
 
 [[kernel]] void i2_copy(const device float* X [[buffer(0)]], device float* O [[buffer(1)]],
@@ -354,29 +350,45 @@ struct i2_bcast_args { uint count, rows; };
 }
 
 // One token's top-k by sigmoid(logits) with the gate bias on the selection only; weights over the unbiased picks.
+// One simdgroup: each lane holds experts lane, lane+32, ...; every round reduces (value, index) across lanes with
+// ties to the lower index, the order the serial scan kept, and the weight denominator sums in pick order.
 [[kernel]] void i2_route(const device float* L [[buffer(0)]], const device float* bias [[buffer(1)]],
-    constant i2_route_args& a [[buffer(2)]], device int* picks [[buffer(3)]], device float* wts [[buffer(4)]]) {
+    constant i2_route_args& a [[buffer(2)]], device int* picks [[buffer(3)]], device float* wts [[buffer(4)]],
+    uint lane [[thread_index_in_simdgroup]]) {
   const uint E = a.experts, K = a.topk;
-  float probs[128];
-  float sel[128];
-  for (uint e = 0; e < E; ++e) {
-    probs[e] = 1.0f / (1.0f + precise::exp(-L[e]));
-    sel[e] = probs[e] + bias[e];
+  float probs[4], sel[4];
+  for (uint j = 0; j < 4; ++j) {
+    const uint e = lane + 32u * j;
+    probs[j] = e < E ? 1.0f / (1.0f + precise::exp(-L[e])) : 0.0f;
+    sel[j] = e < E ? probs[j] + bias[e] : NAN;
   }
+  float picked[16];
   float denom = 0.0f;
   for (uint k = 0; k < K; ++k) {
-    uint best = E;
-    for (uint e = 0; e < E; ++e) {
-      if (isnan(sel[e])) continue;
-      if (best == E || sel[e] > sel[best]) best = e;
+    float bv = 0.0f;
+    uint bi = E;
+    for (uint j = 0; j < 4; ++j) {
+      const uint e = lane + 32u * j;
+      if (e < E && !isnan(sel[j]) && (bi == E || sel[j] > bv)) { bv = sel[j]; bi = e; }
     }
-    picks[k] = int(best);
-    if (best != E) {
-      denom += probs[best];
-      sel[best] = NAN;
+    for (ushort off = 16; off > 0; off >>= 1) {
+      const float ov = simd_shuffle_down(bv, off);
+      const uint oi = simd_shuffle_down(bi, off);
+      if (lane + off < 32u && oi != E && (bi == E || ov > bv || (ov == bv && oi < bi))) { bv = ov; bi = oi; }
+    }
+    bi = simd_broadcast_first(bi);
+    if (lane == 0) picks[k] = int(bi);
+    if (bi != E) {
+      const uint j = bi / 32u;
+      const float p = simd_shuffle(probs[j], ushort(bi % 32u));
+      if (lane == bi % 32u) sel[j] = NAN;
+      denom += p;
+      picked[k] = p;
+    } else {
+      picked[k] = NAN;
     }
   }
-  for (uint k = 0; k < K; ++k) wts[k] = probs[uint(picks[k])] / (denom + 1e-20f) * a.route_scale;
+  if (lane == 0) for (uint k = 0; k < K; ++k) wts[k] = picked[k] / (denom + 1e-20f) * a.route_scale;
 }
 
 // f32 to bf16 over a row, for a check tool's write-back.

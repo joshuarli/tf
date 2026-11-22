@@ -84,6 +84,49 @@ def rejected(trials):
     return scorecard.collect_pairs(trials)[1]
 
 
+class PiServedIdentity(unittest.TestCase):
+    """Inkling serves as `Inkling-2-Mini@<rev>`, which the lowercase model key never prefixed."""
+
+    def identity(self, model_id):
+        return {"model_ids": [model_id], "models": [{"id": model_id, "owned_by": "tensorfold"}]}
+
+    def test_inkling_checkpoint_name_is_attributed(self):
+        problems = pi_run.identity_problems(self.identity("Inkling-2-Mini@ed40e7da625f"), binary_sha256="x",
+                                            model_key="inkling-2-mini", expected_model="")
+        self.assertFalse([p for p in problems if "do not name model" in p], problems)
+
+    def test_another_model_is_still_refused(self):
+        problems = pi_run.identity_problems(self.identity("flint-int4@3b93f9053b53"), binary_sha256="x",
+                                            model_key="inkling-2-mini", expected_model="")
+        self.assertTrue([p for p in problems if "do not name model" in p], problems)
+
+
+class GpuContention(unittest.TestCase):
+    """The GPU lock serialises campaign runs, but other processes on the host can still use the GPU mid-trial."""
+
+    def test_other_gpu_time_over_the_limit_invalidates_the_trial(self):
+        before = {10: ("server", 0), 20: ("WindowServer", 1_000)}
+        after = {10: ("server", 9_000_000_000), 20: ("WindowServer", 1_000_000_000)}
+        users, reasons = harness.gpu_contention(before, after, 10.0, own={10})
+        self.assertEqual([u["pid"] for u in users], [20])
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("10.0% GPU time", reasons[0])
+
+    def test_the_servers_own_gpu_time_and_a_quiet_host_pass(self):
+        before = {10: ("server", 0), 20: ("WindowServer", 1_000)}
+        after = {10: ("server", 9_000_000_000), 20: ("WindowServer", 1_000 + 100_000_000)}
+        self.assertEqual(harness.gpu_contention(before, after, 10.0, own={10})[1], [])
+
+    def test_the_trial_limit_follows_the_gate_setting(self):
+        from unittest import mock
+        before = {10: ("server", 0), 20: ("WindowServer", 1_000)}
+        after = {10: ("server", 9_000_000_000), 20: ("WindowServer", 1_000_000_000)}
+        with mock.patch.dict("os.environ", {"GPU_GATE_MAX_GPU_PCT": "35"}):
+            self.assertEqual(harness.gpu_contention(before, after, 10.0, own={10})[1], [])
+        with mock.patch.dict("os.environ", {"GPU_GATE_MAX_GPU_PCT": "5"}):
+            self.assertEqual(len(harness.gpu_contention(before, after, 10.0, own={10})[1]), 1)
+
+
 class PromptLengthPins(unittest.TestCase):
     """The corpus was sized with Flint's tokenizer; an Inkling 1,349-token prompt was marked invalid against 1024."""
 

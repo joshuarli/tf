@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "exceptions": [
+    {
+      "history": "harbour",
+      "onset_position": 556,
+      "mechanism": "demonstrated routing discontinuity: the Metal pass takes the other side of reference router ties (slot 38 at 556 with an 8th/9th selection gap of 2.98e-08, slot 24 at 557 with a gap of 1.34e-07); forcing the reference's 8th picks reproduces Metal's logits to 9.1e-05 and 4.6e-05, and the corrupted state then persists",
+      "evidence": "campaign/parity/inkling2-mini/long-divergence.md"
+    },
+    {
+      "history": "cells_code",
+      "onset_position": 304,
+      "mechanism": "demonstrated routing discontinuity plus drift amplification: onset at 304 is MoE forward amplification of drift (all eight slot-47 inputs agree to <=5.9e-04 while l_out-47 differs on 40 elements up to 1.5e-03); row 656 is diffuse drift under 1e-3 on the same discrete path (prefix-matched sides agree on all 432x2304 values); reference-side router ties at slot 21, row 473 (gap ~3e-08, --force-pick 21,89,473 reproduces the full-history row to 4.1e-05) and row 690 (gap ~1.6e-07, --force-pick 21,120,690 reproduces the oracle row to 9.2e-05), with the 690 tie's state echo decaying through 694",
+      "evidence": "campaign/parity/inkling2-mini/long-divergence.md"
+    }
+  ]
+}

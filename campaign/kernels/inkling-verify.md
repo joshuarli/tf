@@ -255,6 +255,10 @@ charge. Dense includes the separately listed head.
 | 8 | 89.106 | 25.498 | 29.929 | 18.335 | 4.892 | 3.089 |
 | 16 | 154.503 | 53.365 | 60.172 | 18.159 | 4.889 | 2.185 |
 
+After both retained changes, the prefill parity commands at chunks 4 and 512 each exited 2
+with 14 histories within contract, two explained divergences, and zero unexplained. The
+candidate inference runs stayed below the 28 GB `heavy.py` cap.
+
 The family test passed with `TF_INKLING2_LOOP_DIR` set to the checkpoint and
 `python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1`. It compared
 repeated predictions after snapshot reset and continuation logits byte for byte across the local

@@ -151,7 +151,28 @@ opt-in until code is no slower than decode.
 restore, and accepted-prefix replay. It restores the initial cache before each width and alternates
 width order. The benchmark accepts half the rows, rounded down. A timeline run accepts zero rows
 to keep replay kernels out of the target-forward profile. Hybrid generation also reports round
-costs. The full-round baseline and hybrid throughput comparisons are not yet measured.
+costs. Hybrid throughput comparisons are not yet measured.
+
+One busy-host baseline process ran five rounds per width in alternating order from the same
+1,139-token prose cache state. The table gives median milliseconds for each component and the
+range of total round time. The round has no drafter; accepted rows are half the width rounded
+down. CPU argmax includes access to the shared logits buffer. Host time is the median of the
+total less the measured components; independently rounded component medians need not sum to it.
+The forward includes the vocabulary head. Kernel attribution remains to be measured separately.
+
+| Rows | Accepted | Save ms | Forward ms | Read and argmax ms | Restore ms | Replay ms | Host ms | Total ms (range) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0 | 0.371 | 39.344 | 0.319 | 0.271 | 0 | 0.007 | 40.318 (40.263–40.601) |
+| 2 | 1 | 0.400 | 44.955 | 0.657 | 0.305 | 39.353 | 0.021 | 85.670 (85.588–86.071) |
+| 4 | 2 | 0.467 | 68.402 | 1.311 | 0.357 | 44.936 | 0.022 | 115.566 (115.465–116.145) |
+| 8 | 4 | 0.600 | 102.735 | 2.708 | 0.913 | 68.461 | 0.022 | 175.543 (175.343–176.343) |
+| 16 | 8 | 0.939 | 150.172 | 5.492 | 1.202 | 102.757 | 0.025 | 260.610 (260.060–262.502) |
+
+The runner used `roundbench 5` under `heavy.py`, with `perf-gate-ready` and
+`gpu-gate-ready -1` before the run and their post-checks immediately after it. The busy-host
+GPU limits were 35% for time and utilization. This is one process, not an interleaved
+baseline/candidate comparison. Peak charged memory was 1.4 GB as reported by `heavy.py`;
+the resident checkpoint pages were already warm and this charge is not the model's footprint.
 
 The family test passed with `TF_INKLING2_LOOP_DIR` set to the checkpoint and
 `python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1`. It compared

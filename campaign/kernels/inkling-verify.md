@@ -420,6 +420,31 @@ includes the separately listed vocabulary head.
 | 8 | 89.131 | 25.487 | 29.933 | 18.309 | 4.914 | 3.091 |
 | 16 | 155.219 | 53.919 | 60.146 | 18.115 | 4.896 | 2.161 |
 
+### NVFP4 codebook decoding
+
+An experiment replaced per-slot NVFP4 codebook loads with the existing scalar decode
+function. Revert: five alternating pairs showed a regression at every short width. The
+candidate family test passed FP64 bounds and exact rollback continuation.
+
+| Rows | Save ms | Forward ms | Read and argmax ms | Restore ms | Replay ms | Host ms | Candidate total ms (range) | Baseline total ms (range) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.324 | 40.871 | 0.324 | 0.211 | 0 | 0.003 | 41.760 (41.679–41.772) | 40.418 (40.301–40.502) |
+| 2 | 0.354 | 46.806 | 0.665 | 0.241 | 40.849 | 0.016 | 88.926 (88.790–89.091) | 84.746 (84.530–84.780) |
+| 4 | 0.430 | 61.615 | 1.319 | 0.313 | 46.796 | 0.016 | 110.494 (110.200–110.704) | 101.655 (101.450–101.837) |
+| 8 | 0.563 | 97.956 | 2.646 | 1.223 | 61.639 | 0.017 | 164.117 (163.980–164.264) | 146.466 (146.091–146.642) |
+| 16 | 0.817 | 151.001 | 5.276 | 1.448 | 97.989 | 0.017 | 256.657 (256.028–256.840) | 244.807 (244.465–245.176) |
+
+The candidate split profile used the same five-round timeline and admission method. Dense
+includes the separately listed vocabulary head.
+
+| Rows | Summed GPU span ms | Dense ms | Expert gate/up and down ms | Attention ms | Route selection ms | Vocabulary head ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 43.269 | 11.348 | 5.943 | 11.229 | 4.933 | 1.579 |
+| 2 | 49.566 | 12.482 | 10.905 | 11.372 | 4.930 | 1.591 |
+| 4 | 64.330 | 15.616 | 21.065 | 12.675 | 4.905 | 1.719 |
+| 8 | 101.180 | 25.613 | 41.641 | 18.438 | 4.899 | 3.096 |
+| 16 | 155.116 | 53.812 | 60.187 | 18.247 | 4.894 | 2.161 |
+
 The family test passed with `TF_INKLING2_LOOP_DIR` set to the checkpoint and
 `python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1`. It compared
 repeated predictions after snapshot reset and continuation logits byte for byte across the local

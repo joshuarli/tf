@@ -82,6 +82,29 @@
   - **F2, W8A8 TensorOps experts.** MXFP8 experts use their own E4M3 bytes as E4M3×E4M3, or half×E4M3, with E8M0 scales. NVFP4 experts use half×fp4_e2m1 with their block scales. The measurement includes repacking, activation quantization, scale application and dispatch, and it compares full prefill time, not GEMM time alone.
   - **Order.** G0, extended with the fp16 and fp8 arms, gives the exploratory GEMM ceilings. F1 and F2 start after V4 because they share prefill.zig and prefill.metal, and they run serially.
   - **GPU contention.** The campaign gate is 60/60 (`campaign/bench/harness.py` CAMPAIGN_GPU_GATE).
+- **Owner steering 6 (2026-11-22): trade accuracy for large speed and throughput, and hold a three-way shootout.** The owner accepts lower fidelity to the f32 reference in exchange for much higher performance. The f32 path stays as the oracle. A new TensorFold **fast profile** is judged on task quality and Pi, and its agreement with the f32 oracle is reported but does not gate. This supersedes steering 5's "f32 remains the default" for the fast profile. Whether the fast profile becomes the shipped default is decided after the shootout.
+  - **Shootout protocol, declared before any result.**
+    - **Engines:** TensorFold; oMLX 0.8.3 (`jundot/omlx` `e72868da`, MLX 0.32.4); nanoattention `6f782a8d` (still `main` on 2026-11-22).
+    - **Host and order:** one host, the M5 Max. One engine resident at a time under `heavy.py` and the 60/60 gate, with interleaved alternating pairs (at least 3 per cell), labelled busy-host.
+    - **Prompts:** identical token ids for the code, prose and structured prompts at 1K, 4K and 16K. 16K is the largest that fits the 32K cap.
+    - **Decoding:** greedy at temperature 0, 512 generated tokens.
+    - **Configurations:**
+      - (a) each engine as shipped at its best: oMLX `Inkling-2-Mini-oQ4e-mtp` with Lightning MTP on (default depth 8) and off; nanoattention with its optimized knobs; TensorFold default and fast profile, each with and without speculation;
+      - (b) matched weights: the original checkpoint on every engine that loads it, and oQ4e on oMLX and on TensorFold once TensorFold loads it.
+    - **Metrics:** TTFT and prefill tok/s; decode tok/s as committed tokens over decode wall time; peak charged memory.
+    - **Fidelity:** teacher-forced agreement with the f32 oracle on the 16 parity histories (confident top-1 and mean KL), and each engine's first greedy divergence from the f32 path.
+    - **Served engines** (TensorFold and oMLX) also run the quality dev set and Pi.
+    - **Claims:** no "fastest" claim from isolated kernels or from a single cell.
+  - **What TensorFold must add to be comparable, as serial lanes after E4:**
+    - **H1, fast-profile prefill and decode:** half-precision matrix operands with f32 accumulation in dense, experts and attention, following nanoattention's ablated recipe and building on E4's staged weights.
+    - **H2, cheap speculation:** a bf16 DSpark drafter round, plus copy drafts up to 15 tokens.
+    - **H3, an oQ4e loader:** affine 4-bit experts for layers 20–23, and affine 8-bit attention, embeddings and head.
+  - **Fast-profile gate, declared before results:**
+    - quality dev at least 8 of the scorable cases (the f32 path scores 8/12 with retrieval-t05 beyond the cap), with no new refusal class;
+    - Pi checkers at least 7/8;
+    - no non-finite logits on the 16 histories;
+    - a paired speed win over the f32 default at 1K and 4K.
+  - **Comparator lanes:** O1 sets up oMLX 0.8.3 (source under `.work/src/`, the model under `~/models/` through `campaign/sources.lock.json`). N5 reruns nanoattention under this protocol.
 - **Known gap: kernel-contract registration.** `docs/kernel-contract.md` requires every GPU kernel to register before it lands, and none of the Inkling 2 Mini `i2p_*` kernels are registered, including the accepted P7, V3 and V4 kernels. Each candidate is proved by its own family tests and the parity gate. Registration is required before the family is promoted out of this campaign and is tracked as one family-wide item, not per lane.
 - **Accepted V4: parallel route selection** (`campaign/kernels/inkling-verify.md`, at main `6cd318428`). Route selection had a fixed cost of about 5.1 ms per forward on a single lane; it now takes 0.47 ms. Five alternating pairs give a width-4 verify round of 59.6 ms against 55.0 ms, busy-host. The logits are byte-identical on the 1,139-token prose fixture, prefill parity is unchanged at 14/2/0 at chunks 4 and 512, and the family tests pass. The round is still above the 45.4 ms that would revive DSpark. The same kernel runs in every prefill chunk.
 - **Colab: built and parked** (`campaign/colab/README.md`, "Verdict"). The budgeted harness works: one T4 smoke used under 0.01 CU, with driver 580.82 and CUDA 13.0. The Inkling campaign does not need it. Its bottlenecks are Metal-specific, its numerical studies run cheaper on the Mac's CPU, and full-model checks need either the 104 GB f32 oracle or the native Metal engine. Revisit it for large CUDA-portable sweeps or for TensorFold CUDA work.

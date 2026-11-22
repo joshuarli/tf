@@ -34,6 +34,11 @@ def record(item):
         f.flush()
 
 
+def clean_diagnostics(text):
+    return '\n'.join('[unrelated process details removed]' if ' command=' in line else line
+                     for line in text.splitlines())
+
+
 def worker(path):
     command = json.loads(Path(path).read_text())
     own = {os.getpid()}
@@ -50,7 +55,7 @@ def worker(path):
         reasons.append('pre-run performance gate failed')
     if reasons:
         print(json.dumps({'kind': 'worker', 'before': before, 'reasons': reasons,
-                          'perf_before': before_perf.stdout + before_perf.stderr}), flush=True)
+                          'perf_before': clean_diagnostics(before_perf.stdout + before_perf.stderr)}), flush=True)
         return 75
     gpu_before = harness.gpu_time_by_pid(strict=True)
     started = time.monotonic()
@@ -82,8 +87,8 @@ def worker(path):
                       'other_gpu_seconds': sum(user['gpu_s'] for user in users), 'other_gpu_clients': len(users),
                       'contention_window': 'whole engine process, including load and warmup',
                       'reasons': reasons, 'stdout': stdout, 'stderr': stderr, 'child_exit': child.returncode,
-                      'perf_before': before_perf.stdout + before_perf.stderr,
-                      'perf_after': after_perf.stdout + after_perf.stderr}), flush=True)
+                      'perf_before': clean_diagnostics(before_perf.stdout + before_perf.stderr),
+                      'perf_after': clean_diagnostics(after_perf.stdout + after_perf.stderr)}), flush=True)
     return child.returncode if child.returncode else 75 if reasons else 0
 
 
@@ -230,7 +235,8 @@ def summary():
             print(name, 'differences', [x['agreement']['first_different_generated_index'] for x in comparisons])
             for engine in ('tf', 'nano'):
                 parsed = [x['result'] for x in entries if re.fullmatch(rf'{name}/\d+/{engine}/parsed', x['label'])]
-                runs = [x for x in entries if re.fullmatch(rf'{name}/\d+/{engine}', x['label']) and x['exit'] == 0]
+                runs = [x for x in entries if re.fullmatch(rf'{name}/\d+/{engine}', x['label']) and x['exit'] == 0
+                        and 'stdout' in x.get('worker', {})]
                 if len(parsed) != 3 or len(runs) != 3:
                     print(engine, 'incomplete', len(parsed), len(runs))
                     continue

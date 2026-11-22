@@ -21,9 +21,10 @@ retain successful and rejected attempts. The remaining cells and oracle
 comparison are not yet complete.
 
 The 1,154-token prose cell has one completed pair, with its first generated
-difference at index 323. The second nanoattention trial passed; its TensorFold
-partner is waiting on the GPU lock. These partial trials do not establish a
-cell result.
+difference at index 323. The second nanoattention trial passed. Its TensorFold
+partner completed but the driver redacted its entire receipt and exited 1,
+so that trial was discarded. The driver now redacts individual diagnostic
+lines. These partial trials do not establish a cell result.
 
 The TensorFold raw-token runner was built from commit `86ca89451d882fd99bbfad7c7f9a86461e7c59e3`
 with Zig 0.17.1 and `-Dcpu=apple_m1`. Its SHA-256 is
@@ -72,7 +73,7 @@ sliding window:
 PYTHONDONTWRITEBYTECODE=1 /Users/josh/repos/tensorfold-m5/.work/venv-ref/bin/python campaign/parity/inkling2-mini/oracle.py --histories campaign/parity/inkling2-mini/histories.json --dir /Users/josh/repos/tensorfold-m5/.work/parity/inkling2-mini/ref
 ```
 
-The comparator tests exited 0 with 16 tests and three dependency-related
+The comparator tests exited 0 with 17 tests and four dependency-related
 skips. The skipped template and numerical regressions passed separately in
 the environment with Jinja, tokenizers and NumPy:
 

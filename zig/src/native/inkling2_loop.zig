@@ -81,6 +81,18 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
         problem.* = "INKLING_ROLLBACK_ROWS must be a positive integer";
         return null;
     };
+    const fork_window = rollbackRows(if (std.c.getenv("INKLING_FORK_WINDOW")) |v| std.mem.span(v) else "256") catch {
+        problem.* = "INKLING_FORK_WINDOW must be a positive integer";
+        return null;
+    };
+    const fork_interval = rollbackRows(if (std.c.getenv("INKLING_FORK_INTERVAL")) |v| std.mem.span(v) else "128") catch {
+        problem.* = "INKLING_FORK_INTERVAL must be a positive integer";
+        return null;
+    };
+    if (fork_window > 1024 or fork_interval > fork_window or (fork_window - 1) / fork_interval >= 8) {
+        problem.* = "INKLING_FORK_WINDOW must be at most 1024 and contain one to eight fork intervals";
+        return null;
+    }
     const pool = mtl.objc.Pool.push();
     defer pool.pop();
     const m = inkling.Model.load(gpa, io, o.dir) catch |err| {
@@ -88,6 +100,11 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
         return null;
     };
     errdefer m.deinit();
+    if (fork_window > m.config.text.window) {
+        m.deinit();
+        problem.* = "INKLING_FORK_WINDOW exceeds the model's local attention window";
+        return null;
+    }
     var ram: u64 = 0;
     var len: usize = @sizeOf(u64);
     if (std.c.sysctlbyname("hw.memsize", &ram, &len, null, 0) != 0) ram = 0;
@@ -112,13 +129,14 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
         return null;
     }
     const rollback: u64 = if (prefix_reuse) count *| inkling.Cache.rollbackBytes(&m.config, rollback_rows) else 0;
-    const budget = if (limit > resident + load_margin + rollback) limit - resident - load_margin - rollback else 0;
+    const forks: u64 = if (prefix_reuse) count *| ((fork_window + fork_interval - 1) / fork_interval) *| inkling.Cache.rollbackBytes(&m.config, fork_window) else 0;
+    const budget = if (limit > resident + load_margin + rollback + forks) limit - resident - load_margin - rollback - forks else 0;
     const most: usize = m.config.text.max_context;
     const fits = inkling.Cache.longestFitting(&m.config, budget / count, most);
     const window: i64 = o.context orelse @intCast(fits);
     if (window < 1 or window > fits) {
         const requested: u64 = if (window > 0) @intCast(window) else 0;
-        const total = resident +| load_margin +| rollback +| (count *| (inkling.Cache.fixedBytes(&m.config) +| (requested *| inkling.Cache.bytesPerToken(&m.config))));
+        const total = resident +| load_margin +| rollback +| forks +| (count *| (inkling.Cache.fixedBytes(&m.config) +| (requested *| inkling.Cache.bytesPerToken(&m.config))));
         problem.* = try std.fmt.allocPrint(a, "--parallel {d} --context {d}: Inkling needs {d} bytes including caches and reserves under a {d}-byte load limit; each session fits at most {d} tokens", .{ count, window, total, limit, fits });
         m.deinit();
         return null;
@@ -126,7 +144,7 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
     const per_slot = inkling.Cache.fixedBytes(&m.config) + @as(usize, @intCast(window)) * inkling.Cache.bytesPerToken(&m.config);
     std.log.info("inkling2_loop: {d} session caches, {d:.3} GiB per slot, {d:.3} GiB total rollback, context {d}", .{ count, @as(f64, @floatFromInt(per_slot)) / (1 << 30), @as(f64, @floatFromInt(rollback)) / (1 << 30), window });
     const eos = readEos(a, io, o.dir, m.config.eos);
-    const h = host_mod.openHost(gpa, io, m, @intCast(window), count, eos, limit, copy_drafts, prefix_reuse, rollback_rows) catch |err| {
+    const h = host_mod.openHost(gpa, io, m, @intCast(window), count, eos, limit, copy_drafts, prefix_reuse, rollback_rows, fork_window, fork_interval) catch |err| {
         m.deinit();
         problem.* = try std.fmt.allocPrint(a, "the native Inkling 2 Mini engine cannot hold {d} sessions of {d} tokens ({s})", .{ count, window, @errorName(err) });
         return null;

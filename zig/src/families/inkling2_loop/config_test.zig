@@ -18,6 +18,17 @@ test "oQ4e config admits affine weights and rejects a changed default" {
     try t.expectError(error.Quant, config.parse(t.allocator, edited, &why));
 }
 
+test "shard names collect every distinct index entry and reject unsafe paths" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const files = try config.shardNames(a, "{\"weight_map\":{\"b\":\"two.safetensors\",\"a\":\"one.safetensors\",\"c\":\"two.safetensors\"}}");
+    try t.expectEqual(@as(usize, 2), files.len);
+    try t.expectEqualStrings("one.safetensors", files[0]);
+    try t.expectEqualStrings("two.safetensors", files[1]);
+    try t.expectError(error.BadIndex, config.shardNames(a, "{\"weight_map\":{\"a\":\"../bad\"}}"));
+}
+
 fn failed(json: []const u8, from: []const u8, to: []const u8, want: anyerror, says: []const u8) !void {
     if (std.mem.count(u8, json, from) != 1) return error.EditAnchor;
     const edited = try std.mem.replaceOwned(u8, t.allocator, json, from, to);

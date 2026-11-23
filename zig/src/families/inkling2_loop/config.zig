@@ -119,26 +119,45 @@ pub const Expert = enum { nvfp4, mxfp8 };
 
 /// The text shard's file name, from `model.safetensors.index.json`; the checkpoint splits the text stack from the
 /// MTP head, so exactly one file holds it.
-pub fn shard(a: std.mem.Allocator, io: std.Io, dir: []const u8) ![]const u8 {
-    const idx = try std.fs.path.join(a, &.{ dir, "model.safetensors.index.json" });
-    defer a.free(idx);
-    const body = try std.Io.Dir.cwd().readFileAlloc(io, idx, a, .limited(1 << 26));
-    defer a.free(body);
-    const doc = try std.json.parseFromSliceLeaky(std.json.Value, a, body, .{});
+pub fn shardNames(a: std.mem.Allocator, body: []const u8) ![][]const u8 {
+    const doc = try std.json.parseFromSliceLeaky(std.json.Value, a, body, .{ .allocate = .alloc_always });
     if (doc != .object) return error.BadIndex;
     const map = doc.object.get("weight_map") orelse return error.BadIndex;
     if (map != .object) return error.BadIndex;
-    var found: ?[]const u8 = null;
+    var found: std.StringHashMapUnmanaged(void) = .empty;
     var it = map.object.iterator();
     while (it.next()) |kv| {
         if (kv.value_ptr.* != .string) return error.BadIndex;
         const f = kv.value_ptr.string;
-        if (std.mem.indexOf(u8, f, "..") != null or std.fs.path.isAbsolute(f)) return error.BadIndex;
-        if (found) |g| {
-            if (!std.mem.eql(u8, g, f)) return error.MultipleShards;
-        } else found = f;
+        if (f.len == 0 or std.mem.indexOf(u8, f, "..") != null or std.fs.path.isAbsolute(f)) return error.BadIndex;
+        try found.put(a, f, {});
     }
-    return a.dupe(u8, found orelse return error.BadIndex);
+    if (found.count() == 0) return error.BadIndex;
+    var names: std.ArrayList([]const u8) = .empty;
+    var keys = found.keyIterator();
+    while (keys.next()) |name| try names.append(a, name.*);
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn less(_: void, x: []const u8, y: []const u8) bool {
+            return std.mem.lessThan(u8, x, y);
+        }
+    }.less);
+    return names.toOwnedSlice(a);
+}
+
+pub fn shards(a: std.mem.Allocator, io: std.Io, dir: []const u8) ![][]const u8 {
+    const idx = try std.fs.path.join(a, &.{ dir, "model.safetensors.index.json" });
+    defer a.free(idx);
+    const body = try std.Io.Dir.cwd().readFileAlloc(io, idx, a, .limited(1 << 26));
+    defer a.free(body);
+    return shardNames(a, body);
+}
+
+pub fn shard(a: std.mem.Allocator, io: std.Io, dir: []const u8) ![]const u8 {
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const files = try shards(arena.allocator(), io, dir);
+    if (files.len != 1) return error.MultipleShards;
+    return a.dupe(u8, files[0]);
 }
 
 /// Each layer's expert format from its `w13_weight` header: packed U8 is NVFP4, F8_E4M3 is MXFP8.

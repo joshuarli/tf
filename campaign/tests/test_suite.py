@@ -42,6 +42,7 @@ class Selection(unittest.TestCase):
         gpu = by_name["inkling-gpu"]
         self.assertTrue(gpu.no_skips and by_name["inkling-host"].no_skips)
         self.assertEqual(dict(gpu.env)["TF_INKLING2_LOOP_DIR"], str(suite.INKLING))
+        self.assertEqual(dict(gpu.env)["TF_INKLING2_LOOP_OQ4E_DIR"], str(suite.INKLING_OQ4E))
         self.assertIn("inkling-weights", gpu.needs)
         self.assertIn("--summary", gpu.command)
 

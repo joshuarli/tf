@@ -152,7 +152,7 @@ pub const Forward = struct {
 
     fn affineLin(f: Forward, w: Tensor, x: B, out: B, n: u32, cap: f32) void {
         const p = f.m.affine_pipes.?;
-        const args = AffineDense{ .n = n, .k = @intCast(width(w)), .rows = 1, .xs = 1, .xb = 0, .bits = if (w.affine) |q| q.bits else 0, .cap = cap };
+        const args = AffineDense{ .n = n, .k = @intCast(width(w)), .rows = 1, .xs = 1, .xb = 0, .bits = if (w.affine) |q| q.bits() else 0, .cap = cap };
         if (w.affine) |q| {
             f.setRaw(p.dense, args, &.{ x, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out });
         } else f.setRaw(p.float, args, &.{ x, t(w), A, out });
@@ -491,7 +491,7 @@ pub const Forward = struct {
             f.copyN(b(s.router), bo(s.capture, start * 4), E);
             f.copyN(t(lay.router_bias), bo(s.capture, (start + E) * 4), E);
         }
-        if (lay.affine_expert) {
+        if (lay.precision == .affine4) {
             const p = m.affine_pipes.?;
             const args = AffineExpert{ .k = f.h, .n = inter, .slots = K, .topk = K, .gate_cap = c.text.gate_cap, .up_cap = c.text.up_cap };
             f.setRaw(p.up, args, &.{ input, t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), b(s.picks), A, b(s.act) });
@@ -502,13 +502,13 @@ pub const Forward = struct {
             f.enc.dispatchThreads(mtl.Size.of(f.h, 1, 1), mtl.Size.of(256, 1, 1));
             return;
         }
-        const codes = b(if (lay.mxfp8) m.t256 else m.t16);
-        f.setExpert(lay.mxfp8, .gu, Moe{ .k = f.h, .n = inter, .rows = 2 * inter, .gate_cap = c.text.gate_cap, .up_cap = c.text.up_cap }, &.{
+        const codes = b(if (lay.precision == .mxfp8) m.t256 else m.t16);
+        f.setExpert(lay.precision == .mxfp8, .gu, Moe{ .k = f.h, .n = inter, .rows = 2 * inter, .gate_cap = c.text.gate_cap, .up_cap = c.text.up_cap }, &.{
             input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.picks), b(s.order), A, b(s.act), codes,
         });
         f.enc.dispatchGroups(mtl.Size.of(inter, K, 1), mtl.Size.of(32, 1, 1));
         const down = Moe{ .k = inter, .n = f.h, .rows = f.h, .gate_cap = 0, .up_cap = 0 };
-        if (lay.mxfp8) {
+        if (lay.precision == .mxfp8) {
             f.setExpert(true, .down, down, &.{
                 b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.picks), b(s.order), A, b(s.down),
             });

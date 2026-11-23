@@ -130,6 +130,76 @@ fn experts(c: *const config.Config, i: u32, prec: Precision, sink: anytype) !voi
                 try put(sink, "model.llm.layers.{d}.mlp.experts." ++ w ++ "_weight", L, .f8_e4m3, &.{ e, r, k }, if (n == 0) .expert_w13 else .expert_w2);
                 try put(sink, "model.llm.layers.{d}.mlp.experts." ++ w ++ "_weight_scale", L, .u8, &.{ e, r, k / mxfp8_group }, if (n == 0) .expert_w13_scale else .expert_w2_scale);
             },
+            .affine4, .affine8 => return error.Unsupported,
+        }
+    }
+}
+
+fn mlxLinear(sink: anytype, name: []const u8, rows: u64, cols: u64, bits: u64, role: Role) !void {
+    var buf: [160]u8 = undefined;
+    try sink.put(try std.fmt.bufPrint(&buf, "{s}.weight", .{name}), .u32, &.{ rows, cols * bits / 32 }, role);
+    try sink.put(try std.fmt.bufPrint(&buf, "{s}.scales", .{name}), .bf16, &.{ rows, cols / 64 }, role);
+    try sink.put(try std.fmt.bufPrint(&buf, "{s}.biases", .{name}), .bf16, &.{ rows, cols / 64 }, role);
+}
+
+fn mlxBackbone(c: *const config.Config, sink: anytype) !void {
+    const h: u64 = c.text.hidden;
+    const inter: u64 = c.text.expert_inter;
+    const e: u64 = c.text.experts;
+    try mlxLinear(sink, "model.embed", c.text.vocab, h, 8, .embed);
+    try mlxLinear(sink, "lm_head", c.text.vocab, h, 8, .unembed);
+    try put(sink, "model.embed_norm.weight", .{}, .bf16, &.{h}, .embed_norm);
+    try put(sink, "model.norm.weight", .{}, .bf16, &.{h}, .final_norm);
+    try put(sink, "model.final_input.query", .{}, .f32, &.{ 1, h }, .attn_res_output_query);
+    for (0..c.text.layers) |n| {
+        const i: u32 = @intCast(n);
+        const heads = c.heads(i);
+        const q: u64 = @as(u64, heads.q) * heads.dim;
+        const kv: u64 = @as(u64, heads.kv) * heads.dim;
+        const rel: u64 = @as(u64, heads.q) * c.text.d_rel;
+        const full = c.isFull(i);
+        var buf: [128]u8 = undefined;
+        const prefix = try std.fmt.bufPrint(&buf, "model.layers.{d}.attn.{s}", .{ i, if (full) "q_proj" else "in_proj" });
+        try mlxLinear(sink, prefix, q + (if (full) @as(u64, 0) else 2 * kv) + rel + q + heads.q, h, 8, .attn_q);
+        if (full) {
+            inline for (.{ "k", "v" }) |kind| {
+                const name = try std.fmt.bufPrint(&buf, "model.layers.{d}.attn." ++ kind ++ "_proj", .{i});
+                try mlxLinear(sink, name, kv + @as(u64, heads.kv) * 4, h, 8, if (kind[0] == 'k') .attn_k else .attn_v);
+                try put(sink, "model.layers.{d}.attn." ++ kind ++ "_static", .{i}, .bf16, &.{ 4, kv }, .sconv_static);
+                try put(sink, "model.layers.{d}." ++ kind ++ "_input_norm.weight", .{i}, .bf16, &.{h}, .input_norm);
+            }
+        } else {
+            inline for (.{ "k", "v" }) |kind| try put(sink, "model.layers.{d}.attn." ++ kind ++ "_conv", .{i}, .bf16, &.{ kv, 4 }, .sconv_post);
+            try put(sink, "model.layers.{d}.attn_norm.weight", .{i}, .bf16, &.{h}, .input_norm);
+        }
+        if (full) try put(sink, "model.layers.{d}.q_input_norm.weight", .{i}, .bf16, &.{h}, .input_norm);
+        try mlxLinear(sink, try std.fmt.bufPrint(&buf, "model.layers.{d}.attn.o_proj", .{i}), h, q, 8, .attn_o);
+        try put(sink, "model.layers.{d}.attn.q_scale", .{i}, .bf16, &.{ heads.q, heads.dim }, .attn_q_scale);
+        try put(sink, "model.layers.{d}.attn.r_scale", .{i}, .bf16, &.{ heads.q, c.text.d_rel }, .attn_r_scale);
+        try put(sink, "model.layers.{d}.attn.rel_proj", .{i}, .bf16, &.{ c.text.d_rel, c.extent(i) }, .attn_rel_bias);
+        try put(sink, "model.layers.{d}.attn_conv", .{i}, .bf16, &.{ h, 4 }, .sconv_post);
+        try put(sink, "model.layers.{d}.mlp_conv", .{i}, .bf16, &.{ h, 4 }, .sconv_post);
+        try put(sink, "model.layers.{d}.mlp_norm.weight", .{i}, .bf16, &.{h}, .input_norm);
+        try put(sink, "model.layers.{d}.mlp.router_weight", .{i}, .f32, &.{ e, h }, .router);
+        try put(sink, "model.layers.{d}.mlp.router_bias", .{i}, .f32, &.{e}, .router_bias);
+        try put(sink, "model.layers.{d}.mlp_input.query", .{i}, .f32, &.{ 1, h }, .attn_res_mlp_query);
+        if (i > 0) try put(sink, "model.layers.{d}.attn_input.query", .{i}, .f32, &.{ if (full) 3 else 1, h }, .attn_res_attn_query);
+        if (i >= c.loop.core_start and i < c.loop.core_end) {
+            try put(sink, "model.layers.{d}.loop_down", .{i}, .f32, &.{ 4, 2, h, c.loop.gate_rank }, .controller_down);
+            try put(sink, "model.layers.{d}.loop_gain_forget", .{i}, .f32, &.{ 4, c.loop.gate_rank, 2 * h }, .controller_gain);
+            try put(sink, "model.layers.{d}.loop_message.query", .{i}, .f32, &.{ 4, h }, .cross_pass_query);
+        }
+        inline for (.{ "w13", "w2" }, 0..) |w, j| {
+            const rows: u64 = if (j == 0) 2 * inter else h;
+            const cols: u64 = if (j == 0) h else inter;
+            try put(sink, "model.layers.{d}.mlp.experts." ++ w ++ ".weight", .{i}, .u32, &.{ e, rows, cols / 8 }, if (j == 0) .expert_w13 else .expert_w2);
+            if (i < 20) {
+                try put(sink, "model.layers.{d}.mlp.experts." ++ w ++ ".scales", .{i}, .u8, &.{ e, rows, cols / 16 }, if (j == 0) .expert_w13_scale else .expert_w2_scale);
+                try put(sink, "model.layers.{d}.mlp.experts." ++ w ++ ".global_scale", .{i}, .f32, &.{e}, if (j == 0) .expert_w13_amax else .expert_w2_amax);
+            } else {
+                try put(sink, "model.layers.{d}.mlp.experts." ++ w ++ ".scales", .{i}, .bf16, &.{ e, rows, cols / 64 }, if (j == 0) .expert_w13_scale else .expert_w2_scale);
+                try put(sink, "model.layers.{d}.mlp.experts." ++ w ++ ".biases", .{i}, .bf16, &.{ e, rows, cols / 64 }, if (j == 0) .expert_w13_scale else .expert_w2_scale);
+            }
         }
     }
 }
@@ -217,8 +287,12 @@ fn draft(m: Mtp, text: *const Text, sink: anytype) !void {
 pub fn all(c: *const config.Config, prec: []const Precision, file: File, sink: anytype) !void {
     switch (file) {
         .model => {
-            try backbone(c, prec, sink);
-            try vision(&c.vision, sink);
+            if (c.checkpoint == .mlx) {
+                try mlxBackbone(c, sink);
+            } else {
+                try backbone(c, prec, sink);
+                try vision(&c.vision, sink);
+            }
         },
         .mtp => try draft(c.mtp orelse return error.NoDraftHead, &c.text, sink),
     }
@@ -304,6 +378,20 @@ fn checkMxfp8(entries: st.Header, prefix: []const u8, n: u64, k: u64, why: *conf
 
 /// Every dotted expert layer's NVFP4 or MXFP8 geometry; a corrupted shape or scale is refused by tensor name.
 pub fn geometry(c: *const config.Config, entries: st.Header, why: *config.Why) !void {
+    if (c.checkpoint == .mlx) {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const report = try check(arena.allocator(), c, entries, .model);
+        if (report.missing.items.len != 0) {
+            why.set("{s}: missing", .{report.missing.items[0]});
+            return error.BadGeometry;
+        }
+        if (report.wrong.items.len != 0) {
+            why.set("{s}: wrong dtype or shape", .{report.wrong.items[0]});
+            return error.BadGeometry;
+        }
+        return;
+    }
     var prec: [config.max_layers]Precision = undefined;
     precisions(entries, c.text.layers, &prec) catch |e| {
         why.set("expert tensors do not say NVFP4 (U8) or MXFP8 (F8_E4M3): {s}", .{@errorName(e)});
@@ -325,6 +413,7 @@ pub fn geometry(c: *const config.Config, entries: st.Header, why: *config.Why) !
                 try checkMxfp8(entries, p13, 2 * m, h, why);
                 try checkMxfp8(entries, p2, h, m, why);
             },
+            .affine4, .affine8 => return error.Unsupported,
         }
     }
 }
@@ -368,13 +457,13 @@ fn lessThan(_: void, a: []const u8, b: []const u8) bool {
 /// `entries` against the map of `file`; expert precisions come from the entries themselves (lists live in `arena`).
 pub fn check(arena: std.mem.Allocator, c: *const config.Config, entries: st.Header, file: File) !Report {
     var prec: [config.max_layers]Precision = undefined;
-    if (file == .model) try precisions(entries, c.text.layers, &prec);
+    if (file == .model and c.checkpoint == .modelopt) try precisions(entries, c.text.layers, &prec);
     const seen = try arena.alloc(bool, entries.count());
     @memset(seen, false);
     var r: Report = .{};
     var k: Checker = .{ .arena = arena, .entries = entries, .seen = seen, .report = &r };
     try all(c, &prec, file, &k);
-    for (entries.keys(), seen) |name, was| if (!was) try r.unknown.append(arena, name);
+    for (entries.keys(), seen) |name, was| if (!was and !(c.checkpoint == .mlx and std.mem.startsWith(u8, name, "vision_tower."))) try r.unknown.append(arena, name);
     std.mem.sort([]const u8, r.unknown.items, {}, lessThan);
     return r;
 }

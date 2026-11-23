@@ -11,6 +11,33 @@ const model_header = @embedFile("fixtures/model_header.json");
 const mtp_header = @embedFile("fixtures/mtp_header.json");
 const index_json = @embedFile("fixtures/index.json");
 
+test "oQ4e index text tensors have family roles" {
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var why: config.Why = .{};
+    const c = try config.parse(a, @embedFile("fixtures/oq4e-config.json"), &why);
+    const idx = try std.json.parseFromSliceLeaky(std.json.Value, a, @embedFile("fixtures/oq4e-index.json"), .{});
+    const map = idx.object.get("weight_map").?.object;
+    const roles = try names.roles(a, &c, .model);
+    var text_count: usize = 0;
+    for (map.keys()) |name| {
+        if (std.mem.startsWith(u8, name, "vision_tower.")) continue;
+        try t.expect(roles.contains(name));
+        text_count += 1;
+    }
+    try t.expectEqual(text_count, roles.count());
+    try t.expectEqual(names.Role.attn_q, roles.get("model.layers.0.attn.in_proj.weight").?);
+    try t.expectEqual(names.Role.expert_w13_scale, roles.get("model.layers.20.mlp.experts.w13.biases").?);
+    const entries = try header(a, @embedFile("fixtures/oq4e-header.json"));
+    const report = try names.check(a, &c, entries, .model);
+    if (!report.clean()) {
+        std.debug.print("missing {any} wrong {any} unknown {any}\n", .{ report.missing.items, report.wrong.items, report.unknown.items });
+    }
+    try t.expect(report.clean());
+    try names.geometry(&c, entries, &why);
+}
+
 fn load(a: std.mem.Allocator) !config.Config {
     var why: config.Why = .{};
     return config.parse(a, @embedFile("fixtures/config.json"), &why);

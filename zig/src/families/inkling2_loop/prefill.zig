@@ -559,7 +559,7 @@ const Chunk = struct {
 
     fn affineLin(c: Chunk, w: Tensor, x: In, out: B, n: u32, rows: u32, cap: f32) void {
         const p = c.m.affine_pipes.?;
-        const args = AffineDense{ .n = n, .k = @intCast(width(w)), .rows = rows, .xs = x.xs, .xb = x.xb, .bits = if (w.affine) |q| q.bits else 0, .cap = cap };
+        const args = AffineDense{ .n = n, .k = @intCast(width(w)), .rows = rows, .xs = x.xs, .xb = x.xb, .bits = if (w.affine) |q| q.bits() else 0, .cap = cap };
         if (w.affine) |q| {
             c.setP(p.dense, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out });
         } else c.setP(p.float, args, &.{ x.buf, t(w), A, out });
@@ -807,7 +807,7 @@ const Chunk = struct {
             c.copyN(t(lay.router_bias), bo(routes, (start + @as(usize, c.n) * (K + E)) * 4), E);
         }
         const slots: u32 = c.n * K;
-        if (lay.affine_expert) {
+        if (lay.precision == .affine4) {
             const p = m.affine_pipes.?;
             c.setP(p.up, MoeB{ .k = c.h, .n = inter, .slots = slots, .topk = K, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), b(s.picks), A, b(s.act) });
             c.enc.dispatchGroups(mtl.Size.of((inter + 7) / 8, slots, 1), mtl.Size.of(256, 1, 1));
@@ -818,9 +818,9 @@ const Chunk = struct {
             return;
         }
         if (c.n <= 8) {
-            const codes = b(if (lay.mxfp8) m.t256 else m.t16);
-            const gu = if (lay.mxfp8) s.pipes.gu_mx else s.pipes.gu_nv;
-            const down = if (lay.mxfp8) s.pipes.down_mx else s.pipes.down_nv;
+            const codes = b(if (lay.precision == .mxfp8) m.t256 else m.t16);
+            const gu = if (lay.precision == .mxfp8) s.pipes.gu_mx else s.pipes.gu_nv;
+            const down = if (lay.precision == .mxfp8) s.pipes.down_mx else s.pipes.down_nv;
             c.setP(gu, MoeB{ .k = c.h, .n = inter, .slots = slots, .topk = K, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.picks), A, b(s.act), codes });
             c.enc.dispatchGroups(mtl.Size.of(inter, slots, 1), mtl.Size.of(32, 1, 1));
             c.setP(down, MoeB{ .k = inter, .n = c.h, .slots = slots, .topk = K, .gate_cap = 0, .up_cap = 0 }, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.picks), A, b(s.down), codes });
@@ -837,10 +837,10 @@ const Chunk = struct {
         c.enc.dispatchThreads(mtl.Size.of(128, 1, 1), mtl.Size.of(128, 1, 1));
         c.setP(s.pipes.moe_sort, slots, &.{ b(s.picks), b(s.moe_cur), b(s.moe_sorted), A });
         c.enc.dispatchThreads(mtl.Size.of(slots, 1, 1), mtl.Size.of(32, 1, 1));
-        const codes = b(if (lay.mxfp8) m.t256 else m.t16);
-        const gu = if (lay.mxfp8) s.pipes.gu_g_mx else s.pipes.gu_g_nv;
-        const down = if (lay.mxfp8) s.pipes.down_g_mx else s.pipes.down_g_nv;
-        const matrix = if (lay.mxfp8) s.pipes.half_expert_mx orelse s.pipes.expert_matrix_mx else s.pipes.half_expert_nv orelse s.pipes.expert_matrix_nv;
+        const codes = b(if (lay.precision == .mxfp8) m.t256 else m.t16);
+        const gu = if (lay.precision == .mxfp8) s.pipes.gu_g_mx else s.pipes.gu_g_nv;
+        const down = if (lay.precision == .mxfp8) s.pipes.down_g_mx else s.pipes.down_g_nv;
+        const matrix = if (lay.precision == .mxfp8) s.pipes.half_expert_mx orelse s.pipes.expert_matrix_mx else s.pipes.half_expert_nv orelse s.pipes.expert_matrix_nv;
         c.setP(gu, Moeg{ .k = c.h, .n = inter, .slots = slots, .topk = K, .experts = E, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes });
         c.enc.dispatchGroups(mtl.Size.of(inter, E, 1), mtl.Size.of(32, 1, 1));
         const args_gu = Moeg{ .k = c.h, .n = inter, .slots = slots, .topk = K, .experts = E, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap };

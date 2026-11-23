@@ -5,7 +5,7 @@ const small = @import("inkling2_config");
 
 pub const Why = small.Why;
 
-pub const Kind = enum { nvfp4, mxfp8 };
+pub const Kind = enum { nvfp4, mxfp8, affine4, affine8 };
 
 /// One quantized parameter group: its layers, tensor count, stored block shape and activation block.
 pub const Group = struct {

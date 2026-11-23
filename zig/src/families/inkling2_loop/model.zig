@@ -9,13 +9,22 @@ const core = @import("core");
 const st = core.safetensors;
 const cfg = @import("config.zig");
 const kernels = @import("kernels.zig");
+const quant = @import("quant.zig");
 
 pub const Affine = struct {
     scales: mtl.Buffer,
     scale_offset: usize,
     biases: mtl.Buffer,
     bias_offset: usize,
-    bits: u32,
+    kind: quant.Kind,
+
+    pub fn bits(self: Affine) u32 {
+        return switch (self.kind) {
+            .affine4 => 4,
+            .affine8 => 8,
+            else => unreachable,
+        };
+    }
 };
 
 pub const Tensor = struct {
@@ -73,8 +82,7 @@ pub const Layer = struct {
     w2_den: ?Tensor = null,
     w13_bias: ?Tensor = null,
     w2_bias: ?Tensor = null,
-    affine_expert: bool = false,
-    mxfp8: bool,
+    precision: quant.Kind,
     controllers: [4]?Controller = @splat(null), // attn, k, v, mlp on the core layers
 };
 
@@ -284,12 +292,13 @@ pub const Model = struct {
     }
 
     fn affineWeight(m: *Model, base: []const u8, rows: usize, cols: usize, bits: u32) !Tensor {
+        if ((bits != 4 and bits != 8) or cols % 64 != 0) return error.BadGeometry;
         const a = m.arena.allocator();
         var words = try m.want(try std.fmt.allocPrint(a, "{s}.weight", .{base}), .u32, &.{ rows, cols / (32 / bits) });
         const scales = try m.want(try std.fmt.allocPrint(a, "{s}.scales", .{base}), .bf16, &.{ rows, cols / 64 });
         const biases = try m.want(try std.fmt.allocPrint(a, "{s}.biases", .{base}), .bf16, &.{ rows, cols / 64 });
         words.shape[1] = cols;
-        words.affine = .{ .scales = scales.buffer, .scale_offset = scales.offset, .biases = biases.buffer, .bias_offset = biases.offset, .bits = bits };
+        words.affine = .{ .scales = scales.buffer, .scale_offset = scales.offset, .biases = biases.buffer, .bias_offset = biases.offset, .kind = if (bits == 8) .affine8 else .affine4 };
         return words;
     }
 
@@ -419,8 +428,8 @@ fn affineRows(t: Tensor, start: usize, count: usize) Tensor {
     var out = t;
     const q = out.affine.?;
     const k = t.shape[1];
-    out.offset += start * k * q.bits / 8;
-    out.bytes = count * k * q.bits / 8;
+    out.offset += start * k * q.bits() / 8;
+    out.bytes = count * k * q.bits() / 8;
     out.shape[0] = count;
     out.affine.?.scale_offset += start * (k / 64) * 2;
     out.affine.?.bias_offset += start * (k / 64) * 2;
@@ -474,8 +483,7 @@ fn mapMlxLayer(m: *Model, i: u32) !Layer {
     out.w2_den = null;
     out.w13_bias = null;
     out.w2_bias = null;
-    out.mxfp8 = false;
-    out.affine_expert = false;
+    out.precision = if (i < 20) .nvfp4 else .affine4;
     out.controllers = @splat(null);
     if (full) {
         out.q_norm = try m.want(sub(a, p, "q_input_norm.weight"), .bf16, &.{h});
@@ -528,7 +536,6 @@ fn mapMlxLayer(m: *Model, i: u32) !Layer {
         out.w13_den = den;
         out.w2_den = den;
     } else {
-        out.affine_expert = true;
         out.w13_scale = try m.want(sub(a, w13, ".scales"), .bf16, &.{ experts, 2 * inter, h / 64 });
         out.w2_scale = try m.want(sub(a, w2, ".scales"), .bf16, &.{ experts, h, inter / 64 });
         out.w13_bias = try m.want(sub(a, w13, ".biases"), .bf16, &.{ experts, 2 * inter, h / 64 });
@@ -552,7 +559,7 @@ fn mapLayer(m: *Model, i: u32) !Layer {
     const E: usize = c.text.experts;
     const prec: cfg.Expert = m.formats[i];
     var out: Layer = undefined;
-    out.affine_expert = false;
+    out.precision = if (prec == .mxfp8) .mxfp8 else .nvfp4;
     out.w13_bias = null;
     out.w2_bias = null;
     if (full) {
@@ -588,7 +595,6 @@ fn mapLayer(m: *Model, i: u32) !Layer {
     out.mlp_post = try m.convWeight(sub(a, p, "mlp_sconv.weight"), h, true);
     out.router = try m.want(sub(a, p, "mlp.gate.weight"), .bf16, &.{ E, h });
     out.router_bias = try m.want(sub(a, p, "mlp.gate.bias"), .f32, &.{E});
-    out.mxfp8 = prec == .mxfp8;
     switch (prec) {
         .nvfp4 => {
             out.w13 = try m.want(sub(a, p, "mlp.experts.w13_weight"), .u8, &.{ E, 2 * inter, h / 2 });

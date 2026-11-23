@@ -1,6 +1,6 @@
 # Inkling 2 Mini on the M5 Max: TensorFold against oMLX and nanoattention
 
-**Status: draft.** The served comparison below is main after H5, H4b, P1 and B1g. Open: prefill speed and f16 KV. The final table replaces these numbers after they
+**Status: draft.** The served comparison below is main after H5, H4b, P1 and B1g. Open: f16 KV (memory, 8 agents, long context). The final table replaces these numbers after they
 land.
 
 ## Question
@@ -25,13 +25,13 @@ same weights and workload, with equal or better accuracy and memory.
 ## Served agents, same weights
 
 Aggregate output tokens per second, repetitions 1 and 2. oMLX numbers are from
-[inkling-omlx-concurrency.md](kernels/inkling-omlx-concurrency.md). TensorFold is main with H5, H4b, P1, B1g and B1h; the 2-agent row predates B1h.
+[inkling-omlx-concurrency.md](kernels/inkling-omlx-concurrency.md). TensorFold is main with H5, H4b, P1, B1g, B1h and P2; the 2-agent row predates B1h and P2.
 
 | Agents | TensorFold | oMLX 0.8.3 | TensorFold / oMLX, rep 2 |
 |---:|---:|---:|---:|
-| 1 | 22.8 / 41.7 | 26.0 / 45.2 | 0.92 |
+| 1 | 27.6 / 42.8 | 26.0 / 45.2 | 0.95 |
 | 2 | 33.4 / 47.1 | 54.5 / 59.4 | 0.79 |
-| 4 | 47.9 / 60.3 | 72.7 / 77.4 | 0.78 |
+| 4 | 55.1 / 67.6 | 72.7 / 77.4 | 0.87 |
 | 8 | does not fit 26 GB at 4,096 context with f32 KV | 70.1 / 70.0 (four slots) | — |
 
 TensorFold's 4-agent concurrent replies equal the same requests run alone. Peak charged memory was 20.5–23.4 GB.
@@ -43,6 +43,7 @@ The progression at 4 agents, on repetition 2, was:
 | P1 (prefix store) | 47.6 |
 | B1g (batched attention) | 57.2 |
 | B1h (fused batched decode) | 60.3 |
+| P2 (prefill on TensorOps) | 67.6 |
 
 ## Where the remaining time goes
 

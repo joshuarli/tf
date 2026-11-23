@@ -36,6 +36,10 @@ test "oQ4e index text tensors have family roles" {
     }
     try t.expect(report.clean());
     try names.geometry(&c, entries, &why);
+    var bad = try entries.clone(a);
+    bad.getPtr("model.layers.20.mlp.experts.w13.biases").?.shape[2] += 1;
+    try t.expectError(error.BadGeometry, names.geometry(&c, bad, &why));
+    try t.expect(std.mem.indexOf(u8, why.text(), "model.layers.20.mlp.experts.w13.biases") != null);
 }
 
 fn load(a: std.mem.Allocator) !config.Config {

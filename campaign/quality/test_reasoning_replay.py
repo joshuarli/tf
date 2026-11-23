@@ -64,6 +64,9 @@ class Tasks(unittest.TestCase):
         self.assertEqual(rr.conversations("chain", 2, turns=6)[1]["turns"][:5], rr.conversations("chain", 2)[1]["turns"])
         with self.assertRaises(ValueError):
             rr.conversations("code", 41)
+        for family in rr.FAMILIES:
+            short = rr.conversations(family, 3, turns=4)
+            self.assertEqual([c["turns"] for c in short], [c["turns"][:4] for c in rr.conversations(family, 3)])
 
     def test_chain_expectations_follow_the_stated_transforms(self):
         for conversation in rr.conversations("chain", 5, turns=6):
@@ -165,6 +168,16 @@ class Histories(unittest.TestCase):
         for body in replay.bodies + stripped.bodies:
             self.assertEqual((body["temperature"], body["max_tokens"], body["reasoning_effort"], body["stream"]),
                              (0, 64, "minimal", False))
+
+    def test_families_take_turns_and_no_conversation_starts_after_the_deadline(self):
+        selected = rr.conversations("chain", 2) + rr.conversations("recall", 2) + rr.conversations("code", 1)
+        self.assertEqual([c["id"] for c in rr.interleave(selected)],
+                         ["chain-00", "recall-00", "code-slug-0", "chain-01", "recall-01"])
+        client = self.Scripted()
+        self.assertEqual(rr.run_effort(client, "model", selected, "minimal", 64, 2, time.monotonic() - 1), 0)
+        self.assertEqual(client.bodies, [])
+        self.assertEqual(rr.run_effort(client, "model", selected, "minimal", 64, 2), 5)
+        self.assertEqual(len(client.bodies), 5 * len(rr.ARMS) * 5)
 
     def test_identical_bodies_are_sent_once_and_reload_offline(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -868,16 +868,21 @@ def code_conversation(project: dict, variant: int) -> dict:
 
 
 def conversations(family: str, count: int = CONVERSATIONS, turns: int = TURNS) -> list:
+    """The first `count` conversations of a family. Chain has `turns` turns; recall and code stop at five."""
     if family == "chain":
         return [chain_conversation(index, turns) for index in range(count)]
     if family == "recall":
-        return [recall_conversation(index) for index in range(count)]
-    if family == "code":
+        chosen = [recall_conversation(index) for index in range(count)]
+    elif family == "code":
         ordered = [code_conversation(project, variant) for variant in range(5) for project in PROJECTS]
         if count > len(ordered):
             raise ValueError(f"the code family has {len(ordered)} conversations, not {count}")
-        return ordered[:count]
-    raise ValueError(f"unknown family {family!r}")
+        chosen = ordered[:count]
+    else:
+        raise ValueError(f"unknown family {family!r}")
+    for conversation in chosen:
+        conversation["turns"] = conversation["turns"][:turns]
+    return chosen
 
 
 def reference(conversation: dict, turn: int) -> str:
@@ -1065,17 +1070,42 @@ def refused(text: str) -> dict:
             "error": text[:500]}
 
 
-def run_effort(client: Client, model: str, selected: list, effort: str, max_tokens: int, workers: int) -> None:
-    """Every shared first turn, then both arms of every conversation."""
+def run_effort(client: Client, model: str, selected: list, effort: str, max_tokens: int, workers: int,
+               deadline: float | None = None) -> int:
+    """Both arms of each conversation, `workers` conversations at a time, starting none after `deadline`.
+
+    A job sends the shared first turn and then each arm's later turns, so a conversation is complete once its
+    job ends. Families take turns in the queue, so a deadline cuts every family at about the same count.
+    Returns how many conversations ran."""
+    queue = interleave(selected)
+    started = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        firsts = [pool.submit(converse, client, model, conversation, effort, ARMS[0], max_tokens, 1)
-                  for conversation in selected]
-        for future in firsts:
-            future.result()
-        arms = [pool.submit(converse, client, model, conversation, effort, arm, max_tokens)
-                for conversation in selected for arm in ARMS]
-        for future in concurrent.futures.as_completed(arms):
-            future.result()
+        pending = set()
+        while queue or pending:
+            while queue and len(pending) < workers and (deadline is None or time.monotonic() < deadline):
+                conversation = queue.pop(0)
+                pending.add(pool.submit(both_arms, client, model, conversation, effort, max_tokens))
+                started += 1
+            if not pending:
+                break
+            finished, pending = concurrent.futures.wait(pending, return_when=concurrent.futures.FIRST_COMPLETED)
+            for future in finished:
+                future.result()
+    return started
+
+
+def both_arms(client, model: str, conversation: dict, effort: str, max_tokens: int) -> None:
+    for arm in ARMS:
+        converse(client, model, conversation, effort, arm, max_tokens)
+
+
+def interleave(selected: list) -> list:
+    """Round-robin over families, keeping each family's order."""
+    by_family = {}
+    for conversation in selected:
+        by_family.setdefault(conversation["family"], []).append(conversation)
+    lanes = list(by_family.values())
+    return [lane[index] for index in range(max(map(len, lanes), default=0)) for lane in lanes if index < len(lane)]
 
 
 def recheck(client: Client, sample: int, seed: str = SEED) -> dict:
@@ -1196,8 +1226,10 @@ def run(args) -> int:
                                      "time": time.strftime("%Y-%m-%dT%H:%M:%S")}) + "\n")
         for effort in efforts:
             started = time.monotonic()
-            run_effort(client, model, selected, effort, limits[effort], args.parallel)
-            print(f"effort {effort}: done in {time.monotonic() - started:.0f} s", file=sys.stderr, flush=True)
+            deadline = started + args.deadline_minutes * 60 if args.deadline_minutes else None
+            ran = run_effort(client, model, selected, effort, limits[effort], args.parallel, deadline)
+            print(f"effort {effort}: {ran} of {len(selected)} conversations in {time.monotonic() - started:.0f} s",
+                  file=sys.stderr, flush=True)
         if args.recheck:
             result = recheck(client, args.recheck)
             with (out / "recheck.jsonl").open("a", encoding="utf-8") as handle:
@@ -1521,7 +1553,7 @@ def main(argv=None) -> int:
         sub.add_argument("--families", default=",".join(FAMILIES))
         sub.add_argument("--efforts", default="minimal,high")
         sub.add_argument("--conversations", type=int, default=CONVERSATIONS, help="per family")
-        sub.add_argument("--turns", type=int, default=TURNS, help="chain turns; recall and code have five")
+        sub.add_argument("--turns", type=int, default=TURNS, help="turns per conversation; recall and code stop at five")
         sub.add_argument("--max-tokens", default="2048", help="N, or effort=N pairs such as minimal=2048,high=4096")
         sub.add_argument("--model", help="model id for the requests; default: the served id")
     run_parser = commands.choices["run"]
@@ -1534,6 +1566,8 @@ def main(argv=None) -> int:
                             help="tokens per session; four sessions fit at most 21982 under INKLING_LOAD_LIMIT_GB=26")
     run_parser.add_argument("--prompt-cache-gib", type=float, default=2)
     run_parser.add_argument("--recheck", type=int, default=0, help="resend this many answered bodies at the end")
+    run_parser.add_argument("--deadline-minutes", type=float, default=0,
+                            help="per effort: start no conversation after this long; 0 runs them all")
     score_parser = commands.choices["score"]
     score_parser.add_argument("--partial", action="store_true", help="score the complete pairs when some are missing")
     score_parser.add_argument("--sandbox-workers", type=int, default=4)

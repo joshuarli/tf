@@ -518,3 +518,77 @@ pub fn closeHost(ctx: *anyopaque) void {
     h.model.deinit();
     h.gpa.destroy(h);
 }
+
+
+test "inkling scheduler: queued jobs, finish and cancellation leave other slots running" {
+    const Capture = struct {
+        tokens: [4]usize = @splat(0),
+        reasons: [4]?api.Reason = @splat(null),
+
+        fn event(ctx: *anyopaque, id: api.Id, value: *const api.Event) void {
+            const capture: *@This() = @ptrCast(@alignCast(ctx));
+            switch (value.*) {
+                .tokens => |ids| capture.tokens[@intCast(id)] += ids.len,
+                .finished => |result| capture.reasons[@intCast(id)] = result.reason,
+                else => {},
+            }
+        }
+    };
+    var capture = Capture{};
+    const sink: api.Sink = .{ .ctx = &capture, .event = Capture.event };
+    const requests = [_]api.Request{
+        .{ .prompt = &.{1}, .max_tokens = 1 },
+        .{ .prompt = &.{2}, .max_tokens = 3 },
+        .{ .prompt = &.{3}, .max_tokens = 2 },
+    };
+    var slots = [_]Slot{ .{ .cache = undefined }, .{ .cache = undefined } };
+    for (&slots) |*slot| slot.cache.len = 0;
+    var h: Host = undefined;
+    h.gpa = std.testing.allocator;
+    h.io = std.testing.io;
+    h.slots = &slots;
+    h.eos = 42;
+    h.invalidated = .init(false);
+    h.mutex = .init;
+    h.wake = .init;
+    h.queued = .empty;
+    h.cancels = .empty;
+    h.decoded = .empty;
+    h.closing = false;
+    h.prefilling = false;
+    h.prefill_at = 0;
+    h.prefill_rate = 0;
+    defer {
+        h.queued.deinit(h.gpa);
+        h.cancels.deinit(h.gpa);
+        h.decoded.deinit(h.gpa);
+        for (&slots) |*slot| slot.resident.deinit(h.gpa);
+    }
+    for (&requests, 1..) |*request, id| try Host.submitFn(&h, @intCast(id), request, sink);
+    for (&slots) |*slot| {
+        slot.job = h.queued.orderedRemove(0);
+        slot.job.?.began = h.now();
+    }
+    var status: api.Status = undefined;
+    var stream_tokens: [2]u32 = undefined;
+    Host.statusFn(&h, &status, &stream_tokens);
+    try std.testing.expectEqual(@as(u32, 2), status.running);
+    try std.testing.expectEqual(@as(u32, 1), status.waiting);
+    h.token(&slots[0], 10);
+    try std.testing.expectEqual(@as(?api.Reason, .length), capture.reasons[1]);
+    try std.testing.expectEqual(@as(?api.Id, 2), if (slots[1].job) |job| job.id else null);
+    h.token(&slots[1], 11);
+    try std.testing.expectEqual(@as(usize, 1), capture.tokens[2]);
+    slots[0].job = h.queued.orderedRemove(0);
+    slots[0].job.?.began = h.now();
+    Host.cancelFn(&h, 2);
+    try std.testing.expect(h.cancelled(slots[1].job.?));
+    try std.testing.expect(!h.cancelled(slots[0].job.?));
+    h.retire(&slots[1], .cancelled, "");
+    try std.testing.expectEqual(@as(?api.Reason, .cancelled), capture.reasons[2]);
+    h.token(&slots[0], 12);
+    try std.testing.expectEqual(@as(usize, 1), capture.tokens[3]);
+    try std.testing.expectEqual(@as(?api.Reason, null), capture.reasons[3]);
+    h.token(&slots[0], 13);
+    try std.testing.expectEqual(@as(?api.Reason, .length), capture.reasons[3]);
+}

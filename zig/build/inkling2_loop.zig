@@ -50,6 +50,20 @@ pub fn tests(b: *std.Build, target: std.Build.ResolvedTarget, test_step: *std.Bu
         metal.linkFramework("Foundation", .{});
         metal.linkFramework("IOSurface", .{});
         metal.linkSystemLibrary("objc", .{});
+        const family = engineModule(b, target, metal, readers);
+        const facade_file = b.addWriteFiles().add("inkling_host_facade.zig", "pub const inkling2_loop = @import(\"inkling_family\");\n");
+        const facade = b.createModule(.{ .root_source_file = facade_file, .target = target, .optimize = .Debug, .link_libc = true });
+        facade.addImport("inkling_family", family);
+        const lanes = module(b, target, "zig/src/core/lanes/lanes.zig");
+        const api = module(b, target, "zig/src/core/engine_api.zig");
+        api.addImport("lanes", lanes);
+        const host = module(b, target, "zig/src/native/inkling2_loop_host.zig");
+        host.addImport("metal", metal);
+        host.addImport("tensorfold", facade);
+        host.addImport("engine_api", api);
+        const host_run = b.addRunArtifact(b.addTest(.{ .root_module = host, .filters = &.{"inkling scheduler:"} }));
+        step.dependOn(&host_run.step);
+        test_step.dependOn(&host_run.step);
         metalTests(b, target, metal, readers, test_step);
     }
 }

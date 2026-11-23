@@ -63,6 +63,8 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("{s}", .{usage});
         return error.ExpectedArgs;
     }
+    const profile_env: ?[]const u8 = if (std.c.getenv("INKLING_PROFILE")) |v| std.mem.span(v) else null;
+    _ = try inkling.profile(profile_env);
     const gpa = init.gpa;
     const pool = mtl.objc.Pool.push();
     defer pool.pop();

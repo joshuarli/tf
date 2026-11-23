@@ -502,6 +502,101 @@ struct i2p_gemm_args { uint n, k, rows, xs, xb; float cap; };
     O[((size_t)t * a.heads + h) * 128u + lane + 32u * u] = acc[u] / mass;
 }
 
+#ifdef I2P_HALF_OPERANDS
+[[kernel]] void i2p_attn_half(const device float* Q [[buffer(0)]], const device float* KEYS [[buffer(1)]],
+    const device float* VALUES [[buffer(2)]], const device float* B [[buffer(3)]], const device float* sink [[buffer(4)]],
+    constant i2p_attn_args& a [[buffer(5)]], device float* O [[buffer(6)]],
+    const device float* KC [[buffer(7)]], const device float* VC [[buffer(8)]],
+    device atomic_uint* overflow [[buffer(9)]], uint2 tg [[threadgroup_position_in_grid]], uint ti [[thread_index_in_threadgroup]]) {
+  constexpr uint D = 128, R = 32, K = 16, KP = 24, VP = 136;
+  const uint h = tg.x, kv = h / (a.heads / a.kv), q0 = tg.y * R;
+  const uint lane = ti % 32u, simd = ti / 32u;
+  const uint fr = ((lane / 4u) & 4u) + (lane / 2u) % 4u;
+  const uint fc = (((lane / 4u) & 2u) + lane % 2u) * 2u;
+  const uint row = q0 + 8u * simd + fr, pos = a.base + row;
+  const bool active = row < a.rows;
+  const uint first = a.base + q0, last = a.base + min(q0 + R, a.rows) - 1u;
+  const uint lower = a.window && first + 1u > a.window ? first + 1u - a.window : 0u;
+  const float tau = a.window ? 1.0f : 1.0f + a.alpha * precise::log(max(1.0f, (float(pos) + 1.0f) / a.floor));
+  simdgroup_half8x8 qfrag[D / 8], outprob[K / 8];
+  simdgroup_float8x8 result[D / 8];
+  for (uint j = 0; j < D / 8; ++j) {
+    for (uint e = 0; e < 2; ++e) {
+      float value = active ? Q[((size_t)row * a.heads + h) * D + j * 8u + fc + e] : 0.0f;
+      if (abs(value) > 65504.0f) atomic_fetch_add_explicit(overflow, 1u, memory_order_relaxed);
+      qfrag[j].thread_elements()[e] = half(clamp(value, -65504.0f, 65504.0f));
+    }
+    result[j] = make_filled_simdgroup_matrix<float, 8, 8>(0);
+  }
+  threadgroup half keys[D * KP], values[K * VP];
+  float maximum = 0.0f, denominator = 1.0f;
+  for (uint block = lower / K * K; block <= last; block += K) {
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const uint j = block + ti / 8u, col = (ti % 8u) * 16u;
+    for (uint d = 0; d < 16u; ++d) {
+      float key = 0.0f, value = 0.0f;
+      if (j <= last) {
+        const uint rj = a.rmode && a.window ? j % a.window : j;
+        const size_t at = ((j < a.base ? (size_t)rj : (size_t)(j - a.base)) * a.kv + kv) * D + col + d;
+        key = j < a.base ? KEYS[at] : KC[at];
+        value = j < a.base ? VALUES[at] : VC[at];
+      }
+      if (abs(key) > 65504.0f) atomic_fetch_add_explicit(overflow, 1u, memory_order_relaxed);
+      if (abs(value) > 65504.0f) atomic_fetch_add_explicit(overflow, 1u, memory_order_relaxed);
+      keys[(col + d) * KP + ti / 8u] = half(clamp(key, -65504.0f, 65504.0f));
+      values[(ti / 8u) * VP + col + d] = half(clamp(value, -65504.0f, 65504.0f));
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (q0 + simd * 8u >= a.rows) continue;
+    simdgroup_float8x8 scores[K / 8];
+    float bound = -INFINITY;
+    for (uint j8 = 0; j8 < K / 8; ++j8) {
+      scores[j8] = make_filled_simdgroup_matrix<float, 8, 8>(0);
+      for (uint k = 0; k < D / 8; ++k) {
+        simdgroup_half8x8 wk;
+        simdgroup_load(wk, keys + 8u * (k * KP + j8), ulong(KP));
+        simdgroup_multiply_accumulate(scores[j8], qfrag[k], wk, scores[j8]);
+      }
+      for (uint e = 0; e < 2; ++e) {
+        const uint key = block + j8 * 8u + fc + e;
+        float score = -INFINITY;
+        if (active && key <= pos && (!a.window || pos - key < a.window)) {
+          const uint distance = min(pos - key, a.extent);
+          score = (scores[j8].thread_elements()[e] * a.scale * tau + B[((size_t)row * a.heads + h) * (a.extent + 1u) + distance] - sink[(size_t)row * a.heads + h]) * M_LOG2E_F;
+        }
+        scores[j8].thread_elements()[e] = score;
+        bound = max(bound, score);
+      }
+    }
+    bound = max(bound, simd_shuffle_xor(bound, ushort(1)));
+    bound = max(bound, simd_shuffle_xor(bound, ushort(8)));
+    bound = max(bound, maximum);
+    const float rescale = precise::exp2(maximum - bound);
+    maximum = bound;
+    float weight_sum = 0.0f;
+    for (uint j8 = 0; j8 < K / 8; ++j8) for (uint e = 0; e < 2; ++e) {
+      const float weight = precise::exp2(scores[j8].thread_elements()[e] - bound);
+      weight_sum += weight;
+      outprob[j8].thread_elements()[e] = half(weight);
+    }
+    weight_sum += simd_shuffle_xor(weight_sum, ushort(1));
+    weight_sum += simd_shuffle_xor(weight_sum, ushort(8));
+    denominator = rescale * denominator + weight_sum;
+    for (uint j = 0; j < D / 8; ++j) {
+      result[j].thread_elements()[0] *= rescale;
+      result[j].thread_elements()[1] *= rescale;
+      for (uint k = 0; k < K / 8; ++k) {
+        simdgroup_half8x8 vv;
+        simdgroup_load(vv, values + k * 8u * VP + j * 8u, ulong(VP));
+        simdgroup_multiply_accumulate(result[j], outprob[k], vv, result[j]);
+      }
+    }
+  }
+  if (active) for (uint j = 0; j < D / 8; ++j) for (uint e = 0; e < 2; ++e)
+    O[((size_t)row * a.heads + h) * D + j * 8u + fc + e] = result[j].thread_elements()[e] / denominator;
+}
+#endif
+
 #ifdef I2P_MXFP8
 #define I2P_GROUP 32u
 #define I2P_MATRIX_THRESHOLD 8
@@ -870,6 +965,102 @@ struct i2p_moeg_args { uint k, n, slots, topk, experts; float gate_cap, up_cap; 
   }
 }
 
+#ifdef I2P_HALF_OPERANDS
+[[kernel]] void i2p_expert_matrix(const device float* X [[buffer(0)]], const device uchar* W [[buffer(1)]],
+    const device uchar* S [[buffer(2)]], const device float* amax [[buffer(3)]],
+    const device float* den [[buffer(4)]], const device int* OFF [[buffer(5)]],
+    const device int* ROW_OF [[buffer(6)]], constant i2p_moeg_args& a [[buffer(7)]],
+    device float* OUT [[buffer(8)]], const device float* CODES [[buffer(9)]],
+    device atomic_uint* overflow [[buffer(10)]],
+    uint3 tg [[threadgroup_position_in_grid]], uint ti [[thread_index_in_threadgroup]]) {
+  constexpr uint BM = 32, BN = 32, BK = 64, P = 72;
+  const uint expert = tg.y, m0 = tg.z * BM, n0 = tg.x * BN;
+  const int start = OFF[expert], end = OFF[expert + 1u];
+  if (end - start < I2P_MATRIX_THRESHOLD || m0 >= uint(end - start)) return;
+  const bool gu = a.gate_cap > 0.0f;
+  const uint cols = gu ? 2u * a.n : a.n, sg = ti / 32u, lane = ti % 32u;
+  threadgroup half x[BM * P], w[BN * P];
+  simdgroup_matrix<float, 8, 8> acc[4] = {simdgroup_matrix<float, 8, 8>(0.0f),
+    simdgroup_matrix<float, 8, 8>(0.0f), simdgroup_matrix<float, 8, 8>(0.0f),
+    simdgroup_matrix<float, 8, 8>(0.0f)};
+  for (uint k0 = 0; k0 < a.k; k0 += BK) {
+    for (uint i = ti; i < BM * BK / 4u; i += 128u) {
+      const uint r = i / (BK / 4u), k = (i % (BK / 4u)) * 4u;
+      const bool valid = m0 + r < uint(end - start) && k0 + k < a.k;
+      const uint slot = valid ? uint(ROW_OF[start + int(m0 + r)]) : 0u;
+      const uint xr = gu ? slot / a.topk : slot;
+      float4 value = 0.0f;
+      if (valid && k0 + k + 3u < a.k) value = *reinterpret_cast<const device float4*>(X + size_t(xr) * a.k + k0 + k);
+      else if (valid) for (uint j = 0; j < 4u && k0 + k + j < a.k; ++j) value[j] = X[size_t(xr) * a.k + k0 + k + j];
+      if (tg.x == 0u) {
+        const uint count = uint(abs(value.x) > 65504.0f) + uint(abs(value.y) > 65504.0f) + uint(abs(value.z) > 65504.0f) + uint(abs(value.w) > 65504.0f);
+        if (count) atomic_fetch_add_explicit(overflow, count, memory_order_relaxed);
+      }
+      *reinterpret_cast<threadgroup half4*>(x + r * P + k) = half4(clamp(value, -65504.0f, 65504.0f));
+    }
+    const uint n = n0 + ti / 4u, gk0 = k0 + (ti % 4u) * 16u;
+    const bool valid = n < cols && gk0 < a.k;
+    const size_t weight_row = size_t(expert) * cols + n;
+#ifdef I2P_MXFP8
+    const uint exponent = valid ? uint(S[weight_row * I2P_SCALE_STRIDE(a.k) + gk0 / I2P_GROUP]) : 0u;
+    const float scale = valid ? as_type<float>(exponent == 0u ? 0x00400000u : exponent << 23u) : 0.0f;
+    for (uint j = 0; j < 16u; ++j) {
+      float value = 0.0f;
+      if (valid && gk0 + j < a.k) value = CODES[W[weight_row * I2P_CODE_STRIDE(a.k) + gk0 + j]] * scale;
+      w[(ti / 4u) * P + (ti % 4u) * 16u + j] = half(clamp(value, -65504.0f, 65504.0f));
+    }
+#else
+    const float scale = valid ? i2p_decode_scale(S, weight_row * I2P_SCALE_STRIDE(a.k) + gk0 / I2P_GROUP) : 0.0f;
+    ulong packed = 0;
+    if (valid && gk0 + 15u < a.k) packed = *reinterpret_cast<const device ulong*>(W + weight_row * I2P_CODE_STRIDE(a.k) + gk0 / 2u);
+    for (uint j = 0; j < 16u; j += 4u) {
+      uint4 code = 0u;
+      if (valid && gk0 + 15u < a.k) code = uint4(packed >> (j * 4u)) >> uint4(0u, 4u, 8u, 12u) & 15u;
+      else if (valid) for (uint e = 0; e < 4u && gk0 + j + e < a.k; ++e) {
+        const uint at = gk0 + j + e;
+        code[e] = (W[weight_row * I2P_CODE_STRIDE(a.k) + at / 2u] >> ((at & 1u) * 4u)) & 15u;
+      }
+      const uint4 mag = code & 7u;
+      const uint4 bits = select(0x3f000000u + (mag << 22u), mag * 0x3f000000u, mag < 2u) | ((code & 8u) << 28u);
+      const float4 value = as_type<float4>(bits) * scale;
+      *reinterpret_cast<threadgroup half4*>(w + (ti / 4u) * P + (ti % 4u) * 16u + j) = half4(clamp(value, -65504.0f, 65504.0f));
+    }
+#endif
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint k = 0; k < BK; k += 8u) {
+      simdgroup_matrix<half, 8, 8> b;
+      simdgroup_load(b, w + sg * 8u * P + k, ulong(P), ulong2(0), true);
+      for (uint r = 0; r < 4u; ++r) {
+        simdgroup_matrix<half, 8, 8> a8;
+        simdgroup_load(a8, x + r * 8u * P + k, ulong(P));
+        simdgroup_multiply_accumulate(acc[r], a8, b, acc[r]);
+      }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+#ifdef I2P_MXFP8
+  const float global = 1.0f;
+#else
+  const float global = amax[expert] / den[0];
+#endif
+  const uint fr = ((lane / 4u) & 4u) + (lane / 2u) % 4u;
+  const uint fc = (((lane / 4u) & 2u) + lane % 2u) * 2u;
+  for (uint r = 0; r < 4u; ++r) {
+    if (m0 + r * 8u + fr >= uint(end - start)) continue;
+    const uint col = n0 + sg * 8u + fc;
+    const uint slot = uint(ROW_OF[start + int(m0 + r * 8u + fr)]);
+    const float lo = acc[r].thread_elements()[0] * global;
+    const float hi = acc[r].thread_elements()[1] * global;
+    if (gu) {
+      if (col / 2u < a.n) OUT[size_t(slot) * a.n + col / 2u] = i2p_situ(lo, hi, a.gate_cap, a.up_cap);
+    } else {
+      if (col < a.n) OUT[size_t(slot) * a.n + col] = lo;
+      if (col + 1u < a.n) OUT[size_t(slot) * a.n + col + 1u] = hi;
+    }
+  }
+}
+
+#else
 [[kernel]] void i2p_expert_matrix(const device float* X [[buffer(0)]], const device uchar* W [[buffer(1)]],
     const device uchar* S [[buffer(2)]], const device float* amax [[buffer(3)]],
     const device float* den [[buffer(4)]], const device int* OFF [[buffer(5)]],
@@ -945,6 +1136,8 @@ struct i2p_moeg_args { uint k, n, slots, topk, experts; float gate_cap, up_cap; 
     }
   }
 }
+
+#endif
 
 [[kernel]] void i2p_combine(const device float* DOWN [[buffer(0)]], const device float* wts [[buffer(1)]],
     constant i2p_combine_args& a [[buffer(2)]], device float* OUT [[buffer(3)]], uint2 p [[thread_position_in_grid]]) {

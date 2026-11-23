@@ -241,3 +241,30 @@ credited here.
 ## Fluid Subgraph Residency
 
 TensorFold's exact residency implementation follows published techniques: EdgeMoE's storage-backed weights and memory index, MoE-Infinity and Fiddler's expert locality/popularity caching and prefetch, and Fate's cross-layer gate prefetch. These are re-implementations of proven techniques, with no novelty claim. The frozen TensorFold Python engine provides the implementation ancestry for native expert slots and PLE row streaming. Slotstream is an outside comparison for published SSD streaming memory/speed trade-offs, not the design or code source. See [the exact residency design](design/fluid-subgraph-residency.md) for scope and qualification.
+
+## nanoattention
+
+The Inkling 2 Mini fast expert fragment layout adapts nanoattention by justrach,
+revision `6f782a8dace846e4e64a5a12cbdf5c0252166199`.
+
+MIT License
+
+Copyright (c) 2026 justrach
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

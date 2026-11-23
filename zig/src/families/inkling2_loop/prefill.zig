@@ -13,6 +13,21 @@ const Controller = wts.Controller;
 
 pub const default_chunk: usize = 512;
 
+pub fn profile(text: ?[]const u8) error{BadInklingProfile}!bool {
+    const value = text orelse return false;
+    if (std.mem.eql(u8, value, "f32")) return false;
+    if (std.mem.eql(u8, value, "fast")) return true;
+    return error.BadInklingProfile;
+}
+
+test "profile accepts only the documented values" {
+    try std.testing.expectEqual(false, try profile(null));
+    try std.testing.expectEqual(false, try profile("f32"));
+    try std.testing.expectEqual(true, try profile("fast"));
+    try std.testing.expectError(error.BadInklingProfile, profile(""));
+    try std.testing.expectError(error.BadInklingProfile, profile("FAST"));
+}
+
 pub const WantLogits = enum { none, last, all };
 
 const Dense = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32 };
@@ -82,6 +97,8 @@ pub const Pipes = struct {
     gemm: mtl.Pipeline,
     smallrow: mtl.Pipeline,
     gemm_mpp: ?mtl.Pipeline,
+    bf16_convert: ?mtl.Pipeline,
+    bf16_gemm_mpp: ?mtl.Pipeline,
     pick: mtl.Pipeline,
     embed: mtl.Pipeline,
     rms: mtl.Pipeline,
@@ -107,6 +124,9 @@ pub const Pipes = struct {
     down_g_mx: mtl.Pipeline,
     expert_matrix_nv: mtl.Pipeline,
     expert_matrix_mx: mtl.Pipeline,
+    half_attn: ?mtl.Pipeline,
+    half_expert_nv: ?mtl.Pipeline,
+    half_expert_mx: ?mtl.Pipeline,
     moe_zero: mtl.Pipeline,
     moe_count: mtl.Pipeline,
     moe_offsets: mtl.Pipeline,
@@ -115,6 +135,11 @@ pub const Pipes = struct {
 
     pub fn deinit(p: *Pipes) void {
         if (p.gemm_mpp) |pipe| pipe.deinit();
+        if (p.bf16_convert) |pipe| pipe.deinit();
+        if (p.bf16_gemm_mpp) |pipe| pipe.deinit();
+        if (p.half_attn) |pipe| pipe.deinit();
+        if (p.half_expert_nv) |pipe| pipe.deinit();
+        if (p.half_expert_mx) |pipe| pipe.deinit();
         inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "gemm", "smallrow", "pick", "gu_g_nv", "down_g_nv", "gu_g_mx", "down_g_mx", "expert_matrix_nv", "expert_matrix_mx", "moe_zero", "moe_count", "moe_offsets", "moe_sort", "embed", "rms", "gather", "mix", "mix4", "ctl", "clips", "clip", "conv", "cstore", "kv", "rel", "attn", "attn_tiled", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
     }
 };
@@ -200,6 +225,8 @@ pub const PrefillScratch = struct {
     moe_cur: mtl.Buffer,
     moe_sorted: mtl.Buffer,
     logits: mtl.Buffer,
+    bf16_input: ?mtl.Buffer,
+    half_overflow: ?mtl.Buffer,
     capture: ?mtl.Buffer,
     capture_row: usize,
     routes: ?mtl.Buffer,
@@ -219,6 +246,12 @@ pub const PrefillScratch = struct {
         const vocab: usize = c.text.unpadded_vocab;
         const S: usize = st.mix_states;
         var s: PrefillScratch = undefined;
+        const profile_env: ?[]const u8 = if (std.c.getenv("INKLING_PROFILE")) |v| std.mem.span(v) else null;
+        const fast = try profile(profile_env);
+        s.bf16_input = if (fast and device.tensorUnits()) try device.buffer(@max(chunk * @max(2 * h, @max(qw, @max(kvw, rank))) * 2, 16), mtl.ResourceOptions.private) else null;
+        errdefer if (s.bf16_input) |buf| buf.deinit();
+        s.half_overflow = if (fast) try device.buffer(16, mtl.ResourceOptions.shared) else null;
+        errdefer if (s.half_overflow) |buf| buf.deinit();
         s.capture = null;
         s.capture_row = 0;
         s.routes = null;
@@ -301,12 +334,22 @@ pub const PrefillScratch = struct {
         defer small_lib.deinit();
         s.pipes.smallrow = try mtl.Pipeline.init(device, small_lib, "i2p_small", false);
         errdefer s.pipes.smallrow.deinit();
+        s.pipes.bf16_convert = null;
+        s.pipes.bf16_gemm_mpp = null;
         s.pipes.gemm_mpp = if (device.tensorUnits()) blk: {
             const mpp_lib = try mtl.Library.fromSource(device, kernels.prefill_gemm_mpp, opts);
             defer mpp_lib.deinit();
+            if (fast) {
+                s.pipes.bf16_convert = try mtl.Pipeline.init(device, mpp_lib, "i2p_bf16_convert", false);
+                errdefer s.pipes.bf16_convert.?.deinit();
+                s.pipes.bf16_gemm_mpp = try mtl.Pipeline.init(device, mpp_lib, "i2p_gemm_bf16_mpp", false);
+                errdefer s.pipes.bf16_gemm_mpp.?.deinit();
+            }
             break :blk try mtl.Pipeline.init(device, mpp_lib, "i2p_gemm_mpp", false);
         } else null;
         errdefer if (s.pipes.gemm_mpp) |pipe| pipe.deinit();
+        errdefer if (s.pipes.bf16_convert) |pipe| pipe.deinit();
+        errdefer if (s.pipes.bf16_gemm_mpp) |pipe| pipe.deinit();
         s.pipes.pick = try mtl.Pipeline.init(device, lib, "i2p_routepick", false);
         errdefer s.pipes.pick.deinit();
         s.pipes.embed = try mtl.Pipeline.init(device, lib, "i2p_embed", false);
@@ -357,6 +400,23 @@ pub const PrefillScratch = struct {
         errdefer s.pipes.expert_matrix_nv.deinit();
         s.pipes.expert_matrix_mx = try mtl.Pipeline.init(device, libmx, "i2p_expert_matrix", false);
         errdefer s.pipes.expert_matrix_mx.deinit();
+        s.pipes.half_attn = null;
+        s.pipes.half_expert_nv = null;
+        s.pipes.half_expert_mx = null;
+        if (fast) {
+            const half_lib = try mtl.Library.fromSource(device, "#define I2P_HALF_OPERANDS 1\n" ++ kernels.prefill, opts);
+            defer half_lib.deinit();
+            const half_mx_lib = try mtl.Library.fromSource(device, "#define I2P_HALF_OPERANDS 1\n#define I2P_MXFP8 1\n" ++ kernels.prefill, opts);
+            defer half_mx_lib.deinit();
+            s.pipes.half_attn = try mtl.Pipeline.init(device, half_lib, "i2p_attn_half", false);
+            errdefer s.pipes.half_attn.?.deinit();
+            s.pipes.half_expert_nv = try mtl.Pipeline.init(device, half_lib, "i2p_expert_matrix", false);
+            errdefer s.pipes.half_expert_nv.?.deinit();
+            s.pipes.half_expert_mx = try mtl.Pipeline.init(device, half_mx_lib, "i2p_expert_matrix", false);
+        }
+        errdefer if (s.pipes.half_attn) |pipe| pipe.deinit();
+        errdefer if (s.pipes.half_expert_nv) |pipe| pipe.deinit();
+        errdefer if (s.pipes.half_expert_mx) |pipe| pipe.deinit();
         s.pipes.moe_zero = try mtl.Pipeline.init(device, lib, "i2p_moe_zero", false);
         errdefer s.pipes.moe_zero.deinit();
         s.pipes.moe_count = try mtl.Pipeline.init(device, lib, "i2p_moe_count", false);
@@ -370,6 +430,8 @@ pub const PrefillScratch = struct {
     }
 
     pub fn deinit(s: *PrefillScratch) void {
+        if (s.bf16_input) |buf| buf.deinit();
+        if (s.half_overflow) |buf| buf.deinit();
         s.pipes.deinit();
         inline for ([_][]const u8{ "ids", "x", "prelude", "passout", "bank", "ffnin", "n0", "n1", "n2", "m0", "q", "k", "v", "r", "kc", "vc", "kdyn", "vdyn", "sink", "relbias", "attn", "gate", "projout", "o", "aconv", "moe", "blocks", "staged", "mixout", "msg", "h2in", "normed", "tanhg", "tanhf", "router", "picks", "wts", "act", "down", "moe_cnt", "moe_off", "moe_cur", "moe_sorted", "logits" }) |f| @field(s, f).deinit();
     }
@@ -437,7 +499,14 @@ const Chunk = struct {
             c.setP(c.s.pipes.smallrow, args, &.{ x.buf, t(w), A, out });
             c.enc.dispatchGroups(mtl.Size.of((m + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
         } else if (c.s.pipes.gemm_mpp != null and m >= 384 and args.k >= 2304 and c.n >= 16) {
-            c.setP(c.s.pipes.gemm_mpp.?, args, &.{ x.buf, t(w), A, out });
+            if (c.s.pipes.bf16_gemm_mpp) |pipe| {
+                const input = b(c.s.bf16_input.?);
+                c.setP(c.s.pipes.bf16_convert.?, args, &.{ x.buf, A, input });
+                c.enc.dispatchThreads(mtl.Size.of(@as(usize, c.n) * args.k, 1, 1), mtl.Size.of(256, 1, 1));
+                c.setP(pipe, args, &.{ input, t(w), A, out });
+            } else {
+                c.setP(c.s.pipes.gemm_mpp.?, args, &.{ x.buf, t(w), A, out });
+            }
             c.enc.dispatchGroups(mtl.Size.of((m + 31) / 32, (c.n + 15) / 16, 1), mtl.Size.of(128, 1, 1));
         } else {
             c.setP(c.s.pipes.gemm, args, &.{ x.buf, t(w), A, out });
@@ -451,7 +520,14 @@ const Chunk = struct {
             c.setP(c.s.pipes.smallrow, args, &.{ x.buf, t(w), A, out });
             c.enc.dispatchGroups(mtl.Size.of((vocab + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
         } else if (c.s.pipes.gemm_mpp != null and c.n >= 16 and args.k >= 2304) {
-            c.setP(c.s.pipes.gemm_mpp.?, args, &.{ x.buf, t(w), A, out });
+            if (c.s.pipes.bf16_gemm_mpp) |pipe| {
+                const input = b(c.s.bf16_input.?);
+                c.setP(c.s.pipes.bf16_convert.?, args, &.{ x.buf, A, input });
+                c.enc.dispatchThreads(mtl.Size.of(@as(usize, c.n) * args.k, 1, 1), mtl.Size.of(256, 1, 1));
+                c.setP(pipe, args, &.{ input, t(w), A, out });
+            } else {
+                c.setP(c.s.pipes.gemm_mpp.?, args, &.{ x.buf, t(w), A, out });
+            }
             c.enc.dispatchGroups(mtl.Size.of((vocab + 31) / 32, (c.n + 15) / 16, 1), mtl.Size.of(128, 1, 1));
         } else {
             c.setP(c.s.pipes.gemm, args, &.{ x.buf, t(w), A, out });
@@ -614,8 +690,14 @@ const Chunk = struct {
         const keybase = bo(c.cache.keys, c.slotBase(slot));
         const valbase = bo(c.cache.values, c.slotBase(slot));
         const tiled = c.heads == 24 and c.kv == 8 and c.dim == 128;
-        c.setP(if (tiled) s.pipes.attn_tiled else s.pipes.attn, AttnB{ .heads = c.heads, .kv = c.kv, .dim = c.dim, .rel = c.drel, .extent = extent, .window = win, .base = c.base, .rows = c.n, .rmode = @intFromBool(c.ring), .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.dim))), .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha }, &.{ b(s.q), keybase, valbase, b(s.relbias), b(s.sink), A, b(s.attn), b(s.kc), b(s.vc) });
-        if (tiled) c.enc.dispatchGroups(mtl.Size.of(c.kv, (c.n + 7) / 8, 1), mtl.Size.of(768, 1, 1)) else c.enc.dispatchGroups(mtl.Size.of(c.heads, c.n, 1), mtl.Size.of(32, 1, 1));
+        const attn_args = AttnB{ .heads = c.heads, .kv = c.kv, .dim = c.dim, .rel = c.drel, .extent = extent, .window = win, .base = c.base, .rows = c.n, .rmode = @intFromBool(c.ring), .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.dim))), .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha };
+        if (tiled and s.pipes.half_attn != null) {
+            c.setP(s.pipes.half_attn.?, attn_args, &.{ b(s.q), keybase, valbase, b(s.relbias), b(s.sink), A, b(s.attn), b(s.kc), b(s.vc), b(s.half_overflow.?) });
+            c.enc.dispatchGroups(mtl.Size.of(c.heads, (c.n + 31) / 32, 1), mtl.Size.of(128, 1, 1));
+        } else {
+            c.setP(if (tiled) s.pipes.attn_tiled else s.pipes.attn, attn_args, &.{ b(s.q), keybase, valbase, b(s.relbias), b(s.sink), A, b(s.attn), b(s.kc), b(s.vc) });
+            if (tiled) c.enc.dispatchGroups(mtl.Size.of(c.kv, (c.n + 7) / 8, 1), mtl.Size.of(768, 1, 1)) else c.enc.dispatchGroups(mtl.Size.of(c.heads, c.n, 1), mtl.Size.of(32, 1, 1));
+        }
         c.kvStore(slot);
         c.lin(lay.attn.gate, ins[0], b(s.gate));
         c.flat(.sig_mul, Pair{ .count = c.qw * c.n }, &.{ b(s.attn), b(s.gate), A, b(s.attn) }, @as(usize, c.qw) * c.n);
@@ -670,15 +752,25 @@ const Chunk = struct {
         const codes = b(if (lay.mxfp8) m.t256 else m.t16);
         const gu = if (lay.mxfp8) s.pipes.gu_g_mx else s.pipes.gu_g_nv;
         const down = if (lay.mxfp8) s.pipes.down_g_mx else s.pipes.down_g_nv;
-        const matrix = if (lay.mxfp8) s.pipes.expert_matrix_mx else s.pipes.expert_matrix_nv;
+        const matrix = if (lay.mxfp8) s.pipes.half_expert_mx orelse s.pipes.expert_matrix_mx else s.pipes.half_expert_nv orelse s.pipes.expert_matrix_nv;
         c.setP(gu, Moeg{ .k = c.h, .n = inter, .slots = slots, .topk = K, .experts = E, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes });
         c.enc.dispatchGroups(mtl.Size.of(inter, E, 1), mtl.Size.of(32, 1, 1));
-        c.setP(matrix, Moeg{ .k = c.h, .n = inter, .slots = slots, .topk = K, .experts = E, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes });
-        c.enc.dispatchGroups(mtl.Size.of((inter * 2 + 63) / 64, E, (c.n + 31) / 32), mtl.Size.of(256, 1, 1));
+        const args_gu = Moeg{ .k = c.h, .n = inter, .slots = slots, .topk = K, .experts = E, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap };
+        if (s.half_overflow) |overflow| {
+            c.setP(matrix, args_gu, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes, b(overflow) });
+        } else {
+            c.setP(matrix, args_gu, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes });
+        }
+        c.enc.dispatchGroups(mtl.Size.of(if (s.half_overflow != null) (inter * 2 + 31) / 32 else (inter * 2 + 63) / 64, E, (c.n + 31) / 32), mtl.Size.of(if (s.half_overflow != null) 128 else 256, 1, 1));
         c.setP(down, Moeg{ .k = inter, .n = c.h, .slots = slots, .topk = K, .experts = E, .gate_cap = 0, .up_cap = 0 }, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.moe_off), b(s.moe_sorted), A, b(s.down), codes });
         c.enc.dispatchGroups(mtl.Size.of(c.h, E, 1), mtl.Size.of(32, 1, 1));
-        c.setP(matrix, Moeg{ .k = inter, .n = c.h, .slots = slots, .topk = K, .experts = E, .gate_cap = 0, .up_cap = 0 }, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.moe_off), b(s.moe_sorted), A, b(s.down), codes });
-        c.enc.dispatchGroups(mtl.Size.of((c.h + 63) / 64, E, (c.n + 31) / 32), mtl.Size.of(256, 1, 1));
+        const args_down = Moeg{ .k = inter, .n = c.h, .slots = slots, .topk = K, .experts = E, .gate_cap = 0, .up_cap = 0 };
+        if (s.half_overflow) |overflow| {
+            c.setP(matrix, args_down, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.moe_off), b(s.moe_sorted), A, b(s.down), codes, b(overflow) });
+        } else {
+            c.setP(matrix, args_down, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.moe_off), b(s.moe_sorted), A, b(s.down), codes });
+        }
+        c.enc.dispatchGroups(mtl.Size.of(if (s.half_overflow != null) (c.h + 31) / 32 else (c.h + 63) / 64, E, (c.n + 31) / 32), mtl.Size.of(if (s.half_overflow != null) 128 else 256, 1, 1));
         c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = K, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
         c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
     }
@@ -803,6 +895,7 @@ pub fn prefillWant(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []co
     if (ids.len == 0 or ids.len > s.chunk) return error.BadChunk;
     if (ids.len + cache.len > cache.capacity) return error.ContextFull;
     if (ids.len > m.config.text.window) return error.ChunkTooLarge;
+    if (s.half_overflow) |buf| buf.slice(u32, 1)[0] = 0;
     @memcpy(s.ids.slice(u32, ids.len), ids);
     const kvw: usize = m.config.text.local.kv * m.config.text.local.dim;
     const linear: usize = m.config.slots() * cache.capacity * kvw * 4;
@@ -887,5 +980,6 @@ pub fn prefillWant(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []co
         std.log.err("inkling2_loop prefill: {s}", .{msg});
         return error.GpuFailed;
     }
+    if (s.half_overflow) |buf| std.debug.print("inkling2 half activation overflow: {d}\n", .{buf.slice(u32, 1)[0]});
     cache.len += ids.len;
 }

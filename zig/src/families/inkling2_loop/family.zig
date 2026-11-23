@@ -8,6 +8,7 @@ pub const Scratch = @import("state.zig").Scratch;
 pub const Trace = @import("state.zig").Trace;
 pub const position = @import("forward.zig").position;
 pub const positionTrace = @import("forward.zig").positionTrace;
+pub const profile = @import("prefill.zig").profile;
 pub const prefill = @import("prefill.zig").prefill;
 pub const prefillWant = @import("prefill.zig").prefillWant;
 pub const WantLogits = @import("prefill.zig").WantLogits;

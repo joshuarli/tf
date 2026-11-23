@@ -54,6 +54,11 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
         problem.* = "Inkling 2 Mini has no served drafter in this campaign (its mtp.safetensors head is not wired); run mode ar";
         return null;
     }
+    const profile_env: ?[]const u8 = if (std.c.getenv("INKLING_PROFILE")) |v| std.mem.span(v) else null;
+    _ = inkling.profile(profile_env) catch {
+        problem.* = "INKLING_PROFILE must be f32 or fast";
+        return null;
+    };
     const env: ?[]const u8 = if (std.c.getenv("INKLING_COPY_DRAFTS")) |v| std.mem.span(v) else null;
     const copy_drafts = o.drafts and (copyDrafts(env) catch {
         problem.* = "INKLING_COPY_DRAFTS must be 0 or 1";

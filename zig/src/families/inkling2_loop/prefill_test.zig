@@ -497,6 +497,44 @@ const legacyGemm =
 
 const GemmArgs = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32, cap: f32 };
 
+test "bf16 tensorops dense projection accumulates rounded operands" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    if (!device.tensorUnits()) return error.SkipZigTest;
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, @import("kernels.zig").prefill_gemm_mpp, mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const cast = try mtl.Pipeline.init(device, lib, "i2p_bf16_convert", false);
+    defer cast.deinit();
+    const gemm = try mtl.Pipeline.init(device, lib, "i2p_gemm_bf16_mpp", false);
+    defer gemm.deinit();
+    const rows = 17; const n = 35; const k = 32;
+    const args = GemmArgs{ .n = n, .k = k, .rows = rows, .xs = 2, .xb = 1, .cap = 0 };
+    const x = try device.buffer((rows * 2 + 1) * k * 4, mtl.ResourceOptions.shared);
+    defer x.deinit();
+    @memset(x.slice(f32, (rows * 2 + 1) * k), 1.003);
+    const w = try device.buffer(n * k * 2, mtl.ResourceOptions.shared);
+    defer w.deinit();
+    @memset(w.slice(u16, n * k), 0x3f80);
+    const rounded = try device.buffer(rows * k * 2, mtl.ResourceOptions.shared);
+    defer rounded.deinit();
+    const out = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared);
+    defer out.deinit();
+    const cb = queue.commandBuffer();
+    const enc = cb.compute(.serial);
+    enc.setPipeline(cast); enc.setBuffer(x, 0, 0); enc.setValue(args, 1); enc.setBuffer(rounded, 0, 2);
+    enc.dispatchThreads(mtl.Size.of(rows * k, 1, 1), mtl.Size.of(256, 1, 1));
+    enc.setPipeline(gemm); enc.setBuffer(rounded, 0, 0); enc.setBuffer(w, 0, 1); enc.setValue(args, 2); enc.setBuffer(out, 0, 3);
+    enc.dispatchGroups(mtl.Size.of((n + 31) / 32, (rows + 15) / 16, 1), mtl.Size.of(128, 1, 1));
+    enc.end(); cb.commit(); cb.wait();
+    if (cb.failure()) |msg| { std.debug.print("bf16 tensorops: {s}\n", .{msg}); return error.GpuFailed; }
+    const reference: f64 = 32.0;
+    try t.expect(@abs(reference - @as(f64, @floatCast(@as(f32, 1.003))) * k) > 0.01);
+    for (out.slice(f32, rows * n)) |value| try t.expectApproxEqAbs(reference, @as(f64, @floatCast(value)), 0.0001);
+}
+
 test "tiled dense projections match the original gemm" {
     if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
     const device = try mtl.Device.init();
@@ -729,6 +767,157 @@ fn expertCode(code: u8, mx: bool) f64 {
     return if (code & 8 != 0) -value else value;
 }
 
+test "half routed expert matrix rounds operands before f32 accumulation" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    const queue = try device.queue();
+    defer queue.deinit();
+    for ([_]bool{ false, true }) |mx| {
+        const source = if (mx) "#define I2P_HALF_OPERANDS 1\n#define I2P_MXFP8 1\n" ++ @import("kernels.zig").prefill else "#define I2P_HALF_OPERANDS 1\n" ++ @import("kernels.zig").prefill;
+        const lib = try mtl.Library.fromSource(device, source, mtl.CompileOptions.mlx());
+        defer lib.deinit();
+        const pipe = try mtl.Pipeline.init(device, lib, "i2p_expert_matrix", false);
+        defer pipe.deinit();
+        const rows = 16;
+        const n = 64;
+        const k = 32;
+        const x = try device.buffer(rows * k * 4, mtl.ResourceOptions.shared);
+        defer x.deinit();
+        @memset(x.slice(f32, rows * k), 1.0006);
+        const w = try device.buffer(n * k, mtl.ResourceOptions.shared);
+        defer w.deinit();
+        @memset(w.slice(u8, n * k), if (mx) 0x38 else 0x22);
+        const scales = try device.buffer(n * 2, mtl.ResourceOptions.shared);
+        defer scales.deinit();
+        @memset(scales.slice(u8, n * 2), if (mx) 127 else 0x38);
+        const global = try device.buffer(16, mtl.ResourceOptions.shared);
+        defer global.deinit();
+        global.slice(f32, 1)[0] = 1;
+        const off = try device.buffer(16, mtl.ResourceOptions.shared);
+        defer off.deinit();
+        off.slice(i32, 2)[0] = 0;
+        off.slice(i32, 2)[1] = rows;
+        const row_of = try device.buffer(rows * 4, mtl.ResourceOptions.shared);
+        defer row_of.deinit();
+        for (row_of.slice(i32, rows), 0..) |*value, i| value.* = @intCast(rows - 1 - i);
+        const out = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared);
+        defer out.deinit();
+        @memset(out.slice(f32, rows * n), std.math.nan(f32));
+        const codes = try device.buffer(256 * 4, mtl.ResourceOptions.shared);
+        defer codes.deinit();
+        for (codes.slice(f32, 256), 0..) |*value, i| value.* = @floatCast(expertCode(@intCast(if (mx and i % 128 == 127) 0 else i % (if (mx) @as(usize, 256) else 16)), mx));
+        const args = ExpertArgs{ .k = k, .n = n, .slots = rows, .topk = 1, .experts = 1, .gate_cap = 0, .up_cap = 0 };
+        const overflow = try device.buffer(16, mtl.ResourceOptions.shared);
+        defer overflow.deinit();
+        overflow.slice(u32, 1)[0] = 0;
+        const cb = queue.commandBuffer();
+        const enc = cb.compute(.serial);
+        enc.setPipeline(pipe);
+        enc.setBuffer(x, 0, 0);
+        enc.setBuffer(w, 0, 1);
+        enc.setBuffer(scales, 0, 2);
+        enc.setBuffer(global, 0, 3);
+        enc.setBuffer(global, 0, 4);
+        enc.setBuffer(off, 0, 5);
+        enc.setBuffer(row_of, 0, 6);
+        enc.setValue(args, 7);
+        enc.setBuffer(out, 0, 8);
+        enc.setBuffer(codes, 0, 9);
+        enc.setBuffer(overflow, 0, 10);
+        enc.dispatchGroups(mtl.Size.of(2, 1, 1), mtl.Size.of(128, 1, 1));
+        enc.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |msg| { std.debug.print("half expert: {s}\n", .{msg}); return error.GpuFailed; }
+        try t.expectEqual(@as(u32, 0), overflow.slice(u32, 1)[0]);
+        const rounded: f64 = @floatCast(@as(f16, @floatCast(@as(f32, 1.0006))));
+        const reference = rounded * 32.0;
+        const unrounded_reference = @as(f64, @floatCast(@as(f32, 1.0006))) * 32.0;
+        try t.expect(@abs(reference - unrounded_reference) > 0.001);
+        for (out.slice(f32, rows * n)) |value| try t.expectApproxEqAbs(reference, @as(f64, @floatCast(value)), 0.0001);
+        x.slice(f32, rows * k)[0] = 65505;
+        const cb_overflow = queue.commandBuffer();
+        const enc_overflow = cb_overflow.compute(.serial);
+        enc_overflow.setPipeline(pipe);
+        enc_overflow.setBuffer(x, 0, 0);
+        enc_overflow.setBuffer(w, 0, 1);
+        enc_overflow.setBuffer(scales, 0, 2);
+        enc_overflow.setBuffer(global, 0, 3);
+        enc_overflow.setBuffer(global, 0, 4);
+        enc_overflow.setBuffer(off, 0, 5);
+        enc_overflow.setBuffer(row_of, 0, 6);
+        enc_overflow.setValue(args, 7);
+        enc_overflow.setBuffer(out, 0, 8);
+        enc_overflow.setBuffer(codes, 0, 9);
+        enc_overflow.setBuffer(overflow, 0, 10);
+        enc_overflow.dispatchGroups(mtl.Size.of(2, 1, 1), mtl.Size.of(128, 1, 1));
+        enc_overflow.end();
+        cb_overflow.commit();
+        cb_overflow.wait();
+        if (cb_overflow.failure()) |msg| { std.debug.print("half expert overflow: {s}\n", .{msg}); return error.GpuFailed; }
+        try t.expectEqual(@as(u32, 1), overflow.slice(u32, 1)[0]);
+        try t.expectApproxEqAbs(65504.0 + 31.0 * rounded, @as(f64, @floatCast(out.slice(f32, rows * n)[0])), 0.1);
+    }
+}
+
+test "half routed expert fragments match varied fp64 products" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = try mtl.Device.init(); defer device.deinit();
+    const queue = try device.queue(); defer queue.deinit();
+    const rows = 17; const n = 70; const k = 64;
+    for ([_]bool{ false, true }) |mx| {
+        const source = if (mx) "#define I2P_HALF_OPERANDS 1\n#define I2P_MXFP8 1\n" ++ @import("kernels.zig").prefill else "#define I2P_HALF_OPERANDS 1\n" ++ @import("kernels.zig").prefill;
+        const lib = try mtl.Library.fromSource(device, source, mtl.CompileOptions.mlx()); defer lib.deinit();
+        const pipe = try mtl.Pipeline.init(device, lib, "i2p_expert_matrix", false); defer pipe.deinit();
+        const x = try device.buffer(rows * k * 4, mtl.ResourceOptions.shared); defer x.deinit();
+        for (x.slice(f32, rows * k), 0..) |*v, i| v.* = @as(f32, @floatFromInt(@as(i32, @intCast((i * 17 + i / k * 11) % 97)) - 48)) / 31.0;
+        const weights = try device.buffer(n * k, mtl.ResourceOptions.shared); defer weights.deinit();
+        const wb = weights.slice(u8, n * k);
+        if (mx) {
+            for (wb, 0..) |*v, i| v.* = @intCast((i * 13 + i / k * 7) % 120);
+        } else {
+            for (wb[0 .. n * k / 2], 0..) |*v, i| {
+                const lo: u8 = @intCast((i * 7 + i / (k / 2) * 3) % 16);
+                const hi: u8 = @intCast((i * 11 + i / (k / 2) * 5) % 16);
+                v.* = lo | (hi << 4);
+            }
+        }
+        const scales = try device.buffer(n * (k / 16), mtl.ResourceOptions.shared); defer scales.deinit();
+        @memset(scales.slice(u8, n * (k / 16)), if (mx) 127 else 0x38);
+        const global = try device.buffer(16, mtl.ResourceOptions.shared); defer global.deinit(); global.slice(f32, 1)[0] = 1;
+        const off = try device.buffer(16, mtl.ResourceOptions.shared); defer off.deinit(); off.slice(i32, 2)[0] = 0; off.slice(i32, 2)[1] = rows;
+        const route = try device.buffer(rows * 4, mtl.ResourceOptions.shared); defer route.deinit();
+        for (route.slice(i32, rows), 0..) |*v, i| v.* = @intCast(rows - 1 - i);
+        const out = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared); defer out.deinit();
+        @memset(out.slice(f32, rows * n), std.math.nan(f32));
+        const codes = try device.buffer(256 * 4, mtl.ResourceOptions.shared); defer codes.deinit();
+        for (codes.slice(f32, 256), 0..) |*v, i| v.* = @floatCast(expertCode(@intCast(if (mx and i % 128 == 127) 0 else i % (if (mx) @as(usize, 256) else 16)), mx));
+        const overflow = try device.buffer(16, mtl.ResourceOptions.shared); defer overflow.deinit(); overflow.slice(u32, 1)[0] = 0;
+        const args = ExpertArgs{ .k = k, .n = n, .slots = rows, .topk = 1, .experts = 1, .gate_cap = 0, .up_cap = 0 };
+        const cb = queue.commandBuffer(); const enc = cb.compute(.serial);
+        enc.setPipeline(pipe); enc.setBuffer(x, 0, 0); enc.setBuffer(weights, 0, 1); enc.setBuffer(scales, 0, 2);
+        enc.setBuffer(global, 0, 3); enc.setBuffer(global, 0, 4); enc.setBuffer(off, 0, 5); enc.setBuffer(route, 0, 6);
+        enc.setValue(args, 7); enc.setBuffer(out, 0, 8); enc.setBuffer(codes, 0, 9); enc.setBuffer(overflow, 0, 10);
+        enc.dispatchGroups(mtl.Size.of((n + 31) / 32, 1, 1), mtl.Size.of(128, 1, 1));
+        enc.end(); cb.commit(); cb.wait();
+        if (cb.failure()) |msg| { std.debug.print("half expert varied: {s}\n", .{msg}); return error.GpuFailed; }
+        for (0..rows) |row| for (0..n) |col| {
+            var expected: f64 = 0; var magnitude: f64 = 0;
+            for (0..k) |j| {
+                const code: u8 = if (mx) wb[col * k + j] else (wb[col * (k / 2) + j / 2] >> @as(u3, @intCast((j % 2) * 4))) & 15;
+                const operand: f64 = @floatCast(@as(f16, @floatCast(x.slice(f32, rows * k)[row * k + j])));
+                const weight: f64 = @floatCast(@as(f16, @floatCast(expertCode(code, mx))));
+                expected += operand * weight;
+                magnitude += @abs(operand * weight);
+            }
+            const bound = 4.0 * k * 0x1p-24 * magnitude + 8.0 * 0x1p-24 * @max(1.0, @abs(expected));
+            try t.expect(@abs(@as(f64, @floatCast(out.slice(f32, rows * n)[row * n + col])) - expected) <= bound);
+        };
+        try t.expectEqual(@as(u32, 0), overflow.slice(u32, 1)[0]);
+    }
+}
+
 test "routed expert projections meet fp64 bounds at occupancy boundaries" {
     if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
     const device = try mtl.Device.init();
@@ -946,6 +1135,83 @@ fn attnKey(j: usize, kv: usize, d: usize) f32 {
 
 fn attnValue(j: usize, kv: usize, d: usize) f32 {
     return @as(f32, @floatFromInt(@as(i32, @intCast((j * 13 + kv * 11) % 97)) - 48)) * @as(f32, @floatFromInt(@as(i32, @intCast(d % 17)) - 8)) / 512;
+}
+
+test "half attention uses rounded query key probability and value" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = try mtl.Device.init(); defer device.deinit();
+    const queue = try device.queue(); defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, "#define I2P_HALF_OPERANDS 1\n" ++ @import("kernels.zig").prefill, mtl.CompileOptions.mlx()); defer lib.deinit();
+    const pipe = try mtl.Pipeline.init(device, lib, "i2p_attn_half", false); defer pipe.deinit();
+    const heads = 3; const dim = 128;
+    const q = try device.buffer(heads * dim * 4, mtl.ResourceOptions.shared); defer q.deinit();
+    const k = try device.buffer(dim * 4, mtl.ResourceOptions.shared); defer k.deinit();
+    const v = try device.buffer(dim * 4, mtl.ResourceOptions.shared); defer v.deinit();
+    const bias = try device.buffer(heads * 4, mtl.ResourceOptions.shared); defer bias.deinit();
+    const sink = try device.buffer(heads * 4, mtl.ResourceOptions.shared); defer sink.deinit();
+    const out = try device.buffer(heads * dim * 4, mtl.ResourceOptions.shared); defer out.deinit();
+    const overflow = try device.buffer(16, mtl.ResourceOptions.shared); defer overflow.deinit();
+    @memset(q.slice(f32, heads * dim), 1.0006); @memset(k.slice(f32, dim), 0.01);
+    @memset(v.slice(f32, dim), 0.5003); @memset(bias.slice(f32, heads), 0); @memset(sink.slice(f32, heads), 0);
+    overflow.slice(u32, 1)[0] = 0;
+    const args = AttnArgs{ .heads = heads, .kv = 1, .dim = dim, .rel = 0, .extent = 0, .window = 0, .base = 0, .rows = 1, .rmode = 0, .scale = 0.125, .floor = 128, .alpha = 0 };
+    const cb = queue.commandBuffer(); const enc = cb.compute(.serial);
+    enc.setPipeline(pipe); enc.setBuffer(q, 0, 0); enc.setBuffer(k, 0, 1); enc.setBuffer(v, 0, 2);
+    enc.setBuffer(bias, 0, 3); enc.setBuffer(sink, 0, 4); enc.setValue(args, 5); enc.setBuffer(out, 0, 6);
+    enc.setBuffer(k, 0, 7); enc.setBuffer(v, 0, 8); enc.setBuffer(overflow, 0, 9);
+    enc.dispatchGroups(mtl.Size.of(heads, 1, 1), mtl.Size.of(128, 1, 1));
+    enc.end(); cb.commit(); cb.wait();
+    if (cb.failure()) |msg| { std.debug.print("half attention: {s}\n", .{msg}); return error.GpuFailed; }
+    const qr: f64 = @floatCast(@as(f16, @floatCast(@as(f32, 1.0006))));
+    const kr: f64 = @floatCast(@as(f16, @floatCast(@as(f32, 0.01))));
+    const vr: f64 = @floatCast(@as(f16, @floatCast(@as(f32, 0.5003))));
+    const weight = @exp(qr * kr * dim * @as(f64, args.scale));
+    const norm = @max(1.0, weight);
+    const rounded_weight: f64 = @floatCast(@as(f16, @floatCast(weight / norm)));
+    const expected = rounded_weight * vr / (1.0 / norm + weight / norm);
+    try t.expect(@abs(qr - @as(f64, @floatCast(@as(f32, 1.0006)))) > 0.0001);
+    try t.expectEqual(@as(u32, 0), overflow.slice(u32, 1)[0]);
+    for (out.slice(f32, heads * dim)) |value| try t.expectApproxEqAbs(expected, @as(f64, @floatCast(value)), 0.0001);
+}
+
+test "half attention masks future and expired keys" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = try mtl.Device.init(); defer device.deinit();
+    const queue = try device.queue(); defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, "#define I2P_HALF_OPERANDS 1\n" ++ @import("kernels.zig").prefill, mtl.CompileOptions.mlx()); defer lib.deinit();
+    const pipe = try mtl.Pipeline.init(device, lib, "i2p_attn_half", false); defer pipe.deinit();
+    const heads = 3; const dim = 128; const rows = 35; const window = 3;
+    const q = try device.buffer(rows * heads * dim * 4, mtl.ResourceOptions.shared); defer q.deinit();
+    const k = try device.buffer(rows * dim * 4, mtl.ResourceOptions.shared); defer k.deinit();
+    const v = try device.buffer(rows * dim * 4, mtl.ResourceOptions.shared); defer v.deinit();
+    const bias = try device.buffer(rows * heads * 4, mtl.ResourceOptions.shared); defer bias.deinit();
+    const sink = try device.buffer(rows * heads * 4, mtl.ResourceOptions.shared); defer sink.deinit();
+    const out = try device.buffer(rows * heads * dim * 4, mtl.ResourceOptions.shared); defer out.deinit();
+    const overflow = try device.buffer(16, mtl.ResourceOptions.shared); defer overflow.deinit();
+    @memset(q.slice(f32, rows * heads * dim), 0); @memset(k.slice(f32, rows * dim), 0);
+    @memset(bias.slice(f32, rows * heads), 0); @memset(sink.slice(f32, rows * heads), 0);
+    for (0..rows) |row| @memset(v.slice(f32, rows * dim)[row * dim ..][0..dim], 0.5003 + @as(f32, @floatFromInt(row)) * 0.125);
+    overflow.slice(u32, 1)[0] = 0;
+    const args = AttnArgs{ .heads = heads, .kv = 1, .dim = dim, .rel = 0, .extent = 0, .window = window, .base = 0, .rows = rows, .rmode = 1, .scale = 0.125, .floor = 128, .alpha = 0 };
+    const cb = queue.commandBuffer(); const enc = cb.compute(.serial);
+    enc.setPipeline(pipe); enc.setBuffer(q, 0, 0); enc.setBuffer(k, 0, 1); enc.setBuffer(v, 0, 2);
+    enc.setBuffer(bias, 0, 3); enc.setBuffer(sink, 0, 4); enc.setValue(args, 5); enc.setBuffer(out, 0, 6);
+    enc.setBuffer(k, 0, 7); enc.setBuffer(v, 0, 8); enc.setBuffer(overflow, 0, 9);
+    enc.dispatchGroups(mtl.Size.of(heads, (rows + 31) / 32, 1), mtl.Size.of(128, 1, 1));
+    enc.end(); cb.commit(); cb.wait();
+    if (cb.failure()) |msg| { std.debug.print("half attention window: {s}\n", .{msg}); return error.GpuFailed; }
+    for (0..rows) |row| {
+        const first = if (row + 1 > window) row + 1 - window else 0;
+        var total: f64 = 0;
+        for (first..row + 1) |j| {
+            const value: f32 = 0.5003 + @as(f32, @floatFromInt(j)) * 0.125;
+            total += @as(f64, @floatCast(@as(f16, @floatCast(value))));
+        }
+        const expected = total / @as(f64, @floatFromInt(1 + row + 1 - first));
+        for (out.slice(f32, rows * heads * dim)[row * heads * dim ..][0 .. heads * dim]) |value|
+            try t.expectApproxEqAbs(expected, @as(f64, @floatCast(value)), 0.00001);
+    }
+    try t.expectEqual(@as(u32, 0), overflow.slice(u32, 1)[0]);
 }
 
 test "tiled attention matches fp64 and original attention" {

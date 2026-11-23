@@ -2,6 +2,54 @@
 
 ## Status
 
+- **Frontier campaign T3 (owner, 2026-11-23; specification `campaign/frontier-brief.md`).** This supersedes earlier
+  roadmap entries where they conflict.
+  - **Scope.** Advance Inkling 2 Mini (`inkling2_loop`) inference on this M5 Max against the strongest reproducible
+    implementations, for complete coding-agent work: cold and warm turn latency, sustained generation, concurrent
+    throughput, memory and task completion.
+  - **Target.** T2 stays: at least 1.10× oMLX aggregate throughput in every same-weights 1/2/4/8-agent cell, on both
+    repetitions. Thresholds are recalculated from the corrected workload. If TensorFold serves with MTP, oMLX is
+    remeasured with MTP on, and the MTP-off comparison is kept.
+  - **Constraints kept.**
+    - Memory: 32 GB budget, 28 GB charged-run cap (`heavy.py`) and 26 GB load limit.
+    - Context: 32,768 total tokens including reserved output. 128K, 256K and 1M are analytic projections only.
+    - Engine: the shipped engine is native Zig/Metal. Other engines are references and comparators only.
+    - Delegation and GPU: native Opus delegation; one resident engine at a time; serialized GPU timing.
+    - Measurement: one gated paired screen, then three interleaved pairs for winners, then an integrated workload
+      and quality check.
+  - **Correctness contract.** Consistency tests, plus greedy equality where required, are the gates. Fidelity is
+    reporting-only. At integration milestones and at final integration, report:
+    - the oMLX oracle comparison (`inkling-omlx-oracle`);
+    - the f32 saved-capture comparison against `.work/parity/inkling2-mini/ref`, which is kept for this through
+      `omlx_gate.py compare`.
+
+    Neither blocks integration, and the oMLX gate's thresholds are not integration gates. A large drop triggers an
+    investigation. The T2 fidelity floor is withdrawn, and divergence tracing uses oMLX as its reference.
+  - **Workload.** Every sweep uses the reasoning-replay clients from `69651393c`. Earlier sweeps are not comparable
+    with later ones.
+  - **Deliverables.**
+    - Source and coverage map: `campaign/sources.md`.
+    - Ranked experiment ledger: the "Frontier ledger" section of `campaign/ledger.md`.
+    - Result tables in `campaign/shootout.md`: a controlled engine comparison, the best practical configuration, and
+      an experimental speed–quality frontier.
+    - Receipts in `campaign/kernels/`.
+    - A remaining-opportunities list.
+  - **Execution, as of 2026-11-23.**
+    1. **B2, corrected baselines.** Freeze pins, reconfirm the host, and measure TensorFold main and current oMLX
+       (MTP off and on) on the corrected workload at 1/2/4/8 agents. Comparator lanes follow: current llama.cpp
+       upstream, mlx-serve, MTPLX and a refreshed nanoattention.
+    2. **R1, source map and ledger.** Research only; no GPU.
+    3. **Experiments in flight:**
+       - P3c, cold prefill (avenues B and D).
+       - D2, decode attention and single-row experts (avenues B, C and E).
+       - M1, native MTP/DSpark speculation and few-row verification (avenues F and G). It is anchored on the
+         measured round costs of `lane/ds1-dspark-drafter`: 16.7 ms at width 4 and 29.7 ms at width 8.
+       - D3, the long-context divergence on the harbour history (avenues C and I, correctness).
+       - Q2, the reasoning-replay quality test (avenues K and L).
+
+       Already done: O3, the oMLX oracle. Z2, the f32-oracle code retirement, is pending integration.
+    4. After B2 profiles the integrated build, the next experiments come from the ledger.
+
 - **Owner steering (2026-11-22):** cap campaign context at **32,768 total tokens**, including reserved output;
   quick benchmark defaults are 1K/4K. Refuse oversized benchmark inputs before timing; preserve long fixtures
   and report quality exclusions as incomplete coverage. Defer 128K investigations. This changes campaign

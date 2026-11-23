@@ -232,7 +232,6 @@ pub const Scratch = struct {
     prelude: mtl.Buffer, // the prelude's output, restored by every extra pass [h]
     passout: mtl.Buffer, // a finished pass's final residual, the next pass's bank output [h]
     bank: mtl.Buffer, // the finished pass's core blocks after the first [mix_states][h]
-    ffnin: mtl.Buffer, // the FFN sub-layer's residual [h]
     xn: mtl.Buffer, // [3][h] the normed attention inputs
     q: mtl.Buffer, // [q_width]
     k: mtl.Buffer, // [kv_width] the raw K projection
@@ -253,7 +252,6 @@ pub const Scratch = struct {
     o: mtl.Buffer, // [h] the attention sub-layer's output
     aconv: mtl.Buffer, // [h] the FFN convolution tail
     blocks: mtl.Buffer, // [mix_states][h] the token's block boundaries, oldest first
-    states: mtl.Buffer, // [mix_states][h] one mix's states, newest first then cur
     mixs: mtl.Buffer, // [mix_states][h] the same, normalised
     mixout: mtl.Buffer, // [4][h] one mix's outputs
     msg: mtl.Buffer, // [4][h] the cross-pass messages
@@ -290,7 +288,6 @@ pub const Scratch = struct {
             .{ .ptr = &s.prelude, .bytes = h * 4 },
             .{ .ptr = &s.passout, .bytes = h * 4 },
             .{ .ptr = &s.bank, .bytes = mix_states * h * 4 },
-            .{ .ptr = &s.ffnin, .bytes = h * 4 },
             .{ .ptr = &s.xn, .bytes = 3 * h * 4 },
             .{ .ptr = &s.q, .bytes = qw * 4 },
             .{ .ptr = &s.k, .bytes = kvw * 4 },
@@ -309,7 +306,6 @@ pub const Scratch = struct {
             .{ .ptr = &s.o, .bytes = h * 4 },
             .{ .ptr = &s.aconv, .bytes = h * 4 },
             .{ .ptr = &s.blocks, .bytes = mix_states * h * 4 },
-            .{ .ptr = &s.states, .bytes = mix_states * h * 4 },
             .{ .ptr = &s.mixs, .bytes = mix_states * h * 4 },
             .{ .ptr = &s.mixout, .bytes = 4 * h * 4 },
             .{ .ptr = &s.msg, .bytes = 4 * h * 4 },
@@ -343,7 +339,7 @@ pub const Scratch = struct {
     }
 
     pub fn deinit(s: *Scratch) void {
-        inline for ([_][]const u8{"ids", "x", "prelude", "passout", "bank", "ffnin", "xn", "q", "k", "v", "r", "kc", "vc", "kdyn", "vdyn", "sink", "relbias", "attn", "attn_part", "attn_split", "attn_combine", "gate", "projout", "o", "aconv", "blocks", "states", "mixs", "mixout", "msg", "normed", "h2", "tanh", "router", "picks", "wts", "offsets", "order", "act", "down", "moe", "logits", "capture"}) |f| @field(s, f).deinit();
+        inline for ([_][]const u8{"ids", "x", "prelude", "passout", "bank", "xn", "q", "k", "v", "r", "kc", "vc", "kdyn", "vdyn", "sink", "relbias", "attn", "attn_part", "attn_split", "attn_combine", "gate", "projout", "o", "aconv", "blocks", "mixs", "mixout", "msg", "normed", "h2", "tanh", "router", "picks", "wts", "offsets", "order", "act", "down", "moe", "logits", "capture"}) |f| @field(s, f).deinit();
     }
 };
 

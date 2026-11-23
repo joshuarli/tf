@@ -7,6 +7,7 @@ struct i2_mv_args { uint m, k; float cap; };
 struct i2_rms_args { uint width, blocks; float eps; };
 struct i2_mix_args { uint width, depth, k; float scale; };
 struct i2_clip_args { uint heads, width; float threshold; };
+struct i2_clip3_args { uint heads, kv, dim, rel; float q_threshold, rel_threshold; };
 struct i2_conv_args { uint channels, heads, ring, pos, layout; float norm; };
 struct i2_attn_args { uint heads, kv, dim, rel, extent, window, pos, tau; float scale, floor, alpha; };
 struct i2_pair_args { uint count; };
@@ -64,6 +65,64 @@ inline float i2_bf(const device bfloat* p, size_t i) { return float(p[i]); }
   } else {
     const device bfloat* bw = w + (size_t)blk * a.width;
     for (uint i = t; i < a.width; i += nth) dst[i] = src[i] * inv * i2_bf(bw, i);
+  }
+}
+
+[[kernel]] void i2_rms_gather(const device float* X0 [[buffer(0)]], const device float* X1 [[buffer(1)]],
+    const device float* X2 [[buffer(2)]], const device float* X3 [[buffer(3)]],
+    const device float* X4 [[buffer(4)]], constant i2_rms_args& a [[buffer(5)]],
+    device float* O [[buffer(6)]], uint blk [[threadgroup_position_in_grid]],
+    uint t [[thread_position_in_threadgroup]], uint nth [[threads_per_threadgroup]]) {
+  threadgroup float part[32];
+  const device float* src = blk == 0u ? X0 : blk == 1u ? X1 : blk == 2u ? X2 : blk == 3u ? X3 : X4;
+  float sum = 0.0f;
+  for (uint i = t; i < a.width; i += nth) sum = fma(src[i], src[i], sum);
+  sum = simd_sum(sum);
+  if (t % 32u == 0u) part[t / 32u] = sum;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float total = 0.0f;
+  for (uint s = 0; s < nth / 32u; ++s) total += part[s];
+  const float inv = 1.0f / sqrt(total / float(a.width) + a.eps);
+  for (uint i = t; i < a.width; i += nth) O[(size_t)blk * a.width + i] = src[i] * inv;
+}
+
+[[kernel]] void i2_rms_weighted3(const device float* X0 [[buffer(0)]], const device float* X1 [[buffer(1)]],
+    const device float* X2 [[buffer(2)]], const device bfloat* W0 [[buffer(3)]],
+    const device bfloat* W1 [[buffer(4)]], const device bfloat* W2 [[buffer(5)]],
+    constant i2_rms_args& a [[buffer(6)]], device float* O [[buffer(7)]],
+    uint blk [[threadgroup_position_in_grid]], uint t [[thread_position_in_threadgroup]],
+    uint nth [[threads_per_threadgroup]]) {
+  threadgroup float part[32];
+  const device float* src = blk == 0u ? X0 : blk == 1u ? X1 : X2;
+  const device bfloat* weight = blk == 0u ? W0 : blk == 1u ? W1 : W2;
+  float sum = 0.0f;
+  for (uint i = t; i < a.width; i += nth) sum = fma(src[i], src[i], sum);
+  sum = simd_sum(sum);
+  if (t % 32u == 0u) part[t / 32u] = sum;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float total = 0.0f;
+  for (uint s = 0; s < nth / 32u; ++s) total += part[s];
+  const float inv = 1.0f / sqrt(total / float(a.width) + a.eps);
+  for (uint i = t; i < a.width; i += nth) O[(size_t)blk * a.width + i] = src[i] * inv * float(weight[i]);
+}
+
+[[kernel]] void i2_rms_kv_store(const device float* K [[buffer(0)]], const device float* V [[buffer(1)]],
+    device float* KEYS [[buffer(2)]], device float* VALUES [[buffer(3)]],
+    constant i2_rms_args& a [[buffer(4)]], uint blk [[threadgroup_position_in_grid]],
+    uint t [[thread_position_in_threadgroup]], uint nth [[threads_per_threadgroup]]) {
+  threadgroup float part[32];
+  const size_t base = (size_t)blk * a.width;
+  float sum = 0.0f;
+  for (uint i = t; i < a.width; i += nth) sum = fma(V[base + i], V[base + i], sum);
+  sum = simd_sum(sum);
+  if (t % 32u == 0u) part[t / 32u] = sum;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float total = 0.0f;
+  for (uint s = 0; s < nth / 32u; ++s) total += part[s];
+  const float inv = 1.0f / sqrt(total / float(a.width) + a.eps);
+  for (uint i = t; i < a.width; i += nth) {
+    KEYS[base + i] = K[base + i];
+    VALUES[base + i] = V[base + i] * inv;
   }
 }
 
@@ -181,6 +240,36 @@ inline float i2_bf(const device bfloat* p, size_t i) { return float(p[i]); }
   for (uint i = t; i < a.width; i += nth) O[at + i] = X[at + i] * i2_bf(sc, i) * clip;
 }
 
+[[kernel]] void i2_clip3(device float* Q [[buffer(0)]], const device bfloat* QS [[buffer(1)]],
+    device float* R [[buffer(2)]], const device bfloat* RS [[buffer(3)]], device float* K [[buffer(4)]],
+    constant i2_clip3_args& a [[buffer(5)]], uint group [[threadgroup_position_in_grid]],
+    uint t [[thread_position_in_threadgroup]], uint nth [[threads_per_threadgroup]]) {
+  threadgroup float part[32];
+  const bool q = group < a.heads;
+  const bool r = !q && group < 2u * a.heads;
+  const uint head = q ? group : r ? group - a.heads : group - 2u * a.heads;
+  const uint width = r ? a.rel : a.dim;
+  const size_t at = (size_t)head * width;
+  device float* x = q ? Q : r ? R : K;
+  const device bfloat* scale = q ? QS + at : r ? RS + at : QS;
+  float sum = 0.0f;
+  for (uint i = t; i < width; i += nth) {
+    const float v = r || q ? x[at + i] * float(scale[i]) : x[at + i];
+    sum = fma(v, v, sum);
+  }
+  sum = simd_sum(sum);
+  if (t % 32u == 0u) part[t / 32u] = sum;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float total = 0.0f;
+  for (uint s = 0; s < nth / 32u; ++s) total += part[s];
+  const float threshold = r ? a.rel_threshold : a.q_threshold;
+  const float clip = clamp(threshold / (sqrt(total) + 1e-6f), 0.0f, 1.0f);
+  for (uint i = t; i < width; i += nth) {
+    const float v = r || q ? x[at + i] * float(scale[i]) : x[at + i];
+    x[at + i] = v * clip;
+  }
+}
+
 // The same clip with no learned scale (K's, after its convolution).
 [[kernel]] void i2_clip(const device float* X [[buffer(0)]], constant i2_clip_args& a [[buffer(1)]],
     device float* O [[buffer(2)]], uint head [[threadgroup_position_in_grid]],
@@ -202,7 +291,7 @@ inline float i2_bf(const device bfloat* p, size_t i) { return float(p[i]); }
 // RING keeps this site's earlier tokens at slot (pos - n) % ring. `layout` names the stored tap order: 0 is a
 // transposed store `[channels, taps]` (tap k of channel c at c*taps + k), 1 a full layer's `static_w` `[taps,
 // channels]`, which the reference reverses, so tap k reads row 3 - k.
-[[kernel]] void i2_conv(const device float* X [[buffer(0)]], const device float* RING [[buffer(1)]],
+[[kernel]] void i2_conv(const device float* X [[buffer(0)]], device float* RING [[buffer(1)]],
     const device bfloat* W [[buffer(2)]], const device float* D [[buffer(3)]],
     constant i2_conv_args& a [[buffer(4)]], device float* O [[buffer(5)]],
     uint2 p [[thread_position_in_grid]]) {
@@ -225,6 +314,7 @@ inline float i2_bf(const device bfloat* p, size_t i) { return float(p[i]); }
       sum = fma(v, D[head * 4u + lag], sum);
     }
   }
+  RING[(a.pos % a.ring) * a.channels + c] = X[c];
   O[c] = sum * a.norm;
 }
 

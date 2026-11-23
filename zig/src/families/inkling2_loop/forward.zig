@@ -18,7 +18,7 @@ const Dmg = extern struct { k: u32, m0: u32, m1: u32, m2: u32, m3: u32 };
 const Dmgx = extern struct { k0: u32, k1: u32, k2: u32, m: [8]u32, x: [8]u32 };
 const Rms = extern struct { width: u32, blocks: u32, eps: f32 };
 const Mix = extern struct { width: u32, depth: u32, k: u32, scale: f32 };
-const Clip = extern struct { heads: u32, width: u32, threshold: f32 };
+const Clip3 = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, q_threshold: f32, rel_threshold: f32 };
 const Conv = extern struct { channels: u32, heads: u32, ring: u32, pos: u32, layout: u32, norm: f32 };
 const Attn = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, scale: f32, floor: f32, alpha: f32 };
 const AttnParts = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, splits: u32, chunk: u32, scale: f32, floor: f32, alpha: f32 };
@@ -28,6 +28,8 @@ const Moe = extern struct { k: u32, n: u32, rows: u32, gate_cap: f32, up_cap: f3
 const Combine = extern struct { width: u32, topk: u32 };
 const Plan = extern struct { slots: u32, experts: u32 };
 const AffineDense = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32, bits: u32, cap: f32 };
+const AffineProjections = extern struct { k: u32, full: u32, m: [8]u32 };
+const AffinePair = extern struct { k: u32, m0: u32, m1: u32 };
 const AffineExpert = extern struct { k: u32, n: u32, slots: u32, topk: u32, gate_cap: f32, up_cap: f32 };
 const AffineEmbed = extern struct { width: u32, rows: u32, eps: f32 };
 
@@ -166,6 +168,26 @@ pub const Forward = struct {
         f.fusedx(p, inputs, .{ @intCast(width(a.q)), @intCast(width(a.k)), @intCast(width(a.v)) }, .{ a.q, a.r, a.sink, a.gate, a.k, kd, a.v, vd }, .{ b(s.q), b(s.r), b(s.sink), b(s.gate), b(s.k), if (full) b(s.kdyn) else b(s.k), b(s.v), if (full) b(s.vdyn) else b(s.v) }, .{ @intCast(nrows(a.q)), @intCast(nrows(a.r)), @intCast(nrows(a.sink)), @intCast(nrows(a.gate)), @intCast(nrows(a.k)), if (full) @intCast(nrows(a.k_dyn.?)) else 0, @intCast(nrows(a.v)), if (full) @intCast(nrows(a.v_dyn.?)) else 0 }, .{ 0, 0, 0, 0, 1, 1, 2, 2 });
     }
 
+    fn affineProjections(f: Forward, lay: *const Layer, inputs: [3]B, full: bool) void {
+        const a = &lay.attn;
+        const s = f.s;
+        const k = if (full) a.k else a.q;
+        const v = if (full) a.v else a.q;
+        const qf = a.q.affine.?;
+        const kf = k.affine.?;
+        const vf = v.affine.?;
+        const ms: [8]u32 = .{ @intCast(nrows(a.q)), @intCast(nrows(a.k)), @intCast(nrows(a.v)), @intCast(nrows(a.r)), @intCast(nrows(a.gate)), @intCast(nrows(a.sink)), if (full) @intCast(nrows(a.k_dyn.?)) else 0, if (full) @intCast(nrows(a.v_dyn.?)) else 0 };
+        var total: usize = 0;
+        for (ms) |n| total += n;
+        f.setRaw(f.m.affine_pipes.?.projections, AffineProjections{ .k = @intCast(width(a.q)), .full = @intFromBool(full), .m = ms }, &.{
+            inputs[0], inputs[1], inputs[2], t(a.q), bo(qf.scales, qf.scale_offset), bo(qf.biases, qf.bias_offset),
+            t(k), bo(kf.scales, kf.scale_offset), bo(kf.biases, kf.bias_offset),
+            t(v), bo(vf.scales, vf.scale_offset), bo(vf.biases, vf.bias_offset),
+            b(s.q), b(s.k), b(s.v), b(s.r), b(s.gate), b(s.sink), b(s.kdyn), b(s.vdyn), A,
+        });
+        f.enc.dispatchGroups(mtl.Size.of((total + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+    }
+
 
     fn rms(f: Forward, x: B, weight: ?B, out: B, count: u32, w: u32, eps: f32) void {
         const wb = weight orelse b(f.s.x);
@@ -192,17 +214,19 @@ pub const Forward = struct {
 
     fn mix(f: Forward, states: []const B, cur: B, query: Tensor, out: B) void {
         const s = f.s;
-        var depth: u32 = 0;
-        for (states) |state| {
-            f.copyN(state, bo(s.states, depth * f.h * 4), f.h);
-            depth += 1;
-        }
-        f.copyN(cur, bo(s.states, depth * f.h * 4), f.h);
-        depth += 1;
-        f.rms(b(s.states), null, b(s.mixs), depth, f.h, 1e-6);
+        const depth = f.rmsGather(states, cur);
         const n: u32 = @intCast(nrows(query));
         f.set(.mix, Mix{ .width = f.h, .depth = depth, .k = n, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(f.h))) }, &.{ b(s.mixs), t(query), A, out });
         f.enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
+    }
+
+    fn rmsGather(f: Forward, states: []const B, cur: B) u32 {
+        var inputs: [st.mix_states]B = @splat(cur);
+        for (states, 0..) |state, i| inputs[i] = state;
+        const depth: u32 = @intCast(states.len + 1);
+        f.set(.rms_gather, Rms{ .width = f.h, .blocks = 0, .eps = 1e-6 }, &.{ inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], A, b(f.s.mixs) });
+        f.enc.dispatchGroups(mtl.Size.of(depth, 1, 1), mtl.Size.of(256, 1, 1));
+        return depth;
     }
 
     fn mixBlocks(f: Forward, cur: B, query: Tensor, out: B) void {
@@ -225,8 +249,6 @@ pub const Forward = struct {
         const args = Conv{ .channels = channels, .heads = conv_heads, .ring = st.ring, .pos = f.pos, .layout = layout, .norm = norm };
         f.set(.conv, args, &.{ x, ring, t(weight), dyn_out, A, out });
         f.enc.dispatchThreads(mtl.Size.of(channels, 1, 1), mtl.Size.of(256, 1, 1));
-        f.set(.conv_store, args, &.{ x, ring, A });
-        f.enc.dispatchThreads(mtl.Size.of(channels, 1, 1), mtl.Size.of(256, 1, 1));
     }
 
     fn rings(f: Forward, slot: u32) [4]B {
@@ -246,8 +268,6 @@ pub const Forward = struct {
         if (dyn) |dw| f.lin(dw, dyn_in, dyn_out);
         const args = Conv{ .channels = channels, .heads = conv_heads, .ring = st.ring, .pos = f.pos, .layout = layout, .norm = norm };
         f.set(.conv, args, &.{ x, ring, t(weight), if (dyn != null) dyn_out else A, A, out });
-        f.enc.dispatchThreads(mtl.Size.of(channels, 1, 1), mtl.Size.of(256, 1, 1));
-        f.set(.conv_store, args, &.{ x, ring, A });
         f.enc.dispatchThreads(mtl.Size.of(channels, 1, 1), mtl.Size.of(256, 1, 1));
     }
 
@@ -282,13 +302,9 @@ pub const Forward = struct {
 
         if (f.capture) |cap| for (0..3) |j| f.record(cap, slot, j, inputs[j], f.h);
 
-        if (full) {
-            f.rms1(inputs[0], t(lay.q_norm), bo(s.xn, 0));
-            f.rms1(inputs[1], t(lay.k_norm), bo(s.xn, f.h * 4));
-            f.rms1(inputs[2], t(lay.v_norm), bo(s.xn, 2 * f.h * 4));
-            inputs = .{ bo(s.xn, 0), bo(s.xn, f.h * 4), bo(s.xn, 2 * f.h * 4) };
-        } else if (bank != null) {
-            for (0..3) |j| f.rms1(inputs[j], t(lay.q_norm), bo(s.xn, j * f.h * 4));
+        if (full or bank != null) {
+            f.set(.rms_weighted3, Rms{ .width = f.h, .blocks = 3, .eps = text.eps }, &.{ inputs[0], inputs[1], inputs[2], t(lay.q_norm), t(if (full) lay.k_norm else lay.q_norm), t(if (full) lay.v_norm else lay.q_norm), A, b(s.xn) });
+            f.enc.dispatchGroups(mtl.Size.of(3, 1, 1), mtl.Size.of(256, 1, 1));
             inputs = .{ bo(s.xn, 0), bo(s.xn, f.h * 4), bo(s.xn, 2 * f.h * 4) };
         } else {
             f.rms1(inputs[0], t(lay.q_norm), bo(s.xn, 0));
@@ -303,8 +319,7 @@ pub const Forward = struct {
             f.copyN(b(s.o), b(s.x), f.h);
         } else f.addN(b(s.x), b(s.o), f.h);
 
-        f.copyN(b(s.x), b(s.ffnin), f.h);
-        if (f.capture) |cap| f.record(cap, slot, 7, b(s.ffnin), f.h);
+        if (f.capture) |cap| f.record(cap, slot, 7, b(s.x), f.h);
         f.mixBlocks(b(s.x), m.weights.mlp_queries[index], bo(s.mixout, 0));
         if (msg) |got| {
             const ctl = lay.controllers[3] orelse return error.MissingController;
@@ -314,7 +329,6 @@ pub const Forward = struct {
         f.experts(lay, bo(s.xn, 0), slot);
         const slots = f.rings(slot);
         f.convolve(b(s.moe), b(s.aconv), lay.mlp_post, null, A, A, slots[3], f.h, 0, 0);
-        f.copyN(b(s.ffnin), b(s.x), f.h);
         f.addN(b(s.x), b(s.aconv), f.h);
         if (f.capture) |cap| f.record(cap, slot, 8, b(s.x), f.h);
     }
@@ -327,16 +341,9 @@ pub const Forward = struct {
     fn messages(f: Forward, bk: Bank, ip: u32) B {
         const s = f.s;
         const at: usize = ip - f.m.config.loop.core_start;
-        var depth: u32 = 0;
-        var i: usize = bk.states.len;
-        while (i > 0) {
-            i -= 1;
-            f.copyN(bk.states[i], bo(s.states, depth * f.h * 4), f.h);
-            depth += 1;
-        }
-        f.copyN(bk.out, bo(s.states, depth * f.h * 4), f.h);
-        depth += 1;
-        f.rms(b(s.states), null, b(s.mixs), depth, f.h, 1e-6);
+        var ordered: [st.mix_states]B = undefined;
+        for (0..bk.states.len) |i| ordered[i] = bk.states[bk.states.len - 1 - i];
+        const depth = f.rmsGather(ordered[0..bk.states.len], bk.out);
         f.set(.mix4, Mix{ .width = f.h, .depth = depth, .k = 4, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(f.h))) }, &.{
             b(s.mixs),
             t(rows(f.m.weights.cross_pass_q, at * 2, 1)),
@@ -352,9 +359,15 @@ pub const Forward = struct {
 
     fn control(f: Forward, ctl: Controller, cur: B, message: B, out: B) void {
         const s = f.s;
-        f.rms1(cur, null, bo(s.h2, 0));
-        f.rms1(message, null, bo(s.h2, f.h * 4));
-        if (ctl.gain.dtype == .bf16 and f.dense() != null) {
+        f.set(.rms_gather, Rms{ .width = f.h, .blocks = 0, .eps = f.m.config.text.eps }, &.{ cur, message, cur, cur, cur, A, b(s.h2) });
+        f.enc.dispatchGroups(mtl.Size.of(2, 1, 1), mtl.Size.of(256, 1, 1));
+        if (ctl.gain.dtype == .f32 and ctl.forget.dtype == .f32 and f.m.affine_pipes != null) {
+            f.lin(ctl.down, b(s.h2), b(s.normed));
+            const m0: u32 = @intCast(nrows(ctl.gain));
+            f.setRaw(f.m.affine_pipes.?.float_control, AffinePair{ .k = @intCast(width(ctl.gain)), .m0 = m0, .m1 = @intCast(nrows(ctl.forget)) }, &.{ b(s.normed), t(ctl.gain), t(ctl.forget), cur, message, out, A });
+            f.enc.dispatchGroups(mtl.Size.of((m0 + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+            return;
+        } else if (ctl.gain.dtype == .bf16 and f.dense() != null) {
             const p = f.dense().?;
             f.lin(ctl.down, b(s.h2), b(s.normed));
             f.fused2(p, b(s.normed), ctl.gain, bo(s.tanh, 0), ctl.forget, bo(s.tanh, f.h * 4));
@@ -372,7 +385,11 @@ pub const Forward = struct {
         const text = &f.m.config.text;
         const extent = f.extentOf(full);
         const ring = f.rings(slot);
-        if (a.q.affine == null and f.dense() != null) {
+        if (a.q.affine != null) {
+            f.affineProjections(lay, inputs, full);
+            f.convolveDynPre(b(s.k), b(s.kc), a.k_conv, b(s.kdyn), ring[0], f.kvw, if (full) f.kv else 0, @intFromBool(full), full);
+            f.convolveDynPre(b(s.v), b(s.vc), a.v_conv, b(s.vdyn), ring[1], f.kvw, if (full) f.kv else 0, @intFromBool(full), full);
+        } else if (f.dense() != null) {
             const p = f.dense().?;
             f.projGroup(p, lay, inputs, full);
             f.convolveDynPre(b(s.k), b(s.kc), a.k_conv, b(s.kdyn), ring[0], f.kvw, if (full) f.kv else 0, @intFromBool(full), full);
@@ -387,11 +404,11 @@ pub const Forward = struct {
             f.lin(a.v, inputs[2], b(s.v));
             f.convolve(b(s.v), b(s.vc), a.v_conv, a.v_dyn, inputs[2], b(s.vdyn), ring[1], f.kvw, if (full) f.kv else 0, @intFromBool(full));
         }
-        f.clipScaled(b(s.q), a.q_scale, f.heads, f.dim, text.qk_clip);
-        f.clipScaled(b(s.r), a.r_scale, f.heads, f.drel, text.rel_clip);
-        f.clipPlain(b(s.kc), f.kv, f.dim, text.qk_clip);
-        f.rms(b(s.vc), null, b(s.vc), f.kv, f.dim, text.eps);
-        f.kvStore(slot);
+        f.set(.clip3, Clip3{ .heads = f.heads, .kv = f.kv, .dim = f.dim, .rel = f.drel, .q_threshold = text.qk_clip, .rel_threshold = text.rel_clip }, &.{ b(s.q), t(a.q_scale), b(s.r), t(a.r_scale), b(s.kc), A });
+        f.enc.dispatchGroups(mtl.Size.of(2 * f.heads + f.kv, 1, 1), mtl.Size.of(256, 1, 1));
+        const at = f.cache.row(&f.m.config, slot, f.pos);
+        f.set(.rms_kv_store, Rms{ .width = f.dim, .blocks = 0, .eps = text.eps }, &.{ b(s.kc), b(s.vc), bo(f.cache.keys, at), bo(f.cache.values, at), A });
+        f.enc.dispatchGroups(mtl.Size.of(f.kv, 1, 1), mtl.Size.of(256, 1, 1));
         f.relative(lay, b(s.r), extent, full);
         const win: u32 = if (full) 0 else text.window;
         const lo: u32 = if (win != 0 and f.pos + 1 > win) f.pos + 1 - win else 0;
@@ -424,21 +441,6 @@ pub const Forward = struct {
 
     fn extentOf(f: Forward, full: bool) u32 {
         return if (full) f.m.config.text.rel_extent else f.m.config.text.window;
-    }
-
-    fn kvStore(f: Forward, slot: u32) void {
-        const at = f.cache.row(&f.m.config, slot, f.pos);
-        f.flat(.kv_store, Pair{ .count = f.kvw }, &.{ b(f.s.kc), b(f.s.vc), bo(f.cache.keys, at), bo(f.cache.values, at), A }, f.kvw);
-    }
-
-    fn clipScaled(f: Forward, x: B, scale: Tensor, heads: u32, w: u32, threshold: f32) void {
-        f.set(.clip_scaled, Clip{ .heads = heads, .width = w, .threshold = threshold }, &.{ x, t(scale), A, x });
-        f.enc.dispatchGroups(mtl.Size.of(heads, 1, 1), mtl.Size.of(256, 1, 1));
-    }
-
-    fn clipPlain(f: Forward, x: B, heads: u32, w: u32, threshold: f32) void {
-        f.set(.clip, Clip{ .heads = heads, .width = w, .threshold = threshold }, &.{ x, A, x });
-        f.enc.dispatchGroups(mtl.Size.of(heads, 1, 1), mtl.Size.of(256, 1, 1));
     }
 
     fn relative(f: Forward, lay: *const Layer, r: B, extent: u32, full: bool) void {

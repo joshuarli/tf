@@ -653,8 +653,6 @@ const Chunk = struct {
                 const args = DecodeConv{ .channels = channels, .heads = conv_heads, .ring = st.ring, .pos = @intCast(cache.len), .layout = layout, .norm = norm };
                 c.setG(.conv, args, &.{ xr, cb, t(weight), if (dyn != null) dr else A, A, yr });
                 c.enc.dispatchThreads(mtl.Size.of(channels, 1, 1), mtl.Size.of(256, 1, 1));
-                c.setG(.conv_store, args, &.{ xr, cb, A });
-                c.enc.dispatchThreads(mtl.Size.of(channels, 1, 1), mtl.Size.of(256, 1, 1));
             }
             return;
         }

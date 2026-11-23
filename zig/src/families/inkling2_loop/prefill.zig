@@ -55,7 +55,7 @@ const Moeg = extern struct { k: u32, n: u32, slots: u32, topk: u32, experts: u32
 const CombineB = extern struct { width: u32, topk: u32, rows: u32 };
 const ConvRow = extern struct { ring: u64, pos: u32, pad: u32 = 0 };
 const DecodeConv = extern struct { channels: u32, heads: u32, ring: u32, pos: u32, layout: u32, norm: f32, residual: u32 };
-const DecodeAttn = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, scale: f32, floor: f32, alpha: f32 };
+const DecodeAttn = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, scale: f32, floor: f32, alpha: f32, eps: f32 };
 const DecodeParts = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, splits: u32, chunk: u32, scale: f32, floor: f32, alpha: f32 };
 const BatchStoreRow = extern struct { keys: u64, values: u64, pos: u32, pad: u32 = 0 };
 const BatchRow = extern struct { keys: u64, values: u64, args: DecodeParts };
@@ -743,10 +743,10 @@ const Chunk = struct {
             c.enc.useResource(cache.keys, mtl.ResourceUsage.read | mtl.ResourceUsage.write);
             c.enc.useResource(cache.values, mtl.ResourceUsage.read | mtl.ResourceUsage.write);
         }
-        const rel_args = DecodeAttn{ .heads = c.heads, .kv = c.kv, .dim = c.dim, .rel = c.drel, .extent = extent, .window = 0, .pos = 0, .tau = @intFromBool(full), .scale = 0, .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha };
+        const rel_args = DecodeAttn{ .heads = c.heads, .kv = c.kv, .dim = c.dim, .rel = c.drel, .extent = extent, .window = 0, .pos = 0, .tau = @intFromBool(full), .scale = 0, .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha, .eps = text.eps };
         c.setP(s.pipes.batch_store_rel, rel_args, &.{ b(s.kc), b(s.vc), b(s.r), t(lay.attn.rel_bias), A, b(s.relbias) });
         c.enc.setBytes(std.mem.sliceAsBytes(store_rows[0..batch.caches.len]), 6);
-        c.enc.dispatchThreads(mtl.Size.of(@max(c.kvw, c.heads * (extent + 1)), c.n, 1), mtl.Size.of(256, 1, 1));
+        c.enc.dispatchGroups(mtl.Size.of(c.kv + (c.heads * (extent + 1) + 255) / 256, c.n, 1), mtl.Size.of(256, 1, 1));
         c.enc.setPipeline(batch.scratch.split);
         c.enc.setBuffer(s.q, 0, 0);
         c.enc.setBuffer(s.relbias, 0, 1);
@@ -814,7 +814,7 @@ const Chunk = struct {
         } else c.clipPlain(b(s.kc), c.kv, c.dim, text.qk_clip);
         if (!fused) c.lin(lay.attn.v, ins[2], b(s.v));
         c.convolve(b(s.v), b(s.vc), lay.attn.v_conv, lay.attn.v_dyn, ins[2], b(s.vdyn), ring[1], c.kvw, if (full) c.kv else 0, @intFromBool(full), slot, .value, fused);
-        c.rmsU(b(s.vc), b(s.vc), @as(usize, c.n) * c.kv, c.dim, text.eps);
+        if (c.batch == null) c.rmsU(b(s.vc), b(s.vc), @as(usize, c.n) * c.kv, c.dim, text.eps);
         if (!fused) c.lin(lay.attn.sink, ins[0], b(s.sink));
         if (c.batch) |batch| {
             c.batchAttention(lay, slot, full, extent, batch);

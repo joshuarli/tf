@@ -80,7 +80,7 @@ i2a_embed                         1.0       13.0      12.6    0.0%
 sum of kernels                           61839.0            100.0%
 ```
 
-## Correctness
+## Intermediate correctness at 1cb799836
 
 The native build `/opt/homebrew/bin/zig build native -Dcpu=apple_m1 -j1` exited 0. The timing runner was built separately with `/opt/homebrew/bin/zig build tf-inkling2-loop-run -Dcpu=apple_m1 -j1 --prefix "$PWD/.work/tmp/b1h-candidate-build"` and exited 0. Both used `ZIG_GLOBAL_CACHE_DIR="$HOME/repos/tf/.work/zig-global-cache"` and `TMPDIR="$PWD/.work/tmp"`.
 
@@ -94,7 +94,7 @@ INKLING_LOAD_LIMIT_GB=26 TF_INKLING2_LOOP_DIR="$HOME/models/Inkling-2-Mini-oQ4e-
 
 The command exited 0 with 73 of 73 tests passed. The batch comparison reported zero logit and cache difference for all tested rows at widths 1, 2 and 4, including the cache-boundary case. Peak charged memory was 23.9 GB.
 
-## Streamed fidelity
+## Intermediate streamed fidelity at 1cb799836
 
 The saved oracle verifier exited 0 and verified 16 histories, including two beyond the sliding window. The candidate capture command exited 0. The streamed comparison exited 0 with 2,775 top-1 matches in 3,015 rows (92.0398%), mean KL 0.039272796 and zero non-finite values. Mean KL is the mean of the 16 per-history means. The f32 oracle was not rerun.
 
@@ -143,3 +143,266 @@ print('TOTAL', total, 'TOP1', matches, 'AGREEMENT', matches / total, 'MEAN_KL', 
 if matches / total < 0.915 or np.mean(means) > 0.045 or nonfinite:
     raise SystemExit(1)
 ```
+
+## Intermediate K=1 profile at 1cb799836
+
+Attempt 4 exited 0 after three CPU-gate deferrals. One instrumented batch step at 2,500 cached tokens had 1,494 dispatches and a 27.778 ms GPU span. The instrumented GPU span is attribution and does not establish throughput.
+
+| Kernel | Calls per step | GPU ms per step |
+| --- | ---: | ---: |
+| `i2_batch_split` | 48.0 | 5.101 |
+| `i2p_gu` | 44.0 | 2.345 |
+| `i2a_batch_projections` | 48.0 | 2.194 |
+| `i2a_float` | 144.0 | 2.192 |
+| `i2a_dense` | 49.0 | 1.954 |
+| `i2p_mix` | 96.0 | 1.792 |
+| `i2p_down` | 44.0 | 1.664 |
+| `i2p_batch_conv` | 192.0 | 1.280 |
+| `i2a_batch_float_control` | 96.0 | 1.179 |
+| `i2p_gather_rms` | 120.0 | 1.178 |
+| `i2_batch_combine` | 48.0 | 1.056 |
+| `i2p_combine` | 48.0 | 0.922 |
+| `i2p_rms_pair` | 96.0 | 0.728 |
+| `i2p_batch_store_rel` | 48.0 | 0.630 |
+| `i2p_mix4` | 24.0 | 0.623 |
+| `i2p_rms3` | 28.0 | 0.568 |
+| `i2p_rms` | 69.0 | 0.483 |
+| `i2p_routepick` | 48.0 | 0.405 |
+| `i2_add` | 40.0 | 0.395 |
+| `i2p_scatter` | 8.0 | 0.309 |
+| `i2a_expert_up` | 4.0 | 0.197 |
+| `i2p_clip3` | 48.0 | 0.188 |
+| `i2_rms` | 48.0 | 0.142 |
+| `i2_sig_mul` | 48.0 | 0.131 |
+| `i2a_expert_down` | 4.0 | 0.104 |
+
+## Baseline K=1 GPU times
+
+| Kernel | Calls per step | GPU ms per step |
+| --- | ---: | ---: |
+| `i2a_dense` | 353.0 | 7.441 |
+| `i2_batch_split` | 48.0 | 4.683 |
+| `i2p_rms` | 345.0 | 3.711 |
+| `i2p_gu` | 44.0 | 2.333 |
+| `i2_rms` | 168.0 | 2.226 |
+| `i2a_float` | 336.0 | 2.221 |
+| `i2p_down` | 44.0 | 1.888 |
+| `i2p_mix` | 96.0 | 1.781 |
+| `i2p_gather` | 120.0 | 1.685 |
+| `i2_conv` | 192.0 | 1.488 |
+| `i2_copy` | 119.0 | 0.964 |
+| `i2_batch_combine` | 48.0 | 0.734 |
+| `i2p_ctl` | 96.0 | 0.635 |
+| `i2p_mix4` | 24.0 | 0.627 |
+| `i2p_clip_scaled` | 96.0 | 0.506 |
+| `i2_add` | 88.0 | 0.491 |
+| `i2_kv_store` | 48.0 | 0.395 |
+| `i2p_routepick` | 48.0 | 0.378 |
+| `i2_relbias` | 48.0 | 0.368 |
+| `i2p_combine` | 48.0 | 0.217 |
+| `i2a_expert_up` | 4.0 | 0.197 |
+| `i2p_clip` | 48.0 | 0.146 |
+| `i2_sig_mul` | 48.0 | 0.124 |
+| `i2a_expert_down` | 4.0 | 0.103 |
+| `i2a_embed` | 1.0 | 0.010 |
+
+## Baseline K=4 GPU times
+
+| Kernel | Calls per step | GPU ms per step |
+| --- | ---: | ---: |
+| `i2a_dense` | 353.0 | 12.570 |
+| `i2p_gu` | 44.0 | 8.172 |
+| `i2_batch_split` | 48.0 | 7.862 |
+| `i2p_down` | 44.0 | 5.818 |
+| `i2_conv` | 768.0 | 5.695 |
+| `i2a_float` | 336.0 | 3.647 |
+| `i2p_rms` | 345.0 | 3.320 |
+| `i2p_gather` | 120.0 | 1.669 |
+| `i2_rms` | 168.0 | 1.604 |
+| `i2p_mix` | 96.0 | 1.583 |
+| `i2_batch_combine` | 48.0 | 1.186 |
+| `i2_relbias` | 192.0 | 1.077 |
+| `i2_kv_store` | 192.0 | 1.061 |
+| `i2p_ctl` | 96.0 | 1.020 |
+| `i2_copy` | 155.0 | 0.982 |
+| `i2p_mix4` | 24.0 | 0.931 |
+| `i2_add` | 88.0 | 0.889 |
+| `i2p_routepick` | 48.0 | 0.679 |
+| `i2a_expert_up` | 4.0 | 0.580 |
+| `i2p_combine` | 48.0 | 0.495 |
+| `i2a_expert_down` | 4.0 | 0.326 |
+| `i2p_clip_scaled` | 96.0 | 0.324 |
+| `i2_sig_mul` | 48.0 | 0.182 |
+| `i2p_clip` | 48.0 | 0.154 |
+| `i2a_embed` | 1.0 | 0.013 |
+
+## Intermediate K=4 profile at 1cb799836
+
+Attempt 25 exited 0 after 24 admission or post-check deferrals. The retained run passed both CPU checks and GPU admission.
+
+1 timed rounds after 8 warm: 1 encoders, 1494 stages, 1494 dispatches a round. 46.171 ms a round (46.170 in stages, 0.000 between encoders).
+
+| Kernel | Calls per step | GPU ms per step |
+| --- | ---: | ---: |
+| `i2p_expert_matrix` | 88.0 | 665.775 |
+| `i2a_dense_rows` | 352.0 | 338.532 |
+| `i2p_attn_tiled` | 48.0 | 204.208 |
+| `i2a_float` | 336.0 | 87.022 |
+| `i2p_gu_grouped` | 44.0 | 81.408 |
+| `i2p_down_grouped` | 44.0 | 61.414 |
+| `i2a_group_up` | 4.0 | 46.503 |
+| `i2p_relbias` | 48.0 | 22.529 |
+| `i2a_group_down` | 4.0 | 21.956 |
+| `i2p_gu` | 44.0 | 7.854 |
+| `i2_batch_split` | 48.0 | 7.522 |
+| `i2p_clip_scaled` | 96.0 | 6.001 |
+| `i2p_down` | 44.0 | 5.777 |
+| `i2p_gather_rms` | 120.0 | 5.716 |
+| `i2p_conv` | 192.0 | 5.499 |
+| `i2p_mix` | 96.0 | 5.024 |
+| `i2a_batch_projections` | 48.0 | 5.003 |
+| `i2a_dense` | 49.0 | 4.231 |
+| `i2p_combine` | 48.0 | 4.134 |
+| `i2p_conv_store` | 192.0 | 3.330 |
+| `i2p_ctl` | 96.0 | 3.324 |
+| `i2p_rms_pair` | 96.0 | 3.040 |
+| `i2a_float` | 144.0 | 2.312 |
+| `i2_add` | 88.0 | 2.007 |
+| `i2p_mix` | 96.0 | 1.774 |
+| `i2p_mix4` | 24.0 | 1.690 |
+| `i2p_rms` | 69.0 | 1.567 |
+| `i2a_batch_float_control` | 96.0 | 1.489 |
+| `i2_rms` | 48.0 | 1.404 |
+| `i2p_batch_conv` | 192.0 | 1.313 |
+| `i2p_gather_rms` | 120.0 | 1.267 |
+| `i2_batch_combine` | 48.0 | 1.171 |
+| `i2p_clip` | 48.0 | 1.102 |
+| `i2p_rms3` | 28.0 | 0.940 |
+| `i2_sig_mul` | 48.0 | 0.917 |
+| `i2p_combine` | 48.0 | 0.842 |
+| `i2p_batch_store_rel` | 48.0 | 0.734 |
+| `i2p_rms_pair` | 96.0 | 0.710 |
+| `i2p_moe_zero` | 48.0 | 0.707 |
+| `i2p_mix4` | 24.0 | 0.630 |
+| `i2a_expert_up` | 4.0 | 0.578 |
+| `i2p_rms3` | 28.0 | 0.563 |
+| `i2p_rms` | 69.0 | 0.471 |
+| `i2_add` | 40.0 | 0.424 |
+| `i2p_routepick` | 48.0 | 0.391 |
+| `i2a_expert_down` | 4.0 | 0.327 |
+| `i2p_scatter` | 8.0 | 0.301 |
+| `i2p_clip3` | 48.0 | 0.195 |
+| `i2_rms` | 48.0 | 0.140 |
+| `i2_sig_mul` | 48.0 | 0.132 |
+
+The intermediate profile command used the baseline command above with `b1h-candidate-build` in place of `b1h-base-build`. The K=1 retained attempt was 4 and the K=4 retained attempt was 25. The profiler used `TF_METAL4_TIMELINE=1`, GPU admission, CPU admission, and the immediate CPU post-check.
+
+The token fixture was created by:
+
+```sh
+INKLING_LOAD_LIMIT_GB=26 python3 campaign/heavy.py -- "$PWD/.work/tmp/b1h-base-build/bin/tf-inkling2-loop-run" "$HOME/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd/tokenizer.json" campaign/prompts/dev/code-4096.txt tokenize "$PWD/.work/tmp/b1h-code-all.json"
+jaq '.[0:2500]' .work/tmp/b1h-code-all.json > .work/tmp/b1h-code-2500.json
+```
+
+Tokenization exited 0 and reported 5,265 tokens. The slice holds 2,500 IDs.
+
+## Intermediate K=1 timing
+
+The `1cb799836` runner used three gated alternating pairs at 2,500 cached tokens. The run then stopped the first K=8 baseline step because the K=1 target was not met and a further fusion was selected. The interrupted K=8 attempt exited 130 and was discarded. The final timing matrix must use the final runner.
+
+| Pair | Baseline batch ms | Candidate batch ms |
+| ---: | ---: | ---: |
+| 1 | 24.632 | 21.198 |
+| 2 | 24.735 | 21.066 |
+| 3 | 24.425 | 21.134 |
+
+## Final K=1 profile
+
+The candidate command exited 0 on attempt 1 with GPU and CPU admission and an immediate CPU post-check. 1 timed rounds after 8 warm: 1 encoders, 1446 stages, 1446 dispatches a round. 27.888 ms a round (27.888 in stages, 0.000 between encoders).
+
+| Kernel | Calls per step | GPU ms per step |
+| --- | ---: | ---: |
+| `i2_batch_split` | 48.0 | 4.709 |
+| `i2p_gu` | 44.0 | 2.330 |
+| `i2a_batch_projections` | 48.0 | 2.284 |
+| `i2p_down` | 44.0 | 1.983 |
+| `i2a_dense` | 49.0 | 1.978 |
+| `i2p_batch_conv` | 192.0 | 1.930 |
+| `i2a_float` | 144.0 | 1.901 |
+| `i2p_mix` | 96.0 | 1.867 |
+| `i2_batch_combine` | 48.0 | 1.446 |
+| `i2p_mix4` | 24.0 | 0.944 |
+| `i2p_combine` | 48.0 | 0.858 |
+| `i2a_batch_float_control` | 96.0 | 0.813 |
+| `i2_sig_mul` | 48.0 | 0.766 |
+| `i2p_rms_pair` | 96.0 | 0.737 |
+| `i2p_routepick` | 48.0 | 0.689 |
+| `i2p_gather_rms` | 120.0 | 0.636 |
+| `i2p_rms3` | 28.0 | 0.563 |
+| `i2p_rms` | 69.0 | 0.484 |
+| `i2p_batch_store_rel` | 48.0 | 0.353 |
+| `i2a_expert_up` | 4.0 | 0.202 |
+| `i2p_clip3` | 48.0 | 0.175 |
+| `i2a_expert_down` | 4.0 | 0.104 |
+| `i2_add` | 40.0 | 0.097 |
+| `i2p_scatter` | 8.0 | 0.020 |
+| `i2a_embed` | 1.0 | 0.011 |
+
+## Final K=4 profile
+
+The candidate command exited 0 on attempt 1 with GPU and CPU admission and an immediate CPU post-check. 1 timed rounds after 8 warm: 1 encoders, 1446 stages, 1446 dispatches a round. 48.485 ms a round (48.485 in stages, 0.000 between encoders).
+
+| Kernel | Calls per step | GPU ms per step |
+| --- | ---: | ---: |
+| `i2p_expert_matrix` | 88.0 | 695.234 |
+| `i2a_dense_rows` | 352.0 | 355.550 |
+| `i2p_attn_tiled` | 48.0 | 210.981 |
+| `i2a_float` | 336.0 | 88.966 |
+| `i2p_gu_grouped` | 44.0 | 84.239 |
+| `i2p_down_grouped` | 44.0 | 62.784 |
+| `i2a_group_up` | 4.0 | 52.432 |
+| `i2a_group_down` | 4.0 | 24.681 |
+| `i2p_relbias` | 48.0 | 23.372 |
+| `i2p_gu` | 44.0 | 8.497 |
+| `i2_batch_split` | 48.0 | 7.665 |
+| `i2p_down` | 44.0 | 6.567 |
+| `i2p_clip_scaled` | 96.0 | 6.295 |
+| `i2p_gather_rms` | 120.0 | 5.957 |
+| `i2a_batch_projections` | 48.0 | 5.373 |
+| `i2p_conv` | 192.0 | 5.346 |
+| `i2p_mix` | 96.0 | 4.831 |
+| `i2a_dense` | 49.0 | 4.542 |
+| `i2p_combine` | 48.0 | 4.310 |
+| `i2p_conv_store` | 192.0 | 3.403 |
+| `i2p_ctl` | 96.0 | 3.144 |
+| `i2p_rms_pair` | 96.0 | 2.935 |
+| `i2a_float` | 144.0 | 1.941 |
+| `i2_add` | 88.0 | 1.916 |
+| `i2p_mix` | 96.0 | 1.899 |
+| `i2p_batch_conv` | 192.0 | 1.857 |
+| `i2p_mix4` | 24.0 | 1.687 |
+| `i2_batch_combine` | 48.0 | 1.476 |
+| `i2_rms` | 48.0 | 1.452 |
+| `i2p_rms` | 69.0 | 1.364 |
+| `i2a_batch_float_control` | 96.0 | 1.170 |
+| `i2p_clip` | 48.0 | 1.150 |
+| `i2p_mix4` | 24.0 | 0.945 |
+| `i2p_combine` | 48.0 | 0.942 |
+| `i2p_rms3` | 28.0 | 0.916 |
+| `i2p_moe_zero` | 48.0 | 0.848 |
+| `i2_sig_mul` | 48.0 | 0.845 |
+| `i2_sig_mul` | 48.0 | 0.743 |
+| `i2p_rms_pair` | 96.0 | 0.715 |
+| `i2p_routepick` | 48.0 | 0.703 |
+| `i2p_gather_rms` | 120.0 | 0.684 |
+| `i2a_expert_up` | 4.0 | 0.593 |
+| `i2p_rms3` | 28.0 | 0.565 |
+| `i2p_rms` | 69.0 | 0.499 |
+| `i2p_batch_store_rel` | 48.0 | 0.421 |
+| `i2a_expert_down` | 4.0 | 0.339 |
+| `i2p_clip3` | 48.0 | 0.200 |
+| `i2_add` | 40.0 | 0.105 |
+| `i2p_scatter` | 8.0 | 0.022 |
+| `i2a_embed` | 1.0 | 0.011 |
+
+The final profile used the baseline command above with `b1h-candidate2-build` replacing `b1h-base-build`.

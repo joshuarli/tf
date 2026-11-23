@@ -532,25 +532,40 @@ struct i2p_batch_conv_args { uint channels, heads, ring, pos, layout; float norm
 }
 
 struct i2p_batch_store_row { device float* keys; device float* values; uint pos, pad; };
-struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; float scale, floor, alpha; };
+struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; float scale, floor, alpha, eps; };
 
 [[kernel]] void i2p_batch_store_rel(const device float* K [[buffer(0)]], const device float* V [[buffer(1)]],
     const device float* R [[buffer(2)]], const device bfloat* P [[buffer(3)]],
     constant i2p_batch_rel_args& a [[buffer(4)]], device float* O [[buffer(5)]],
-    constant i2p_batch_store_row* rows [[buffer(6)]], uint2 p [[thread_position_in_grid]]) {
-  const uint count = a.kv * a.dim;
-  if (p.x < count) {
-    rows[p.y].keys[p.x] = K[(size_t)p.y * count + p.x];
-    rows[p.y].values[p.x] = V[(size_t)p.y * count + p.x];
+    constant i2p_batch_store_row* rows [[buffer(6)]], uint2 group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]]) {
+  threadgroup float part[8];
+  const uint row = group.y, count = a.kv * a.dim;
+  if (group.x < a.kv) {
+    const size_t at = (size_t)row * count + group.x * a.dim;
+    float sum = 0.0f;
+    for (uint i = tid; i < a.dim; i += 256u) sum = fma(V[at + i], V[at + i], sum);
+    sum = simd_sum(sum);
+    if (tid % 32u == 0u) part[tid / 32u] = sum;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float total = 0.0f;
+    for (uint i = 0; i < 8u; ++i) total += part[i];
+    const float inv = 1.0f / sqrt(total / float(a.dim) + a.eps);
+    for (uint i = tid; i < a.dim; i += 256u) {
+      rows[row].keys[group.x * a.dim + i] = K[at + i];
+      rows[row].values[group.x * a.dim + i] = V[at + i] * inv;
+    }
+    return;
   }
+  const uint i = (group.x - a.kv) * 256u + tid;
   const uint cols = a.extent + 1u;
-  if (p.x >= cols * a.heads) return;
-  const uint h = p.x / cols, dist = p.x % cols;
-  const size_t out = (size_t)p.y * cols * a.heads + p.x;
+  if (i >= cols * a.heads) return;
+  const uint h = i / cols, dist = i % cols;
+  const size_t out = (size_t)row * cols * a.heads + i;
   if (dist == a.extent) { O[out] = 0.0f; return; }
-  const float tau = a.tau ? 1.0f + a.alpha * precise::log(max(1.0f, (float(rows[p.y].pos) + 1.0f) / a.floor)) : 1.0f;
+  const float tau = a.tau ? 1.0f + a.alpha * precise::log(max(1.0f, (float(rows[row].pos) + 1.0f) / a.floor)) : 1.0f;
   float sum = 0.0f;
-  const device float* r = R + ((size_t)p.y * a.heads + h) * a.rel;
+  const device float* r = R + ((size_t)row * a.heads + h) * a.rel;
   for (uint u = 0; u < a.rel; ++u) sum = fma(i2p_bf(P, u * a.extent + dist), r[u], sum);
   O[out] = sum * tau;
 }

@@ -23,6 +23,38 @@ pub fn prefillSource(comptime mxfp8: bool) []const u8 {
 pub const attention = @embedFile("kernels/attention.metal");
 
 pub const dense = @embedFile("kernels/dense.metal");
+pub const affine = @embedFile("kernels/affine.metal");
+
+pub const AffinePipes = struct {
+    dense: mtl.Pipeline,
+    float: mtl.Pipeline,
+    embed: mtl.Pipeline,
+    up: mtl.Pipeline,
+    down: mtl.Pipeline,
+
+    pub fn init(device: mtl.Device) !AffinePipes {
+        const lib = try mtl.Library.fromSource(device, affine, mtl.CompileOptions.mlx());
+        defer lib.deinit();
+        const dense_pipe = try mtl.Pipeline.init(device, lib, "i2a_dense", false);
+        errdefer dense_pipe.deinit();
+        const float_pipe = try mtl.Pipeline.init(device, lib, "i2a_float", false);
+        errdefer float_pipe.deinit();
+        const embed_pipe = try mtl.Pipeline.init(device, lib, "i2a_embed", false);
+        errdefer embed_pipe.deinit();
+        const up_pipe = try mtl.Pipeline.init(device, lib, "i2a_expert_up", false);
+        errdefer up_pipe.deinit();
+        const down_pipe = try mtl.Pipeline.init(device, lib, "i2a_expert_down", false);
+        return .{ .dense = dense_pipe, .float = float_pipe, .embed = embed_pipe, .up = up_pipe, .down = down_pipe };
+    }
+
+    pub fn deinit(p: AffinePipes) void {
+        p.dense.deinit();
+        p.float.deinit();
+        p.embed.deinit();
+        p.up.deinit();
+        p.down.deinit();
+    }
+};
 
 pub const dense_names = [_][:0]const u8{ "i2_dmv", "i2_dmv_cap", "i2_dmv_fused", "i2_dmv_fusedx" };
 

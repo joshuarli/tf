@@ -10,6 +10,14 @@ const st = core.safetensors;
 const cfg = @import("config.zig");
 const kernels = @import("kernels.zig");
 
+pub const Affine = struct {
+    scales: mtl.Buffer,
+    scale_offset: usize,
+    biases: mtl.Buffer,
+    bias_offset: usize,
+    bits: u32,
+};
+
 pub const Tensor = struct {
     buffer: mtl.Buffer,
     offset: usize,
@@ -17,13 +25,14 @@ pub const Tensor = struct {
     dtype: st.DType,
     shape: [st.max_rank]usize = @splat(1),
     rank: usize = 0,
+    affine: ?Affine = null,
 
     pub fn count(self: Tensor) usize {
         return self.bytes / self.dtype.size();
     }
 };
 
-const Shard = struct { map: mtl.MappedFile, buffer: mtl.Buffer, data: usize, header: st.Header };
+const Shard = struct { map: ?mtl.MappedFile, buffer: mtl.Buffer, data: usize, header: st.Header };
 
 pub const Attn = struct {
     q: Tensor, // wq_du [q_width, hidden]
@@ -62,6 +71,9 @@ pub const Layer = struct {
     w2_scale: Tensor,
     w2_global: ?Tensor = null,
     w2_den: ?Tensor = null,
+    w13_bias: ?Tensor = null,
+    w2_bias: ?Tensor = null,
+    affine_expert: bool = false,
     mxfp8: bool,
     controllers: [4]?Controller = @splat(null), // attn, k, v, mlp on the core layers
 };
@@ -129,10 +141,12 @@ pub const Model = struct {
     config: cfg.Config,
     arena: std.heap.ArenaAllocator,
     shards: []Shard,
+    owned: std.ArrayList(mtl.Buffer) = .empty,
     formats: []cfg.Expert,
     weights: Weights,
     glue: [glue_names.len]mtl.Pipeline,
     experts: [2][2]mtl.Pipeline, // [nvfp4, mxfp8][gate/up, down]
+    affine_pipes: ?kernels.AffinePipes = null,
     t16: mtl.Buffer,
     t256: mtl.Buffer,
 
@@ -142,6 +156,8 @@ pub const Model = struct {
         const m = try gpa.create(Model);
         errdefer gpa.destroy(m);
         m.gpa = gpa;
+        m.owned = .empty;
+        m.affine_pipes = null;
         var arena = std.heap.ArenaAllocator.init(gpa);
         errdefer arena.deinit();
         m.config = try readConfig(arena.allocator(), io, dir);
@@ -150,12 +166,13 @@ pub const Model = struct {
         errdefer m.device.deinit();
         m.queue = try m.device.queue();
         errdefer m.queue.deinit();
+        errdefer for (m.owned.items) |buf| buf.deinit();
         const names = try cfg.shards(m.arena.allocator(), io, dir);
         m.shards = try m.arena.allocator().alloc(Shard, names.len);
         var mapped: usize = 0;
         errdefer for (m.shards[0..mapped]) |s| {
             s.buffer.deinit();
-            s.map.deinit();
+            if (s.map) |map| map.deinit();
         };
         for (names, 0..) |name, i| {
             m.shards[i] = try mapShard(m, dir, name);
@@ -166,7 +183,7 @@ pub const Model = struct {
             if (m.shards.len != 1) return error.MultipleShards;
             try cfg.expertFormats(m.shards[0].header, m.config.text.layers, m.formats);
         } else @memset(m.formats, .nvfp4);
-        m.weights = try m.mapWeights();
+        m.weights = if (m.config.checkpoint == .mlx) try m.mapMlxWeights() else try m.mapWeights();
         m.t16 = try m.device.buffer(16 * 4, mtl.ResourceOptions.shared);
         errdefer m.t16.deinit();
         m.t256 = try m.device.buffer(256 * 4, mtl.ResourceOptions.shared);
@@ -174,14 +191,21 @@ pub const Model = struct {
         for (0..16) |i| m.t16.slice(f32, 16)[i] = @floatCast(core.quant.nvfp4.e2m1(@intCast(i)));
         for (0..256) |i| m.t256.slice(f32, 256)[i] = @floatCast(core.quant.fp8.e4m3(@intCast(i)));
         try m.buildPipelines();
+        errdefer {
+            for (m.glue) |p| p.deinit();
+            for (m.experts) |row| for (row) |p| p.deinit();
+        }
+        if (m.config.checkpoint == .mlx) m.affine_pipes = try kernels.AffinePipes.init(m.device);
         return m;
     }
 
     pub fn deinit(m: *Model) void {
+        if (m.affine_pipes) |p| p.deinit();
         for (m.glue) |p| p.deinit();
         for (m.experts) |row| for (row) |p| p.deinit();
         m.t16.deinit();
         m.t256.deinit();
+        for (m.owned.items) |buf| buf.deinit();
         m.unmapShards();
         m.arena.deinit();
         m.queue.deinit();
@@ -192,7 +216,7 @@ pub const Model = struct {
     fn unmapShards(m: *Model) void {
         for (m.shards) |s| {
             s.buffer.deinit();
-            s.map.deinit();
+            if (s.map) |map| map.deinit();
         }
     }
 
@@ -205,7 +229,15 @@ pub const Model = struct {
         const n = try st.headerSize(std.mem.readInt(u64, map.bytes[0..8], .little), map.size);
         const data = 8 + n;
         const prefixes: []const []const u8 = if (m.config.checkpoint == .mlx) &.{ "model.", "lm_head." } else &.{"model.llm."};
-        const header = try st.parseHeaderPrefixes(a, map.bytes[8..data], map.size - data, prefixes);
+        const header_bytes = if (m.config.checkpoint == .mlx) try a.dupe(u8, map.bytes[8..data]) else map.bytes[8..data];
+        const header = try st.parseHeaderPrefixes(a, header_bytes, map.size - data, prefixes);
+        if (m.config.checkpoint == .mlx) {
+            for (header.values()) |entry| if (entry.begin % 4 != 0) return error.UnalignedTensor;
+            const buffer = try m.device.buffer(map.size - data, mtl.ResourceOptions.shared | mtl.ResourceOptions.untracked);
+            @memcpy(buffer.contents()[0 .. map.size - data], map.bytes[data..map.size]);
+            map.deinit();
+            return .{ .map = null, .buffer = buffer, .data = 0, .header = header };
+        }
         const buffer = try m.device.bufferNoCopy(map.bytes.ptr, map.bytes.len, mtl.ResourceOptions.shared | mtl.ResourceOptions.untracked);
         return .{ .map = map, .buffer = buffer, .data = data, .header = header };
     }
@@ -242,6 +274,29 @@ pub const Model = struct {
             return error.BadTensor;
         };
         return t;
+    }
+
+    fn ownedTensor(m: *Model, rows: usize, cols: usize) !Tensor {
+        const buf = try m.device.buffer(rows * cols * 4, mtl.ResourceOptions.shared);
+        errdefer buf.deinit();
+        try m.owned.append(m.arena.allocator(), buf);
+        return .{ .buffer = buf, .offset = 0, .bytes = rows * cols * 4, .dtype = .f32, .shape = .{ rows, cols, 1, 1, 1 }, .rank = 2 };
+    }
+
+    fn affineWeight(m: *Model, base: []const u8, rows: usize, cols: usize, bits: u32) !Tensor {
+        const a = m.arena.allocator();
+        var words = try m.want(try std.fmt.allocPrint(a, "{s}.weight", .{base}), .u32, &.{ rows, cols / (32 / bits) });
+        const scales = try m.want(try std.fmt.allocPrint(a, "{s}.scales", .{base}), .bf16, &.{ rows, cols / 64 });
+        const biases = try m.want(try std.fmt.allocPrint(a, "{s}.biases", .{base}), .bf16, &.{ rows, cols / 64 });
+        words.shape[1] = cols;
+        words.affine = .{ .scales = scales.buffer, .scale_offset = scales.offset, .biases = biases.buffer, .bias_offset = biases.offset, .bits = bits };
+        return words;
+    }
+
+    fn mlxConv(m: *Model, name: []const u8, channels: usize, full: bool) !Tensor {
+        var weight = if (full) try m.want(name, .bf16, &.{ 4, channels }) else try m.want(name, .bf16, &.{ channels, 4 });
+        weight.shape = .{ 4, channels, 1, 1, 1 };
+        return weight;
     }
 
     /// A convolution weight as [taps][channels], the view the kernel's two layouts name. SWA layers store
@@ -289,6 +344,45 @@ pub const Model = struct {
         return w;
     }
 
+    fn mapMlxWeights(m: *Model) !Weights {
+        const c = &m.config;
+        const a = m.arena.allocator();
+        const h: usize = c.text.hidden;
+        const layers: usize = c.text.layers;
+        var w: Weights = undefined;
+        w.embed = try m.affineWeight("model.embed", c.text.vocab, h, 8);
+        w.embed_norm = try m.want("model.embed_norm.weight", .bf16, &.{h});
+        w.norm = try m.want("model.norm.weight", .bf16, &.{h});
+        w.unembed = try m.affineWeight("lm_head", c.text.vocab, h, 8);
+        w.output_query = try m.want("model.final_input.query", .f32, &.{ 1, h });
+        const core_layers = c.loop.core_end - c.loop.core_start;
+        w.cross_pass_q = try m.ownedTensor(2 * core_layers, h);
+        w.cross_pass_kv = try m.ownedTensor(2 * core_layers, h);
+        for (0..core_layers) |i| {
+            const name = try std.fmt.allocPrint(a, "model.layers.{d}.loop_message.query", .{i + c.loop.core_start});
+            const src = try m.want(name, .f32, &.{ 4, h });
+            const input = src.buffer.contents()[src.offset..][0..src.bytes];
+            const q = w.cross_pass_q.buffer.contents();
+            const kv = w.cross_pass_kv.buffer.contents();
+            @memcpy(q[(2 * i) * h * 4 ..][0 .. h * 4], input[0 .. h * 4]);
+            @memcpy(kv[(2 * i) * h * 4 ..][0 .. 2 * h * 4], input[h * 4 ..][0 .. 2 * h * 4]);
+            @memcpy(q[(2 * i + 1) * h * 4 ..][0 .. h * 4], input[3 * h * 4 ..][0 .. h * 4]);
+        }
+        w.layers = try a.alloc(Layer, layers);
+        w.attn_queries = try a.alloc(Tensor, layers - 1);
+        w.mlp_queries = try a.alloc(Tensor, layers);
+        for (0..layers) |i| {
+            const mlp = try std.fmt.allocPrint(a, "model.layers.{d}.mlp_input.query", .{i});
+            w.mlp_queries[i] = try m.want(mlp, .f32, &.{ 1, h });
+            if (i > 0) {
+                const attn = try std.fmt.allocPrint(a, "model.layers.{d}.attn_input.query", .{i});
+                w.attn_queries[i - 1] = try m.want(attn, .f32, &.{ if (c.isFull(@intCast(i))) 3 else 1, h });
+            }
+            w.layers[i] = try mapMlxLayer(m, @intCast(i));
+        }
+        return w;
+    }
+
     pub fn pipe(m: *const Model, g: Glue) mtl.Pipeline {
         return m.glue[@backingInt(g)];
     }
@@ -321,6 +415,129 @@ fn sub(a: std.mem.Allocator, prefix: []const u8, suffix: []const u8) []const u8 
     return std.fmt.allocPrint(a, "{s}{s}", .{ prefix, suffix }) catch unreachable;
 }
 
+fn affineRows(t: Tensor, start: usize, count: usize) Tensor {
+    var out = t;
+    const q = out.affine.?;
+    const k = t.shape[1];
+    out.offset += start * k * q.bits / 8;
+    out.bytes = count * k * q.bits / 8;
+    out.shape[0] = count;
+    out.affine.?.scale_offset += start * (k / 64) * 2;
+    out.affine.?.bias_offset += start * (k / 64) * 2;
+    return out;
+}
+
+fn mapMlxControllers(m: *Model, prefix: []const u8, out: *Layer) !void {
+    const h: usize = m.config.text.hidden;
+    const rank: usize = m.config.loop.gate_rank;
+    const a = m.arena.allocator();
+    const down = try m.want(sub(a, prefix, "loop_down"), .f32, &.{ 4, 2, h, rank });
+    const gates = try m.want(sub(a, prefix, "loop_gain_forget"), .f32, &.{ 4, rank, 2 * h });
+    const ds = std.mem.bytesAsSlice(f32, @as([]align(4) const u8, @alignCast(down.buffer.contents()[down.offset..][0..down.bytes])));
+    const gs = std.mem.bytesAsSlice(f32, @as([]align(4) const u8, @alignCast(gates.buffer.contents()[gates.offset..][0..gates.bytes])));
+    for (0..4) |j| {
+        const d = try m.ownedTensor(rank, 2 * h);
+        const g = try m.ownedTensor(h, rank);
+        const f = try m.ownedTensor(h, rank);
+        const dv = d.buffer.slice(f32, rank * 2 * h);
+        const gv = g.buffer.slice(f32, h * rank);
+        const fv = f.buffer.slice(f32, h * rank);
+        for (0..rank) |r| for (0..2 * h) |col| {
+            dv[r * 2 * h + col] = ds[(j * 2 * h + col) * rank + r];
+        };
+        for (0..h) |col| for (0..rank) |r| {
+            gv[col * rank + r] = gs[(j * rank + r) * 2 * h + col];
+            fv[col * rank + r] = gs[(j * rank + r) * 2 * h + h + col];
+        };
+        out.controllers[j] = .{ .down = d, .gain = g, .forget = f };
+    }
+}
+
+fn mapMlxLayer(m: *Model, i: u32) !Layer {
+    const c = &m.config;
+    const a = m.arena.allocator();
+    const h: usize = c.text.hidden;
+    const hd = c.heads(i);
+    const q: usize = hd.q * hd.dim;
+    const kv: usize = hd.kv * hd.dim;
+    const rel: usize = hd.q * c.text.d_rel;
+    const inter: usize = c.text.expert_inter;
+    const experts: usize = c.text.experts;
+    const full = c.isFull(i);
+    const p = try std.fmt.allocPrint(a, "model.layers.{d}.", .{i});
+    var out: Layer = undefined;
+    out.attn.k_dyn = null;
+    out.attn.v_dyn = null;
+    out.w13_global = null;
+    out.w13_den = null;
+    out.w2_global = null;
+    out.w2_den = null;
+    out.w13_bias = null;
+    out.w2_bias = null;
+    out.mxfp8 = false;
+    out.affine_expert = false;
+    out.controllers = @splat(null);
+    if (full) {
+        out.q_norm = try m.want(sub(a, p, "q_input_norm.weight"), .bf16, &.{h});
+        out.k_norm = try m.want(sub(a, p, "k_input_norm.weight"), .bf16, &.{h});
+        out.v_norm = try m.want(sub(a, p, "v_input_norm.weight"), .bf16, &.{h});
+    } else {
+        out.q_norm = try m.want(sub(a, p, "attn_norm.weight"), .bf16, &.{h});
+        out.k_norm = out.q_norm;
+        out.v_norm = out.q_norm;
+    }
+    const projection = try m.affineWeight(sub(a, p, if (full) "attn.q_proj" else "attn.in_proj"), q + (if (full) @as(usize, 0) else 2 * kv) + rel + q + hd.q, h, 8);
+    var at: usize = 0;
+    out.attn.q = affineRows(projection, at, q); at += q;
+    if (!full) {
+        out.attn.k = affineRows(projection, at, kv); at += kv;
+        out.attn.v = affineRows(projection, at, kv); at += kv;
+    } else {
+        const kp = try m.affineWeight(sub(a, p, "attn.k_proj"), kv + hd.kv * 4, h, 8);
+        const vp = try m.affineWeight(sub(a, p, "attn.v_proj"), kv + hd.kv * 4, h, 8);
+        out.attn.k = affineRows(kp, 0, kv);
+        out.attn.k_dyn = affineRows(kp, kv, hd.kv * 4);
+        out.attn.v = affineRows(vp, 0, kv);
+        out.attn.v_dyn = affineRows(vp, kv, hd.kv * 4);
+    }
+    out.attn.r = affineRows(projection, at, rel); at += rel;
+    out.attn.gate = affineRows(projection, at, q); at += q;
+    out.attn.sink = affineRows(projection, at, hd.q);
+    out.attn.o = try m.affineWeight(sub(a, p, "attn.o_proj"), h, q, 8);
+    out.attn.q_scale = try m.want(sub(a, p, "attn.q_scale"), .bf16, &.{ hd.q, hd.dim });
+    out.attn.r_scale = try m.want(sub(a, p, "attn.r_scale"), .bf16, &.{ hd.q, c.text.d_rel });
+    out.attn.rel_bias = try m.want(sub(a, p, "attn.rel_proj"), .bf16, &.{ c.text.d_rel, c.extent(i) });
+    out.attn.k_conv = try m.mlxConv(sub(a, p, if (full) "attn.k_static" else "attn.k_conv"), kv, full);
+    out.attn.v_conv = try m.mlxConv(sub(a, p, if (full) "attn.v_static" else "attn.v_conv"), kv, full);
+    out.attn_post = try m.mlxConv(sub(a, p, "attn_conv"), h, false);
+    out.mlp_norm = try m.want(sub(a, p, "mlp_norm.weight"), .bf16, &.{h});
+    out.mlp_post = try m.mlxConv(sub(a, p, "mlp_conv"), h, false);
+    out.router = try m.want(sub(a, p, "mlp.router_weight"), .f32, &.{ experts, h });
+    out.router_bias = try m.want(sub(a, p, "mlp.router_bias"), .f32, &.{experts});
+    const w13 = sub(a, p, "mlp.experts.w13");
+    const w2 = sub(a, p, "mlp.experts.w2");
+    out.w13 = try m.want(sub(a, w13, ".weight"), .u32, &.{ experts, 2 * inter, h / 8 });
+    out.w2 = try m.want(sub(a, w2, ".weight"), .u32, &.{ experts, h, inter / 8 });
+    if (i < 20) {
+        out.w13_scale = try m.want(sub(a, w13, ".scales"), .u8, &.{ experts, 2 * inter, h / 16 });
+        out.w2_scale = try m.want(sub(a, w2, ".scales"), .u8, &.{ experts, h, inter / 16 });
+        out.w13_global = try m.want(sub(a, w13, ".global_scale"), .f32, &.{experts});
+        out.w2_global = try m.want(sub(a, w2, ".global_scale"), .f32, &.{experts});
+        const den = try m.ownedTensor(1, 1);
+        den.buffer.slice(f32, 1)[0] = 2688;
+        out.w13_den = den;
+        out.w2_den = den;
+    } else {
+        out.affine_expert = true;
+        out.w13_scale = try m.want(sub(a, w13, ".scales"), .bf16, &.{ experts, 2 * inter, h / 64 });
+        out.w2_scale = try m.want(sub(a, w2, ".scales"), .bf16, &.{ experts, h, inter / 64 });
+        out.w13_bias = try m.want(sub(a, w13, ".biases"), .bf16, &.{ experts, 2 * inter, h / 64 });
+        out.w2_bias = try m.want(sub(a, w2, ".biases"), .bf16, &.{ experts, h, inter / 64 });
+    }
+    if (i >= c.loop.core_start and i < c.loop.core_end) try mapMlxControllers(m, p, &out);
+    return out;
+}
+
 fn mapLayer(m: *Model, i: u32) !Layer {
     const c = &m.config;
     const a = m.arena.allocator();
@@ -335,6 +552,9 @@ fn mapLayer(m: *Model, i: u32) !Layer {
     const E: usize = c.text.experts;
     const prec: cfg.Expert = m.formats[i];
     var out: Layer = undefined;
+    out.affine_expert = false;
+    out.w13_bias = null;
+    out.w2_bias = null;
     if (full) {
         out.q_norm = try m.want(sub(a, p, "q_input_norm.weight"), .bf16, &.{h});
         out.k_norm = try m.want(sub(a, p, "k_input_norm.weight"), .bf16, &.{h});

@@ -114,6 +114,8 @@ pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.B
     test_step.dependOn(&dense_run.step);
     const affine = module(b, target, "zig/src/families/inkling2_loop/affine_test.zig");
     affine.addImport("metal", metal);
+    affine.addImport("core", core);
+    affine.addImport("inkling2_config", b.createModule(.{ .root_source_file = b.path("zig/src/families/inkling2/config.zig"), .target = target, .optimize = .Debug }));
     const affine_run = b.addRunArtifact(b.addTest(.{ .root_module = affine }));
     affine_run.has_side_effects = true;
     b.step("test-inkling2-loop-affine", "Compare affine dense and expert kernels with float64").dependOn(&affine_run.step);

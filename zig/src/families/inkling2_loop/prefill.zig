@@ -54,6 +54,7 @@ const DecodeAttn = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, exte
 const DecodeParts = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, splits: u32, chunk: u32, scale: f32, floor: f32, alpha: f32 };
 const Rms = extern struct { width: u32, blocks: u32, eps: f32 };
 const Pair = extern struct { count: u32 };
+const AffineDense = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32, bits: u32, cap: f32 };
 
 const B = struct { buf: mtl.Buffer, off: usize = 0, args: bool = false };
 const A = B{ .buf = undefined, .args = true };
@@ -498,6 +499,10 @@ const Chunk = struct {
 
     fn lin(c: Chunk, w: Tensor, x: In, out: B) void {
         const m: usize = nrows(w);
+        if (w.affine != null or w.dtype == .f32) {
+            c.affineLin(w, x, out, @intCast(m), c.n, 0);
+            return;
+        }
         const args = Gemm{ .n = @intCast(m), .k = @intCast(width(w)), .rows = c.n, .xs = x.xs, .xb = x.xb, .cap = 0 };
         if (c.n <= 8) {
             c.setP(c.s.pipes.smallrow, args, &.{ x.buf, t(w), A, out });
@@ -519,6 +524,10 @@ const Chunk = struct {
     }
 
     fn headModel(c: Chunk, w: Tensor, x: In, out: B, vocab: u32) void {
+        if (w.affine != null) {
+            c.affineLin(w, x, out, vocab, c.n, c.m.config.text.logit_cap);
+            return;
+        }
         const args = Gemm{ .n = vocab, .k = @intCast(width(w)), .rows = c.n, .xs = x.xs, .xb = x.xb, .cap = c.m.config.text.logit_cap };
         if (c.n <= 8) {
             c.setP(c.s.pipes.smallrow, args, &.{ x.buf, t(w), A, out });
@@ -540,8 +549,21 @@ const Chunk = struct {
     }
 
     fn headModelLast(c: Chunk, w: Tensor, xoff: B, out: B, vocab: u32) void {
+        if (w.affine != null) {
+            c.affineLin(w, .{ .buf = xoff, .xs = 1, .xb = 0 }, out, vocab, 1, c.m.config.text.logit_cap);
+            return;
+        }
         c.setP(c.s.pipes.capexact, Cap{ .n = vocab, .k = @intCast(width(w)), .rows = 1, .cap = c.m.config.text.logit_cap }, &.{ xoff, t(w), A, out });
         c.enc.dispatchGroups(mtl.Size.of((vocab + 31) / 32, 1, 1), mtl.Size.of(1024, 1, 1));
+    }
+
+    fn affineLin(c: Chunk, w: Tensor, x: In, out: B, n: u32, rows: u32, cap: f32) void {
+        const p = c.m.affine_pipes.?;
+        const args = AffineDense{ .n = n, .k = @intCast(width(w)), .rows = rows, .xs = x.xs, .xb = x.xb, .bits = if (w.affine) |q| q.bits else 0, .cap = cap };
+        if (w.affine) |q| {
+            c.setP(p.dense, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out });
+        } else c.setP(p.float, args, &.{ x.buf, t(w), A, out });
+        c.enc.dispatchGroups(mtl.Size.of((n + 7) / 8, rows, 1), mtl.Size.of(256, 1, 1));
     }
 
     fn rmsW(c: Chunk, x: In, weight: B, out: B, ys: u32, yb: u32, w: u32, eps: f32) void {
@@ -764,8 +786,12 @@ const Chunk = struct {
         const E: u32 = cc.text.experts;
         const K: u32 = cc.text.topk;
         const inter: u32 = cc.text.expert_inter;
-        c.setP(s.pipes.router, RouterA{ .n = E, .k = c.h, .rows = c.n, .xs = 1, .xb = 0 }, &.{ input, t(lay.router), A, b(s.router) });
-        c.enc.dispatchGroups(mtl.Size.of((E + 31) / 32, c.n, 1), mtl.Size.of(1024, 1, 1));
+        if (lay.router.dtype == .f32) {
+            c.lin(lay.router, .{ .buf = input, .xs = 1, .xb = 0 }, b(s.router));
+        } else {
+            c.setP(s.pipes.router, RouterA{ .n = E, .k = c.h, .rows = c.n, .xs = 1, .xb = 0 }, &.{ input, t(lay.router), A, b(s.router) });
+            c.enc.dispatchGroups(mtl.Size.of((E + 31) / 32, c.n, 1), mtl.Size.of(1024, 1, 1));
+        }
         c.setP(s.pipes.pick, Pick{ .experts = E, .topk = K, .rows = c.n, .route_scale = cc.text.route_scale }, &.{ b(s.router), t(lay.router_bias), A, b(s.picks), b(s.wts) });
         c.enc.dispatchGroups(mtl.Size.of(c.n, 1, 1), mtl.Size.of(32, 1, 1));
         if (s.capture) |capture| {
@@ -781,6 +807,16 @@ const Chunk = struct {
             c.copyN(t(lay.router_bias), bo(routes, (start + @as(usize, c.n) * (K + E)) * 4), E);
         }
         const slots: u32 = c.n * K;
+        if (lay.affine_expert) {
+            const p = m.affine_pipes.?;
+            c.setP(p.up, MoeB{ .k = c.h, .n = inter, .slots = slots, .topk = K, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), b(s.picks), A, b(s.act) });
+            c.enc.dispatchGroups(mtl.Size.of((inter + 7) / 8, slots, 1), mtl.Size.of(256, 1, 1));
+            c.setP(p.down, MoeB{ .k = inter, .n = c.h, .slots = slots, .topk = K, .gate_cap = 0, .up_cap = 0 }, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), t(lay.w2_bias.?), b(s.picks), A, b(s.down) });
+            c.enc.dispatchGroups(mtl.Size.of((c.h + 7) / 8, slots, 1), mtl.Size.of(256, 1, 1));
+            c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = K, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
+            c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
+            return;
+        }
         if (c.n <= 8) {
             const codes = b(if (lay.mxfp8) m.t256 else m.t16);
             const gu = if (lay.mxfp8) s.pipes.gu_mx else s.pipes.gu_nv;
@@ -992,7 +1028,9 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
         .ring = ring,
         .batch = batch,
     };
-    c.setP(s.pipes.embed, EmbedA{ .width = s.h, .rows = c.n, .eps = text.eps }, &.{ b(s.ids), t(m.weights.embed), t(m.weights.embed_norm), A, b(s.x) });
+    if (m.weights.embed.affine) |q| {
+        c.setP(m.affine_pipes.?.embed, EmbedA{ .width = s.h, .rows = c.n, .eps = text.eps }, &.{ b(s.ids), t(m.weights.embed), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), t(m.weights.embed_norm), A, b(s.x) });
+    } else c.setP(s.pipes.embed, EmbedA{ .width = s.h, .rows = c.n, .eps = text.eps }, &.{ b(s.ids), t(m.weights.embed), t(m.weights.embed_norm), A, b(s.x) });
     c.enc.dispatchGroups(mtl.Size.of(c.n, 1, 1), mtl.Size.of(256, 1, 1));
     var profile_name: [64]u8 = undefined;
     for (0..config.loop.core_start) |i| {

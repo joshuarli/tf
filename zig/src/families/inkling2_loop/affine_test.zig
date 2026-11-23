@@ -94,3 +94,24 @@ test "affine dense and expert kernels agree with dequantized float64 weights" {
         try t.expectApproxEqAbs(want, @as(f64, y.slice(f32, 2 * n)[row * n + col]), 0.001);
     };
 }
+
+test "misaligned oQ4e shard data produces finite decode logits" {
+    const path = std.c.getenv("TF_INKLING2_LOOP_OQ4E_DIR") orelse return error.SkipZigTest;
+    const model = @import("model.zig");
+    const state = @import("state.zig");
+    const forward = @import("forward.zig");
+    const m = try model.Model.load(t.allocator, t.io, std.mem.span(path));
+    defer m.deinit();
+    var cache = try state.Cache.init(m.device, &m.config, 1);
+    defer cache.deinit();
+    var scratch = try state.Scratch.init(m.device, &m.config);
+    defer scratch.deinit();
+    try forward.position(m, &scratch, &cache, 200002);
+    const logits = scratch.logits.slice(f32, m.config.text.unpadded_vocab);
+    var best: usize = 0;
+    for (logits, 0..) |v, i| {
+        try t.expect(std.math.isFinite(v));
+        if (v > logits[best]) best = i;
+    }
+    try t.expectEqual(@as(usize, 12), best);
+}

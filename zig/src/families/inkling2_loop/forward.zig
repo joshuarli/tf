@@ -31,6 +31,9 @@ const Route = extern struct { experts: u32, topk: u32, route_scale: f32 };
 const Moe = extern struct { k: u32, n: u32, rows: u32, gate_cap: f32, up_cap: f32 };
 const Combine = extern struct { width: u32, topk: u32 };
 const Plan = extern struct { slots: u32, experts: u32 };
+const AffineDense = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32, bits: u32, cap: f32 };
+const AffineExpert = extern struct { k: u32, n: u32, slots: u32, topk: u32, gate_cap: f32, up_cap: f32 };
+const AffineEmbed = extern struct { width: u32, rows: u32, eps: f32 };
 
 const B = struct { buf: mtl.Buffer, off: usize = 0, args: bool = false };
 const A = B{ .buf = undefined, .args = true };
@@ -119,6 +122,10 @@ pub const Forward = struct {
     /// out[rows] = bf16 W[rows, k] . x[k]; a warp an output row.
     fn lin(f: Forward, w: Tensor, x: B, out: B) void {
         const m: usize = nrows(w);
+        if (w.affine != null or w.dtype == .f32) {
+            f.affineLin(w, x, out, @intCast(m), 0);
+            return;
+        }
         if (f.dense()) |p| {
             f.setRaw(p.mv, Dm{ .m = @intCast(m), .k = @intCast(width(w)), .cap = 0 }, &.{ x, t(w), A, out });
             f.enc.dispatchGroups(mtl.Size.of((m + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
@@ -130,6 +137,10 @@ pub const Forward = struct {
 
     /// The unembedding: the soft-capped logits over the unpadded vocabulary.
     fn headModel(f: Forward, w: Tensor, x: B, out: B, vocab: u32) void {
+        if (w.affine != null) {
+            f.affineLin(w, x, out, vocab, f.m.config.text.logit_cap);
+            return;
+        }
         if (f.dense()) |p| {
             f.setRaw(p.mv_cap, Dm{ .m = vocab, .k = @intCast(width(w)), .cap = f.m.config.text.logit_cap }, &.{ x, t(w), A, out });
             f.enc.dispatchGroups(mtl.Size.of((vocab + 31) / 32, 1, 1), mtl.Size.of(1024, 1, 1));
@@ -137,6 +148,15 @@ pub const Forward = struct {
         }
         f.set(.mv_cap, Mv{ .m = vocab, .k = @intCast(width(w)), .cap = f.m.config.text.logit_cap }, &.{ x, t(w), A, out });
         f.enc.dispatchGroups(mtl.Size.of((vocab + 31) / 32, 1, 1), mtl.Size.of(1024, 1, 1));
+    }
+
+    fn affineLin(f: Forward, w: Tensor, x: B, out: B, n: u32, cap: f32) void {
+        const p = f.m.affine_pipes.?;
+        const args = AffineDense{ .n = n, .k = @intCast(width(w)), .rows = 1, .xs = 1, .xb = 0, .bits = if (w.affine) |q| q.bits else 0, .cap = cap };
+        if (w.affine) |q| {
+            f.setRaw(p.dense, args, &.{ x, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out });
+        } else f.setRaw(p.float, args, &.{ x, t(w), A, out });
+        f.enc.dispatchGroups(mtl.Size.of((n + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
     }
 
     fn fusedx(f: Forward, p: kernels.Dense, xs: [3]B, ks: [3]u32, ws: [8]Tensor, os: [8]B, ms: [8]u32, xsel: [8]u32) void {
@@ -361,7 +381,8 @@ pub const Forward = struct {
         const s = f.s;
         f.rms1(cur, null, bo(s.h2, 0));
         f.rms1(message, null, bo(s.h2, f.h * 4));
-        if (f.dense()) |p| {
+        if (ctl.gain.dtype == .bf16 and f.dense() != null) {
+            const p = f.dense().?;
             f.lin(ctl.down, b(s.h2), b(s.normed));
             f.fused2(p, b(s.normed), ctl.gain, bo(s.tanh, 0), ctl.forget, bo(s.tanh, f.h * 4));
         } else {
@@ -378,7 +399,8 @@ pub const Forward = struct {
         const text = &f.m.config.text;
         const extent = f.extentOf(full);
         const ring = f.rings(slot);
-        if (f.dense()) |p| {
+        if (a.q.affine == null and f.dense() != null) {
+            const p = f.dense().?;
             f.projGroup(p, lay, inputs, full);
             f.convolveDynPre(b(s.k), b(s.kc), a.k_conv, b(s.kdyn), ring[0], f.kvw, if (full) f.kv else 0, @intFromBool(full), full);
             f.convolveDynPre(b(s.v), b(s.vc), a.v_conv, b(s.vdyn), ring[1], f.kvw, if (full) f.kv else 0, @intFromBool(full), full);
@@ -469,6 +491,17 @@ pub const Forward = struct {
             f.copyN(b(s.router), bo(s.capture, start * 4), E);
             f.copyN(t(lay.router_bias), bo(s.capture, (start + E) * 4), E);
         }
+        if (lay.affine_expert) {
+            const p = m.affine_pipes.?;
+            const args = AffineExpert{ .k = f.h, .n = inter, .slots = K, .topk = K, .gate_cap = c.text.gate_cap, .up_cap = c.text.up_cap };
+            f.setRaw(p.up, args, &.{ input, t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), b(s.picks), A, b(s.act) });
+            f.enc.dispatchGroups(mtl.Size.of((inter + 7) / 8, K, 1), mtl.Size.of(256, 1, 1));
+            f.setRaw(p.down, AffineExpert{ .k = inter, .n = f.h, .slots = K, .topk = K, .gate_cap = 0, .up_cap = 0 }, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), t(lay.w2_bias.?), b(s.picks), A, b(s.down) });
+            f.enc.dispatchGroups(mtl.Size.of((f.h + 7) / 8, K, 1), mtl.Size.of(256, 1, 1));
+            f.set(.combine, Combine{ .width = f.h, .topk = K }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
+            f.enc.dispatchThreads(mtl.Size.of(f.h, 1, 1), mtl.Size.of(256, 1, 1));
+            return;
+        }
         const codes = b(if (lay.mxfp8) m.t256 else m.t16);
         f.setExpert(lay.mxfp8, .gu, Moe{ .k = f.h, .n = inter, .rows = 2 * inter, .gate_cap = c.text.gate_cap, .up_cap = c.text.up_cap }, &.{
             input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.picks), b(s.order), A, b(s.act), codes,
@@ -493,7 +526,9 @@ pub const Forward = struct {
     fn embed(f: Forward, id: u32) void {
         const m = f.m;
         f.s.ids.slice(u32, 1)[0] = id;
-        f.set(.embed, Rms{ .width = f.h, .blocks = 1, .eps = m.config.text.eps }, &.{ b(f.s.ids), t(m.weights.embed), t(m.weights.embed_norm), A, b(f.s.x) });
+        if (m.weights.embed.affine) |q| {
+            f.setRaw(m.affine_pipes.?.embed, AffineEmbed{ .width = f.h, .rows = 1, .eps = m.config.text.eps }, &.{ b(f.s.ids), t(m.weights.embed), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), t(m.weights.embed_norm), A, b(f.s.x) });
+        } else f.set(.embed, Rms{ .width = f.h, .blocks = 1, .eps = m.config.text.eps }, &.{ b(f.s.ids), t(m.weights.embed), t(m.weights.embed_norm), A, b(f.s.x) });
         f.enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
     }
 };

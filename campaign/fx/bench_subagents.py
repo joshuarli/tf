@@ -3,6 +3,7 @@ import concurrent.futures
 import json
 import importlib.util
 import re
+import subprocess
 import threading
 import time
 import urllib.request
@@ -24,7 +25,9 @@ def aggregate(agents, wall):
     return {'wall_seconds': wall, 'aggregate_tokens_per_second': sum(counts) / wall,
             'agent_tokens_per_second': [n / agent['seconds'] for n, agent in zip(counts, agents)],
             'ttft_seconds': [turn['ttft'] for agent in agents for turn in agent['turns']],
-            'output_tokens': sum(counts)}
+            'output_tokens': sum(counts),
+            'cached_tokens': [turn['cached_tokens'] for agent in agents for turn in agent['turns']],
+            'request_ids': [turn['id'] for agent in agents for turn in agent['turns']]}
 
 
 def agent(base, model, turns, barrier, agent_id):
@@ -44,6 +47,8 @@ def agent(base, model, turns, barrier, agent_id):
         content = []
         tokens = None
         finished = False
+        cached_tokens = None
+        request_id = None
         with urllib.request.urlopen(req, timeout=800) as response:
             for raw in response:
                 line = raw.decode().strip()
@@ -54,8 +59,10 @@ def agent(base, model, turns, barrier, agent_id):
                     finished = True
                     break
                 event = json.loads(data)
+                request_id = event.get('id', request_id)
                 if event.get('usage'):
                     tokens = event['usage']['completion_tokens']
+                    cached_tokens = (event['usage'].get('prompt_tokens_details') or {}).get('cached_tokens')
                 for choice in event.get('choices', []):
                     delta = choice.get('delta') or {}
                     piece = delta.get('content') or delta.get('reasoning_content') or ''
@@ -66,7 +73,7 @@ def agent(base, model, turns, barrier, agent_id):
         if not finished or tokens is None or first is None or not answer:
             raise ValueError(f'incomplete streamed response: done={finished}, tokens={tokens}, '
                              f'first_output={first is not None}, answer_chars={len(answer)}')
-        records.append({'tokens': tokens, 'ttft': first - sent})
+        records.append({'tokens': tokens, 'ttft': first - sent, 'cached_tokens': cached_tokens, 'id': request_id})
         messages.extend([{'role': 'assistant', 'content': answer},
                          {'role': 'user', 'content': 'What does transform_1(42) return? Explain in one sentence.'}])
     return {'turns': records, 'seconds': time.monotonic() - started}
@@ -94,6 +101,7 @@ def main():
     args = parser.parse_args()
     for repeat in range(2):
         for n in (1, 2, 4, 8):
+            subprocess.run(["perf-gate-ready"], check=True)
             offset = args.log.stat().st_size
             barrier = threading.Barrier(n + 1)
             stop = threading.Event()
@@ -107,6 +115,7 @@ def main():
                     started = time.monotonic()
                     agents = [task.result() for task in tasks]
                     wall = time.monotonic() - started
+                    subprocess.run(["perf-gate-ready", "-1"], check=True)
             finally:
                 stop.set()
                 sampler.join()

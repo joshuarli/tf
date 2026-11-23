@@ -35,7 +35,7 @@ done
 perf-gate-ready
 wired=$(cat "$base/wired")
 model=$(jaq -r '.data[0].id' "$base/models.json")
-python3 -c 'import os, sys; p = "campaign/comparators/omlx/bench_subagents.py"; s = open(p).read(); needle = "for n in (1, 2, 4, 8):"; assert s.count(needle) == 1; s = s.replace(needle, "for n in (int(os.environ[\"INKLING_AGENTS\"]),):"); sys.argv = [p] + sys.argv[1:]; exec(compile(s, p, "exec"), {"__name__": "__main__", "__file__": os.path.abspath(p), "os": os})' --base "http://127.0.0.1:$port/v1" --model "$model" --log "$base/server.log" --server-pid "$server" --wired-start "$wired" >"$base/results.jsonl"
+python3 -c 'import os, sys; p = "campaign/fx/bench_subagents.py"; s = open(p).read(); needle = "for n in (1, 2, 4, 8):"; assert s.count(needle) == 1; s = s.replace(needle, "for n in (int(os.environ[\"INKLING_AGENTS\"]),):"); sys.argv = [p] + sys.argv[1:]; exec(compile(s, p, "exec"), {"__name__": "__main__", "__file__": os.path.abspath(p), "os": os})' --base "http://127.0.0.1:$port/v1" --model "$model" --log "$base/server.log" --server-pid "$server" --wired-start "$wired" >"$base/results.jsonl"
 perf-gate-ready -1
 python3 -c 'import sys; sys.path.insert(0, "campaign/fx"); import bench_subagents; events = bench_subagents.parse_log(open(sys.argv[1]).read()); expected = int(sys.argv[2]) * 8; assert len(events["prefix"]) == expected and len(events["done"]) == expected, events; assert all(row["reused"] + row["prefilled"] + 256 <= int(sys.argv[3]) for row in events["prefix"]), events' "$base/server.log" "$INKLING_AGENTS" "$context"
 jaq -e -s 'length == 2 and all(.[]; ((.cached_tokens | length) == (.n * 4)) and ([.cached_tokens | to_entries[] | select(.key % 4 != 0) | (.value != null and .value > 0)] | all))' "$base/results.jsonl"

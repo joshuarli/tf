@@ -466,10 +466,6 @@ pub const Host = struct {
             slot.resident.appendSliceAssumeCapacity(r.prompt[at..][0..take]);
             at += take;
         }
-        h.store(slot) catch |e| {
-            h.retire(slot, .failed, @errorName(e));
-            return;
-        };
         if (slot.rollback) |*rollback| {
             rollback.copyRows(h.model.queue, &h.model.config, &slot.cache, true, r.max_tokens -| 1) catch |e| {
                 h.retire(slot, .failed, @errorName(e));

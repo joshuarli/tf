@@ -1,7 +1,7 @@
 """Attribute Inkling 2 Mini's native Metal decode step: weight floor, bench medians, per-kernel timeline, trace window.
 
     python3 campaign/kernels/inkling_profile.py weights --model DIR [--gbs B]
-    python3 campaign/kernels/inkling_profile.py timeline --log FILE [--rounds N]
+    python3 campaign/kernels/inkling_profile.py timeline --log FILE [--split] [--round NAME]
     python3 campaign/kernels/inkling_profile.py trace --trace FILE --steps N [--process tf-inkling2-loop-run]
     python3 campaign/kernels/inkling_profile.py bandwidth [--bytes BYTES]
 
@@ -314,8 +314,20 @@ def cmd_split_timeline(text: str) -> int:
     return 0
 
 
+def round_blocks(text: str, name: str) -> str:
+    """The receipt blocks of the rounds named `name`, so a log that also stamped other rounds reduces to one."""
+    blocks = re.split(r"(?=^(?:info: )?metal 4 timeline: \S+, \d+ rounds after)", text, flags=re.MULTILINE)
+    kept = [block for block in blocks[1:] if (m := TIMELINE_HEADER.search(block)) and m.group(1) == name]
+    return "".join(kept)
+
+
 def cmd_timeline(args: argparse.Namespace) -> int:
     contents = Path(args.log).read_text(errors="replace")
+    if args.round:
+        contents = round_blocks(contents, args.round)
+        if not contents:
+            print(f"no metal 4 timeline receipt for the round {args.round} in the log", file=sys.stderr)
+            return 1
     if args.split:
         return cmd_split_timeline(contents)
     parsed = parse_timeline(contents)
@@ -478,6 +490,7 @@ def main() -> int:
     t = sub.add_parser("timeline", help="reduce the runner's Metal 4 timeline receipt")
     t.add_argument("--log", required=True)
     t.add_argument("--split", action="store_true")
+    t.add_argument("--round", help="reduce only the rounds of this name, e.g. inkling2-batch")
     t.set_defaults(func=cmd_timeline)
     r = sub.add_parser("trace", help="reduce one Metal System Trace window")
     r.add_argument("--trace", required=True)

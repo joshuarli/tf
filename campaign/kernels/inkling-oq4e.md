@@ -1,6 +1,6 @@
 # Inkling 2 Mini oQ4e
 
-Status: checkpoint loading and the family-local affine tests pass. Gated throughput and oMLX ID comparisons are pending.
+Status: checkpoint loading, the family-local affine tests, and the fidelity comparisons pass. Gated throughput is pending.
 
 The new affine kernels join the family-wide kernel-contract registration item required before promotion out of the
 campaign. This lane uses family-local FP64 tests and parity under the campaign's explicit ruling.
@@ -32,3 +32,9 @@ With the native checkpoint in `TF_INKLING2_LOOP_DIR`, `python3 campaign/heavy.py
 8-bit dense and 4-bit expert projections against dequantized FP64 weights and checks finite oQ4e decode logits.
 The aligned oQ4e one-token probe peaked at 20.6 GB charged under the 28 GB cap. This is not a peak for the
 remaining long-context and batch measurements.
+
+For `campaign/prompts/inkling/code-1024.json`, `greedy-decode 512` exited 0. Against the MTP-off oMLX trial in
+`campaign/comparators/omlx/results/code-1024-1795386552036119000.json`, the first 45 IDs agree and 53 of 512 IDs
+agree by position. At zero-based position 45, TensorFold returns 170289 and oMLX returns 68014. The first 32
+TensorFold IDs detokenize to a coherent response to the prompt. The run peaked at 23.4 GB charged, with host memory
+pressure level 2 and no increase in swap. This greedy comparison is not a gated throughput measurement.

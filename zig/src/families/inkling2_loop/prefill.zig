@@ -563,7 +563,8 @@ const Chunk = struct {
         if (w.affine) |q| {
             c.setP(if (rows > 8) p.dense_rows else p.dense, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out });
         } else c.setP(p.float, args, &.{ x.buf, t(w), A, out });
-        c.enc.dispatchGroups(mtl.Size.of((n + 7) / 8, if (w.affine != null and rows > 8) (rows + 3) / 4 else rows, 1), mtl.Size.of(256, 1, 1));
+        const matrix = w.affine != null and rows > 8;
+        c.enc.dispatchGroups(mtl.Size.of(if (matrix) (n + 63) / 64 else (n + 7) / 8, if (matrix) (rows + 31) / 32 else rows, 1), mtl.Size.of(256, 1, 1));
     }
 
     fn rmsW(c: Chunk, x: In, weight: B, out: B, ys: u32, yb: u32, w: u32, eps: f32) void {

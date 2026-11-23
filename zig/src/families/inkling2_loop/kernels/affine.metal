@@ -93,26 +93,43 @@ inline float i2a_dot(const device float* x, const device uint* w, const device b
     const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
     constant i2a_dense_args& a [[buffer(4)]], device float* y [[buffer(5)]],
     uint2 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
-  const uint col = group.x * 8u + tid / 32u, lane = tid % 32u;
-  const uint first = group.y * 4u;
-  if (col >= a.n || first >= a.rows) return;
-  const uint per = 32u / a.bits, mask = (1u << a.bits) - 1u;
-  float acc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-  for (uint word = lane; word < a.k / per; word += 32u) {
-    const uint packed = w[(size_t)col * (a.k / per) + word];
-    const size_t g = (size_t)col * (a.k / 64u) + word * per / 64u;
-    const float scale = float(s[g]), bias = float(b[g]);
-    for (uint j = 0; j < per; ++j) {
-      const float v = float((packed >> (j * a.bits)) & mask) * scale + bias;
-      for (uint r = 0; r < 4u; ++r)
-        if (first + r < a.rows)
-          acc[r] = fma(x[(size_t)((first + r) * a.xs + a.xb) * a.k + word * per + j], v, acc[r]);
+  constexpr uint bm = 32u, bn = 64u, bk = 32u, ap = 40u, bp = 72u;
+  const uint sg = tid / 32u, m0 = group.y * bm, n0 = group.x * bn;
+  threadgroup float inputs[bm * ap], weights[bk * bp], output[bm * bp];
+  simdgroup_matrix<float, 8, 8> acc[4] = {simdgroup_matrix<float, 8, 8>(0.0f),
+    simdgroup_matrix<float, 8, 8>(0.0f), simdgroup_matrix<float, 8, 8>(0.0f),
+    simdgroup_matrix<float, 8, 8>(0.0f)};
+  for (uint k0 = 0; k0 < a.k; k0 += bk) {
+    for (uint i = tid; i < bm * bk; i += 256u) {
+      const uint row = i / bk, k = i % bk;
+      inputs[row * ap + k] = m0 + row < a.rows && k0 + k < a.k
+        ? x[(size_t)(a.xb + (m0 + row) * a.xs) * a.k + k0 + k] : 0.0f;
     }
+    for (uint i = tid; i < bk * bn; i += 256u) {
+      const uint k = i / bn, col = i % bn;
+      weights[k * bp + col] = n0 + col < a.n && k0 + k < a.k
+        ? i2a_weight(w, s, b, n0 + col, k0 + k, a.k, a.bits) : 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint k = 0; k < bk; k += 8u) {
+      simdgroup_matrix<float, 8, 8> rhs;
+      simdgroup_load(rhs, weights + k * bp + sg * 8u, ulong(bp));
+      for (uint r = 0; r < 4u; ++r) {
+        simdgroup_matrix<float, 8, 8> lhs;
+        simdgroup_load(lhs, inputs + r * 8u * ap + k, ulong(ap));
+        simdgroup_multiply_accumulate(acc[r], lhs, rhs, acc[r]);
+      }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
   }
-  for (uint r = 0; r < 4u; ++r) {
-    const float value = simd_sum(acc[r]);
-    if (lane == 0u && first + r < a.rows)
-      y[(size_t)(first + r) * a.n + col] = a.cap > 0.0f ? a.cap * precise::tanh(value / a.cap) : value;
+  for (uint r = 0; r < 4u; ++r) simdgroup_store(acc[r], output + r * 8u * bp + sg * 8u, ulong(bp));
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint i = tid; i < bm * bn; i += 256u) {
+    const uint row = i / bn, col = i % bn;
+    if (m0 + row < a.rows && n0 + col < a.n) {
+      const float value = output[row * bp + col];
+      y[(size_t)(m0 + row) * a.n + n0 + col] = a.cap > 0.0f ? a.cap * precise::tanh(value / a.cap) : value;
+    }
   }
 }
 

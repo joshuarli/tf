@@ -34,7 +34,8 @@ fn launch(device: mtl.Device, queue: mtl.Queue, name: []const u8, buffers: []con
     enc.setValue(args, buffers.len - 1);
     enc.setBuffer(buffers[buffers.len - 1], 0, buffers.len);
     const grouped = std.mem.startsWith(u8, name, "i2a_group_");
-    enc.dispatchGroups(mtl.Size.of((n + 7) / 8, if (grouped) 2 else if (std.mem.eql(u8, name, "i2a_dense_rows")) (rows + 3) / 4 else rows, if (grouped) (rows + 3) / 4 else 1), mtl.Size.of(256, 1, 1));
+    const matrix = std.mem.eql(u8, name, "i2a_dense_rows");
+    enc.dispatchGroups(mtl.Size.of(if (matrix) (n + 63) / 64 else (n + 7) / 8, if (grouped) 2 else if (matrix) (rows + 31) / 32 else rows, if (grouped) (rows + 3) / 4 else 1), mtl.Size.of(256, 1, 1));
     enc.end();
     cb.commit();
     cb.wait();

@@ -3,7 +3,7 @@ set -eu
 root=$(git rev-parse --show-toplevel)
 main=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
 work="$root/.work"
-base="$work/tmp/omlx-concurrency-off"
+base="$work/tmp/omlx-concurrency-guarded-four"
 mkdir -p "$base/models" "$base/omlx" "$work/tmp"
 [ -L "$base/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd" ] || ln -s "$HOME/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd" "$base/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd"
 export PATH="$main/.work/venv-omlx/bin:$PATH"
@@ -21,7 +21,7 @@ port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); pr
 model='Inkling-2-Mini-oQ4e-mtp@3eea042751cd'
 memory_pressure > "$base/memory-start.txt"
 sysctl vm.swapusage >> "$base/memory-start.txt"
-python3 campaign/heavy.py -- sh -c 'python3 -c "import sys; sys.path.insert(0, \"campaign\"); import heavy; print(heavy.wired_bytes())" > "$1"; shift; gpu-gate-ready -1 || exit 75; exec "$@"' sh "$base/wired" omlx serve --model-dir "$base/models" --base-path "$base/omlx" --host 127.0.0.1 --port "$port" --no-hf-cache > "$base/server.log" 2>&1 &
+python3 campaign/heavy.py -- sh -c 'python3 -c "import sys; sys.path.insert(0, \"campaign\"); import heavy; print(heavy.wired_bytes())" > "$1"; shift; until gpu-gate-ready -1; do sleep 5; done; exec "$@"' sh "$base/wired" omlx serve --model-dir "$base/models" --base-path "$base/omlx" --host 127.0.0.1 --port "$port" --no-hf-cache --memory-guard-gb 26 --max-concurrent-requests 4 > "$base/server.log" 2>&1 &
 server=$!
 stop() { kill -TERM "$server" 2>/dev/null || true; wait "$server" || true; }
 trap stop EXIT HUP INT TERM
@@ -31,10 +31,10 @@ while :; do
     sleep 2
 done
 wired=$(cat "$base/wired")
-perf-gate-ready
+until perf-gate-ready; do sleep 10; done
 python3 campaign/comparators/omlx/bench_subagents.py --base "http://127.0.0.1:$port/v1" --model "$model" --log "$base/server.log" --server-pid "$server" --wired-start "$wired" > "$base/results.jsonl"
 perf-gate-ready -1
-perf-gate-ready
+until perf-gate-ready; do sleep 10; done
 python3 tools/bench_concurrent.py "http://127.0.0.1:$port" "$model" --levels 1,2,4,8 --tokens 256 --reps 2 --temperatures 0 --alone --serial --output "$base/concurrent.json" > "$base/concurrent.jsonl"
 perf-gate-ready -1
 memory_pressure > "$base/memory-end.txt"

@@ -820,9 +820,9 @@ const Chunk = struct {
                 c.setP(s.pipes.moe_sort, slots, &.{ b(s.picks), b(s.moe_cur), b(s.moe_sorted), A });
                 c.enc.dispatchThreads(mtl.Size.of(slots, 1, 1), mtl.Size.of(32, 1, 1));
                 c.setP(p.group_up, Moeg{ .k = c.h, .n = inter, .slots = slots, .topk = K, .experts = E, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), b(s.moe_off), b(s.moe_sorted), A, b(s.act) });
-                c.enc.dispatchGroups(mtl.Size.of((inter + 7) / 8, E, (c.n + 3) / 4), mtl.Size.of(256, 1, 1));
+                c.enc.dispatchGroups(mtl.Size.of((inter * 2 + 63) / 64, E, (c.n + 31) / 32), mtl.Size.of(256, 1, 1));
                 c.setP(p.group_down, Moeg{ .k = inter, .n = c.h, .slots = slots, .topk = K, .experts = E, .gate_cap = 0, .up_cap = 0 }, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), t(lay.w2_bias.?), b(s.moe_off), b(s.moe_sorted), A, b(s.down) });
-                c.enc.dispatchGroups(mtl.Size.of((c.h + 7) / 8, E, (c.n + 3) / 4), mtl.Size.of(256, 1, 1));
+                c.enc.dispatchGroups(mtl.Size.of((c.h + 63) / 64, E, (c.n + 31) / 32), mtl.Size.of(256, 1, 1));
                 c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = K, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
                 c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
                 return;

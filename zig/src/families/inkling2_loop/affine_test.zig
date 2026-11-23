@@ -35,7 +35,8 @@ fn launch(device: mtl.Device, queue: mtl.Queue, name: []const u8, buffers: []con
     enc.setBuffer(buffers[buffers.len - 1], 0, buffers.len);
     const grouped = std.mem.startsWith(u8, name, "i2a_group_");
     const matrix = std.mem.eql(u8, name, "i2a_dense_rows");
-    enc.dispatchGroups(mtl.Size.of(if (matrix) (n + 63) / 64 else (n + 7) / 8, if (grouped) 2 else if (matrix) (rows + 31) / 32 else rows, if (grouped) (rows + 3) / 4 else 1), mtl.Size.of(256, 1, 1));
+    const group_up = std.mem.eql(u8, name, "i2a_group_up");
+    enc.dispatchGroups(mtl.Size.of(if (grouped) (n * (if (group_up) @as(usize, 2) else 1) + 63) / 64 else if (matrix) (n + 63) / 64 else (n + 7) / 8, if (grouped) 2 else if (matrix) (rows + 31) / 32 else rows, if (grouped) (rows + 31) / 32 else 1), mtl.Size.of(256, 1, 1));
     enc.end();
     cb.commit();
     cb.wait();
@@ -50,7 +51,7 @@ test "affine dense and expert kernels agree with dequantized float64 weights" {
     const queue = try device.queue();
     defer queue.deinit();
     const k = 64;
-    const n = 4;
+    const n = 68;
     const x = try device.buffer(256 * k * 4, mtl.ResourceOptions.shared);
     defer x.deinit();
     const words = try device.buffer(2 * 2 * n * k, mtl.ResourceOptions.shared);

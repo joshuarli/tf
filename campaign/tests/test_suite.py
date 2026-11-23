@@ -3,8 +3,10 @@
 import argparse
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 CAMPAIGN = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("campaign_suite", CAMPAIGN / "suite" / "suite.py")
@@ -57,6 +59,25 @@ class Selection(unittest.TestCase):
                     args(names="inkling-gpu", skip="inkling-gpu")):
             with self.assertRaises(SystemExit):
                 suite.select(bad)
+
+    def test_the_omlx_oracle_gate_runs_in_the_scenario_tier_only(self):
+        gate = {w.name: w for w in suite.WORKLOADS}["inkling-omlx-oracle"]
+        self.assertEqual((gate.tier, gate.area), ("scenario", "inkling"))
+        self.assertEqual(gate.command, suite.make("omlx-oracle-gate"))
+        self.assertTrue({"omlx-oracle", "inkling-oq4e-weights", "target:omlx-oracle-gate"} <= set(gate.needs))
+        for tier in ("edit", "change"):
+            self.assertNotIn(gate.name, {w.name for w in suite.select(args(tier=tier))})
+        self.assertIn(gate.name, {w.name for w in suite.select(args(tier="scenario", areas="inkling"))})
+        self.assertEqual([w.name for w in suite.select(args(names=gate.name))], [gate.name])
+
+    def test_the_omlx_oracle_preflight_wants_a_complete_capture(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(suite, "OMLX_ORACLE", Path(tmp)):
+            self.assertIn("make -C campaign omlx-oracle-capture", suite.requirement("omlx-oracle", set(), False))
+            for held in ('{"complete": false}', "{"):
+                (Path(tmp) / "manifest.json").write_text(held)
+                self.assertIn("incomplete", suite.requirement("omlx-oracle", set(), False))
+            (Path(tmp) / "manifest.json").write_text('{"complete": true}')
+            self.assertIsNone(suite.requirement("omlx-oracle", set(), False))
 
     def test_inkling_binary_freshness_watches_shared_core_and_metal_sources(self):
         self.assertIn(suite.REPO / "zig/src/core", suite.INKLING_SOURCES)

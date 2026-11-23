@@ -32,6 +32,7 @@ INKLING = Path.home() / "models/Inkling-2-Mini@ed40e7da625f"
 INKLING_OQ4E = Path.home() / "models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd"
 FLINT_RUN = REPO / "zig-out/bin/tf-flint-run"
 FIXTURES = WORK / "suite/fixtures"
+OMLX_ORACLE = WORK / "parity/inkling2-mini/omlx-ref"
 TIERS = ["edit", "change", "scenario", "full"]
 
 
@@ -103,6 +104,10 @@ WORKLOADS = [
              "four multi-turn agents on one server: prefix reuse, forks, and concurrent replies equal to solo",
              "estimated 15 min", ("inkling-binary", "inkling-weights"),
              ("sh", str(CAMPAIGN / "fx/sweep-subagents.sh"), "4", "4096")),
+    Workload("inkling-omlx-oracle", "scenario", "inkling",
+             "oQ4e teacher-forced prefill logits against the saved oMLX oracle: top-1 and KL bounds from the baseline",
+             "observed 2 min", ("zig", "inkling-oq4e-weights", "omlx-oracle", "target:omlx-oracle-gate"),
+             make("omlx-oracle-gate"), env=(("INKLING_LOAD_LIMIT_GB", "26"),)),
     Workload("flint-matrix-ar", "scenario", "flint", "1K/4K matrix, ar, six pairs; 32K total context cap", "unmeasured",
              ("target:bench", "baseline", "flint-weights"),
              make("bench", "MODEL=flint", "MODE=ar", "CELLS=1024,4096", "PAIRS=6")),
@@ -183,6 +188,16 @@ def requirement(need: str, targets: set[str], fix_fixture: bool) -> str | None:
     if need == "inkling-oq4e-weights":
         index = INKLING_OQ4E / "model.safetensors.index.json"
         return None if index.is_file() else f"oQ4e checkpoint missing at {INKLING_OQ4E} (no model.safetensors.index.json)"
+    if need == "omlx-oracle":
+        manifest = OMLX_ORACLE / "manifest.json"
+        if not manifest.is_file():
+            return f"oMLX oracle captures missing at {OMLX_ORACLE}; run `make -C campaign omlx-oracle-capture`"
+        try:
+            complete = json.loads(manifest.read_text()).get("complete") is True
+        except (OSError, json.JSONDecodeError):
+            complete = False
+        return None if complete else (f"the oMLX oracle at {OMLX_ORACLE} is incomplete or unreadable; "
+                                      "rerun `make -C campaign omlx-oracle-capture`")
     if need == "inkling-binary":
         if not INKLING_BIN.is_file():
             return (f"campaign native binary missing at {INKLING_BIN}; run `zig build native -Dcpu=apple_m1 -Dversion=1.0.0` at the repo root" + (" or set INKLING_BIN" if "INKLING_BIN" not in os.environ else ""))

@@ -70,6 +70,28 @@ Read [the comparator protocol](comparators/nanoattention/README.md) before inter
 it measures engine timings, and upstream's experimental BF16 implementation has not passed logit parity.
 The setup and host tests are prepared; actual Mac build and M5 timings still need these commands.
 
+### oMLX correctness oracle
+
+The correctness reference for Inkling 2 Mini is oMLX on the same oQ4e weights. It replaces the f32 GGUF oracle,
+whose native-checkpoint weights differ from oQ4e. `omlx-oracle-capture` teacher-forces the 16 parity histories
+through oMLX 0.8.3's served model with MTP off. It saves full-vocabulary logits in the layout of the f32 captures,
+with receipts and a provenance manifest, to `.work/parity/inkling2-mini/omlx-ref/`. `omlx-oracle-gate` builds
+`tf-inkling2-loop-run`, captures its chunked-prefill logits for the same histories under `heavy.py`, and streams
+them against the oracle. It passes when pooled top-1 agreement is at most 0.5 points below the baseline in
+[omlx_gate.json](parity/inkling2-mini/omlx_gate.json), both KL means are at most 1.5 times the baseline's, and no
+logit is non-finite. It refuses any oracle but the pinned capture, and any runner capture whose receipt names
+another runner, checkpoint or policy. The suite runs it as `inkling-omlx-oracle` in the scenario tier only.
+
+```sh
+make -C campaign omlx-setup              # once: the pinned oMLX environment
+make -C campaign omlx-oracle-capture     # once, about 30 s; keeps captures whose receipts still match
+make -C campaign omlx-oracle-gate        # about 2 min; the report lands beside the lane's captures
+```
+
+The oracle is not exact: oMLX's own one-token forwards agree with its 2,048-token forwards on 95.2% of top-1
+tokens, about as often as TensorFold agrees with the oracle. Read a failure with the per-history table. [The receipt](kernels/inkling-omlx-oracle.md) records the baseline, that
+noise floor, the comparison with the f32 captures, and how to re-baseline after a deliberate arithmetic change.
+
 ### Select a check tier
 
 `make -C campaign bench-list` prints every workload with its tier, area, purpose and cost. Pick the smallest tier, or the named workloads, that cover a change.
@@ -78,7 +100,7 @@ The setup and host tests are prepared; actual Mac build and M5 timings still nee
 | --- | --- | --- |
 | `edit` | CPU fixtures and host tests: the logit gate's controls, the evidence fixtures, quality cases, the prompt corpus, Flint and Inkling 2 Mini host tests | about 30 s warm |
 | `change` | one short round on the GPU: `tf-flint-run` decode steps and one-row against 16-row self-consistency (no server, the fastest Flint loop), the served smoke, one 1,024-token bench process, the cached Inkling reference check, and `inkling-gpu`: the Inkling 2 Mini Metal tests against the checkpoint (forward, prefill, batched step, rollback, fork, verify) | minutes |
-| `scenario` | the six-pair primary matrix, the quality dev set, the Pi tasks, Flint parity, and `inkling-agents-4`: four multi-turn agents on one server, which fails when prefix reuse is missing or a concurrent reply differs from the same request alone | tens of minutes each |
+| `scenario` | the six-pair primary matrix, the quality dev set, the Pi tasks, Flint parity, `inkling-agents-4`: four multi-turn agents on one server, which fails when prefix reuse is missing or a concurrent reply differs from the same request alone, and `inkling-omlx-oracle`: oQ4e prefill logits against the saved oMLX oracle | minutes to tens of minutes each |
 | `full` | the 48-case quality set, the 104 GB Inkling oracle rerun, `zig build test test-golden` | manual only |
 
 ```sh

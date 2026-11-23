@@ -796,6 +796,10 @@ const Chunk = struct {
         const norm: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(mul * taps + 1)));
         if (!dyn_ready) if (dyn) |dw| c.lin(dw, dyn_in, dyn_out);
         if (c.batch) |batch| {
+            if (batch.group) |g| {
+                g.conv(c.enc, x.buf, x.off, weight, if (dyn != null) dyn_out.buf else null, if (site == .mlp) c.s.x else out.buf, if (site == .mlp) 0 else out.off, channels, conv_heads, layout, norm, slot, site);
+                return;
+            }
             var rows: [8]ConvRow = undefined;
             for (batch.caches, 0..) |cache, row| {
                 const buf = switch (site) {
@@ -843,6 +847,10 @@ const Chunk = struct {
     }
 
     fn batchAttention(c: Chunk, lay: *const Layer, slot: u32, full: bool, extent: u32, batch: *BatchContext) void {
+        if (batch.group) |g| {
+            g.attend(c.enc, c.m, lay.attn.rel_bias, slot, full, extent, .{ .q = c.s.q, .k = c.s.kc, .v = c.s.vc, .r = c.s.r, .sink = c.s.sink, .relbias = c.s.relbias, .out = c.s.attn, .parts = batch.scratch.parts, .combine = batch.scratch.combine });
+            return;
+        }
         const s = c.s;
         const text = &c.m.config.text;
         const win: u32 = if (full) 0 else text.window;
@@ -1209,6 +1217,7 @@ pub const Bank = struct { states: B, out: B, n: usize };
 const BatchContext = struct {
     scratch: *@import("batch.zig").BatchScratch,
     caches: []const *Cache,
+    group: ?*const @import("verify.zig").Group = null,
 };
 
 pub fn prefill(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32) !void {
@@ -1222,6 +1231,12 @@ pub fn prefillWant(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []co
 pub fn batchStep(m: *const Model, s: *@import("batch.zig").BatchScratch, caches: []const *Cache, ids: []const u32) !void {
     var context = BatchContext{ .scratch = s, .caches = caches };
     try run(m, &s.rows, caches[0], ids, .all, &context);
+}
+
+/// The batch step over grouped rows (`verify.Group`): every row's logits, the caches untouched until its commit.
+pub fn groupStep(m: *const Model, s: *@import("batch.zig").BatchScratch, group: *const @import("verify.zig").Group, ids: []const u32) !void {
+    var context = BatchContext{ .scratch = s, .caches = group.caches, .group = group };
+    try run(m, &s.rows, group.caches[0], ids, .all, &context);
 }
 
 fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, want: WantLogits, batch: ?*BatchContext) !void {
@@ -1328,6 +1343,8 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
         }
     }
     if (batch) |value| {
-        for (value.caches) |item| item.len += 1;
+        if (value.group == null) for (value.caches) |item| {
+            item.len += 1;
+        };
     } else cache.len += ids.len;
 }

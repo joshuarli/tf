@@ -38,5 +38,6 @@ test {
     _ = @import("prefill_test.zig");
     _ = @import("verify_test.zig");
     _ = @import("draft.zig");
+    _ = @import("verify.zig");
     _ = @import("batch_test.zig");
 }

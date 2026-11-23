@@ -105,6 +105,8 @@ before it acquires the shared lock (`campaign/heavy.py:151-156`). Existing
 wired pages can therefore be
 absent from the increment charged to a later process. A reported charge is
 the watchdog's measurement, not proof of total model physical memory.
+Two 16K code pairs have passed. Both first differ at generated index 24;
+the third pair is still pending, so no complete cell statistic is reported.
 
 Both engines allocate **65,536 bytes per additional context token** for global
 key and value state. The checkpoint has eight global attention visits after

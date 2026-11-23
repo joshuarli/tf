@@ -55,3 +55,16 @@ A candidate assigned adjacent dimensions to each SIMD lane instead of strided di
 `run` opens one serial compute encoder for each batch step and waits for its command buffer before returning. On Metal 4, `Slot.dispatched` inserts a device-visibility barrier after each serial dispatch. The next dependent step's CPU encoding therefore cannot overlap the preceding step's GPU work. The timeline stamps are emitted at those barriers, so their per-stage spans include kernel execution, barrier effects and timestamp instrumentation; they do not separately measure gaps. The instrumented K=1 span was 28.127 ms, versus an uninstrumented 21.569 ms base median below, and subtracting them does not yield a gap measurement.
 
 A candidate fused the independent key and value convolutions into one dispatch per slot for affine batch projections, saving 48 dispatches. Native and oQ4e family test runs each exited 0 with 82/82 tests; the oQ4e batch/decode checks reported zero maximum logit and cache differences. Three gated 2,500-token `batchbench K 5` pairs, in base/candidate, candidate/base, base/candidate order, showed no measurable speedup. K=1 base medians were 21.626, 21.569 and 21.547 ms, candidate 21.782, 21.605 and 21.672 ms; outer medians were 21.569 and 21.672 ms. K=4 base medians were 41.086, 42.412 and 41.790 ms, candidate 42.022, 42.455 and 41.546 ms; outer medians were 41.790 and 42.022 ms. K=4 inner samples spanned 40.833–43.639 ms. Deferrals were retried; all retained samples passed the GPU/CPU gates and compiler monitor. The candidate was reverted.
+
+A gated Metal System Trace on the base runner at K=1 and 2,500 cached IDs exited 0. The traced `batchbench 1 9` reported a 22.062 ms batch median and 21.945 ms serial median. The final six GPU command-buffer spans, containing both batch and serial operations, had a 20.869 ms median and 20.661–21.508 ms range. Their median is about 1.2 ms below the batch wall median, but the sample sets are not paired and tracing adds overhead. This is not an isolated inter-dispatch or CPU-encode measurement. Earlier instrumented stage spans include barriers and timestamps, so they cannot be subtracted from the uninstrumented wall time to produce such a measurement. The successful trace stayed under the 28 GB guard, peaking at 26.8 GB.
+
+```sh
+python3 campaign/heavy.py -- "$PWD/.work/tmp/timed-run.sh" "$PWD/.work/tmp/d1-trace3-compiler" \
+  xctrace record --template 'Metal System Trace' --output "$PWD/.work/tmp/d1-base-trace3.trace" \
+  --target-stdout "$PWD/.work/tmp/d1-trace3-target.log" --no-prompt --launch -- /bin/sh -c 'exec "$@" 2>&1' sh \
+  "$PWD/.work/tmp/base-build/bin/tf-inkling2-loop-run" "$HOME/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd" \
+  "$PWD/.work/tmp/code-2500.json" batchbench 1 9
+python3 campaign/kernels/inkling_profile.py trace --trace .work/tmp/d1-base-trace3.trace --steps 6 --process 'sh (9976)'
+```
+
+The trace process label includes the process ID; substitute the recorded process label when reproducing. The first launch attempt used `sh` instead of `/bin/sh` and exited 2 without running the model; the second exited 0. The `timed-run.sh` wrapper is the one in `inkling-f16-kv.md` and applies the GPU admission, CPU admission and post-checks, and compiler monitor.

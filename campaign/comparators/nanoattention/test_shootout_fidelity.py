@@ -2,13 +2,19 @@ import math
 import unittest
 
 try:
-    from shootout import clean_diagnostics, fidelity_row
+    from shootout import clean_diagnostics, fidelity_row, prelaunch_cap
 except ModuleNotFoundError:
     fidelity_row = None
 
 
 @unittest.skipIf(fidelity_row is None, 'numerical comparison dependencies unavailable')
 class FidelityTests(unittest.TestCase):
+    def test_prelaunch_wired_memory_is_distinct_from_a_model_cap_failure(self):
+        receipt = 'footprint 0.0 GB; host wired growth 28.4 GB'
+        self.assertTrue(prelaunch_cap({'exit': 3, 'worker': {}, 'output': receipt}))
+        self.assertFalse(prelaunch_cap({'exit': 3, 'worker': {'child_exit': 3}, 'output': receipt}))
+        self.assertFalse(prelaunch_cap({'exit': 3, 'worker': {}, 'output': 'footprint 5.0 GB; host wired growth 28.4 GB'}))
+
     def test_redaction_keeps_the_rest_of_the_gate_receipt(self):
         self.assertEqual(clean_diagnostics('busy\nprocess command=private\nquiet'),
                          'busy\n[unrelated process details removed]\nquiet')

@@ -39,6 +39,12 @@ def clean_diagnostics(text):
                      for line in text.splitlines())
 
 
+def prelaunch_cap(item):
+    return (item.get('exit') == 3 and not item.get('worker')
+            and 'host wired growth' in item.get('output', '')
+            and 'footprint 0.0 GB' in item.get('output', ''))
+
+
 def worker(path):
     command = json.loads(Path(path).read_text())
     own = {os.getpid()}
@@ -97,6 +103,10 @@ def gated(command, label):
     job.write_text(json.dumps(command))
     outer = ['python3', str(HEAVY), '--', sys.executable, str(Path(__file__).resolve()), 'worker', str(job)]
     busy_start = time.monotonic()
+    cap_retry = RESULTS.exists() and any(
+        entry['label'] == label and prelaunch_cap(entry)
+        for entry in (json.loads(line) for line in RESULTS.read_text().splitlines())
+    )
     while True:
         print(f'{label}: starting', flush=True)
         result = subprocess.run(outer, env=ENV, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -111,6 +121,10 @@ def gated(command, label):
                 'exit': status, 'output': output, 'worker': worker_row}
         record(item)
         print(f'{label}: exit={status}', flush=True)
+        if prelaunch_cap(item) and not cap_retry:
+            cap_retry = True
+            time.sleep(10)
+            continue
         if status not in (75, 76):
             return item
         if time.monotonic() - busy_start > 10800:
@@ -139,7 +153,12 @@ def timings():
     completed = {entry['label']: entry['result'] for entry in entries if entry['label'].endswith('/parsed')}
     comparisons = {entry['label'] for entry in entries if entry['label'].endswith('/comparison')}
     failed_cells = {entry['label'].split('/')[0] for entry in entries
-                    if 'exit' in entry and entry['exit'] not in (0, 75, 76)}
+                    if 'exit' in entry and entry['exit'] not in (0, 75, 76) and not prelaunch_cap(entry)}
+    cap_failures = {}
+    for entry in entries:
+        if prelaunch_cap(entry):
+            cap_failures[entry['label']] = cap_failures.get(entry['label'], 0) + 1
+    failed_cells.update(label.split('/')[0] for label, count in cap_failures.items() if count >= 2)
     for size in (1024, 4096, 16384):
         for topic in ('code', 'prose', 'structured'):
             name = f'{topic}-{size}'

@@ -80,7 +80,7 @@ sliding window:
 PYTHONDONTWRITEBYTECODE=1 /Users/josh/repos/tensorfold-m5/.work/venv-ref/bin/python campaign/parity/inkling2-mini/oracle.py --histories campaign/parity/inkling2-mini/histories.json --dir /Users/josh/repos/tensorfold-m5/.work/parity/inkling2-mini/ref
 ```
 
-The comparator tests exited 0 with 17 tests and four dependency-related
+The comparator tests exited 0 with 18 tests and five dependency-related
 skips. The skipped template and numerical regressions passed separately in
 the environment with Jinja, tokenizers and NumPy:
 
@@ -89,6 +89,12 @@ PATH=/opt/homebrew/bin:$PATH PYTHONDONTWRITEBYTECODE=1 UV_PROJECT_ENVIRONMENT="$
 PYTHONDONTWRITEBYTECODE=1 /Users/josh/repos/tensorfold-m5/.work/venv-mlx-lm/bin/python -m unittest discover -s campaign/comparators/nanoattention -p test_prompt_ids.py
 PYTHONDONTWRITEBYTECODE=1 /Users/josh/repos/tensorfold-m5/.work/venv-mlx-lm/bin/python -m unittest discover -s campaign/comparators/nanoattention -p test_shootout_fidelity.py
 ```
+
+The first 4K prose and structured TensorFold attempts exited 3 before their
+workers emitted receipts. `heavy.py` reported a 0.0 GB footprint and 28.4 GB
+and 29.1 GB of host wired growth, respectively. The driver advanced to a
+queued 16K attempt, which was stopped so the two environmental failures can
+each be retried once before the long cells.
 
 Both engines allocate **65,536 bytes per additional context token** for global
 key and value state. The checkpoint has eight global attention visits after

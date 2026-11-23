@@ -1,6 +1,6 @@
 # Inkling 2 Mini oQ4e
 
-Status: checkpoint loading, the family-local affine tests, and the fidelity comparisons pass. Gated throughput is pending.
+Status: checkpoint loading and the family-local affine tests pass. Fidelity comparisons are complete; gated throughput is pending.
 
 The candidate is `mlx-community/Inkling-2-Mini-oQ4e-mtp` at `3eea042751cd`, compared with the native
 `Inkling-2-Mini` checkpoint at `ed40e7da625f`. Both revisions are pinned in `campaign/sources.lock.json`.

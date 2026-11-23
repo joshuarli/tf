@@ -19,12 +19,46 @@ inline float i2a_dot(const device float* x, const device uint* w, const device b
                      const device bfloat* b, size_t row, uint width, uint bits, uint lane) {
   const uint per = 32u / bits;
   const uint mask = (1u << bits) - 1u;
+  const uint words = width / per;
+  const uint4 shift = uint4(0u, bits, bits * 2u, bits * 3u);
   float acc = 0.0f;
-  for (uint word = lane; word < width / per; word += 32u) {
-    const uint packed = w[row * (width / per) + word];
+  uint word = lane;
+  for (; word + 96u < words; word += 128u) {
+    uint packed[4];
+    float scale[4], bias[4];
+    float4 input0[4], input1[4];
+#pragma unroll
+    for (uint i = 0; i < 4u; ++i) {
+      const uint at = word + 32u * i;
+      packed[i] = w[row * words + at];
+      const size_t group = row * (width / 64u) + (at * per) / 64u;
+      scale[i] = float(s[group]);
+      bias[i] = float(b[group]);
+      input0[i] = float4(*reinterpret_cast<const device packed_float4*>(x + at * per));
+      input1[i] = bits == 4u ? float4(*reinterpret_cast<const device packed_float4*>(x + at * per + 4u)) : float4(0.0f);
+    }
+#pragma unroll
+    for (uint i = 0; i < 4u; ++i) {
+      const float4 code0 = float4((uint4(packed[i]) >> shift) & mask);
+      const float4 value0 = fma(code0, float4(scale[i]), float4(bias[i]));
+      acc = fma(input0[i].x, value0.x, acc);
+      acc = fma(input0[i].y, value0.y, acc);
+      acc = fma(input0[i].z, value0.z, acc);
+      acc = fma(input0[i].w, value0.w, acc);
+      if (bits == 4u) {
+        const float4 code1 = float4((uint4(packed[i] >> 16u) >> shift) & mask);
+        const float4 value1 = fma(code1, float4(scale[i]), float4(bias[i]));
+        acc = fma(input1[i].x, value1.x, acc);
+        acc = fma(input1[i].y, value1.y, acc);
+        acc = fma(input1[i].z, value1.z, acc);
+        acc = fma(input1[i].w, value1.w, acc);
+      }
+    }
+  }
+  for (; word < words; word += 32u) {
+    const uint packed = w[row * words + word];
     const size_t group = row * (width / 64u) + (word * per) / 64u;
     const float scale = float(s[group]), bias = float(b[group]);
-    const uint4 shift = uint4(0u, bits, bits * 2u, bits * 3u);
     const float4 code0 = float4((uint4(packed) >> shift) & mask);
     const float4 input0 = float4(*reinterpret_cast<const device packed_float4*>(x + word * per));
     const float4 value0 = fma(code0, float4(scale), float4(bias));
@@ -52,32 +86,49 @@ inline void i2a_dot_rows(const device float* x, size_t stride, uint rows, const 
                          uint lane, thread float (&acc)[8]) {
   const uint per = 32u / bits;
   const uint mask = (1u << bits) - 1u;
+  const uint words = width / per;
+  const uint4 shift = uint4(0u, bits, bits * 2u, bits * 3u);
   for (uint r = 0; r < 8u; ++r) acc[r] = 0.0f;
-  for (uint word = lane; word < width / per; word += 32u) {
-    const uint packed = w[row * (width / per) + word];
-    const size_t group = row * (width / 64u) + (word * per) / 64u;
-    const float scale = float(s[group]), bias = float(b[group]);
-    const uint4 shift = uint4(0u, bits, bits * 2u, bits * 3u);
-    const float4 code0 = float4((uint4(packed) >> shift) & mask);
-    const float4 value0 = fma(code0, float4(scale), float4(bias));
-    const float4 code1 = float4((uint4(packed >> 16u) >> shift) & mask);
-    const float4 value1 = fma(code1, float4(scale), float4(bias));
-    for (uint r = 0; r < 8u; ++r) {
-      if (r >= rows) break;
-      const device float* xr = x + r * stride + word * per;
-      const float4 input0 = float4(*reinterpret_cast<const device packed_float4*>(xr));
-      acc[r] = fma(input0.x, value0.x, acc[r]);
-      acc[r] = fma(input0.y, value0.y, acc[r]);
-      acc[r] = fma(input0.z, value0.z, acc[r]);
-      acc[r] = fma(input0.w, value0.w, acc[r]);
-      if (bits == 4u) {
-        const float4 input1 = float4(*reinterpret_cast<const device packed_float4*>(xr + 4u));
-        acc[r] = fma(input1.x, value1.x, acc[r]);
-        acc[r] = fma(input1.y, value1.y, acc[r]);
-        acc[r] = fma(input1.z, value1.z, acc[r]);
-        acc[r] = fma(input1.w, value1.w, acc[r]);
+  uint word = lane;
+  while (word < words) {
+    const uint count = word + 96u < words ? 4u : 1u;
+    uint packed[4];
+    float scale[4], bias[4];
+#pragma unroll
+    for (uint i = 0; i < 4u; ++i) {
+      if (i >= count) break;
+      const uint at = word + 32u * i;
+      packed[i] = w[row * words + at];
+      const size_t group = row * (width / 64u) + (at * per) / 64u;
+      scale[i] = float(s[group]);
+      bias[i] = float(b[group]);
+    }
+#pragma unroll
+    for (uint i = 0; i < 4u; ++i) {
+      if (i >= count) break;
+      const uint at = word + 32u * i;
+      const float4 code0 = float4((uint4(packed[i]) >> shift) & mask);
+      const float4 value0 = fma(code0, float4(scale[i]), float4(bias[i]));
+      const float4 code1 = float4((uint4(packed[i] >> 16u) >> shift) & mask);
+      const float4 value1 = fma(code1, float4(scale[i]), float4(bias[i]));
+      for (uint r = 0; r < 8u; ++r) {
+        if (r >= rows) break;
+        const device float* xr = x + r * stride + at * per;
+        const float4 input0 = float4(*reinterpret_cast<const device packed_float4*>(xr));
+        acc[r] = fma(input0.x, value0.x, acc[r]);
+        acc[r] = fma(input0.y, value0.y, acc[r]);
+        acc[r] = fma(input0.z, value0.z, acc[r]);
+        acc[r] = fma(input0.w, value0.w, acc[r]);
+        if (bits == 4u) {
+          const float4 input1 = float4(*reinterpret_cast<const device packed_float4*>(xr + 4u));
+          acc[r] = fma(input1.x, value1.x, acc[r]);
+          acc[r] = fma(input1.y, value1.y, acc[r]);
+          acc[r] = fma(input1.z, value1.z, acc[r]);
+          acc[r] = fma(input1.w, value1.w, acc[r]);
+        }
       }
     }
+    word += 32u * count;
   }
   for (uint r = 0; r < 8u; ++r) {
     if (r >= rows) break;
@@ -117,6 +168,22 @@ inline void i2a_dot_rows(const device float* x, size_t stride, uint rows, const 
   const device float* weight = w + (size_t)col * a.k;
   float acc = 0.0f;
   uint base = 0u;
+  for (; base + 768u <= a.k; base += 768u) {
+    float4 xv[6], wv[6];
+#pragma unroll
+    for (uint i = 0; i < 6u; ++i) {
+      const uint k = base + 128u * i + lane * 4u;
+      xv[i] = float4(*reinterpret_cast<const device packed_float4*>(input + k));
+      wv[i] = float4(*reinterpret_cast<const device packed_float4*>(weight + k));
+    }
+#pragma unroll
+    for (uint i = 0; i < 6u; ++i) {
+      acc = fma(xv[i].x, wv[i].x, acc);
+      acc = fma(xv[i].y, wv[i].y, acc);
+      acc = fma(xv[i].z, wv[i].z, acc);
+      acc = fma(xv[i].w, wv[i].w, acc);
+    }
+  }
   for (; base + 128u <= a.k; base += 128u) {
     const uint k = base + lane * 4u;
     const float4 xv = float4(*reinterpret_cast<const device packed_float4*>(input + k));

@@ -42,6 +42,13 @@ const Slot = struct {
     live_generated: u64 = 0,
 };
 
+const Entry = struct {
+    tokens: []u32,
+    cache: inkling.Cache,
+    bytes: u64,
+    last_used: u64,
+};
+
 pub const Host = struct {
     gpa: Allocator,
     io: std.Io,
@@ -50,6 +57,9 @@ pub const Host = struct {
     batch: inkling.BatchScratch,
     batch_logits: []f32,
     sequence: u64 = 0,
+    entries: std.ArrayList(Entry) = .empty,
+    store_bytes: u64 = 0,
+    store_limit: u64 = 0,
     prefill: inkling.PrefillScratch,
     capacity: usize,
     eos: u32,
@@ -96,6 +106,11 @@ pub const Host = struct {
         h.queued.deinit(h.gpa);
         h.cancels.deinit(h.gpa);
         h.decoded.deinit(h.gpa);
+        for (h.entries.items) |*entry| {
+            entry.cache.deinit();
+            h.gpa.free(entry.tokens);
+        }
+        h.entries.deinit(h.gpa);
         for (h.slots) |*slot| {
             slot.resident.deinit(h.gpa);
             slot.cache.deinit();
@@ -322,6 +337,33 @@ pub const Host = struct {
         }
     }
 
+    fn store(h: *Host, slot: *Slot) !void {
+        if (!h.prefix_reuse or slot.cache.len == 0 or h.store_limit == 0) return;
+        const tokens = slot.resident.items;
+        h.sequence += 1;
+        if (prefix.duplicate(h.entries.items, tokens)) |i| {
+            h.entries.items[i].last_used = h.sequence;
+            return;
+        }
+        const bytes = inkling.Cache.fixedBytes(&h.model.config) +| slot.cache.len *| inkling.Cache.bytesPerToken(&h.model.config) +| tokens.len *| @sizeOf(u32);
+        if (bytes > h.store_limit) return;
+        while (prefix.eviction(h.entries.items, h.store_bytes, h.store_limit, bytes)) |i| {
+            var old = h.entries.swapRemove(i);
+            h.store_bytes -= old.bytes;
+            std.debug.print("inkling store: evict {d} tokens {d} bytes\n", .{ old.tokens.len, old.bytes });
+            old.cache.deinit();
+            h.gpa.free(old.tokens);
+        }
+        const ids = try h.gpa.dupe(u32, tokens);
+        errdefer h.gpa.free(ids);
+        var cache = try inkling.Cache.init(h.model.device, &h.model.config, slot.cache.len);
+        errdefer cache.deinit();
+        try cache.copyFrom(h.model.queue, &h.model.config, &slot.cache, slot.cache.len);
+        try h.entries.append(h.gpa, .{ .tokens = ids, .cache = cache, .bytes = bytes, .last_used = h.sequence });
+        h.store_bytes += bytes;
+        std.debug.print("inkling store: insert {d} tokens {d} bytes total {d}\n", .{ ids.len, bytes, h.store_bytes });
+    }
+
     fn admit(h: *Host, slot: *Slot, choice: prefix.Choice, fork: ?prefix.Fork) void {
         const job = slot.job.?;
         const r = job.request;
@@ -335,12 +377,26 @@ pub const Host = struct {
         }
         h.sequence += 1;
         slot.last_used = h.sequence;
+        if (h.prefix_reuse) h.sequence = prefix.touchPrefixes(h.entries.items, r.prompt, h.sequence);
         slot.resident.ensureTotalCapacity(h.gpa, r.prompt.len) catch {
             h.retire(slot, .failed, @errorName(error.OutOfMemory));
             return;
         };
         job.reused = choice.reused;
-        if (fork) |f| {
+        const best_fork = if (fork) |f| f.point else choice.reused;
+        const hit = prefix.storeLookup(h.entries.items, r.prompt, h.prefix_reuse, best_fork);
+        if (hit) |i| {
+            const entry = &h.entries.items[i];
+            slot.cache.copyFrom(h.model.queue, &h.model.config, &entry.cache, entry.tokens.len) catch |e| {
+                h.retire(slot, .failed, @errorName(e));
+                return;
+            };
+            slot.resident.clearRetainingCapacity();
+            slot.resident.appendSliceAssumeCapacity(entry.tokens);
+            job.reused = entry.tokens.len;
+            entry.last_used = h.sequence;
+            std.debug.print("inkling store: hit {d} of {d} prompt tokens\n", .{ job.reused, r.prompt.len });
+        } else if (fork) |f| {
             const source = &h.slots[f.source];
             slot.cache.copyFrom(h.model.queue, &h.model.config, &source.cache, f.point) catch |e| {
                 h.retire(slot, .failed, @errorName(e));
@@ -360,6 +416,10 @@ pub const Host = struct {
             slot.resident.clearRetainingCapacity();
             slot.resident.appendSliceAssumeCapacity(r.prompt[0..f.point]);
             job.reused = f.point;
+            h.store(slot) catch |e| {
+                h.retire(slot, .failed, @errorName(e));
+                return;
+            };
             std.debug.print("inkling fork: from slot {d} at {d} of {d} prompt tokens\n", .{ f.source, f.point, f.common });
         }
         slot.points = @splat(0);
@@ -385,10 +445,19 @@ pub const Host = struct {
                     return;
                 };
                 slot.points[saved] = at;
+                if (job.reused == 0 and saved == 0) h.store(slot) catch |e| {
+                    h.retire(slot, .failed, @errorName(e));
+                    return;
+                };
                 saved += 1;
                 next += h.fork_interval;
             }
-            const take = @min(h.prefill.chunk, @min(r.prompt.len - at, if (h.prefix_reuse and next > at) next - at else r.prompt.len - at));
+            if (h.prefix_reuse and at == r.prompt.len - 1) h.store(slot) catch |e| {
+                h.retire(slot, .failed, @errorName(e));
+                return;
+            };
+            const remaining = if (h.prefix_reuse and at < r.prompt.len - 1) r.prompt.len - 1 - at else r.prompt.len - at;
+            const take = @min(h.prefill.chunk, @min(remaining, if (h.prefix_reuse and next > at) next - at else remaining));
             inkling.prefillWant(h.model, &h.prefill, &slot.cache, r.prompt[at..][0..take], if (at + take == r.prompt.len) .last else .none) catch |e| {
                 emit(job, .{ .prefilled = 0 });
                 h.retire(slot, .failed, @errorName(e));
@@ -397,6 +466,10 @@ pub const Host = struct {
             slot.resident.appendSliceAssumeCapacity(r.prompt[at..][0..take]);
             at += take;
         }
+        h.store(slot) catch |e| {
+            h.retire(slot, .failed, @errorName(e));
+            return;
+        };
         if (slot.rollback) |*rollback| {
             rollback.copyRows(h.model.queue, &h.model.config, &slot.cache, true, r.max_tokens -| 1) catch |e| {
                 h.retire(slot, .failed, @errorName(e));
@@ -498,7 +571,7 @@ pub const Host = struct {
 
 };
 
-pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usize, count: usize, eos: u32, load_limit: u64, copy_drafts: bool, prefix_reuse: bool, rollback_rows: usize, fork_window: usize, fork_interval: usize) !*Host {
+pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usize, count: usize, eos: u32, load_limit: u64, copy_drafts: bool, prefix_reuse: bool, rollback_rows: usize, fork_window: usize, fork_interval: usize, store_limit: u64) !*Host {
     _ = copy_drafts;
     const h = try gpa.create(Host);
     errdefer gpa.destroy(h);
@@ -538,6 +611,7 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
         .prefix_reuse = prefix_reuse,
         .fork_window = fork_window,
         .fork_interval = fork_interval,
+        .store_limit = store_limit,
         .info_ = .{
             .name = "inkling2-loop",
             .lanes = @intCast(count),

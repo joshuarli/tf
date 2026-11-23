@@ -66,6 +66,51 @@ pub fn chooseAdmission(slots: anytype, prompt: []const u32, enabled: bool) ?Admi
     return best;
 }
 
+pub fn storeLookup(entries: anytype, prompt: []const u32, enabled: bool, minimum: usize) ?usize {
+    if (!enabled) return null;
+    var best: ?usize = null;
+    var longest = minimum;
+    for (entries, 0..) |entry, i| {
+        const n = reuse(entry.tokens, prompt, true);
+        if (n > longest) {
+            best = i;
+            longest = n;
+        }
+    }
+    return best;
+}
+
+pub fn duplicate(entries: anytype, tokens: []const u32) ?usize {
+    for (entries, 0..) |entry, i| if (std.mem.eql(u32, entry.tokens, tokens)) return i;
+    return null;
+}
+
+pub fn oldest(entries: anytype) ?usize {
+    var result: ?usize = null;
+    for (entries, 0..) |entry, i| {
+        if (result == null or entry.last_used < entries[result.?].last_used) result = i;
+    }
+    return result;
+}
+
+pub fn touchPrefixes(entries: anytype, prompt: []const u32, sequence: u64) u64 {
+    const now = sequence + entries.len + 1;
+    for (entries) |*entry| {
+        if (entry.tokens.len > prompt.len or !std.mem.eql(u32, entry.tokens, prompt[0..entry.tokens.len])) continue;
+        var shorter: u64 = 0;
+        for (entries) |other| {
+            if (other.tokens.len < entry.tokens.len and std.mem.eql(u32, other.tokens, prompt[0..other.tokens.len])) shorter += 1;
+        }
+        entry.last_used = now - shorter;
+    }
+    return now;
+}
+
+pub fn eviction(entries: anytype, used: u64, budget: u64, incoming: u64) ?usize {
+    if (incoming > budget or used <= budget - incoming) return null;
+    return oldest(entries);
+}
+
 pub fn cancelled(id: u64, background: bool, closing: bool, foreground_waiting: bool, cancels: []const u64) bool {
     return closing or (background and foreground_waiting) or std.mem.indexOfScalar(u64, cancels, id) != null;
 }
@@ -192,4 +237,63 @@ test "choose the longest available fork and retain longer own reuse" {
     const admission = chooseAdmission(&slots, &.{ 1, 2, 3, 4, 5, 6 }, true).?;
     try std.testing.expectEqual(@as(usize, 1), admission.fork.?.source);
     try std.testing.expect(admission.choice.index != 1);
+}
+
+test "store selection respects strict prefix and disabled reuse" {
+    const entries = [_]struct { tokens: []const u32, last_used: u64 }{
+        .{ .tokens = &.{ 1, 2 }, .last_used = 2 },
+        .{ .tokens = &.{ 1, 2, 3, 4 }, .last_used = 1 },
+        .{ .tokens = &.{ 1, 2, 3, 4, 5 }, .last_used = 3 },
+    };
+    try std.testing.expectEqual(@as(?usize, 1), storeLookup(&entries, &.{ 1, 2, 3, 4, 5 }, true, 3));
+    try std.testing.expectEqual(@as(?usize, null), storeLookup(&entries, &.{ 1, 2, 3, 4, 5 }, false, 0));
+    try std.testing.expectEqual(@as(?usize, 1), duplicate(&entries, &.{ 1, 2, 3, 4 }));
+    try std.testing.expectEqual(@as(?usize, null), duplicate(&entries, &.{ 1, 2, 3 }));
+    try std.testing.expectEqual(@as(?usize, 1), oldest(&entries));
+}
+
+test "store insertion deduplicates and evicts least recently used within byte budget" {
+    const Entry = struct { tokens: []const u32, bytes: u64, last_used: u64 };
+    var entries: std.ArrayList(Entry) = .empty;
+    defer entries.deinit(std.testing.allocator);
+    try entries.appendSlice(std.testing.allocator, &.{
+        .{ .tokens = &.{ 1, 2 }, .bytes = 4, .last_used = 9 },
+        .{ .tokens = &.{ 1, 3 }, .bytes = 6, .last_used = 3 },
+    });
+    try std.testing.expectEqual(@as(?usize, 0), duplicate(entries.items, &.{ 1, 2 }));
+    try std.testing.expectEqual(@as(?usize, null), eviction(entries.items, 10, 14, 4));
+    const victim = eviction(entries.items, 10, 14, 6).?;
+    try std.testing.expectEqual(@as(usize, 1), victim);
+    const removed = entries.swapRemove(victim);
+    try std.testing.expectEqual(@as(u64, 6), removed.bytes);
+    try entries.append(std.testing.allocator, .{ .tokens = &.{ 1, 4 }, .bytes = 6, .last_used = 10 });
+    try std.testing.expectEqual(@as(?usize, null), eviction(entries.items, 10, 14, 4));
+    try std.testing.expectEqual(@as(?usize, 0), duplicate(entries.items, &.{ 1, 2 }));
+}
+
+test "stored strict prefix beats own and fork reuse" {
+    const T = struct { job: ?usize = null, resident: std.ArrayList(u32) = .empty, last_used: u64 = 0, points: []const usize = &.{} };
+    var slots = [_]T{ .{}, .{ .job = 1, .points = &.{3} } };
+    defer for (&slots) |*slot| slot.resident.deinit(std.testing.allocator);
+    try slots[0].resident.appendSlice(std.testing.allocator, &.{ 1, 2 });
+    try slots[1].resident.appendSlice(std.testing.allocator, &.{ 1, 2, 3, 8 });
+    const prompt = &[_]u32{ 1, 2, 3, 4, 5, 6 };
+    const admission = chooseAdmission(&slots, prompt, true).?;
+    try std.testing.expectEqual(@as(usize, 3), admission.fork.?.point);
+    const entries = [_]struct { tokens: []const u32 }{.{ .tokens = &.{ 1, 2, 3, 4, 5 } }};
+    try std.testing.expectEqual(@as(?usize, 0), storeLookup(&entries, prompt, true, admission.fork.?.point));
+    try std.testing.expectEqual(@as(?usize, null), storeLookup(&entries, prompt, false, 0));
+}
+
+test "shared prefixes remain recent as later prompts grow" {
+    var entries = [_]struct { tokens: []const u32, last_used: u64 }{
+        .{ .tokens = &.{ 1, 2 }, .last_used = 1 },
+        .{ .tokens = &.{ 1, 2, 3 }, .last_used = 2 },
+        .{ .tokens = &.{ 8, 9 }, .last_used = 3 },
+    };
+    const now = touchPrefixes(&entries, &.{ 1, 2, 3, 4 }, 3);
+    try std.testing.expectEqual(@as(u64, 7), now);
+    try std.testing.expectEqual(@as(?usize, 2), oldest(&entries));
+    try std.testing.expect(entries[0].last_used > entries[1].last_used);
+    try std.testing.expectEqual(@as(u64, 3), entries[2].last_used);
 }

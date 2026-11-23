@@ -23,6 +23,61 @@ fn argmax(values: []const f32) usize {
     return best;
 }
 
+fn readState(m: *const inkling.Model, c: *inkling.Cache) !mtl.Buffer {
+    const config = &m.config;
+    const row_bytes = inkling.Cache.row(c, config, 0, 1) - inkling.Cache.row(c, config, 0, 0);
+    const kv_bytes = (inkling.Cache.localSlots(config) * config.text.window + inkling.Cache.globalSlots(config) * c.len) * row_bytes * 2;
+    const conv_bytes = c.k_conv.length() + c.v_conv.length() + c.attn_conv.length() + c.mlp_conv.length();
+    const result = try m.device.buffer(kv_bytes + conv_bytes, mtl.ResourceOptions.shared);
+    errdefer result.deinit();
+    const cb = m.queue.commandBuffer();
+    const blit = cb.blit();
+    var at: usize = 0;
+    for ([_]mtl.Buffer{ c.k_conv, c.v_conv, c.attn_conv, c.mlp_conv }) |buf| {
+        blit.copy(buf, 0, result, at, buf.length());
+        at += buf.length();
+    }
+    for (0..config.slots()) |slot| {
+        const bytes = (if (inkling.Cache.isLocalSlot(config, slot)) config.text.window else c.len) * row_bytes;
+        for ([_]mtl.Buffer{ c.keys, c.values }) |buf| {
+            blit.copy(buf, c.baseOffset(config, slot), result, at, bytes);
+            at += bytes;
+        }
+    }
+    blit.end();
+    cb.commit();
+    cb.wait();
+    if (cb.failure()) |_| return error.GpuFailed;
+    return result;
+}
+
+fn checkStore(m: *const inkling.Model, p: *inkling.PrefillScratch, ids: []const u32, point: usize, a: std.mem.Allocator) !void {
+    var source = try inkling.Cache.init(m.device, &m.config, ids.len);
+    defer source.deinit();
+    var direct = try inkling.Cache.init(m.device, &m.config, ids.len);
+    defer direct.deinit();
+    var restored = try inkling.Cache.init(m.device, &m.config, ids.len);
+    defer restored.deinit();
+    try prefill(m, p, &source, ids[0..point]);
+    var entry = try inkling.Cache.init(m.device, &m.config, point);
+    defer entry.deinit();
+    try entry.copyFrom(m.queue, &m.config, &source, point);
+    try prefill(m, p, &direct, ids[0..point]);
+    try restored.copyFrom(m.queue, &m.config, &entry, point);
+    if (restored.len != direct.len) return error.StoreLengthMismatch;
+    const expected = try readState(m, &direct);
+    defer expected.deinit();
+    const actual = try readState(m, &restored);
+    defer actual.deinit();
+    if (!std.mem.eql(u8, expected.slice(u8, expected.length()), actual.slice(u8, actual.length()))) return error.StoreStateMismatch;
+    try prefill(m, p, &direct, ids[point..]);
+    const logits = try a.dupe(f32, p.logits.slice(f32, m.config.text.unpadded_vocab));
+    defer a.free(logits);
+    try prefill(m, p, &restored, ids[point..]);
+    if (!std.mem.eql(f32, logits, p.logits.slice(f32, logits.len))) return error.StoreLogitsMismatch;
+    std.debug.print("store: len={d} state_bytes={d} state_equal=true continuation_logits_equal=true\n", .{ point, actual.length() });
+}
+
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len != 3) return error.ExpectedModelAndCapture;
@@ -46,6 +101,7 @@ pub fn main(init: std.process.Init) !void {
     defer p.deinit();
     var s = try inkling.Scratch.init(m.device, &m.config);
     defer s.deinit();
+    try checkStore(m, &p, ids.items, first, a);
     const vocab: usize = m.config.text.unpadded_vocab;
     try scheduled(m, &p, &s, &c, ids.items, first, decoded);
     const retained = try a.dupe(f32, p.logits.slice(f32, vocab));

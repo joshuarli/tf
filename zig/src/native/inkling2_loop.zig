@@ -130,13 +130,20 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
     }
     const rollback: u64 = if (prefix_reuse) count *| inkling.Cache.rollbackBytes(&m.config, rollback_rows) else 0;
     const forks: u64 = if (prefix_reuse) count *| ((fork_window + fork_interval - 1) / fork_interval) *| inkling.Cache.rollbackBytes(&m.config, fork_window) else 0;
-    const budget = if (limit > resident + load_margin + rollback + forks) limit - resident - load_margin - rollback - forks else 0;
+    const gib = o.prompt_cache_gib orelse 2;
+    if (!std.math.isFinite(gib) or gib < 0 or gib > 1024) {
+        m.deinit();
+        problem.* = "--prompt-cache-gib must be between 0 and 1024";
+        return null;
+    }
+    const store_budget: u64 = if (prefix_reuse) @intFromFloat(gib * (1 << 30)) else 0;
+    const budget = if (limit > resident +| load_margin +| rollback +| forks +| store_budget) limit - resident - load_margin - rollback - forks - store_budget else 0;
     const most: usize = m.config.text.max_context;
     const fits = inkling.Cache.longestFitting(&m.config, budget / count, most);
     const window: i64 = o.context orelse @intCast(fits);
     if (window < 1 or window > fits) {
         const requested: u64 = if (window > 0) @intCast(window) else 0;
-        const total = resident +| load_margin +| rollback +| forks +| (count *| (inkling.Cache.fixedBytes(&m.config) +| (requested *| inkling.Cache.bytesPerToken(&m.config))));
+        const total = resident +| load_margin +| rollback +| forks +| store_budget +| (count *| (inkling.Cache.fixedBytes(&m.config) +| (requested *| inkling.Cache.bytesPerToken(&m.config))));
         problem.* = try std.fmt.allocPrint(a, "--parallel {d} --context {d}: Inkling needs {d} bytes including caches and reserves under a {d}-byte load limit; each session fits at most {d} tokens", .{ count, window, total, limit, fits });
         m.deinit();
         return null;
@@ -144,7 +151,7 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
     const per_slot = inkling.Cache.fixedBytes(&m.config) + @as(usize, @intCast(window)) * inkling.Cache.bytesPerToken(&m.config);
     std.log.info("inkling2_loop: {d} session caches, {d:.3} GiB per slot, {d:.3} GiB total rollback, context {d}", .{ count, @as(f64, @floatFromInt(per_slot)) / (1 << 30), @as(f64, @floatFromInt(rollback)) / (1 << 30), window });
     const eos = readEos(a, io, o.dir, m.config.eos);
-    const h = host_mod.openHost(gpa, io, m, @intCast(window), count, eos, limit, copy_drafts, prefix_reuse, rollback_rows, fork_window, fork_interval) catch |err| {
+    const h = host_mod.openHost(gpa, io, m, @intCast(window), count, eos, limit, copy_drafts, prefix_reuse, rollback_rows, fork_window, fork_interval, store_budget) catch |err| {
         m.deinit();
         problem.* = try std.fmt.allocPrint(a, "the native Inkling 2 Mini engine cannot hold {d} sessions of {d} tokens ({s})", .{ count, window, @errorName(err) });
         return null;

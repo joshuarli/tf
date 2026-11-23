@@ -35,6 +35,8 @@
     - Receipts in `campaign/kernels/`.
     - A remaining-opportunities list.
   - **Execution, as of 2026-11-23.**
+    0. **Wind-down (owner, 2026-11-23).** No new lanes start in this session. The running lanes (P3c, M1, D2, D3 and
+       Q2) settle and are integrated. B2 and R1 below are the next session's first steps; neither has started.
     1. **B2, corrected baselines.** Freeze pins, reconfirm the host, and measure TensorFold main and current oMLX
        (MTP off and on) on the corrected workload at 1/2/4/8 agents. Comparator lanes follow: current llama.cpp
        upstream, mlx-serve, MTPLX and a refreshed nanoattention.

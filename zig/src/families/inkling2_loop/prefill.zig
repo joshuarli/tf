@@ -52,6 +52,7 @@ const CombineB = extern struct { width: u32, topk: u32, rows: u32 };
 const DecodeConv = extern struct { channels: u32, heads: u32, ring: u32, pos: u32, layout: u32, norm: f32 };
 const DecodeAttn = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, scale: f32, floor: f32, alpha: f32 };
 const DecodeParts = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, splits: u32, chunk: u32, scale: f32, floor: f32, alpha: f32 };
+const BatchRow = extern struct { keys: u64, values: u64, args: DecodeParts };
 const Rms = extern struct { width: u32, blocks: u32, eps: f32 };
 const Pair = extern struct { count: u32 };
 const AffineDense = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32, bits: u32, cap: f32 };
@@ -689,6 +690,8 @@ const Chunk = struct {
         const s = c.s;
         const text = &c.m.config.text;
         const win: u32 = if (full) 0 else text.window;
+        var rows: [8]BatchRow = undefined;
+        var max_splits: u32 = 0;
         for (batch.caches, 0..) |cache, row| {
             const pos: u32 = @intCast(cache.len);
             const at = cache.row(&c.m.config, slot, pos);
@@ -701,11 +704,23 @@ const Chunk = struct {
             const lo: u32 = if (win != 0 and pos + 1 > win) pos + 1 - win else 0;
             const part = st.attnPartition(pos + 1 - lo);
             const parts = DecodeParts{ .heads = c.heads, .kv = c.kv, .dim = c.dim, .rel = c.drel, .extent = extent, .window = win, .pos = pos, .tau = @intFromBool(full), .splits = part.splits, .chunk = part.chunk, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.dim))), .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha };
-            c.setP(batch.scratch.decode.attn_split, parts, &.{ bo(s.q, row * c.qw * 4), bo(cache.keys, cache.row(&c.m.config, slot, 0)), bo(cache.values, cache.row(&c.m.config, slot, 0)), rel, bo(s.sink, row * c.heads * 4), A, b(batch.scratch.decode.attn_part) });
-            c.enc.dispatchGroups(mtl.Size.of(c.kv * part.splits, 1, 1), mtl.Size.of((c.heads / c.kv) * 32, 1, 1));
-            c.setP(batch.scratch.decode.attn_combine, parts, &.{ b(batch.scratch.decode.attn_part), A, bo(s.attn, row * c.qw * 4) });
-            c.enc.dispatchGroups(mtl.Size.of(c.heads, 1, 1), mtl.Size.of(32, 1, 1));
+            rows[row] = .{ .keys = cache.keys.gpuAddress() + cache.row(&c.m.config, slot, 0), .values = cache.values.gpuAddress() + cache.row(&c.m.config, slot, 0), .args = parts };
+            max_splits = @max(max_splits, part.splits);
+            c.enc.useResource(cache.keys, mtl.ResourceUsage.read);
+            c.enc.useResource(cache.values, mtl.ResourceUsage.read);
         }
+        c.enc.setPipeline(batch.scratch.split);
+        c.enc.setBuffer(s.q, 0, 0);
+        c.enc.setBuffer(s.relbias, 0, 1);
+        c.enc.setBuffer(s.sink, 0, 2);
+        c.enc.setBytes(std.mem.sliceAsBytes(rows[0..batch.caches.len]), 3);
+        c.enc.setBuffer(batch.scratch.parts, 0, 4);
+        c.enc.dispatchGroups(mtl.Size.of(c.kv * max_splits, c.n, 1), mtl.Size.of((c.heads / c.kv) * 32, 1, 1));
+        c.enc.setPipeline(batch.scratch.combine);
+        c.enc.setBuffer(batch.scratch.parts, 0, 0);
+        c.enc.setBytes(std.mem.sliceAsBytes(rows[0..batch.caches.len]), 1);
+        c.enc.setBuffer(s.attn, 0, 2);
+        c.enc.dispatchGroups(mtl.Size.of(c.heads, c.n, 1), mtl.Size.of(32, 1, 1));
     }
 
     fn control(c: Chunk, ctl: Controller, cur: In, msg: In, out: B, ys: u32, yb: u32) void {
@@ -1020,7 +1035,7 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
     const ring = cache.keys.length() != linear;
     const pool = mtl.objc.Pool.push();
     defer pool.pop();
-    m.queue.roundBegin("inkling2-prefill");
+    m.queue.roundBegin(if (batch == null) "inkling2-prefill" else "inkling2-batch");
     defer m.queue.roundEnd();
     const threshold = if (std.c.getenv("TF_INKLING_PREFILL_PROFILE_BASE")) |v| std.fmt.parseInt(usize, std.mem.span(v), 10) catch 0 else null;
     const profiling = if (threshold) |base| batch == null and cache.len >= base else false;

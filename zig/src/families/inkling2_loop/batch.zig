@@ -7,15 +7,32 @@ const prefill = @import("prefill.zig");
 pub const BatchScratch = struct {
     rows: prefill.PrefillScratch,
     decode: state.Scratch,
+    parts: mtl.Buffer,
+    split: mtl.Pipeline,
+    combine: mtl.Pipeline,
 
     pub fn init(device: mtl.Device, config: *const @import("config.zig").Config, capacity: usize) !BatchScratch {
         if (capacity == 0 or capacity > 8) return error.BadBatch;
         var rows = try prefill.PrefillScratch.init(device, config, capacity);
         errdefer rows.deinit();
-        return .{ .rows = rows, .decode = try state.Scratch.init(device, config) };
+        var decode = try state.Scratch.init(device, config);
+        errdefer decode.deinit();
+        const heads = @max(config.text.local.q, config.text.global.q);
+        const dim = @max(config.text.local.dim, config.text.global.dim);
+        const parts = try device.buffer(capacity * heads * state.attn_splits * (dim + 2) * 4, mtl.ResourceOptions.private);
+        errdefer parts.deinit();
+        const lib = try mtl.Library.fromSource(device, @import("kernels.zig").attention, mtl.CompileOptions.mlx());
+        defer lib.deinit();
+        const split = try mtl.Pipeline.init(device, lib, "i2_batch_split", false);
+        errdefer split.deinit();
+        const combine = try mtl.Pipeline.init(device, lib, "i2_batch_combine", false);
+        return .{ .rows = rows, .decode = decode, .parts = parts, .split = split, .combine = combine };
     }
 
     pub fn deinit(s: *BatchScratch) void {
+        s.combine.deinit();
+        s.split.deinit();
+        s.parts.deinit();
         s.decode.deinit();
         s.rows.deinit();
     }

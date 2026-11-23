@@ -9,6 +9,7 @@ const core = @import("core");
 const st = core.safetensors;
 const cfg = @import("config.zig");
 const kernels = @import("kernels.zig");
+const name_map = @import("names.zig");
 const quant = @import("quant.zig");
 
 pub const Affine = struct {
@@ -387,7 +388,7 @@ pub const Model = struct {
                 const attn = try std.fmt.allocPrint(a, "model.layers.{d}.attn_input.query", .{i});
                 w.attn_queries[i - 1] = try m.want(attn, .f32, &.{ if (c.isFull(@intCast(i))) 3 else 1, h });
             }
-            w.layers[i] = try mapMlxLayer(m, @intCast(i));
+            w.layers[i] = try name_map.mapMlxLayer(MlxLoader{ .model = m, .config = c, .arena = &m.arena }, @intCast(i));
         }
         return w;
     }
@@ -424,17 +425,27 @@ fn sub(a: std.mem.Allocator, prefix: []const u8, suffix: []const u8) []const u8 
     return std.fmt.allocPrint(a, "{s}{s}", .{ prefix, suffix }) catch unreachable;
 }
 
-fn affineRows(t: Tensor, start: usize, count: usize) Tensor {
-    var out = t;
-    const q = out.affine.?;
-    const k = t.shape[1];
-    out.offset += start * k * q.bits() / 8;
-    out.bytes = count * k * q.bits() / 8;
-    out.shape[0] = count;
-    out.affine.?.scale_offset += start * (k / 64) * 2;
-    out.affine.?.bias_offset += start * (k / 64) * 2;
-    return out;
-}
+const MlxLoader = struct {
+    model: *Model,
+    config: *const cfg.Config,
+    arena: *std.heap.ArenaAllocator,
+
+    pub fn want(l: MlxLoader, name: []const u8, dtype: st.DType, dims: []const usize) !Tensor {
+        return l.model.want(name, dtype, dims);
+    }
+    pub fn ownedTensor(l: MlxLoader, rows: usize, cols: usize) !Tensor {
+        return l.model.ownedTensor(rows, cols);
+    }
+    pub fn affineWeight(l: MlxLoader, name: []const u8, rows: usize, cols: usize, bits: u32) !Tensor {
+        return l.model.affineWeight(name, rows, cols, bits);
+    }
+    pub fn mlxConv(l: MlxLoader, name: []const u8, channels: usize, full: bool) !Tensor {
+        return l.model.mlxConv(name, channels, full);
+    }
+    pub fn controllers(l: MlxLoader, prefix: []const u8, out: *Layer) !void {
+        return mapMlxControllers(l.model, prefix, out);
+    }
+};
 
 fn mapMlxControllers(m: *Model, prefix: []const u8, out: *Layer) !void {
     const h: usize = m.config.text.hidden;
@@ -460,89 +471,6 @@ fn mapMlxControllers(m: *Model, prefix: []const u8, out: *Layer) !void {
         };
         out.controllers[j] = .{ .down = d, .gain = g, .forget = f };
     }
-}
-
-fn mapMlxLayer(m: *Model, i: u32) !Layer {
-    const c = &m.config;
-    const a = m.arena.allocator();
-    const h: usize = c.text.hidden;
-    const hd = c.heads(i);
-    const q: usize = hd.q * hd.dim;
-    const kv: usize = hd.kv * hd.dim;
-    const rel: usize = hd.q * c.text.d_rel;
-    const inter: usize = c.text.expert_inter;
-    const experts: usize = c.text.experts;
-    const full = c.isFull(i);
-    const p = try std.fmt.allocPrint(a, "model.layers.{d}.", .{i});
-    var out: Layer = undefined;
-    out.attn.k_dyn = null;
-    out.attn.v_dyn = null;
-    out.w13_global = null;
-    out.w13_den = null;
-    out.w2_global = null;
-    out.w2_den = null;
-    out.w13_bias = null;
-    out.w2_bias = null;
-    out.precision = if (i < 20) .nvfp4 else .affine4;
-    out.controllers = @splat(null);
-    if (full) {
-        out.q_norm = try m.want(sub(a, p, "q_input_norm.weight"), .bf16, &.{h});
-        out.k_norm = try m.want(sub(a, p, "k_input_norm.weight"), .bf16, &.{h});
-        out.v_norm = try m.want(sub(a, p, "v_input_norm.weight"), .bf16, &.{h});
-    } else {
-        out.q_norm = try m.want(sub(a, p, "attn_norm.weight"), .bf16, &.{h});
-        out.k_norm = out.q_norm;
-        out.v_norm = out.q_norm;
-    }
-    const projection = try m.affineWeight(sub(a, p, if (full) "attn.q_proj" else "attn.in_proj"), q + (if (full) @as(usize, 0) else 2 * kv) + rel + q + hd.q, h, 8);
-    var at: usize = 0;
-    out.attn.q = affineRows(projection, at, q); at += q;
-    if (!full) {
-        out.attn.k = affineRows(projection, at, kv); at += kv;
-        out.attn.v = affineRows(projection, at, kv); at += kv;
-    } else {
-        const kp = try m.affineWeight(sub(a, p, "attn.k_proj"), kv + hd.kv * 4, h, 8);
-        const vp = try m.affineWeight(sub(a, p, "attn.v_proj"), kv + hd.kv * 4, h, 8);
-        out.attn.k = affineRows(kp, 0, kv);
-        out.attn.k_dyn = affineRows(kp, kv, hd.kv * 4);
-        out.attn.v = affineRows(vp, 0, kv);
-        out.attn.v_dyn = affineRows(vp, kv, hd.kv * 4);
-    }
-    out.attn.r = affineRows(projection, at, rel); at += rel;
-    out.attn.gate = affineRows(projection, at, q); at += q;
-    out.attn.sink = affineRows(projection, at, hd.q);
-    out.attn.o = try m.affineWeight(sub(a, p, "attn.o_proj"), h, q, 8);
-    out.attn.q_scale = try m.want(sub(a, p, "attn.q_scale"), .bf16, &.{ hd.q, hd.dim });
-    out.attn.r_scale = try m.want(sub(a, p, "attn.r_scale"), .bf16, &.{ hd.q, c.text.d_rel });
-    out.attn.rel_bias = try m.want(sub(a, p, "attn.rel_proj"), .bf16, &.{ c.text.d_rel, c.extent(i) });
-    out.attn.k_conv = try m.mlxConv(sub(a, p, if (full) "attn.k_static" else "attn.k_conv"), kv, full);
-    out.attn.v_conv = try m.mlxConv(sub(a, p, if (full) "attn.v_static" else "attn.v_conv"), kv, full);
-    out.attn_post = try m.mlxConv(sub(a, p, "attn_conv"), h, false);
-    out.mlp_norm = try m.want(sub(a, p, "mlp_norm.weight"), .bf16, &.{h});
-    out.mlp_post = try m.mlxConv(sub(a, p, "mlp_conv"), h, false);
-    out.router = try m.want(sub(a, p, "mlp.router_weight"), .f32, &.{ experts, h });
-    out.router_bias = try m.want(sub(a, p, "mlp.router_bias"), .f32, &.{experts});
-    const w13 = sub(a, p, "mlp.experts.w13");
-    const w2 = sub(a, p, "mlp.experts.w2");
-    out.w13 = try m.want(sub(a, w13, ".weight"), .u32, &.{ experts, 2 * inter, h / 8 });
-    out.w2 = try m.want(sub(a, w2, ".weight"), .u32, &.{ experts, h, inter / 8 });
-    if (i < 20) {
-        out.w13_scale = try m.want(sub(a, w13, ".scales"), .u8, &.{ experts, 2 * inter, h / 16 });
-        out.w2_scale = try m.want(sub(a, w2, ".scales"), .u8, &.{ experts, h, inter / 16 });
-        out.w13_global = try m.want(sub(a, w13, ".global_scale"), .f32, &.{experts});
-        out.w2_global = try m.want(sub(a, w2, ".global_scale"), .f32, &.{experts});
-        const den = try m.ownedTensor(1, 1);
-        den.buffer.slice(f32, 1)[0] = 2688;
-        out.w13_den = den;
-        out.w2_den = den;
-    } else {
-        out.w13_scale = try m.want(sub(a, w13, ".scales"), .bf16, &.{ experts, 2 * inter, h / 64 });
-        out.w2_scale = try m.want(sub(a, w2, ".scales"), .bf16, &.{ experts, h, inter / 64 });
-        out.w13_bias = try m.want(sub(a, w13, ".biases"), .bf16, &.{ experts, 2 * inter, h / 64 });
-        out.w2_bias = try m.want(sub(a, w2, ".biases"), .bf16, &.{ experts, h, inter / 64 });
-    }
-    if (i >= c.loop.core_start and i < c.loop.core_end) try mapMlxControllers(m, p, &out);
-    return out;
 }
 
 fn mapLayer(m: *Model, i: u32) !Layer {

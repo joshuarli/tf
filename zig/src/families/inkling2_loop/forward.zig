@@ -1,6 +1,3 @@
-//! Inkling 2 Mini's teacher-forced forward on Metal: the 24 physical layers, the core loop's three passes each with its
-//! own KV and convolution state, and the depth mixes. One token a call, one command buffer a forward, in the
-//! reference's order (`campaign/ref/inkling2_loop_ref.py`, a transcription of llama.cpp `40b7a546`).
 const std = @import("std");
 const mtl = @import("metal");
 const cfg = @import("config.zig");
@@ -15,7 +12,6 @@ const Tensor = wts.Tensor;
 const Layer = wts.Layer;
 const Controller = wts.Controller;
 
-/// The kernels' argument structs; each mirrors one `struct` in the `.metal` sources.
 const Mv = extern struct { m: u32, k: u32, cap: f32 };
 const Dm = extern struct { m: u32, k: u32, cap: f32 };
 const Dmg = extern struct { k: u32, m0: u32, m1: u32, m2: u32, m3: u32 };
@@ -38,31 +34,18 @@ const AffineEmbed = extern struct { width: u32, rows: u32, eps: f32 };
 const B = struct { buf: mtl.Buffer, off: usize = 0, args: bool = false };
 const A = B{ .buf = undefined, .args = true };
 
-fn b(buf: mtl.Buffer) B {
-    return .{ .buf = buf };
-}
+fn b(buf: mtl.Buffer) B { return .{ .buf = buf }; }
 
-fn bo(buf: mtl.Buffer, off: usize) B {
-    return .{ .buf = buf, .off = off };
-}
+fn bo(buf: mtl.Buffer, off: usize) B { return .{ .buf = buf, .off = off }; }
 
-fn t(x: Tensor) B {
-    return .{ .buf = x.buffer, .off = x.offset };
-}
+fn t(x: Tensor) B { return .{ .buf = x.buffer, .off = x.offset }; }
 
-fn opt(x: ?Tensor) B {
-    return if (x) |v| t(v) else A;
-}
+fn opt(x: ?Tensor) B { return if (x) |v| t(v) else A; }
 
-fn width(x: Tensor) usize {
-    return if (x.rank >= 2) x.shape[1] else x.shape[0];
-}
+fn width(x: Tensor) usize { return if (x.rank >= 2) x.shape[1] else x.shape[0]; }
 
-fn nrows(x: Tensor) usize {
-    return if (x.rank >= 2) x.shape[0] else 1;
-}
+fn nrows(x: Tensor) usize { return if (x.rank >= 2) x.shape[0] else 1; }
 
-/// `count` rows of `x` from row `at`, as a tensor of their own.
 fn rows(x: Tensor, at: usize, count: usize) Tensor {
     const k = width(x);
     var out = x;
@@ -119,7 +102,6 @@ pub const Forward = struct {
         }
     }
 
-    /// out[rows] = bf16 W[rows, k] . x[k]; a warp an output row.
     fn lin(f: Forward, w: Tensor, x: B, out: B) void {
         const m: usize = nrows(w);
         if (w.affine != null or w.dtype == .f32) {
@@ -135,7 +117,6 @@ pub const Forward = struct {
         f.enc.dispatchGroups(mtl.Size.of((m + 31) / 32, 1, 1), mtl.Size.of(1024, 1, 1));
     }
 
-    /// The unembedding: the soft-capped logits over the unpadded vocabulary.
     fn headModel(f: Forward, w: Tensor, x: B, out: B, vocab: u32) void {
         if (w.affine != null) {
             f.affineLin(w, x, out, vocab, f.m.config.text.logit_cap);
@@ -186,7 +167,6 @@ pub const Forward = struct {
     }
 
 
-    /// rms_norm of `count` rows `w` wide; a null weight leaves them unweighted (the depth mix).
     fn rms(f: Forward, x: B, weight: ?B, out: B, count: u32, w: u32, eps: f32) void {
         const wb = weight orelse b(f.s.x);
         f.set(.rms, Rms{ .width = w, .blocks = if (weight == null) 0 else count, .eps = eps }, &.{ x, wb, A, out });
@@ -210,7 +190,6 @@ pub const Forward = struct {
         f.flat(.add, Pair{ .count = @intCast(count) }, &.{ dst, src, A }, count);
     }
 
-    /// The depth mix: `states` newest first, then `cur`, over `query`'s rows.
     fn mix(f: Forward, states: []const B, cur: B, query: Tensor, out: B) void {
         const s = f.s;
         var depth: u32 = 0;
@@ -226,7 +205,6 @@ pub const Forward = struct {
         f.enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
     }
 
-    /// The mix over this token's block states newest first, then `cur`.
     fn mixBlocks(f: Forward, cur: B, query: Tensor, out: B) void {
         var ordered: [st.mix_states]B = undefined;
         for (0..f.count) |i| ordered[i] = f.blocks[f.count - 1 - i];
@@ -261,8 +239,6 @@ pub const Forward = struct {
         };
     }
 
-    /// One convolution site over a token: the taps, then the ring's update. `dyn_in` is the projection's input row and
-    /// `x` the convolved row; they differ for the keys and values, whose taps come from a separate projection.
     fn convolve(f: Forward, x: B, out: B, weight: Tensor, dyn: ?Tensor, dyn_in: B, dyn_out: B, ring: B, channels: u32, conv_heads: u32, layout: u32) void {
         const taps: u32 = cfg.conv_taps;
         const mul: u32 = if (dyn != null) 2 else 1;
@@ -275,7 +251,6 @@ pub const Forward = struct {
         f.enc.dispatchThreads(mtl.Size.of(channels, 1, 1), mtl.Size.of(256, 1, 1));
     }
 
-    /// One executed slot. `ip` is its executed position (for the block boundaries), `slot` its state.
     fn layer(f: *Forward, slot: u32, ip: u32, bank: ?Bank) !void {
         const m = f.m;
         const c = &m.config;
@@ -349,7 +324,6 @@ pub const Forward = struct {
         f.copyN(src, bo(f.s.capture, at), cols);
     }
 
-    /// The four messages of one core layer: its stacked cross-pass query rows over the bank, newest state first.
     fn messages(f: Forward, bk: Bank, ip: u32) B {
         const s = f.s;
         const at: usize = ip - f.m.config.loop.core_start;
@@ -376,7 +350,6 @@ pub const Forward = struct {
         return b(s.msg);
     }
 
-    /// A loop controller's output: cur - forget * cur + gain * message.
     fn control(f: Forward, ctl: Controller, cur: B, message: B, out: B) void {
         const s = f.s;
         f.rms1(cur, null, bo(s.h2, 0));
@@ -453,7 +426,6 @@ pub const Forward = struct {
         return if (full) f.m.config.text.rel_extent else f.m.config.text.window;
     }
 
-    /// This token's convolved key and normed value into its slot's row, for the positions after it.
     fn kvStore(f: Forward, slot: u32) void {
         const at = f.cache.row(&f.m.config, slot, f.pos);
         f.flat(.kv_store, Pair{ .count = f.kvw }, &.{ b(f.s.kc), b(f.s.vc), bo(f.cache.keys, at), bo(f.cache.values, at), A }, f.kvw);

@@ -135,6 +135,105 @@ fn experts(c: *const config.Config, i: u32, prec: Precision, sink: anytype) !voi
     }
 }
 
+fn mlxSub(a: std.mem.Allocator, prefix: []const u8, suffix: []const u8) []const u8 {
+    return std.fmt.allocPrint(a, "{s}{s}", .{ prefix, suffix }) catch unreachable;
+}
+
+fn affineRows(t: anytype, start: usize, count: usize) @TypeOf(t) {
+    var out = t;
+    const q = out.affine.?;
+    const k = t.shape[1];
+    out.offset += start * k * q.bits() / 8;
+    out.bytes = count * k * q.bits() / 8;
+    out.shape[0] = count;
+    out.affine.?.scale_offset += start * (k / 64) * 2;
+    out.affine.?.bias_offset += start * (k / 64) * 2;
+    return out;
+}
+
+pub fn mapMlxLayer(m: anytype, i: u32) !@TypeOf(m.model.weights.layers[0]) {
+    const c = m.config;
+    const a = m.arena.allocator();
+    const h: usize = c.text.hidden;
+    const hd = c.heads(i);
+    const q: usize = hd.q * hd.dim;
+    const kv: usize = hd.kv * hd.dim;
+    const rel: usize = hd.q * c.text.d_rel;
+    const inter: usize = c.text.expert_inter;
+    const expert_count: usize = c.text.experts;
+    const full = c.isFull(i);
+    const p = try std.fmt.allocPrint(a, "model.layers.{d}.", .{i});
+    var out: @TypeOf(m.model.weights.layers[0]) = undefined;
+    out.attn.k_dyn = null;
+    out.attn.v_dyn = null;
+    out.w13_global = null;
+    out.w13_den = null;
+    out.w2_global = null;
+    out.w2_den = null;
+    out.w13_bias = null;
+    out.w2_bias = null;
+    out.precision = if (i < 20) .nvfp4 else .affine4;
+    out.controllers = @splat(null);
+    if (full) {
+        out.q_norm = try m.want(mlxSub(a, p, "q_input_norm.weight"), .bf16, &.{h});
+        out.k_norm = try m.want(mlxSub(a, p, "k_input_norm.weight"), .bf16, &.{h});
+        out.v_norm = try m.want(mlxSub(a, p, "v_input_norm.weight"), .bf16, &.{h});
+    } else {
+        out.q_norm = try m.want(mlxSub(a, p, "attn_norm.weight"), .bf16, &.{h});
+        out.k_norm = out.q_norm;
+        out.v_norm = out.q_norm;
+    }
+    const projection = try m.affineWeight(mlxSub(a, p, if (full) "attn.q_proj" else "attn.in_proj"), q + (if (full) @as(usize, 0) else 2 * kv) + rel + q + hd.q, h, 8);
+    var at: usize = 0;
+    out.attn.q = affineRows(projection, at, q); at += q;
+    if (!full) {
+        out.attn.k = affineRows(projection, at, kv); at += kv;
+        out.attn.v = affineRows(projection, at, kv); at += kv;
+    } else {
+        const kp = try m.affineWeight(mlxSub(a, p, "attn.k_proj"), kv + hd.kv * 4, h, 8);
+        const vp = try m.affineWeight(mlxSub(a, p, "attn.v_proj"), kv + hd.kv * 4, h, 8);
+        out.attn.k = affineRows(kp, 0, kv);
+        out.attn.k_dyn = affineRows(kp, kv, hd.kv * 4);
+        out.attn.v = affineRows(vp, 0, kv);
+        out.attn.v_dyn = affineRows(vp, kv, hd.kv * 4);
+    }
+    out.attn.r = affineRows(projection, at, rel); at += rel;
+    out.attn.gate = affineRows(projection, at, q); at += q;
+    out.attn.sink = affineRows(projection, at, hd.q);
+    out.attn.o = try m.affineWeight(mlxSub(a, p, "attn.o_proj"), h, q, 8);
+    out.attn.q_scale = try m.want(mlxSub(a, p, "attn.q_scale"), .bf16, &.{ hd.q, hd.dim });
+    out.attn.r_scale = try m.want(mlxSub(a, p, "attn.r_scale"), .bf16, &.{ hd.q, c.text.d_rel });
+    out.attn.rel_bias = try m.want(mlxSub(a, p, "attn.rel_proj"), .bf16, &.{ c.text.d_rel, c.extent(i) });
+    out.attn.k_conv = try m.mlxConv(mlxSub(a, p, if (full) "attn.k_static" else "attn.k_conv"), kv, full);
+    out.attn.v_conv = try m.mlxConv(mlxSub(a, p, if (full) "attn.v_static" else "attn.v_conv"), kv, full);
+    out.attn_post = try m.mlxConv(mlxSub(a, p, "attn_conv"), h, false);
+    out.mlp_norm = try m.want(mlxSub(a, p, "mlp_norm.weight"), .bf16, &.{h});
+    out.mlp_post = try m.mlxConv(mlxSub(a, p, "mlp_conv"), h, false);
+    out.router = try m.want(mlxSub(a, p, "mlp.router_weight"), .f32, &.{ expert_count, h });
+    out.router_bias = try m.want(mlxSub(a, p, "mlp.router_bias"), .f32, &.{expert_count});
+    const w13 = mlxSub(a, p, "mlp.experts.w13");
+    const w2 = mlxSub(a, p, "mlp.experts.w2");
+    out.w13 = try m.want(mlxSub(a, w13, ".weight"), .u32, &.{ expert_count, 2 * inter, h / 8 });
+    out.w2 = try m.want(mlxSub(a, w2, ".weight"), .u32, &.{ expert_count, h, inter / 8 });
+    if (i < 20) {
+        out.w13_scale = try m.want(mlxSub(a, w13, ".scales"), .u8, &.{ expert_count, 2 * inter, h / 16 });
+        out.w2_scale = try m.want(mlxSub(a, w2, ".scales"), .u8, &.{ expert_count, h, inter / 16 });
+        out.w13_global = try m.want(mlxSub(a, w13, ".global_scale"), .f32, &.{expert_count});
+        out.w2_global = try m.want(mlxSub(a, w2, ".global_scale"), .f32, &.{expert_count});
+        const den = try m.ownedTensor(1, 1);
+        den.buffer.slice(f32, 1)[0] = 2688;
+        out.w13_den = den;
+        out.w2_den = den;
+    } else {
+        out.w13_scale = try m.want(mlxSub(a, w13, ".scales"), .bf16, &.{ expert_count, 2 * inter, h / 64 });
+        out.w2_scale = try m.want(mlxSub(a, w2, ".scales"), .bf16, &.{ expert_count, h, inter / 64 });
+        out.w13_bias = try m.want(mlxSub(a, w13, ".biases"), .bf16, &.{ expert_count, 2 * inter, h / 64 });
+        out.w2_bias = try m.want(mlxSub(a, w2, ".biases"), .bf16, &.{ expert_count, h, inter / 64 });
+    }
+    if (i >= c.loop.core_start and i < c.loop.core_end) try m.controllers(p, &out);
+    return out;
+}
+
 fn mlxLinear(sink: anytype, name: []const u8, rows: u64, cols: u64, bits: u64, role: Role) !void {
     var buf: [160]u8 = undefined;
     try sink.put(try std.fmt.bufPrint(&buf, "{s}.weight", .{name}), .u32, &.{ rows, cols * bits / 32 }, role);

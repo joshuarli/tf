@@ -20,7 +20,7 @@ stop() {
         lock_pid=$(ps -o ppid= -p "$model_pid" | tr -d ' ' || true)
         if [ -n "$lock_pid" ]; then
             parent_pid=$(ps -o ppid= -p "$lock_pid" | tr -d ' ' || true)
-            if [ "$parent_pid" = "$server" ]; then kill -TERM "$model_pid" 2>/dev/null || true; fi
+            if [ "$parent_pid" = "$server" ] || [ "$lock_pid" = "$server" ]; then kill -TERM "$model_pid" 2>/dev/null || true; fi
         fi
     else
         kill -TERM "$server" 2>/dev/null || true

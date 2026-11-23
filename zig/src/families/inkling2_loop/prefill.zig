@@ -759,7 +759,8 @@ const Chunk = struct {
     fn mixQ(c: Chunk, query: Tensor, out: B) void {
         const depth = c.count + 1;
         const k: u32 = @intCast(nrows(query));
-        c.setP(c.s.pipes.mix, MixB{ .width = c.h, .depth = @intCast(depth), .k = k, .rows = c.n, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.h))) }, &.{ b(c.s.staged), t(query), A, out });
+        const pipe = if (c.batch != null and k <= 4 and depth <= st.mix_states) c.batch.?.scratch.mix else c.s.pipes.mix;
+        c.setP(pipe, MixB{ .width = c.h, .depth = @intCast(depth), .k = k, .rows = c.n, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.h))) }, &.{ b(c.s.staged), t(query), A, out });
         c.enc.dispatchGroups(mtl.Size.of(c.n, 1, 1), mtl.Size.of(256, 1, 1));
     }
 
@@ -907,7 +908,8 @@ const Chunk = struct {
         const s = c.s;
         const at: usize = ip - m.config.loop.core_start;
         c.gatherM(bk.states, bk.out, @intCast(bk.n + 1));
-        c.setP(s.pipes.mix4, MixB{ .width = c.h, .depth = @intCast(bk.n + 1), .k = 4, .rows = c.n, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.h))) }, &.{
+        const pipe = if (c.batch != null and bk.n + 1 <= st.mix_states) c.batch.?.scratch.mix4 else s.pipes.mix4;
+        c.setP(pipe, MixB{ .width = c.h, .depth = @intCast(bk.n + 1), .k = 4, .rows = c.n, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.h))) }, &.{
             b(s.staged),
             t(srows(m.weights.cross_pass_q, at * 2, 1)),
             t(srows(m.weights.cross_pass_kv, at * 2, 1)),

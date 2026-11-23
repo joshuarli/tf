@@ -289,6 +289,85 @@ struct i2_batch_row { device half* keys; device half* values; i2_attn_parts args
   else i2_combine_serial(PART, a, O, tg.x, lane);
 }
 
+struct i2_mix_args { uint width, depth, k, rows; float scale; };
+
+// A token's depth mix for up to four queries over up to five states, one threadgroup of 256 a row: every query and
+// state's dot is accumulated in one pass, each with the per-thread order, SIMD reduction and part order of i2p_mix.
+inline void i2_mix_rows(const device float* S, const device float* q0, const device float* q1, const device float* q2,
+    const device float* q3, constant i2_mix_args& a, uint kn, device float* O, uint t, uint i,
+    threadgroup float (&part)[4][5][8], threadgroup float (&w)[4][5]) {
+  const device float* st = S + (size_t)t * a.depth * a.width;
+  device float* out = O + (size_t)t * kn * a.width;
+  const device float* qs[4] = { q0, q1, q2, q3 };
+  float sums[4][5];
+#pragma unroll
+  for (uint k = 0; k < 4u; ++k) {
+#pragma unroll
+    for (uint j = 0; j < 5u; ++j) sums[k][j] = 0.0f;
+  }
+  for (uint u = i; u < a.width; u += 256u) {
+    float sv[5];
+#pragma unroll
+    for (uint j = 0; j < 5u; ++j) sv[j] = j < a.depth ? st[j * a.width + u] : 0.0f;
+#pragma unroll
+    for (uint k = 0; k < 4u; ++k) {
+      if (k >= kn) break;
+      const float qv = qs[k][u];
+#pragma unroll
+      for (uint j = 0; j < 5u; ++j) if (j < a.depth) sums[k][j] = fma(sv[j], qv, sums[k][j]);
+    }
+  }
+#pragma unroll
+  for (uint k = 0; k < 4u; ++k) {
+    if (k >= kn) break;
+#pragma unroll
+    for (uint j = 0; j < 5u; ++j) {
+      if (j >= a.depth) break;
+      const float sum = simd_sum(sums[k][j]);
+      if (i % 32u == 0u) part[k][j][i / 32u] = sum;
+    }
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (i < kn) {
+    const uint k = i;
+    for (uint j = 0; j < a.depth; ++j) {
+      float total = 0.0f;
+      for (uint s = 0; s < 8u; ++s) total += part[k][j][s];
+      w[k][j] = total * a.scale;
+    }
+    float peak = w[k][0];
+    for (uint j = 1; j < a.depth; ++j) peak = max(peak, w[k][j]);
+    float total = 0.0f;
+    for (uint j = 0; j < a.depth; ++j) total += precise::exp(w[k][j] - peak);
+    for (uint j = 0; j < a.depth; ++j) w[k][j] = precise::exp(w[k][j] - peak) / total;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint k = 0; k < kn; ++k) {
+    for (uint u = i; u < a.width; u += 256u) {
+      float sum = 0.0f;
+      for (uint j = 0; j < a.depth; ++j) sum = fma(w[k][j], st[j * a.width + u], sum);
+      out[k * a.width + u] = sum;
+    }
+  }
+}
+
+[[kernel]] void i2_batch_mix(const device float* S [[buffer(0)]], const device float* Q [[buffer(1)]],
+    constant i2_mix_args& a [[buffer(2)]], device float* O [[buffer(3)]],
+    uint t [[threadgroup_position_in_grid]], uint i [[thread_position_in_threadgroup]]) {
+  threadgroup float part[4][5][8];
+  threadgroup float w[4][5];
+  i2_mix_rows(S, Q, Q + a.width, Q + 2u * a.width, Q + 3u * a.width, a, min(a.k, 4u), O, t, i, part, w);
+}
+
+[[kernel]] void i2_batch_mix4(const device float* S [[buffer(0)]], const device float* Q [[buffer(1)]],
+    const device float* K [[buffer(2)]], const device float* V [[buffer(3)]], const device float* F [[buffer(4)]],
+    constant i2_mix_args& a [[buffer(5)]], device float* O [[buffer(6)]],
+    uint t [[threadgroup_position_in_grid]], uint i [[thread_position_in_threadgroup]]) {
+  threadgroup float part[4][5][8];
+  threadgroup float w[4][5];
+  i2_mix_rows(S, Q, K, V, F, a, 4u, O, t, i, part, w);
+}
+
 struct i2_controls_args { uint h, rank, rows; uint xs[3], xb[3]; };
 
 [[kernel]] void i2_controls_norm(const device float* X0 [[buffer(0)]], const device float* X1 [[buffer(1)]],

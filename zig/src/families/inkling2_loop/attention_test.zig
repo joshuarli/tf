@@ -677,3 +677,74 @@ test "staged split attention keeps the serial kernel's bytes, single and batched
     std.debug.print("staged split test: {d} cases byte-equal to the serial kernel and across batch rows\n", .{checked});
 }
 
+const MixArgs = extern struct { width: u32, depth: u32, k: u32, rows: u32, scale: f32 };
+
+test "batched depth mixes keep the prefill mixes' bytes" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = mtl.Device.init() catch return error.SkipZigTest;
+    defer device.deinit();
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, kernels.attention, mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const prefill_lib = try mtl.Library.fromSource(device, kernels.prefillSource(false), mtl.CompileOptions.mlx());
+    defer prefill_lib.deinit();
+    const pipes = [_]mtl.Pipeline{
+        try mtl.Pipeline.init(device, prefill_lib, "i2p_mix", false),
+        try mtl.Pipeline.init(device, lib, "i2_batch_mix", false),
+        try mtl.Pipeline.init(device, prefill_lib, "i2p_mix4", false),
+        try mtl.Pipeline.init(device, lib, "i2_batch_mix4", false),
+    };
+    defer for (pipes) |p| p.deinit();
+    const width = 2304;
+    const rows = 5;
+    var prng = std.Random.DefaultPrng.init(0x6d6978);
+    const rng = prng.random();
+    const states = try device.buffer(rows * 5 * width * 4, mtl.ResourceOptions.shared);
+    defer states.deinit();
+    const queries = try device.buffer(4 * width * 4, mtl.ResourceOptions.shared);
+    defer queries.deinit();
+    fill(rng, states.slice(f32, rows * 5 * width));
+    fill(rng, queries.slice(f32, 4 * width));
+    var outs: [2]mtl.Buffer = undefined;
+    for (&outs) |*o| o.* = try device.buffer(rows * 4 * width * 4, mtl.ResourceOptions.shared);
+    defer for (outs) |o| o.deinit();
+    var checked: usize = 0;
+    for (1..6) |depth| for (0..5) |kq| {
+        const four = kq == 4;
+        const k: u32 = if (four) 4 else @intCast(kq + 1);
+        const args = MixArgs{ .width = width, .depth = @intCast(depth), .k = k, .rows = rows, .scale = 1.0 / @sqrt(@as(f32, width)) };
+        const cb = queue.commandBuffer();
+        const enc = cb.compute(.serial);
+        for (0..2) |side| {
+            enc.setPipeline(pipes[(if (four) @as(usize, 2) else 0) + side]);
+            enc.setBuffer(states, 0, 0);
+            if (four) {
+                for (0..4) |q| enc.setBuffer(queries, q * width * 4, 1 + q);
+                enc.setValue(args, 5);
+                enc.setBuffer(outs[side], 0, 6);
+            } else {
+                enc.setBuffer(queries, 0, 1);
+                enc.setValue(args, 2);
+                enc.setBuffer(outs[side], 0, 3);
+            }
+            enc.dispatchGroups(mtl.Size.of(rows, 1, 1), mtl.Size.of(256, 1, 1));
+        }
+        enc.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |msg| {
+            std.debug.print("mix test: {s}\n", .{msg});
+            return error.GpuFailed;
+        }
+        const count = rows * k * width;
+        if (!sameBits(outs[0].slice(f32, count), outs[1].slice(f32, count))) {
+            std.debug.print("mix test depth={d} k={d} four={}: bytes differ\n", .{ depth, k, four });
+            return error.TestUnexpectedResult;
+        }
+        checked += 1;
+    };
+    std.debug.print("batched depth mix test: {d} cases byte-equal to the prefill mixes\n", .{checked});
+}

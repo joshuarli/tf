@@ -17,8 +17,7 @@ The harness works. One T4 smoke used under 0.01 CU. The campaign does not use it
 - **Numerical studies are cheaper locally.** Operand-rounding error for fp16, bf16 and fp8 is a property of the
   formats, so the Mac's CPU computes it at no cost. F1's per-layer sensitivity needs activations captured by
   the Metal runner, and analysing those dumps is CPU work.
-- **Full-model checks do not fit.** The f32 oracle needs about 104 GB. Parity, quality and Pi run against the
-  native Metal engine. An L4 has 24 GB, and there is no Inkling CUDA path.
+- **Full-model checks do not fit.** The oMLX oracle, parity, quality and Pi all run against Metal engines. An L4 has 24 GB, and there is no Inkling CUDA path.
 - **The limit is GPU timing, not machine count.** Only one model timing runs on the M5 at a time, and Colab
   cannot take that load.
 

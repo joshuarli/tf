@@ -1,5 +1,7 @@
 # Inkling 2 Mini long-history divergence: explained verdict
 
+**Superseded record.** The f32-oracle pipeline that produced this was retired on 2026-11-23 (plan Decision 9), and its tools are gone. The oMLX oracle ([inkling-omlx-oracle.md](../../kernels/inkling-omlx-oracle.md)) replaces it.
+
 Diagnosis only. The row and router captures do not change inference arithmetic.
 
 ## Verdict

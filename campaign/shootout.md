@@ -2,6 +2,8 @@
 
 **Status: final, 2026-11-23.** TensorFold is main at `6285f2f56`, which includes every lane through H6 (f16 KV).
 
+**Superseded workload.** These sweeps used the agent clients from before `69651393c`, which dropped `reasoning_content` between turns. The GO decision stands, but plan Decision 16 requires remeasuring both engines on the corrected clients. Later numbers do not pair with these. Current next steps are in plan **Status**.
+
 ## Verdict
 
 **Keep building TensorFold.** TensorFold and oMLX serve the same oQ4e weights on the same multi-turn agent workload. On the warm repetition, TensorFold reaches 0.91–1.08 of oMLX's aggregate throughput at 1, 2, 4 and 8 agents. Its accuracy is the same. At 8 agents it serves eight true concurrent sessions in 23.9 GB, while oMLX needed to drop to four slots to stay under the cap. The decision rule asked for within about 15%, and every cell meets it.

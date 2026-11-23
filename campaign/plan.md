@@ -32,7 +32,7 @@
   - an effect that **Execution boundary** forbids;
   - a loop that cannot check anything.
   
-  Pushing is always forbidden.
+  Push only as Decision 2 allows.
 - Failing items: find the cause before retrying (`root-cause`). After three attempts at the same item, or three failed variants of one optimization idea, park the item. Park it on its branch with the cause and a retry condition, then go to the next ready item.
 - Fix egregious problems in their own commit when you meet them. Egregious means any of:
   - a crash or hang over 60 s;
@@ -43,7 +43,7 @@
   Record anything smaller in the ledger and leave it.
 - Per-model dependencies, not phase barriers (owner steering, 2026-11-21). Each model advances on its own chain (see **Sequence**). Profiling is diagnostic and may run while parity investigations continue. Promoting changed arithmetic waits for that model's qualified correctness contract. Speculation is a separate branch after the model's target path is qualified, and comparators run alongside engineering under the GPU lock; neither blocks autoregressive optimization. Broad comparator coverage is needed only before a competitive claim.
 - **Lanes:** parallel for the disjoint sets named in **Sequence**, serial otherwise. Each lane works in `.work/wt/<lane>` on branch `lane/<id>`, following `orchestrate`'s worktree lifecycle; never system temp. Set `TMPDIR=$PWD/.work/tmp`. The parent integrates into `main` and runs the parent steering checkpoint (`orchestrate` skill, `references/campaigns.md`, section "Parent steering checkpoint") after each accepted slice.
-- **GPU lock:** take it for any timed run, any process that loads a full model, and the Metal device suite. Use `lockf ~/repos/tensorfold-m5/.work/gpu.lock <command>`. No compiles inside a timed window. Stop only processes the campaign started.
+- **GPU lock:** run every timed run, every process that loads a full model, and the Metal device suite through `campaign/heavy.py`, which takes the lock (Decision 8). No compiles inside a timed window. Stop only processes the campaign started.
 - **Commits:** Conventional Commits, scoped to the workstream (`campaign`, `flint`, `inkling2-loop`, `metal`). Put the item ID in the body. End every commit with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Code comments never cite this doc.
 - **TensorFold rules:** follow `docs/recipes/SKILL.md`, `docs/kernel-contract.md` (for GPU work) and `docs/recipes/adding-a-zig-family.md` (for I-items). Skip their ATC, PR and publication steps; see **Execution boundary**.
 
@@ -51,7 +51,7 @@
 
 The owner made the first two decisions on 2026-11-21:
 
-1. **Owner: layout.** One repo at `~/repos/tensorfold-m5`, a TensorFold clone with `upstream` as a fetch-only remote (push URL `DISABLED`). Campaign tooling and records live in `campaign/`. The original draft lived at `~/d/infer/plan.md`; this file supersedes it.
+1. **Owner: layout.** One repo at `~/repos/tf` (`~/repos/tensorfold-m5` is a symlink to it), a TensorFold clone with `upstream` as a fetch-only remote (push URL `DISABLED`). Campaign tooling and records live in `campaign/`.
 2. **Owner: push to `origin` (`joshuarli/tf`) only.** The earlier no-push rule is lifted. Never push to `upstream` (ashhart/TensorFold); its push URL is disabled.
 3. **Owner: build inputs through `laputa-buildlib`.** Every downloaded input is pinned in `campaign/sources.lock.json` (schema 1, see the [build repository contract](https://github.com/laputa-systems/stuff/blob/main/docs/build-repos.md)) and fetched through `buildlib.locks.fetch_input`. Downloaded inputs include weights, comparator sources and the xgrammar sources. Pin buildlib in `campaign/pyproject.toml` as follows and commit `campaign/uv.lock`:
    - version `laputa-buildlib==0.1.0`;
@@ -67,13 +67,14 @@ The owner made the first two decisions on 2026-11-21:
    - Flint: `RecursiveSI/flint-int4@3b93f9053b530488405ae9fca51d4900d6ce21f0`, 22.6 GB.
    - Flint drafter: `incoai/Flint-DFlash2@39b0a7f7a12a14461b9eac8d90a9fcec24168889`, 0.8 GB.
    - Inkling 2 Mini: 20.2 GB, mixed NVFP4/MXFP8. It includes `mtp.safetensors`, its native draft head.
+   - Inkling 2 Mini oQ4e, the T2 target: `Inkling-2-Mini-oQ4e-mtp@3eea042751cd`, 16.8 GB. Its experts are NVFP4 in layers 0–19 and affine 4-bit in layers 20–23. Attention, embeddings and head are affine 8-bit.
    - Comparator weights, fetched only when their item runs.
 
-   The fetch total stays under 120 GB; 621 GiB is free. Never delete files you did not create. Only one full model is resident at a time.
+   The fetch total stays under 120 GB. Never delete files you did not create. Only one full model is resident at a time.
 8. **Prescribed: memory.** The machine has 48 GiB of RAM. C0 records the Metal device's `recommendedMaxWorkingSetSize` (W).
    - Owner cap (2026-11-21): the campaign as a whole stays under 32 GB so the host stays usable for other work. Every command that loads a model or uses more than about 2 GB runs through `campaign/heavy.py`, which takes the GPU lock and stops the process tree past 28 GB; bare `lockf` is not used.
-   - Every benchmark server sets `FLINT_LOAD_LIMIT_GB=27` (`heavy.FLINT_LOAD_LIMIT_GB`; or the Inkling equivalent),
-     an explicit `--prompt-cache-gib` and `--context 32768`. The old memory-derived Flint limit was 56,192
+   - Every benchmark server sets its load limit (`FLINT_LOAD_LIMIT_GB=27` from `heavy.FLINT_LOAD_LIMIT_GB`, or
+     `INKLING_LOAD_LIMIT_GB=26`), an explicit `--prompt-cache-gib`, and `--context` of at most 32768. The old memory-derived Flint limit was 56,192
      tokens; the owner's total-context cap now takes precedence. Runs recorded before the memory cap used
      36 and pair only with runs at the same memory and context limits.
    - Prompt cache is 0 for cold-prefill cells and 2 otherwise.
@@ -84,7 +85,7 @@ The owner made the first two decisions on 2026-11-21:
    - **Inkling 2 Mini:** the semantic reference is llama.cpp `src/models/inkling2-loop.cpp` plus `conversion/inkling2.py`, pinned at the commit I0 records (master was `40b7a546defe1f60edd1338c719552ffc58c89a0` on 2026-11-21). The vLLM recipe and the model card's linked code are cross-checks. The numerical oracle is oMLX 0.8.3 on the oQ4e checkpoint (owner, 2026-11-23): `make -C campaign omlx-oracle-gate` holds TensorFold to its saved teacher-forced captures (`campaign/kernels/inkling-omlx-oracle.md`). `trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration@5e761216759d5d040c09f458d5f077b9aaa5ac78` is the tiny unit fixture.
 10. **Prescribed: quality rules.** These are fixed now and never relaxed later.
     - Unchanged-arithmetic transformations must be bit-identical to the frozen baseline on logits: compare the frozen baseline's and the candidate's tensor and logit dumps on identical forced histories. `tf-flint-run exact` is only a self-consistency check inside one build (one-row steps against 16-row windows); keep it, but it does not compare builds.
-    - Inkling 2 Mini's logit comparisons pass `campaign/parity/inkling2-mini/omlx_gate.py` against the pinned oMLX oracle (owner, 2026-11-23): expected shape and position count, a candidate receipt naming the current runner, checkpoint, tokens and policy, finite values, and top-1 and KL bounds set from the recorded baseline in `omlx_gate.json`.
+    - **Inkling 2 Mini is exempt from the logit rules below (owner, 2026-11-23; Decision 16).** Its `omlx_gate.py` comparison against the pinned oMLX oracle is reported, not gating. Divergences are traced against oMLX (`campaign/kernels/inkling-long-context.md`). The owner accepted the oQ4e weights and f16 KV.
     - Reordering changes are judged on the F2/I2 teacher-forced corpus:
       - The candidate's mean KL to the oracle must stay within 1.10× the baseline's.
       - Top-1 agreement with the baseline must be at least 99.5% on positions where the baseline's top-2 margin is at least 0.1 logit.
@@ -106,8 +107,8 @@ The owner made the first two decisions on 2026-11-21:
     | Stretch | ≥30% runtime gain, or a substantial measured memory reduction at equal speed and quality |
     | Inkling | Qualified native text inference, then the same optimization process against I3's baseline |
 
-13. **Prescribed: speculation.** Advertise greedy-only speculation first, labelled as such. A sampled mode needs the Leviathan et al. acceptance/rejection correction, or the model's native method. Its proof is the item's own enumerable-distribution tests and argument, as §7 of the source draft required (see **Sequence** F5/I5). Every mode keeps its no-drafter path and automatic fallback, and fallback cost is included in timings.
-14. **Delegated: optimization order.** For each model's optimization, the executor ranks hypotheses by measured cost share and keeps the ranked table in `campaign/ledger.md`. Candidates come from §8 A–E of the source draft:
+13. **Prescribed: speculation.** Advertise greedy-only speculation first, labelled as such. A sampled mode needs the Leviathan et al. acceptance/rejection correction, or the model's native method. Its proof is the item's own enumerable-distribution tests and argument (see **Sequence** F5/I5). Every mode keeps its no-drafter path and automatic fallback, and fallback cost is included in timings.
+14. **Delegated: optimization order.** For each model's optimization, the executor ranks hypotheses by measured cost share and keeps the ranked table in `campaign/ledger.md`. Candidates (the frontier brief's §4 A–M extends them):
     - A: Exo #2533 fusions;
     - B: M5 TensorOps/MPP matrix paths and quantized layouts;
     - C: attention and state;
@@ -166,7 +167,7 @@ The phase headings below group items; they are not barriers. Every item ends on 
 **Disjoint ownership sets:**
 - `campaign/` (C, Q and H items, plus the F2 and I2 harness files): one writer at a time.
 - Flint: `zig/src/families/flint/`, `zig/src/native/flint.zig`, `zig/kernels/metal/flint/`, `zig/tests/flint/`, `zig/tests/contract/metal_flint*`.
-- Inkling 2 Mini: `zig/src/families/inkling2_loop/`, `zig/src/native/inkling2_loop.zig`, `zig/kernels/metal/inkling2_loop/`, `zig/build/inkling2_loop.zig`, `zig/tests/inkling2_loop/`, `campaign/ref/`.
+- Inkling 2 Mini: `zig/src/families/inkling2_loop/` (including its kernels and tests), `zig/src/native/inkling2_loop.zig`, `zig/src/native/inkling2_loop_host.zig`, `zig/build/inkling2_loop.zig`, `campaign/parity/inkling2-mini/`.
 - Shared: `build.zig`, `zig/build/metal_*.zig`, the native registry, `zig/src/core/`, `zig/src/server/` and `zig/kernels/metal/core/`. One registration edit is folded into the item that needs it, and the parent merges these. Any other shared-core change is its own serial item. While it is open, it blocks the other workstream from touching core.
 
 GPU-timed and full-model steps serialize on the GPU lock even when their code lanes run in parallel.
@@ -256,9 +257,7 @@ I-items own the Inkling set. They may start code work parallel to F-items, and u
   - the final logit softcap of 30, and the 201,024 vocabulary padded from 200,058;
   - the per-tensor NVFP4/MXFP8 groups and the MTP head taps.
   
-  Then build `campaign/ref/inkling2_loop_ref.py` and check it against the tiny fixture's transformers output, if that output exists, or against llama.cpp.
-  
-  **Acceptance:** `make -C campaign ref-check MODEL=inkling2-mini` reproduces llama.cpp's teacher-forced top-1 on 4 short histories and states the error it finds.
+  Done. Its f32 Python reference and `ref-check` were retired on 2026-11-23 for the oMLX oracle (Decision 9).
 - **I1. Family loader and refusals** (M, after I0). This covers config, tensor map, tokenizer and template, NVFP4/MXFP8 geometry checks, registration, and a clear refusal of image parts and `--vision`. Vision is out of scope.
   
   **Acceptance:** `zig build test-inkling2-loop-host` passes, including tests that the refusals fire.
@@ -287,7 +286,7 @@ I-items own the Inkling set. They may start code work parallel to F-items, and u
 
 - **O-items** (each S–M). Each is created from the ranked hypothesis table after profiling: Metal System Trace and capture outside timed windows, short and long context. Profiling attributes time to experts and projections, attention, routing, norms and residuals, quantization, dispatch, synchronization, sampling and memory movement, together with bandwidth estimates.
   
-  Each O-item follows the source draft's §10 loop: bottleneck, hypothesis, smallest change with a fallback, focused correctness checks, a short paired screen, then the full matrix and held-out prompts for winners. Commit winners. Revert losers but keep their ledger entry and runs. Re-profile and pick the next.
+  Each O-item follows this loop: bottleneck, hypothesis, smallest change with a fallback, focused correctness checks, a short paired screen, then the full matrix and held-out prompts for winners. Commit winners. Revert losers but keep their ledger entry and runs. Re-profile and pick the next.
   
   Flint O-items and Inkling O-items run in parallel lanes, with the GPU serialized.
   
@@ -308,7 +307,7 @@ I-items own the Inkling set. They may start code work parallel to F-items, and u
 ## Acceptance
 
 1. **Native engine.** `zig build native -Dcpu=apple_m1` builds. Flint and Inkling 2 Mini serve text. Qualified defaults are on, with opt-in experimental modes and fallbacks. `zig build test test-golden` adds no red beyond what **Baseline** lists.
-2. **Correctness.** Run `make -C campaign parity MODEL=flint`, `make -C campaign omlx-oracle-gate` and `make -C campaign quality MODEL=… SET=full`; each must meet Decision 10.
+2. **Correctness.** `make -C campaign parity MODEL=flint` and `make -C campaign quality MODEL=… SET=full` meet Decision 10. Inkling's `make -C campaign omlx-oracle-gate` is reported (Decision 16).
    - Speculation tests pass, including state rollback.
    - **Failure condition:** any advertised mode whose output differs from its target-distribution contract, or a free-run text comparison standing in for teacher-forced evidence.
 3. **Harness.** `make -C campaign bench …` and `make -C campaign scorecard` regenerate both tables from `campaign/runs/`. `make -C campaign pi-harness` passes for both models.
@@ -344,7 +343,7 @@ The shipping path stays native Zig/Metal with its existing C/Objective-C glue. A
 - `tensorfold benchmark --publish` and `--upload-url`;
 - renting compute or buying services;
 - changing system-wide security, memory or power settings;
-- writing to `~/.pi`, `~/.cache` or other global caches, beyond reading the Hugging Face cache;
+- writing to `~/.pi`, or installing tools globally (the owner allows global caches);
 - deleting files the campaign did not create;
 - Python, MLX or another framework in the shipping path;
 - a language rewrite.

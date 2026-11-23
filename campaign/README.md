@@ -68,7 +68,7 @@ make -C campaign nanoattention-bench
 This uses the original checkpoint and identical prompt token IDs, under the GPU lock and memory watchdog.
 Read [the comparator protocol](comparators/nanoattention/README.md) before interpreting its receipts:
 it measures engine timings, and upstream's experimental BF16 implementation has not passed logit parity.
-The setup and host tests are prepared; actual Mac build and M5 timings still need these commands.
+Measured results are in [inkling-nanoattention.md](kernels/inkling-nanoattention.md).
 
 ### oMLX correctness oracle
 
@@ -80,7 +80,7 @@ logits as float32 [tokens, vocab], with receipts and a provenance manifest, to
 them against the oracle. It passes when pooled top-1 agreement is at most 0.5 points below the baseline in
 [omlx_gate.json](parity/inkling2-mini/omlx_gate.json), both KL means are at most 1.5 times the baseline's, and no
 logit is non-finite. It refuses any oracle but the pinned capture, and any runner capture whose receipt names
-another runner, checkpoint or policy. The suite runs it as `inkling-omlx-oracle` in the scenario tier only.
+another runner, checkpoint or policy. The suite runs it as `inkling-omlx-oracle` in the scenario tier only. Its verdict is reported and blocks no integration (plan Decision 16).
 
 ```sh
 make -C campaign omlx-setup              # once: the pinned oMLX environment

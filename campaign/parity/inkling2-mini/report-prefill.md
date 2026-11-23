@@ -1,5 +1,7 @@
 # Inkling 2 Mini parity: Metal against the float32 reference
 
+**Superseded record.** The f32-oracle pipeline that produced this was retired on 2026-11-23 (plan Decision 9), and its tools are gone. The oMLX oracle ([inkling-omlx-oracle.md](../../kernels/inkling-omlx-oracle.md)) replaces it.
+
 Arithmetic: NVFP4 and MXFP8 weights decoded from the checkpoint's own bytes, float32 activations. This is
 not the official activation-quantized path and no equivalence with it is claimed.
 

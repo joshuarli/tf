@@ -25,5 +25,6 @@ that state across blocks (`tokenspeed@947b25bc92d7/python/tokenspeed/runtime/mod
 After target verification, select the last accepted target row's captured features for the next round, mix the taps
 for the recurrent head, and use the block anchor as its first previous token
 (`tokenspeed@947b25bc92d7/python/tokenspeed/runtime/execution/drafter/inkling2.py:197-229,312-323`,
-`tokenspeed@947b25bc92d7/python/tokenspeed/runtime/models/inkling2_mtp.py:618-629`). Verification, rollback and the
-drafter itself remain future work; this document does not establish native numerical or GPU correctness.
+`tokenspeed@947b25bc92d7/python/tokenspeed/runtime/models/inkling2_mtp.py:618-629`). Native drafters with verification
+and rollback exist only on the parked branches `lane/ds1-dspark-drafter` ([inkling-dspark.md](../kernels/inkling-dspark.md))
+and `lane/m1-mtp`; main has none, and this document establishes no native numerical or GPU correctness.

@@ -1,8 +1,8 @@
 # Inkling 2 Mini (`inkling2_loop`)
 
-Set `INKLING_COPY_DRAFTS=1` to opt in to greedy copy drafts on the native Metal server. `--no-drafts` disables them.
-Copy verification uses prefill arithmetic, which can choose a different token from the decode path at a near-tie.
-See the [copy verification receipt](../../campaign/kernels/inkling-verify.md) for the measured workloads.
+The concurrent Inkling host serves no drafts. It accepts `INKLING_COPY_DRAFTS` and ignores it
+(`zig/src/native/inkling2_loop_host.zig:581`). The [copy verification receipt](../../campaign/kernels/inkling-verify.md)
+records the earlier single-stream copy drafts.
 
 This page records the graph of `thinkingmachines/Inkling-2-Mini` as read from the pinned llama.cpp reference
 (commit `40b7a546defe1f60edd1338c719552ffc58c89a0`) and the checkpoint's own config, index, quantization config and
@@ -253,8 +253,9 @@ gives its setup and bounds.
 
 ## Unverified
 
-- **Long context.** Positions ≥ 8192 exercise `tau`; the histories stop far below it. The native family must still
-  implement it from `src/models/inkling2.cpp:258-261`.
+- **Long context.** Positions ≥ 8192 exercise `tau` (`src/models/inkling2.cpp:258-261`). The native kernels apply
+  it (`zig/src/families/inkling2_loop/kernels/prefill.metal:566`), but no history reaches it.
 - **Vision.** The encoder and projector are not covered; the plan refuses image input.
-- **MTP numerics.** Capture semantics are source-verified; native draft arithmetic and end-to-end output remain untested.
+- **MTP numerics.** Capture semantics are source-verified. Native drafters on the parked branches `lane/ds1-dspark-drafter`
+  and `lane/m1-mtp` match MLX's proposals; neither is on main.
 - **Model quality.** The logits agreement is a numerical check, not a capability check.

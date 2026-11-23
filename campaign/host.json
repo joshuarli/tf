@@ -29,7 +29,7 @@
     "sdk_path": "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk"
   },
   "zig": "0.17.1",
-  "free_disk_bytes": 611526115328,
+  "free_disk_bytes": 601458884608,
   "pmset_therm": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
   "metal": {
     "swift": "/usr/bin/swift",

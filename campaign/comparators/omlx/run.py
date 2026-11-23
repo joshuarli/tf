@@ -15,7 +15,7 @@ from adapter import mtp_cycles, parse_result, read_prompt, redact_other_processe
 from setup import model_entries, source_entry
 
 CAMPAIGN = Path(__file__).resolve().parents[2]
-ROOT = Path('/Users/josh/repos/tensorfold-m5')
+ROOT = Path(subprocess.run(['git', '-C', str(Path(__file__).resolve().parent), 'rev-parse', '--path-format=absolute', '--git-common-dir'], check=True, capture_output=True, text=True).stdout.strip()).parent
 WORK = ROOT / '.work'
 MODEL = Path.home() / 'models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd'
 HEAVY = ROOT / 'campaign/heavy.py'

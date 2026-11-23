@@ -7,11 +7,12 @@ export INKLING_LOAD_LIMIT_GB=26 INKLING_COPY_DRAFTS=1 TENSORFOLD_NO_UPDATE_CHECK
 export GPU_GATE_MAX_GPU_PCT=60 GPU_GATE_MAX_UTIL_PCT=60
 export INKLING_AGENTS="${1:-1}"
 context="${2:-4096}"
-base="$PWD/.work/tmp/sessions-$INKLING_AGENTS-$context"
+model_dir="${INKLING_MODEL:-$HOME/models/Inkling-2-Mini@ed40e7da625f}"
+base="$PWD/.work/tmp/sessions-$(basename "$model_dir")-$INKLING_AGENTS-$context"
 mkdir -p "$base"
 rm -f "$base/server.pid"
 port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
-python3 campaign/heavy.py -- sh -c 'python3 -c "import sys; sys.path.insert(0, \"campaign\"); import heavy; print(heavy.wired_bytes())" > "$1"; printf "%s\n" "$$" > "$2"; shift 2; exec "$@"' sh "$base/wired" "$base/server.pid" "$PWD/zig-out/native/bin/tensorfold-native" serve "$HOME/models/Inkling-2-Mini@ed40e7da625f" --host 127.0.0.1 --port "$port" --parallel "$INKLING_AGENTS" --prompt-cache-gib 2 --no-update-check --context "$context" --temperature 0 >"$base/server.log" 2>&1 &
+python3 campaign/heavy.py -- sh -c 'python3 -c "import sys; sys.path.insert(0, \"campaign\"); import heavy; print(heavy.wired_bytes())" > "$1"; printf "%s\n" "$$" > "$2"; shift 2; exec "$@"' sh "$base/wired" "$base/server.pid" "$PWD/zig-out/native/bin/tensorfold-native" serve "$model_dir" --host 127.0.0.1 --port "$port" --parallel "$INKLING_AGENTS" --prompt-cache-gib 2 --no-update-check --context "$context" --temperature 0 >"$base/server.log" 2>&1 &
 server=$!
 stop() {
     if [ -f "$base/server.pid" ]; then

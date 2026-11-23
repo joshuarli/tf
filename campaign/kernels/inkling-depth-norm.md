@@ -37,26 +37,26 @@ so that total is not an isolated count of the change. The candidate's RMS dispat
 frequent than the old batched depth normalizations; the indexed mix also costs more per call in this profile.
 The profile is instrumented and does not establish which effect explains the end-to-end regression.
 
-Reproduction (set `PATH=/opt/homebrew/bin:$PATH`, `TMPDIR=/Users/josh/repos/tensorfold-m5/.work/tmp`,
-and `ZIG_GLOBAL_CACHE_DIR=/Users/josh/repos/tensorfold-m5/.work/zig-global-cache`):
+Reproduction (set `PATH=/opt/homebrew/bin:$PATH`, `TMPDIR=~/repos/tf/.work/tmp`,
+and `ZIG_GLOBAL_CACHE_DIR=~/repos/tf/.work/zig-global-cache`):
 
 ```sh
-H=/Users/josh/repos/tensorfold-m5/campaign/heavy.py
+H=~/repos/tf/campaign/heavy.py
 M=/Users/josh/models/Inkling-2-Mini@ed40e7da625f
-D=/Users/josh/repos/tensorfold-m5/.work/tmp
-B=/Users/josh/repos/tensorfold-m5/zig-out/bin/tf-inkling2-loop-run
+D=~/repos/tf/.work/tmp
+B=~/repos/tf/zig-out/bin/tf-inkling2-loop-run
 C=./zig-out/bin/tf-inkling2-loop-run
 python3 "$H" -- zig build test-inkling2-loop -Dcpu=apple_m1
 zig build tf-inkling2-loop-run -Dcpu=apple_m1
 head -c 400 campaign/prompts/dev/code-1024.txt > "$D/d2-prompt.txt"
 python3 "$H" -- "$C" "$M/tokenizer.json" "$D/d2-prompt.txt" tokenize "$D/d2-ids.json"
 for n in greeting sql prose_review cells_code; do
-  ids=/Users/josh/repos/tensorfold-m5/.work/parity/inkling2-mini/metal/$n.tokens.json
+  ids=~/repos/tf/.work/parity/inkling2-mini/metal/$n.tokens.json
   python3 "$H" -- "$B" "$M" "$ids" logits "$D/d2-$n-base.bin"
   python3 "$H" -- "$C" "$M" "$ids" logits "$D/d2-$n-cand.bin"
   cmp "$D/d2-$n-base.bin" "$D/d2-$n-cand.bin"
 done
-python3 "$H" -- "$C" "$M" /Users/josh/repos/tensorfold-m5/.work/parity/inkling2-mini/metal/greeting.tokens.json reset "$D/d2-reset.bin"
+python3 "$H" -- "$C" "$M" ~/repos/tf/.work/parity/inkling2-mini/metal/greeting.tokens.json reset "$D/d2-reset.bin"
 ```
 
 For each timeline and benchmark run, the heavy command launched a shell which ran the pre-gate, started

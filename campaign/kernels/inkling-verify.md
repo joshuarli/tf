@@ -557,8 +557,8 @@ Both final parity commands below exited 2 with the expected 14 within contract, 
 (`harbour` and `cells_code`), zero unexplained:
 
 ```sh
-make -C campaign -f parity/inkling2-mini/parity.mk parity-inkling2-mini RUNNER_MODE=prefill PREFILL_CHUNK=4 LANE=v3-commit-final REPORT=/Users/josh/repos/tensorfold-m5/.work/tmp/v3-commit-parity-4.md
-make -C campaign -f parity/inkling2-mini/parity.mk parity-inkling2-mini RUNNER_MODE=prefill PREFILL_CHUNK=512 LANE=v3-commit-final REPORT=/Users/josh/repos/tensorfold-m5/.work/tmp/v3-commit-parity-512.md
+make -C campaign -f parity/inkling2-mini/parity.mk parity-inkling2-mini RUNNER_MODE=prefill PREFILL_CHUNK=4 LANE=v3-commit-final REPORT=~/repos/tf/.work/tmp/v3-commit-parity-4.md
+make -C campaign -f parity/inkling2-mini/parity.mk parity-inkling2-mini RUNNER_MODE=prefill PREFILL_CHUNK=512 LANE=v3-commit-final REPORT=~/repos/tf/.work/tmp/v3-commit-parity-512.md
 ```
 
 Both commands used the lane runner built from this change, the established saved oracle, and

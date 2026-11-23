@@ -66,8 +66,8 @@ exit codes, output IDs and memory receipts. The first pair used the same command
 as the remaining pairs, invoked directly. Subsequent pairs used
 [run_pairs.py](../comparators/mlx-vlm/run_pairs.py). Rebuild the native runner
 outside a measurement window with `PATH=/opt/homebrew/bin:$PATH
-TMPDIR=/Users/josh/repos/tensorfold-m5/.work/tmp
-ZIG_GLOBAL_CACHE_DIR=/Users/josh/repos/tensorfold-m5/.work/zig-global-cache
+TMPDIR=~/repos/tf/.work/tmp
+ZIG_GLOBAL_CACHE_DIR=~/repos/tf/.work/zig-global-cache
 python3 campaign/comparators/mlx-vlm/build_native.py`. The regenerated binary
 hash differed from the measured binary; the measured hash above identifies the
 actual artifact used for all six native runs.

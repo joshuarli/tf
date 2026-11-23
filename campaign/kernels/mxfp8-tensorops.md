@@ -42,13 +42,13 @@ The large shift in absolute latency between the 8- and 64-row measurements, incl
 
 ## Commands and guard results
 
-The `PATH` selects Homebrew Python because the system Python 3.9 cannot run `heavy.py`'s type annotations. Scratch and Zig global cache were set to `/Users/josh/repos/tensorfold-m5/.work/tmp` and `/Users/josh/repos/tensorfold-m5/.work/zig-global-cache` respectively.
+The `PATH` selects Homebrew Python because the system Python 3.9 cannot run `heavy.py`'s type annotations. Scratch and Zig global cache were set to `~/repos/tf/.work/tmp` and `~/repos/tf/.work/zig-global-cache` respectively.
 
 ```sh
-TMPDIR=/Users/josh/repos/tensorfold-m5/.work/tmp xcrun -sdk macosx metal -std=metal4.1 -c zig/src/core/metal_fp4/mxfp8_tensorops.metal -o /Users/josh/repos/tensorfold-m5/.work/tmp/mxfp8_tensorops.air
-PATH=/opt/homebrew/bin:$PATH TMPDIR=/Users/josh/repos/tensorfold-m5/.work/tmp ZIG_GLOBAL_CACHE_DIR=/Users/josh/repos/tensorfold-m5/.work/zig-global-cache python3 /Users/josh/repos/tensorfold-m5/campaign/heavy.py --cap-gb 4 -- zig build test-fp4-kernels -Dcpu=apple_m1
-PATH=/opt/homebrew/bin:$PATH TMPDIR=/Users/josh/repos/tensorfold-m5/.work/tmp ZIG_GLOBAL_CACHE_DIR=/Users/josh/repos/tensorfold-m5/.work/zig-global-cache zig build tf-fp4-bench -Dcpu=apple_m1
-PATH=/opt/homebrew/bin:$PATH TMPDIR=/Users/josh/repos/tensorfold-m5/.work/tmp ZIG_GLOBAL_CACHE_DIR=/Users/josh/repos/tensorfold-m5/.work/zig-global-cache TF_MXFP8_TENSOROPS=1 python3 /Users/josh/repos/tensorfold-m5/campaign/heavy.py --cap-gb 4 -- sh -c 'perf-gate-ready -1 && gpu-gate-ready -1 || exit $?; ./zig-out/bin/tf-fp4-bench; run=$?; gpu-gate-ready -1; gpu=$?; perf-gate-ready -1; cpu=$?; printf "run_exit=%s post_gpu_exit=%s post_cpu_exit=%s\n" "$run" "$gpu" "$cpu"; test "$run" -eq 0 && test "$gpu" -eq 0 && test "$cpu" -eq 0'
+TMPDIR=~/repos/tf/.work/tmp xcrun -sdk macosx metal -std=metal4.1 -c zig/src/core/metal_fp4/mxfp8_tensorops.metal -o ~/repos/tf/.work/tmp/mxfp8_tensorops.air
+PATH=/opt/homebrew/bin:$PATH TMPDIR=~/repos/tf/.work/tmp ZIG_GLOBAL_CACHE_DIR=~/repos/tf/.work/zig-global-cache python3 ~/repos/tf/campaign/heavy.py --cap-gb 4 -- zig build test-fp4-kernels -Dcpu=apple_m1
+PATH=/opt/homebrew/bin:$PATH TMPDIR=~/repos/tf/.work/tmp ZIG_GLOBAL_CACHE_DIR=~/repos/tf/.work/zig-global-cache zig build tf-fp4-bench -Dcpu=apple_m1
+PATH=/opt/homebrew/bin:$PATH TMPDIR=~/repos/tf/.work/tmp ZIG_GLOBAL_CACHE_DIR=~/repos/tf/.work/zig-global-cache TF_MXFP8_TENSOROPS=1 python3 ~/repos/tf/campaign/heavy.py --cap-gb 4 -- sh -c 'perf-gate-ready -1 && gpu-gate-ready -1 || exit $?; ./zig-out/bin/tf-fp4-bench; run=$?; gpu-gate-ready -1; gpu=$?; perf-gate-ready -1; cpu=$?; printf "run_exit=%s post_gpu_exit=%s post_cpu_exit=%s\n" "$run" "$gpu" "$cpu"; test "$run" -eq 0 && test "$gpu" -eq 0 && test "$cpu" -eq 0'
 ```
 
 All four commands exited 0. The timing wrapper printed `run_exit=0 post_gpu_exit=0 post_cpu_exit=0`. An earlier timing was discarded because its post-run CPU gate exited 75. While queued behind other work, three test attempts were stopped by the 4 GB wrapper on host wired-memory growth, and another timing attempt was stopped by the same guard; none is counted as a pass. The final test's peak charged memory was 1.6 GB.

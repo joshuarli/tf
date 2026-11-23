@@ -181,13 +181,13 @@ kind, with the 690 tie's state echo decaying through 694 and a raised floor
 
 ## How to reproduce
 
-Every model load below ran through `python3 /Users/josh/repos/tensorfold-m5/campaign/heavy.py --`,
-with `TMPDIR=/Users/josh/repos/tensorfold-m5/.work/tmp` and
-`ZIG_GLOBAL_CACHE_DIR=/Users/josh/repos/tensorfold-m5/.work/zig-global-cache`.
+Every model load below ran through `python3 ~/repos/tf/campaign/heavy.py --`,
+with `TMPDIR=~/repos/tf/.work/tmp` and
+`ZIG_GLOBAL_CACHE_DIR=~/repos/tf/.work/zig-global-cache`.
 `$M` is `/Users/josh/models/Inkling-2-Mini@ed40e7da625f`,
-`$D` is `/Users/josh/repos/tensorfold-m5/.work/parity/inkling2-mini/metal/trace`,
-`$R` is `/Users/josh/repos/tensorfold-m5/.work/parity/inkling2-mini/trace-ref`,
-`$V` is `/Users/josh/repos/tensorfold-m5/.work/venv-ref/bin/python`.
+`$D` is `~/repos/tf/.work/parity/inkling2-mini/metal/trace`,
+`$R` is `~/repos/tf/.work/parity/inkling2-mini/trace-ref`,
+`$V` is `~/repos/tf/.work/venv-ref/bin/python`.
 Build: `zig build tf-inkling2-loop-run -Dcpu=apple_m1` (exit 0).
 
 - Metal onset/control traces (exits 0; peaks 0.9/0.9/0.6/0.6 GB):
@@ -209,7 +209,7 @@ Build: `zig build tf-inkling2-loop-run -Dcpu=apple_m1` (exit 0).
   (exit 0, peak 19.2 GB); `harbour.full-rerun.npy` matches the saved oracle bit-for-bit
   (max diff 0.0), proving the oracle sound and the prefix/full difference a tie flip.
 - cells_code 656-694 forensics (all exits 0; `$W` is the lane-private
-  `/Users/josh/repos/tensorfold-m5/.work/tmp/w1/` holding every file this run wrote):
+  `~/repos/tf/.work/tmp/w1/` holding every file this run wrote):
   fresh full-history Metal logits `cells_code.metal.bin` (1,178 rows in 46.5 s, peak
   1.6 GB; sha256 `77e41236fb6355a145d286e567ee34be6d26fa8cfa7736919ceafb56b7540ab9`)
   and Metal prefix traces/rows (`trace`/`tracerow` at 655, 656, 689, 690; peaks 1.2/0.6 GB);

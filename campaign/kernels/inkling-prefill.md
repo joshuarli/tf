@@ -368,13 +368,13 @@ Rows per expert by execution slot, base 4992; each entry counts experts in that 
 
 The profile commands used the primary checkout's locked runner, with
 `PATH=/opt/homebrew/bin:$PATH` to select Python 3.15 and `TMPDIR` set to
-`/Users/josh/repos/tensorfold-m5/.work/tmp`. After building
+`~/repos/tf/.work/tmp`. After building
 `zig build tf-inkling2-loop-run -Dcpu=apple_m1`, tokenize each prompt with
-`python3 /Users/josh/repos/tensorfold-m5/campaign/heavy.py --
+`python3 ~/repos/tf/campaign/heavy.py --
 ./zig-out/bin/tf-inkling2-loop-run MODEL/tokenizer.json PROMPT tokenize IDS`.
 For each row set `TF_METAL4_TIMELINE=1`, `TF_INKLING_PREFILL_PROFILE_BASE`
 and `TF_INKLING_PREFILL_OCCUPANCY_BASE` as above, then run
-`python3 /Users/josh/repos/tensorfold-m5/campaign/heavy.py --
+`python3 ~/repos/tf/campaign/heavy.py --
 ./zig-out/bin/tf-inkling2-loop-run MODEL IDS prefill 128 OUTPUT 2>LOG`.
 
 The two-row gate/up candidate preserves float32 inputs and accumulation; it

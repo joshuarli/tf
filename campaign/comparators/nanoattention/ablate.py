@@ -7,16 +7,18 @@ import subprocess
 import sys
 import time
 
+MAIN = Path(subprocess.run(['git', '-C', str(Path(__file__).resolve().parent), 'rev-parse', '--path-format=absolute', '--git-common-dir'], check=True, capture_output=True, text=True).stdout.strip()).parent
+
 root = Path.cwd()
-work = Path('/Users/josh/repos/tensorfold-m5/.work/tmp/nanoattention-lane')
+work = MAIN / '.work/tmp/nanoattention-lane'
 nano = work / 'nanoattention-6f782a8dace846e4e64a5a12cbdf5c0252166199/zig-out/bin/nano'
 model = '/Users/josh/models/Inkling-2-Mini@ed40e7da625f'
-heavy = '/Users/josh/repos/tensorfold-m5/campaign/heavy.py'
+heavy = str(MAIN / 'campaign/heavy.py')
 receipt = root / 'campaign/comparators/nanoattention/runs/ablation.jsonl'
 knobs = ['batch=128', 'expert_simd=true', 'expert_wide_dot=true', 'expert_gate_pair=true', 'expert_prefill=true', 'expert_wide_k=true', 'expert_bf16_tiles=true', 'expert_mlx_scale=true', 'bf16_linear_tile=true', 'bf16_prefill_tile=8', 'bf16_prefill_matrix=true', 'bf16_decode_vec=true', 'fuse_bf16_cast=true', 'concurrent_scratch=true', 'relative_split=true', 'relative_split_4=true', 'relative_tile_prefill=true']
 groups = {'expert_prefill': {'expert_prefill', 'expert_wide_k', 'expert_bf16_tiles', 'expert_mlx_scale'}, 'relative_split': {'relative_split', 'relative_split_4'}}
 env = os.environ.copy()
-env.update({'PATH': '/opt/homebrew/bin:' + env['PATH'], 'TMPDIR': '/Users/josh/repos/tensorfold-m5/.work/tmp', 'XDG_CACHE_HOME': str(work / 'xdg-cache'), 'ZIG_GLOBAL_CACHE_DIR': '/Users/josh/repos/tensorfold-m5/.work/zig-global-cache', 'PYTHONDONTWRITEBYTECODE': '1', 'GPU_GATE_MAX_GPU_PCT': '35', 'GPU_GATE_MAX_UTIL_PCT': '35'})
+env.update({'PATH': '/opt/homebrew/bin:' + env['PATH'], 'TMPDIR': str(MAIN / '.work/tmp'), 'XDG_CACHE_HOME': str(work / 'xdg-cache'), 'ZIG_GLOBAL_CACHE_DIR': str(MAIN / '.work/zig-global-cache'), 'PYTHONDONTWRITEBYTECODE': '1', 'GPU_GATE_MAX_GPU_PCT': '35', 'GPU_GATE_MAX_UTIL_PCT': '35'})
 ids = json.loads((root / 'campaign/prompts/inkling/code-1024.json').read_text())
 workload = work / 'workload-1024.json'
 assert json.loads(workload.read_text()) == {'bos': ids[0], 'code': ids[1:], 'decode': [0] * 64}

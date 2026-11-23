@@ -14,14 +14,16 @@ import numpy as np
 from inkling import OPTIMIZED, harness, output_agreement, parse_result, workload
 from prompt_ids import prompt_ids
 
+MAIN = Path(subprocess.run(['git', '-C', str(Path(__file__).resolve().parent), 'rev-parse', '--path-format=absolute', '--git-common-dir'], check=True, capture_output=True, text=True).stdout.strip()).parent
+
 ROOT = Path(__file__).resolve().parents[3]
 TEMP = ROOT / '.work/tmp/n5-shootout'
 MODEL = Path.home() / 'models/Inkling-2-Mini@ed40e7da625f'
-NANO = Path('/Users/josh/repos/tensorfold-m5/.work/tmp/nanoattention-lane/nanoattention-6f782a8dace846e4e64a5a12cbdf5c0252166199/zig-out/bin/nano')
+NANO = MAIN / '.work/tmp/nanoattention-lane/nanoattention-6f782a8dace846e4e64a5a12cbdf5c0252166199/zig-out/bin/nano'
 TF = ROOT / '.work/tmp/native-build/native-compare'
-HEAVY = Path('/Users/josh/repos/tensorfold-m5/campaign/heavy.py')
+HEAVY = MAIN / 'campaign/heavy.py'
 RESULTS = ROOT / 'campaign/comparators/nanoattention/runs/shootout-20261122-gated.jsonl'
-ORACLE = Path('/Users/josh/repos/tensorfold-m5/.work/parity/inkling2-mini/ref')
+ORACLE = MAIN / '.work/parity/inkling2-mini/ref'
 KNOBS = ['--knob', 'batch=128'] + [item for key, value in OPTIMIZED.items() for item in ('--knob', f'{key}={value}')]
 ENV = dict(os.environ, PATH='/opt/homebrew/bin:' + os.environ['PATH'], INKLING_LOAD_LIMIT_GB='26',
            GPU_GATE_MAX_GPU_PCT='60', GPU_GATE_MAX_UTIL_PCT='60', TMPDIR=str(TEMP),

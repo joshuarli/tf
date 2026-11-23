@@ -66,10 +66,10 @@ root were:
 
 ```sh
 mkdir -p .work/tmp/native-build .work/tmp/zig-cache
-PATH=/opt/homebrew/bin:$PATH ZIG_GLOBAL_CACHE_DIR=/Users/josh/repos/tensorfold-m5/.work/zig-global-cache TMPDIR="$PWD/.work/tmp" zig build tf-inkling2-loop-run -Dcpu=apple_m1 --prefix "$PWD/.work/tmp/native-build" --cache-dir "$PWD/.work/tmp/zig-cache" --verbose > .work/tmp/native-build/build.log 2>&1
-PATH=/opt/homebrew/bin:$PATH ZIG_GLOBAL_CACHE_DIR=/Users/josh/repos/tensorfold-m5/.work/zig-global-cache TMPDIR="$PWD/.work/tmp" python3 -c 'import importlib.util, pathlib, subprocess; p=pathlib.Path("campaign/comparators/mlx-vlm/build_native.py").resolve(); s=importlib.util.spec_from_file_location("builder",p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); cmd=m.native_command(pathlib.Path(".work/tmp/native-build/build.log").read_text(), pathlib.Path(".work/tmp/native-build/native-compare").resolve()); print("building raw-token comparator", flush=True); subprocess.run(cmd,check=True)'
-PYTHONDONTWRITEBYTECODE=1 /Users/josh/repos/tensorfold-m5/.work/venv-mlx-lm/bin/python campaign/comparators/nanoattention/shootout.py prepare
-PATH=/opt/homebrew/bin:$PATH PYTHONDONTWRITEBYTECODE=1 /Users/josh/repos/tensorfold-m5/.work/venv-mlx-lm/bin/python -u campaign/comparators/nanoattention/shootout.py timings > .work/tmp/n5-shootout/gated-timings.log 2>&1
+PATH=/opt/homebrew/bin:$PATH ZIG_GLOBAL_CACHE_DIR=~/repos/tf/.work/zig-global-cache TMPDIR="$PWD/.work/tmp" zig build tf-inkling2-loop-run -Dcpu=apple_m1 --prefix "$PWD/.work/tmp/native-build" --cache-dir "$PWD/.work/tmp/zig-cache" --verbose > .work/tmp/native-build/build.log 2>&1
+PATH=/opt/homebrew/bin:$PATH ZIG_GLOBAL_CACHE_DIR=~/repos/tf/.work/zig-global-cache TMPDIR="$PWD/.work/tmp" python3 -c 'import importlib.util, pathlib, subprocess; p=pathlib.Path("campaign/comparators/mlx-vlm/build_native.py").resolve(); s=importlib.util.spec_from_file_location("builder",p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); cmd=m.native_command(pathlib.Path(".work/tmp/native-build/build.log").read_text(), pathlib.Path(".work/tmp/native-build/native-compare").resolve()); print("building raw-token comparator", flush=True); subprocess.run(cmd,check=True)'
+PYTHONDONTWRITEBYTECODE=1 ~/repos/tf/.work/venv-mlx-lm/bin/python campaign/comparators/nanoattention/shootout.py prepare
+PATH=/opt/homebrew/bin:$PATH PYTHONDONTWRITEBYTECODE=1 ~/repos/tf/.work/venv-mlx-lm/bin/python -u campaign/comparators/nanoattention/shootout.py timings > .work/tmp/n5-shootout/gated-timings.log 2>&1
 ```
 
 The two build commands and prompt preparation exited 0. The oracle verifier
@@ -77,7 +77,7 @@ also exited 0 and reported 16 saved histories, including two longer than the
 sliding window:
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 /Users/josh/repos/tensorfold-m5/.work/venv-ref/bin/python campaign/parity/inkling2-mini/oracle.py --histories campaign/parity/inkling2-mini/histories.json --dir /Users/josh/repos/tensorfold-m5/.work/parity/inkling2-mini/ref
+PYTHONDONTWRITEBYTECODE=1 ~/repos/tf/.work/venv-ref/bin/python campaign/parity/inkling2-mini/oracle.py --histories campaign/parity/inkling2-mini/histories.json --dir ~/repos/tf/.work/parity/inkling2-mini/ref
 ```
 
 The comparator tests exited 0 with 18 tests and five dependency-related
@@ -86,8 +86,8 @@ the environment with Jinja, tokenizers and NumPy:
 
 ```sh
 PATH=/opt/homebrew/bin:$PATH PYTHONDONTWRITEBYTECODE=1 UV_PROJECT_ENVIRONMENT="$PWD/.work/tmp/n5-uv-venv" make -C campaign nanoattention-tests
-PYTHONDONTWRITEBYTECODE=1 /Users/josh/repos/tensorfold-m5/.work/venv-mlx-lm/bin/python -m unittest discover -s campaign/comparators/nanoattention -p test_prompt_ids.py
-PYTHONDONTWRITEBYTECODE=1 /Users/josh/repos/tensorfold-m5/.work/venv-mlx-lm/bin/python -m unittest discover -s campaign/comparators/nanoattention -p test_shootout_fidelity.py
+PYTHONDONTWRITEBYTECODE=1 ~/repos/tf/.work/venv-mlx-lm/bin/python -m unittest discover -s campaign/comparators/nanoattention -p test_prompt_ids.py
+PYTHONDONTWRITEBYTECODE=1 ~/repos/tf/.work/venv-mlx-lm/bin/python -m unittest discover -s campaign/comparators/nanoattention -p test_shootout_fidelity.py
 ```
 
 The first 4K prose and structured TensorFold attempts exited 3 before their

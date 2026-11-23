@@ -104,7 +104,16 @@ perf-gate-ready -1 || exit 76
 ```
 
 Use `../../../.work/tmp/p3-4096.json` for the 4K bracket. The input files are
-campaign scratch fixtures and must be regenerated if removed.
+campaign scratch fixtures. These commands regenerate identical token IDs from
+tracked prompts:
+
+```sh
+./.work/tmp/h1-packed-build/bin/tf-inkling2-loop-run "$TF_INKLING2_LOOP_DIR/tokenizer.json" campaign/prompts/dev/prose-1024.txt tokenize ../../../.work/tmp/ids-1k.json
+./.work/tmp/h1-packed-build/bin/tf-inkling2-loop-run "$TF_INKLING2_LOOP_DIR/tokenizer.json" campaign/prompts/dev/code-4096.txt tokenize ../../../.work/tmp/p3-4096.json
+```
+
+The regenerated arrays were compared with both measured fixtures and were
+identical: 1,139 prose tokens and 5,265 code tokens.
 
 Five 1K brackets isolated dense bf16 TensorOps against the fragment-only
 runner. Their median paired ratio was 1.047, range 1.040–1.264. Five isolated

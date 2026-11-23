@@ -4,7 +4,7 @@ export PATH=/opt/homebrew/bin:$PATH
 export ZIG_GLOBAL_CACHE_DIR="$(git rev-parse --git-common-dir)/../.work/zig-global-cache"
 export TMPDIR="$PWD/.work/tmp"
 export INKLING_LOAD_LIMIT_GB=26 INKLING_COPY_DRAFTS=1 TENSORFOLD_NO_UPDATE_CHECK=1
-export GPU_GATE_MAX_GPU_PCT=60 GPU_GATE_MAX_UTIL_PCT=60
+export GPU_GATE_MAX_GPU_PCT=60 GPU_GATE_MAX_UTIL_PCT=60 PERF_GATE_MAX_BUSY_CORES="${PERF_GATE_MAX_BUSY_CORES:-4}"
 export INKLING_AGENTS="${1:-1}"
 context="${2:-4096}"
 model_dir="${INKLING_MODEL:-$HOME/models/Inkling-2-Mini@ed40e7da625f}"

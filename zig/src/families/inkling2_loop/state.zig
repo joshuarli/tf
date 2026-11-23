@@ -34,6 +34,7 @@ pub const Cache = struct {
         buffer: mtl.Buffer,
         len: usize = 0,
         rows: usize,
+        limit: usize,
         saved_rows: usize = 0,
 
         pub fn init(device: mtl.Device, config: *const cfg.Config) !Rollback {
@@ -42,7 +43,7 @@ pub const Cache = struct {
 
         pub fn initRows(device: mtl.Device, config: *const cfg.Config, rows: usize) !Rollback {
             const count = @min(rows, config.text.window);
-            return .{ .buffer = try device.buffer(@max(rollbackBytes(config, count), 16), mtl.ResourceOptions.private), .rows = count };
+            return .{ .buffer = try device.buffer(@max(rollbackBytes(config, count), 16), mtl.ResourceOptions.private), .rows = count, .limit = rows };
         }
 
         pub fn deinit(r: *Rollback) void {
@@ -486,7 +487,7 @@ fn readPromptState(device: mtl.Device, queue: mtl.Queue, config: *const cfg.Conf
     return output;
 }
 
-test "prompt rollback restores the state after generated tokens overwrite rings" {
+fn checkPromptRollback(wrapped: bool) !void {
     const path = std.c.getenv("TF_INKLING2_LOOP_DIR") orelse return error.SkipZigTest;
     const model = try @import("model.zig").Model.load(std.testing.allocator, std.testing.io, std.mem.span(path));
     defer model.deinit();
@@ -499,21 +500,30 @@ test "prompt rollback restores the state after generated tokens overwrite rings"
     defer scratch.deinit();
     var ids: [512]u32 = undefined;
     for (&ids, 0..) |*id, i| id.* = @intCast(100 + i % 71);
+    const prompt_len = config.text.window - @as(usize, if (wrapped) 2 else 0);
     var at: usize = 0;
-    while (at < config.text.window - 2) {
-        const n = @min(ids.len, config.text.window - 2 - at);
+    while (at < prompt_len) {
+        const n = @min(ids.len, prompt_len - at);
         try @import("prefill.zig").prefillWant(model, &prefill, &cache, ids[0..n], .none);
         at += n;
     }
     const before = try readPromptState(model.device, model.queue, config, &cache);
     defer before.deinit();
-    var rollback = try Cache.Rollback.initRows(model.device, config, 4);
+    var rollback = if (wrapped) try Cache.Rollback.initRows(model.device, config, 4) else try Cache.Rollback.init(model.device, config);
     defer rollback.deinit();
     try rollback.copy(model.queue, config, &cache, true);
     for ([_]u32{ 123, 124, 125, 126 }) |id| try @import("forward.zig").position(model, &scratch, &cache, id);
     try rollback.copy(model.queue, config, &cache, false);
-    try std.testing.expectEqual(@as(usize, config.text.window - 2), cache.len);
+    try std.testing.expectEqual(prompt_len, cache.len);
     const after = try readPromptState(model.device, model.queue, config, &cache);
     defer after.deinit();
     try std.testing.expectEqualSlices(u8, before.slice(u8, before.length()), after.slice(u8, after.length()));
+}
+
+test "prompt rollback restores the state after generated tokens overwrite rings" {
+    try checkPromptRollback(false);
+}
+
+test "bounded prompt rollback restores rows across the ring wrap" {
+    try checkPromptRollback(true);
 }

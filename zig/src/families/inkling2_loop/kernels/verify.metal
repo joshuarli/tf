@@ -198,3 +198,47 @@ struct i2v_commit_args { uint kvw, hidden, rows, stride, slots, window, ring; };
   const size_t src = (size_t)slot * a.stride * (2u * a.kvw + 2u * a.hidden) + (size_t)site_at * a.stride + (size_t)row * width + c;
   r.conv[site][((size_t)slot * a.ring + r.pos % a.ring) * width + c] = CAP[src];
 }
+
+// Each row's greedy pick, as the host's scan picks it: the first index of the largest value, where a NaN never wins
+// and a NaN at index 0 is kept. One threadgroup a row.
+struct i2v_argmax_args { uint vocab; };
+
+[[kernel]] void i2v_argmax(const device float* L [[buffer(0)]], constant i2v_argmax_args& a [[buffer(1)]],
+    device uint* OUT [[buffer(2)]], uint row [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
+    uint nth [[threads_per_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]) {
+  threadgroup float tv[32];
+  threadgroup uint ti[32];
+  const device float* x = L + (size_t)row * a.vocab;
+  float v = -INFINITY;
+  uint i = 0xffffffffu;
+  for (uint k = tid; k < a.vocab; k += nth) {
+    const float y = x[k];
+    if (y > v || (y == v && k < i)) {
+      v = y;
+      i = k;
+    }
+  }
+  for (uint off = 16u; off > 0u; off /= 2u) {
+    const float ov = simd_shuffle_xor(v, off);
+    const uint oi = simd_shuffle_xor(i, off);
+    if (ov > v || (ov == v && oi < i)) {
+      v = ov;
+      i = oi;
+    }
+  }
+  if (lane == 0u) {
+    tv[sg] = v;
+    ti[sg] = i;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid == 0u) {
+    for (uint g = 1; g < nth / 32u; ++g) {
+      if (tv[g] > v || (tv[g] == v && ti[g] < i)) {
+        v = tv[g];
+        i = ti[g];
+      }
+    }
+    OUT[row] = (isnan(x[0]) || i == 0xffffffffu) ? 0u : i;
+  }
+}

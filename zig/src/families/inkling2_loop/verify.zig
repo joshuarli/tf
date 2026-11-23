@@ -181,8 +181,8 @@ const CommitRow = extern struct { keys: u64, values: u64, conv: [4]u64, pos: u32
 const CommitSlot = extern struct { local: u32, locals_before: u32, globals_before: u32, pad: u32 = 0 };
 const CommitArgs = extern struct { kvw: u32, hidden: u32, rows: u32, stride: u32, slots: u32, window: u32, ring: u32 };
 
-const group_names = [_][:0]const u8{ "i2v_conv", "i2v_store_rel", "i2v_split", "i2v_commit_kv", "i2v_commit_conv" };
-const GK = enum { conv, store_rel, split, commit_kv, commit_conv };
+const group_names = [_][:0]const u8{ "i2v_conv", "i2v_store_rel", "i2v_split", "i2v_commit_kv", "i2v_commit_conv", "i2v_argmax" };
+const GK = enum { conv, store_rel, split, commit_kv, commit_conv, argmax };
 
 /// Grouped verification: one batch step whose rows are several streams' consecutive positions, the first of each the
 /// stream's newest token and the rest its drafts. Every row computes what an ordinary batch step at that position
@@ -192,6 +192,7 @@ pub const Verifier = struct {
     kernels: [group_names.len]mtl.Pipeline,
     kv: mtl.Buffer,
     conv: prefill.ConvCapture,
+    targets: mtl.Buffer,
     slots: [64]CommitSlot,
     slot_count: usize,
 
@@ -210,6 +211,8 @@ pub const Verifier = struct {
         v.kv = try device.buffer(config.slots() * 2 * group_rows * kvw * 2, mtl.ResourceOptions.private);
         errdefer v.kv.deinit();
         v.conv = try prefill.ConvCapture.init(device, config, group_rows);
+        errdefer v.conv.deinit();
+        v.targets = try device.buffer(group_rows * 4, mtl.ResourceOptions.shared);
         v.slot_count = config.slots();
         var locals: u32 = 0;
         var globals: u32 = 0;
@@ -225,6 +228,29 @@ pub const Verifier = struct {
         for (v.kernels) |p| p.deinit();
         v.kv.deinit();
         v.conv.deinit();
+        v.targets.deinit();
+    }
+
+    /// Each of the forward's rows' greedy pick, chosen on the GPU exactly as the host's scan of its logits would.
+    pub fn picks(v: *const Verifier, m: *const Model, logits: mtl.Buffer, rows: usize) ![]const u32 {
+        if (rows == 0 or rows > group_rows) return error.BadGroup;
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
+        const cb = m.queue.commandBuffer();
+        const enc = cb.compute(.serial);
+        enc.setPipeline(v.pipe(.argmax));
+        enc.setBuffer(logits, 0, 0);
+        enc.setValue(@as(u32, m.config.text.unpadded_vocab), 1);
+        enc.setBuffer(v.targets, 0, 2);
+        enc.dispatchGroups(mtl.Size.of(rows, 1, 1), mtl.Size.of(1024, 1, 1));
+        enc.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |message| {
+            std.log.err("inkling verify picks: {s}", .{message});
+            return error.GpuFailed;
+        }
+        return v.targets.slice(u32, rows);
     }
 
     fn pipe(v: *const Verifier, k: GK) mtl.Pipeline {
@@ -261,6 +287,23 @@ pub const Verifier = struct {
     /// Commit `accepted[i] + 1` rows of each group (its newest token and the drafts accepted after it) and advance its
     /// cache by that many positions.
     pub fn commit(v: *const Verifier, m: *const Model, g: *const Group, accepted: []const usize) !void {
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
+        const cb = m.queue.commandBuffer();
+        const enc = cb.compute(.serial);
+        try v.encodeCommit(enc, m, g, accepted);
+        enc.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |message| {
+            std.log.err("inkling grouped commit: {s}", .{message});
+            return error.GpuFailed;
+        }
+        committed(g, accepted);
+    }
+
+    /// The commit's dispatches, for an encoder the caller ends; once they complete, `committed` advances the caches.
+    pub fn encodeCommit(v: *const Verifier, enc: mtl.ComputeEncoder, m: *const Model, g: *const Group, accepted: []const usize) !void {
         if (accepted.len != g.caches.len) return error.BadAcceptedPrefix;
         for (accepted, g.sizes) |a, size| if (a >= size) return error.BadAcceptedPrefix;
         const c = &m.config;
@@ -282,10 +325,6 @@ pub const Verifier = struct {
         }
         const kvw: usize = c.text.local.kv * c.text.local.dim;
         const args = CommitArgs{ .kvw = @intCast(kvw), .hidden = c.text.hidden, .rows = @intCast(g.rows), .stride = group_rows, .slots = @intCast(v.slot_count), .window = c.text.window, .ring = state.ring };
-        const pool = mtl.objc.Pool.push();
-        defer pool.pop();
-        const cb = m.queue.commandBuffer();
-        const enc = cb.compute(.serial);
         for (g.caches) |cache| for ([_]mtl.Buffer{ cache.keys, cache.values, cache.k_conv, cache.v_conv, cache.attn_conv, cache.mlp_conv }) |buf| enc.useResource(buf, mtl.ResourceUsage.write);
         enc.setPipeline(v.pipe(.commit_kv));
         enc.setBuffer(v.kv, 0, 0);
@@ -298,16 +337,13 @@ pub const Verifier = struct {
         enc.setValue(args, 1);
         enc.setBytes(std.mem.sliceAsBytes(rows[0..g.rows]), 2);
         enc.dispatchThreads(mtl.Size.of(@max(kvw, c.text.hidden), g.rows, v.slot_count * 4), mtl.Size.of(256, 1, 1));
-        enc.end();
-        cb.commit();
-        cb.wait();
-        if (cb.failure()) |message| {
-            std.log.err("inkling grouped commit: {s}", .{message});
-            return error.GpuFailed;
-        }
-        for (g.caches, accepted) |cache, a| cache.len += a + 1;
     }
 };
+
+/// The caches after a commit's dispatches completed: each group's accepted rows are its newest positions.
+pub fn committed(g: *const Group, accepted: []const usize) void {
+    for (g.caches, accepted) |cache, a| cache.len += a + 1;
+}
 
 /// One round's rows: the stream each belongs to (`owner`), its position and the chunk row its group starts at.
 pub const Group = struct {
@@ -415,4 +451,151 @@ test "grouped verification kernels compile" {
         const p = try mtl.Pipeline.init(device, lib, name, false);
         p.deinit();
     }
+}
+
+const mtp = @import("mtp.zig");
+const draft_mod = @import("draft.zig");
+
+/// A stream a speculator drives: its target cache and drafter context, which stay at the same position.
+pub const Stream = struct {
+    cache: *Cache,
+    ctx: *draft_mod.Context,
+    estimate: mtp.Estimate = .{},
+    /// Set before each round: the stream's newest token, not yet in its cache, and the most drafts it may verify.
+    anchor: u32 = 0,
+    limit: usize = 0,
+    /// After a round: the tokens it emits, its accepted drafts then the target's next pick.
+    emitted: [group_rows]u32 = undefined,
+    emitted_len: usize = 0,
+    drafts: [group_rows]u32 = undefined,
+    /// Totals over the stream's rounds.
+    offered: u64 = 0,
+    taken: u64 = 0,
+    rounds: u64 = 0,
+};
+
+/// Greedy speculation with the checkpoint's MTP head: each round plans every stream's drafts from its acceptance and
+/// the measured round costs, proposes them, verifies all streams' rows in one grouped batch step and commits the
+/// accepted prefixes. A stream planned zero drafts (the fallback) decodes one token through the same exact step.
+pub const Speculator = struct {
+    model: *const Model,
+    drafter: *draft_mod.Drafter,
+    verifier: *const Verifier,
+    batch: *batch_mod.BatchScratch,
+    costs: mtp.Costs = .{ .base = 0.020, .row = 0.007, .propose = 0.005 },
+    /// Rounds a stream goes without drafts before one round probes its acceptance with a single draft.
+    probe_every: u32 = 16,
+    /// Off: every stream decodes one token a round, the drafter only following the context.
+    drafting: bool = true,
+    /// Seconds spent in each phase over every round so far.
+    spent: Phases = .{},
+
+    pub const Phases = struct { propose: f64 = 0, forward: f64 = 0, argmax: f64 = 0, commit: f64 = 0, rounds: u64 = 0 };
+
+    pub fn round(s: *Speculator, streams: []const *Stream) !void {
+        const n = streams.len;
+        if (n == 0 or n > group_rows) return error.BadBatch;
+        var counts: [group_rows]usize = @splat(0);
+        if (s.drafting and n < group_rows) {
+            var rates: [group_rows]f32 = undefined;
+            var limits: [group_rows]usize = undefined;
+            for (streams, 0..) |st, i| {
+                rates[i] = st.estimate.rate();
+                limits[i] = @min(st.limit, s.drafter.depth());
+            }
+            mtp.plan(rates[0..n], limits[0..n], &s.costs, counts[0..n]);
+            var rows = n;
+            for (counts[0..n]) |k| rows += k;
+            for (streams, 0..) |st, i| {
+                if (counts[i] == 0 and st.estimate.idle >= s.probe_every and limits[i] > 0 and rows < group_rows) {
+                    counts[i] = 1;
+                    rows += 1;
+                }
+            }
+        }
+        for (streams) |st| if (st.ctx.len != st.cache.len) return error.DraftContextBehind;
+        var proposing: [group_rows]*draft_mod.Context = undefined;
+        var anchors: [group_rows]u32 = undefined;
+        var wanted: [group_rows]usize = undefined;
+        var outs: [group_rows][]u32 = undefined;
+        var p: usize = 0;
+        for (streams, 0..) |st, i| if (counts[i] > 0) {
+            proposing[p] = st.ctx;
+            anchors[p] = st.anchor;
+            wanted[p] = counts[i];
+            outs[p] = st.drafts[0..counts[i]];
+            p += 1;
+        };
+        if (p > 0) {
+            const started = now();
+            try s.drafter.propose(proposing[0..p], anchors[0..p], wanted[0..p], outs[0..p]);
+            const took = seconds(now() - started);
+            s.costs.noteProposal(took);
+            s.spent.propose += took;
+        }
+        var ids: [group_rows]u32 = undefined;
+        var sizes: [group_rows]usize = undefined;
+        var caches: [group_rows]*Cache = undefined;
+        var rows: usize = 0;
+        for (streams, 0..) |st, i| {
+            caches[i] = st.cache;
+            sizes[i] = 1 + counts[i];
+            ids[rows] = st.anchor;
+            @memcpy(ids[rows + 1 ..][0..counts[i]], st.drafts[0..counts[i]]);
+            rows += sizes[i];
+        }
+        const started = now();
+        const g = try s.verifier.group(caches[0..n], sizes[0..n]);
+        s.batch.rows.taps = &s.drafter.taps;
+        defer s.batch.rows.taps = null;
+        try s.verifier.forward(s.model, s.batch, &g, ids[0..rows]);
+        const forwarded = now();
+        const targets = try s.verifier.picks(s.model, s.batch.rows.logits, rows);
+        var taken: [group_rows]usize = undefined;
+        var extend: [group_rows]draft_mod.Row = undefined;
+        var at: usize = 0;
+        for (streams, 0..) |st, i| {
+            const own = targets[at..][0..sizes[i]];
+            const a = mtp.accepted(st.drafts[0..counts[i]], own[0..counts[i]]);
+            taken[i] = a;
+            @memcpy(st.emitted[0..a], st.drafts[0..a]);
+            st.emitted[a] = own[a];
+            st.emitted_len = a + 1;
+            for (0..sizes[i]) |j| extend[at + j] = .{ .ctx = st.ctx, .keep = j <= a };
+            at += sizes[i];
+        }
+        const picked = now();
+        {
+            const pool = mtl.objc.Pool.push();
+            defer pool.pop();
+            const cb = s.model.queue.commandBuffer();
+            const enc = cb.compute(.serial);
+            try s.verifier.encodeCommit(enc, s.model, &g, taken[0..n]);
+            try s.drafter.encodeExtend(enc, extend[0..rows]);
+            enc.end();
+            cb.commit();
+            cb.wait();
+            if (cb.failure()) |message| {
+                std.log.err("inkling speculation commit: {s}", .{message});
+                return error.GpuFailed;
+            }
+            committed(&g, taken[0..n]);
+        }
+        const ended = now();
+        s.costs.note(rows, seconds(ended - started));
+        s.spent.forward += seconds(forwarded - started);
+        s.spent.argmax += seconds(picked - forwarded);
+        s.spent.commit += seconds(ended - picked);
+        s.spent.rounds += 1;
+        for (streams, 0..) |st, i| {
+            st.estimate.note(counts[i], taken[i]);
+            st.offered += counts[i];
+            st.taken += taken[i];
+            st.rounds += 1;
+        }
+    }
+};
+
+fn seconds(ns: u64) f32 {
+    return @floatCast(@as(f64, @floatFromInt(ns)) / 1e9);
 }

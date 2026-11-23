@@ -56,6 +56,29 @@ pub const Context = struct {
         c.start = at;
         c.len = at;
     }
+
+    /// Positions `[0, len)` of `from`, which must hold them, become this context's.
+    pub fn copyFrom(c: *Context, queue: mtl.Queue, config: *const cfg.Config, from: *const Context, len: usize) !void {
+        if (from.start != 0 or from.len < len or len > c.capacity) return error.BadDraftContext;
+        const head = config.mtp orelse return error.NoDraftHead;
+        const row: usize = @as(usize, head.kv_heads) * head.head_dim * 2;
+        if (len > 0) {
+            const pool = mtl.objc.Pool.push();
+            defer pool.pop();
+            const cb = queue.commandBuffer();
+            const blit = cb.blit();
+            for (0..head.layers) |l| {
+                blit.copy(from.keys, l * from.capacity * row, c.keys, l * c.capacity * row, len * row);
+                blit.copy(from.values, l * from.capacity * row, c.values, l * c.capacity * row, len * row);
+            }
+            blit.end();
+            cb.commit();
+            cb.wait();
+            if (cb.failure()) |_| return error.GpuFailed;
+        }
+        c.start = 0;
+        c.len = len;
+    }
 };
 
 /// One tapped row of the last forward for `extend`: the context it joins, at that context's next position, unless it
@@ -300,8 +323,20 @@ pub const Drafter = struct {
     /// position. A context's Markov tap becomes its newest kept row's.
     pub fn extend(d: *Drafter, rows: []const Row) !void {
         if (rows.len == 0) return;
-        if (rows.len > d.rows) return error.TooManyRows;
         const started = if (d.times != null) now() else 0;
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
+        const cb = d.model.queue.commandBuffer();
+        const enc = cb.compute(.serial);
+        try d.encodeExtend(enc, rows);
+        try finish(cb, enc, "extend");
+        if (d.times) |t| t.extend += now() - started;
+    }
+
+    /// `extend`'s dispatches, for an encoder the caller ends before the taps change; the contexts advance now.
+    pub fn encodeExtend(d: *Drafter, enc: mtl.ComputeEncoder, rows: []const Row) !void {
+        if (rows.len == 0) return;
+        if (rows.len > d.rows) return error.TooManyRows;
         const m = d.model;
         const w = m.draft.?;
         const head = d.head;
@@ -319,10 +354,6 @@ pub const Drafter = struct {
             }
         }
         if (!any) return;
-        const pool = mtl.objc.Pool.push();
-        defer pool.pop();
-        const cb = m.queue.commandBuffer();
-        const enc = cb.compute(.serial);
         var mix = MixArgs{ .hidden = @intCast(h), .rows = @intCast(rows.len), .taps = head.taps_n, .tap_rows = @intCast(d.rows), .row0 = 0, .mixes = head.layers + 1, .eps = m.config.text.eps, .norms = @splat(0), .alpha = @splat(0) };
         for (0..head.layers) |l| mix.norms[l] = @intCast(w.layers[l].mix_norm.offset / 2);
         mix.norms[head.layers] = @intCast(w.markov_norm.offset / 2);
@@ -352,8 +383,6 @@ pub const Drafter = struct {
             }
             if (last) d.copy(enc, bo(d.mixed, (@as(usize, head.layers) * rows.len + i) * h * 4), bb(row.ctx.frnn), h);
         }
-        try finish(cb, enc, "extend");
-        if (d.times) |t| t.extend += now() - started;
     }
 
     /// Propose up to `counts[i]` tokens after `anchors[i]` for each context into `out[i]`; a count of zero drafts
@@ -600,20 +629,12 @@ test "the drafter's proposals follow its own logits, repeat bit for bit and batc
     defer one.deinit();
     var two = try Context.init(m.device, &m.config, 4096);
     defer two.deinit();
-    const all_taps = try gpa.alloc(f32, prompt.len * taps_n * h);
-    defer gpa.free(all_taps);
     var at: usize = 0;
     while (at < prompt.len) {
         const take = @min(512, prompt.len - at);
         ps.taps = &d.taps;
         defer ps.taps = null;
         try prefill.prefillWant(m, &ps, &cache, prompt[at..][0..take], if (at + take == prompt.len) .last else .none);
-        const tapped = try readShared(m, d.taps.buffer, 0, taps_n * d.taps.rows * h * 4);
-        defer tapped.deinit();
-        const view = tapped.slice(f32, taps_n * d.taps.rows * h);
-        for (0..take) |r| for (0..taps_n) |t| {
-            @memcpy(all_taps[((at + r) * taps_n + t) * h ..][0..h], view[(t * d.taps.rows + r) * h ..][0..h]);
-        };
         var rows: [512]Row = undefined;
         for (rows[0..take]) |*row| row.* = .{ .ctx = &one };
         try d.extend(rows[0..take]);
@@ -646,14 +667,45 @@ test "the drafter's proposals follow its own logits, repeat bit for bit and batc
     std.debug.print("drafter anchor={d} drafts={any}\n", .{ anchor, first[0..steps] });
     if (std.c.getenv("TF_INKLING2_MTP_DUMP")) |prefix_z| {
         const prefix = std.mem.span(prefix_z);
-        var name: [512]u8 = undefined;
-        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fmt.bufPrint(&name, "{s}.taps.f32", .{prefix}), .data = std.mem.sliceAsBytes(all_taps) });
-        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fmt.bufPrint(&name, "{s}.logits.f32", .{prefix}), .data = std.mem.sliceAsBytes(logits) });
-        var meta: [512]u8 = undefined;
-        var list: [128]u8 = undefined;
-        var n: usize = 0;
-        for (first[0..steps], 0..) |token, i| n += (try std.fmt.bufPrint(list[n..], "{s}{d}", .{ if (i == 0) "" else ",", token })).len;
-        const text = try std.fmt.bufPrint(&meta, "{{\"positions\":{d},\"anchor\":{d},\"steps\":{d},\"vocab\":{d},\"hidden\":{d},\"taps\":{d},\"drafts\":[{s}]}}\n", .{ prompt.len, anchor, steps, vocab, h, taps_n, list[0..n] });
-        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fmt.bufPrint(&name, "{s}.json", .{prefix}), .data = text });
+        for (parsed.value, 0..) |case, index| {
+            var cache_n = try @import("state.zig").Cache.init(m.device, &m.config, 4096);
+            defer cache_n.deinit();
+            var ctx = try Context.init(m.device, &m.config, 4096);
+            defer ctx.deinit();
+            const ids = case.token_ids;
+            const taps = try gpa.alloc(f32, ids.len * taps_n * h);
+            defer gpa.free(taps);
+            var pos: usize = 0;
+            while (pos < ids.len) {
+                const take = @min(512, ids.len - pos);
+                ps.taps = &d.taps;
+                defer ps.taps = null;
+                try prefill.prefillWant(m, &ps, &cache_n, ids[pos..][0..take], if (pos + take == ids.len) .last else .none);
+                const tapped = try readShared(m, d.taps.buffer, 0, taps_n * d.taps.rows * h * 4);
+                defer tapped.deinit();
+                const view = tapped.slice(f32, taps_n * d.taps.rows * h);
+                for (0..take) |r| for (0..taps_n) |t| {
+                    @memcpy(taps[((pos + r) * taps_n + t) * h ..][0..h], view[(t * d.taps.rows + r) * h ..][0..h]);
+                };
+                var rows: [512]Row = undefined;
+                for (rows[0..take]) |*row| row.* = .{ .ctx = &ctx };
+                try d.extend(rows[0..take]);
+                pos += take;
+            }
+            const start = argmaxOf(ps.logits.slice(f32, vocab));
+            var drafts: [7]u32 = undefined;
+            try d.propose(&.{&ctx}, &.{start}, &.{steps}, &.{drafts[0..steps]});
+            var name: [512]u8 = undefined;
+            const stem = if (index == 0) prefix else try std.fmt.bufPrint(&name, "{s}-{s}", .{ prefix, case.name });
+            var file: [600]u8 = undefined;
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fmt.bufPrint(&file, "{s}.taps.f32", .{stem}), .data = std.mem.sliceAsBytes(taps) });
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fmt.bufPrint(&file, "{s}.logits.f32", .{stem}), .data = std.mem.sliceAsBytes(d.dump.?.slice(f32, steps * vocab)) });
+            var meta: [512]u8 = undefined;
+            var list: [128]u8 = undefined;
+            var n: usize = 0;
+            for (drafts[0..steps], 0..) |token, i| n += (try std.fmt.bufPrint(list[n..], "{s}{d}", .{ if (i == 0) "" else ",", token })).len;
+            const text = try std.fmt.bufPrint(&meta, "{{\"positions\":{d},\"anchor\":{d},\"steps\":{d},\"vocab\":{d},\"hidden\":{d},\"taps\":{d},\"drafts\":[{s}]}}\n", .{ ids.len, start, steps, vocab, h, taps_n, list[0..n] });
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fmt.bufPrint(&file, "{s}.json", .{stem}), .data = text });
+        }
     }
 }

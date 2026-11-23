@@ -40,6 +40,13 @@ const Slot = struct {
     points: [8]usize = @splat(0),
     job: ?*Job = null,
     live_generated: u64 = 0,
+    /// With MTP drafts: the drafter's context of this slot, the stream the speculator drives, and the tokens at the
+    /// context's positions `[0, ctx.len)`.
+    ctx: ?inkling.draft.Context = null,
+    stream: inkling.verify.Stream = undefined,
+    fed: std.ArrayList(u32) = .empty,
+    job_offered: u64 = 0,
+    job_taken: u64 = 0,
 };
 
 const Entry = struct {
@@ -80,6 +87,9 @@ pub const Host = struct {
     prefill_rate: f64 = 0,
     prefill_at: i96 = 0,
     prefilling: bool = false,
+    drafter: ?inkling.draft.Drafter = null,
+    verifier: ?inkling.verify.Verifier = null,
+    speculator: ?inkling.verify.Speculator = null,
     const Mark = struct { at: i96, tokens: u64 };
     const window_ns: i96 = 2 * std.time.ns_per_s;
 
@@ -116,10 +126,70 @@ pub const Host = struct {
             slot.cache.deinit();
             if (slot.rollback) |*rollback| rollback.deinit();
             for (&slot.snapshots) |*snapshot| if (snapshot.*) |*saved| saved.deinit();
+            if (slot.ctx) |*ctx| ctx.deinit();
+            slot.fed.deinit(h.gpa);
         }
+        h.closeDrafts();
         h.gpa.free(h.slots);
         h.batch.deinit();
         h.gpa.free(h.batch_logits);
+    }
+
+    fn closeDrafts(h: *Host) void {
+        h.speculator = null;
+        if (h.drafter) |*d| d.deinit();
+        h.drafter = null;
+        if (h.verifier) |*v| v.deinit();
+        h.verifier = null;
+    }
+
+    /// Serve with the checkpoint's MTP head: its weights, the drafter, grouped verification and a drafter context per
+    /// slot. A checkpoint that cannot serve drafts keeps the no-drafter path.
+    fn openDrafts(h: *Host, capacity: usize) !void {
+        errdefer {
+            for (h.slots) |*slot| if (slot.ctx) |*ctx| {
+                ctx.deinit();
+                slot.ctx = null;
+            };
+            h.closeDrafts();
+        }
+        try h.model.loadDraft(h.model.dir);
+        h.drafter = try inkling.draft.Drafter.init(h.model, &h.prefill.pipes, h.slots.len, h.prefill.chunk);
+        h.verifier = try inkling.verify.Verifier.init(h.model.device, &h.model.config);
+        for (h.slots) |*slot| {
+            slot.ctx = try inkling.draft.Context.init(h.model.device, &h.model.config, capacity);
+            slot.stream = .{ .cache = &slot.cache, .ctx = &slot.ctx.? };
+        }
+        h.speculator = .{ .model = h.model, .drafter = &h.drafter.?, .verifier = &h.verifier.?, .batch = &h.batch };
+        std.log.info("inkling2_loop: greedy MTP drafts on: block {d}, {d} slots, {d:.3} GiB drafter contexts", .{ h.drafter.?.block, h.slots.len, @as(f64, @floatFromInt(h.slots.len * inkling.draft.Context.bytes(&h.model.config, capacity))) / (1 << 30) });
+    }
+
+    fn common(a: []const u32, b: []const u32) usize {
+        var n: usize = 0;
+        while (n < a.len and n < b.len and a[n] == b[n]) n += 1;
+        return n;
+    }
+
+    /// Bring the slot's drafter context to the `reused` prompt positions its cache already holds: keep its own when it
+    /// fed them, else take them from a slot that did, else start the context at `reused`.
+    fn syncDraft(h: *Host, slot: *Slot, prompt: []const u32, reused: usize) !void {
+        const ctx = &slot.ctx.?;
+        if (ctx.start <= reused and @min(ctx.len, common(slot.fed.items, prompt)) >= reused) {
+            ctx.len = reused;
+        } else {
+            var source: ?*Slot = null;
+            for (h.slots) |*other| {
+                if (other == slot) continue;
+                const oc = &(other.ctx orelse continue);
+                if (oc.start == 0 and @min(oc.len, common(other.fed.items, prompt)) >= reused) {
+                    source = other;
+                    break;
+                }
+            }
+            if (source) |src| try ctx.copyFrom(h.model.queue, &h.model.config, &src.ctx.?, reused) else ctx.restart(reused);
+        }
+        slot.fed.clearRetainingCapacity();
+        try slot.fed.appendSlice(h.gpa, prompt[0..reused]);
     }
     fn self(ctx: *anyopaque) *Host {
         return @ptrCast(@alignCast(ctx));
@@ -295,7 +365,15 @@ pub const Host = struct {
             }
         }
         std.debug.print("inkling prefix: reused {d} of {d} prompt tokens\n", .{ job.reused, job.request.prompt.len });
-        const stats: api.Stats = .{ .rounds = job.rounds, .drafted = 0, .accepted = 0, .min_rows = 1, .prefill_seconds = job.prefill_seconds, .queued_seconds = @as(f64, @floatFromInt(@max(0, job.began - job.queued))) / 1e9 };
+        const drafted: u64 = if (slot.ctx != null) slot.stream.offered - slot.job_offered else 0;
+        const accepted: u64 = if (slot.ctx != null) slot.stream.taken - slot.job_taken else 0;
+        if (h.speculator) |spec| {
+            const t = spec.spent;
+            var ms: [inkling.verify.group_rows + 1]u32 = undefined;
+            for (&ms, 0..) |*x, r| x.* = @intFromFloat(spec.costs.measured[r] * 1e5);
+            std.debug.print("inkling mtp: rounds {d} drafted {d} accepted {d} context {d}..{d}; verify cost by rows (10 us) {any}, propose {d:.2} ms; all rounds {d}: propose {d:.3} s forward {d:.3} s picks {d:.3} s commit and extend {d:.3} s\n", .{ job.rounds, drafted, accepted, slot.ctx.?.start, slot.ctx.?.len, ms[1..], spec.costs.propose * 1e3, t.rounds, t.propose, t.forward, t.argmax, t.commit });
+        }
+        const stats: api.Stats = .{ .rounds = job.rounds, .drafted = drafted, .accepted = accepted, .min_rows = 1, .prefill_seconds = job.prefill_seconds, .queued_seconds = @as(f64, @floatFromInt(@max(0, job.began - job.queued))) / 1e9 };
         h.lock();
         if (!restored) slot.points = @splat(0);
         prefix.release(slot, restored);
@@ -337,6 +415,44 @@ pub const Host = struct {
         }
     }
 
+    /// One speculative round for the decoding slots: each emits its accepted drafts and the target's next pick, every
+    /// token equal to plain greedy decoding's.
+    fn speculate(h: *Host, spec: *inkling.verify.Speculator, selected: []const *Slot) void {
+        var live: [8]*inkling.verify.Stream = undefined;
+        for (selected, 0..) |slot, i| {
+            const job = slot.job.?;
+            const st = &slot.stream;
+            st.anchor = job.emitted.items[job.emitted.items.len - 1];
+            st.limit = job.request.max_tokens -| (job.emitted.items.len + 1);
+            live[i] = st;
+        }
+        spec.round(live[0..selected.len]) catch |e| {
+            for (selected) |slot| h.retire(slot, .failed, @errorName(e));
+            return;
+        };
+        for (selected) |slot| {
+            const st = &slot.stream;
+            const job = slot.job orelse continue;
+            job.rounds += 1;
+            slot.fed.append(h.gpa, st.anchor) catch |e| {
+                h.retire(slot, .failed, @errorName(e));
+                continue;
+            };
+            slot.fed.appendSlice(h.gpa, st.emitted[0 .. st.emitted_len - 1]) catch |e| {
+                h.retire(slot, .failed, @errorName(e));
+                continue;
+            };
+            if (h.cancelled(job)) {
+                h.retire(slot, .cancelled, "");
+                continue;
+            }
+            for (st.emitted[0..st.emitted_len]) |tok| {
+                h.token(slot, tok);
+                if (slot.job == null) break;
+            }
+        }
+    }
+
     fn store(h: *Host, slot: *Slot) !void {
         if (!h.prefix_reuse or slot.cache.len == 0 or h.store_limit == 0) return;
         const tokens = slot.resident.items;
@@ -368,6 +484,10 @@ pub const Host = struct {
         const job = slot.job.?;
         const r = job.request;
         job.began = h.now();
+        if (slot.ctx != null) {
+            slot.job_offered = slot.stream.offered;
+            slot.job_taken = slot.stream.taken;
+        }
         if (r.images.len > 0 or r.prompt.len == 0 or r.prompt.len + r.max_tokens > h.capacity or r.sampling != null) {
             emit(job, .{ .prefilled = 0 });
             job.prefill_sent = true;
@@ -427,6 +547,10 @@ pub const Host = struct {
             slot.cache.len = 0;
             slot.resident.clearRetainingCapacity();
         }
+        if (slot.ctx != null) h.syncDraft(slot, r.prompt, job.reused) catch |e| {
+            h.retire(slot, .failed, @errorName(e));
+            return;
+        };
         std.debug.print("inkling session: slot {d}\n", .{choice.index});
         const prefill_start = h.now();
         var at = job.reused;
@@ -458,6 +582,8 @@ pub const Host = struct {
             };
             const remaining = if (h.prefix_reuse and at < r.prompt.len - 1) r.prompt.len - 1 - at else r.prompt.len - at;
             const take = @min(h.prefill.chunk, @min(remaining, if (h.prefix_reuse and next > at) next - at else remaining));
+            if (h.drafter) |*d| h.prefill.taps = &d.taps;
+            defer h.prefill.taps = null;
             inkling.prefillWant(h.model, &h.prefill, &slot.cache, r.prompt[at..][0..take], if (at + take == r.prompt.len) .last else .none) catch |e| {
                 if (e == error.HalfActivationOverflow and h.prefill.half) {
                     std.debug.print("inkling prefill: half activation overflow at {d} of {d} prompt tokens; refilling in f32\n", .{ at, r.prompt.len });
@@ -474,6 +600,20 @@ pub const Host = struct {
                 return;
             };
             slot.resident.appendSliceAssumeCapacity(r.prompt[at..][0..take]);
+            if (h.drafter) |*d| {
+                var rows: [inkling.default_chunk]inkling.draft.Row = undefined;
+                for (rows[0..take]) |*row| row.* = .{ .ctx = &slot.ctx.? };
+                d.extend(rows[0..take]) catch |e| {
+                    emit(job, .{ .prefilled = 0 });
+                    h.retire(slot, .failed, @errorName(e));
+                    return;
+                };
+                slot.fed.appendSlice(h.gpa, r.prompt[at..][0..take]) catch |e| {
+                    emit(job, .{ .prefilled = 0 });
+                    h.retire(slot, .failed, @errorName(e));
+                    return;
+                };
+            }
             at += take;
         }
         if (slot.rollback) |*rollback| {
@@ -563,6 +703,10 @@ pub const Host = struct {
                 }
             };
             if (count == 0) continue;
+            if (h.speculator) |*spec| {
+                h.speculate(spec, selected[0..count]);
+                continue;
+            }
             const vocab = h.model.config.text.unpadded_vocab;
             inkling.batchStep(h.model, &h.batch, caches[0..count], ids[0..count], h.batch_logits[0 .. count * vocab]) catch |e| {
                 for (selected[0..count]) |slot| h.retire(slot, .failed, @errorName(e));
@@ -577,8 +721,10 @@ pub const Host = struct {
 
 };
 
-pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usize, count: usize, eos: u32, load_limit: u64, copy_drafts: bool, prefix_reuse: bool, rollback_rows: usize, fork_window: usize, fork_interval: usize, store_limit: u64) !*Host {
-    _ = copy_drafts;
+/// `drafts` serves with the checkpoint's MTP head when it has one; otherwise, and without it, every step is the
+/// no-drafter batch step.
+pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usize, count: usize, eos: u32, load_limit: u64, drafts: bool, prefix_reuse: bool, rollback_rows: usize, fork_window: usize, fork_interval: usize, store_limit: u64) !*Host {
+    const drafting = drafts and model.config.mtp != null;
     const h = try gpa.create(Host);
     errdefer gpa.destroy(h);
     const slots = try gpa.alloc(Slot, count);
@@ -597,7 +743,7 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
             for (0..((fork_window + fork_interval - 1) / fork_interval)) |i| slot.snapshots[i] = try inkling.Cache.Rollback.initRows(model.device, &model.config, fork_window);
         }
     }
-    var batch = try inkling.BatchScratch.init(model.device, &model.config, count);
+    var batch = try inkling.BatchScratch.init(model.device, &model.config, if (drafting) inkling.verify.group_rows else count);
     errdefer batch.deinit();
     const batch_logits = try gpa.alloc(f32, count * model.config.text.unpadded_vocab);
     errdefer gpa.free(batch_logits);
@@ -639,6 +785,7 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
     h.vision_markers[0] = image_token;
     h.info_.vision.?.markers = &h.vision_markers;
     h.info_.vision.?.ctx = h;
+    if (drafting) h.openDrafts(capacity) catch |e| std.log.warn("inkling2_loop: no MTP drafts ({s}); serving without a drafter", .{@errorName(e)});
     try h.start();
     return h;
 }

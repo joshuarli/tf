@@ -29,3 +29,58 @@ test "checkpoint taps name the raw state entering each visit and the final norma
     other.block = 4;
     try t.expectEqual(@as(u32, 3), mtp.proposalCount(other));
 }
+
+test "acceptance stops at the first draft the target's pick contradicts" {
+    const t = std.testing;
+    try t.expectEqual(@as(usize, 0), mtp.accepted(&.{ 5, 6 }, &.{ 4, 6, 7 }));
+    try t.expectEqual(@as(usize, 1), mtp.accepted(&.{ 5, 6 }, &.{ 5, 7, 7 }));
+    try t.expectEqual(@as(usize, 2), mtp.accepted(&.{ 5, 6 }, &.{ 5, 6, 7 }));
+    try t.expectEqual(@as(usize, 0), mtp.accepted(&.{}, &.{9}));
+}
+
+test "the acceptance estimate rises with accepted drafts and falls with rejections" {
+    const t = std.testing;
+    var e: mtp.Estimate = .{};
+    const prior = e.rate();
+    try t.expectApproxEqAbs(@as(f32, 2.0 / 3.0), prior, 1e-6);
+    e.note(4, 4);
+    try t.expect(e.rate() > prior);
+    var f: mtp.Estimate = .{};
+    for (0..6) |_| f.note(3, 0);
+    try t.expect(f.rate() < 0.3);
+    f.note(0, 0);
+    f.note(0, 0);
+    try t.expectEqual(@as(u32, 2), f.idle);
+    f.note(1, 1);
+    try t.expectEqual(@as(u32, 0), f.idle);
+}
+
+test "the planner drafts when acceptance pays for the rows and falls back when it does not" {
+    const t = std.testing;
+    const costs = mtp.Costs{ .base = 0.019, .row = 0.007, .propose = 0.004 };
+    var out: [8]usize = undefined;
+    mtp.plan(&.{0.9}, &.{7}, &costs, out[0..1]);
+    try t.expect(out[0] >= 3);
+    mtp.plan(&.{0.1}, &.{7}, &costs, out[0..1]);
+    try t.expectEqual(@as(usize, 0), out[0]);
+    mtp.plan(&.{0.9}, &.{2}, &costs, out[0..1]);
+    try t.expectEqual(@as(usize, 2), out[0]);
+    mtp.plan(&.{ 0.95, 0.2 }, &.{ 7, 7 }, &costs, out[0..2]);
+    try t.expect(out[0] > 0);
+    try t.expectEqual(@as(usize, 0), out[1]);
+    var total: usize = 2;
+    for (out[0..2]) |k| total += k;
+    try t.expect(total <= mtp.max_rows);
+    mtp.plan(&.{ 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9 }, &.{ 7, 7, 7, 7, 7, 7, 7, 7 }, &costs, out[0..8]);
+    for (out[0..8]) |k| try t.expectEqual(@as(usize, 0), k);
+    var c = costs;
+    try t.expectApproxEqAbs(@as(f32, 0.019 + 2 * 0.007), c.verify(3), 1e-7);
+    c.note(3, 0.040);
+    try t.expectApproxEqAbs(@as(f32, 0.040), c.verify(3), 1e-7);
+    try t.expectApproxEqAbs(@as(f32, 0.040 + 2 * 0.007), c.verify(5), 1e-7);
+    c.note(7, 0.060);
+    try t.expectApproxEqAbs(@as(f32, 0.050), c.verify(5), 1e-6);
+    try t.expectApproxEqAbs(@as(f32, 0.030), c.verify(1), 1e-6);
+    c.note(3, 0.050);
+    try t.expectApproxEqAbs(@as(f32, 0.040 * 0.8 + 0.050 * 0.2), c.verify(3), 1e-7);
+}

@@ -324,3 +324,129 @@ test "grouped verification equals batch decoding bit for bit and commits the sam
     }
     if (!ran) return error.SkipZigTest;
 }
+
+fn argmaxAt(values: []const f32) u32 {
+    var best: usize = 0;
+    for (values[1..], 1..) |value, i| if (value > values[best]) {
+        best = i;
+    };
+    return @intCast(best);
+}
+
+/// Prefill `tokens` in chunks, feeding each chunk's taps to the stream's drafter context when it has one; the
+/// prompt's next token. Both decoding paths prefill through here, so their caches start equal.
+fn prefillDrafted(m: *const model.Model, ps: *prefill.PrefillScratch, cache: *state.Cache, d: *drafting.Drafter, ctx: ?*drafting.Context, tokens: []const u32) !u32 {
+    var at: usize = 0;
+    var rows: [512]drafting.Row = undefined;
+    while (at < tokens.len) {
+        const take = @min(ps.chunk, tokens.len - at);
+        if (ctx != null) ps.taps = &d.taps;
+        defer ps.taps = null;
+        try prefill.prefillWant(m, ps, cache, tokens[at..][0..take], if (at + take == tokens.len) .last else .none);
+        if (ctx) |c| {
+            for (rows[0..take]) |*row| row.* = .{ .ctx = c };
+            try d.extend(rows[0..take]);
+        }
+        at += take;
+    }
+    return argmaxAt(ps.logits.slice(f32, m.config.text.unpadded_vocab));
+}
+
+fn checkSpeculation(path: []const u8, width: usize, steps: usize) !void {
+    const gpa = std.testing.allocator;
+    const m = try model.Model.load(gpa, std.testing.io, path);
+    defer m.deinit();
+    try m.loadDraft(path);
+    const config = &m.config;
+    const vocab = config.text.unpadded_vocab;
+    const parsed = try std.json.parseFromSlice([]const drafting.Prompt, gpa, drafting.prompts_json, .{});
+    defer parsed.deinit();
+    var ps = try prefill.PrefillScratch.init(m.device, config, 512);
+    defer ps.deinit();
+    var bs = try batch.BatchScratch.init(m.device, config, 8);
+    defer bs.deinit();
+    var verifier = try verify.Verifier.init(m.device, config);
+    defer verifier.deinit();
+    var d = try drafting.Drafter.init(m, &ps.pipes, 4, 512);
+    defer d.deinit();
+    const capacity: usize = 4096;
+    var plain: [4]state.Cache = undefined;
+    var spec: [4]state.Cache = undefined;
+    var ctxs: [4]drafting.Context = undefined;
+    var made: usize = 0;
+    defer for (0..made) |i| {
+        plain[i].deinit();
+        spec[i].deinit();
+        ctxs[i].deinit();
+    };
+    const want = try gpa.alloc(u32, width * (steps + 1));
+    defer gpa.free(want);
+    const got = try gpa.alloc(u32, width * (steps + 1));
+    defer gpa.free(got);
+    var have: [4]usize = @splat(0);
+    var streams: [4]verify.Stream = undefined;
+    for (0..width) |i| {
+        plain[i] = try state.Cache.init(m.device, config, capacity);
+        spec[i] = try state.Cache.init(m.device, config, capacity);
+        ctxs[i] = try drafting.Context.init(m.device, config, capacity);
+        made += 1;
+        const prompt = parsed.value[i].token_ids;
+        want[i * (steps + 1)] = try prefillDrafted(m, &ps, &plain[i], &d, null, prompt);
+        const first = try prefillDrafted(m, &ps, &spec[i], &d, &ctxs[i], prompt);
+        got[i * (steps + 1)] = first;
+        have[i] = 1;
+        streams[i] = .{ .cache = &spec[i], .ctx = &ctxs[i], .anchor = first };
+    }
+    const logits = try gpa.alloc(f32, width * vocab);
+    defer gpa.free(logits);
+    var caches: [4]*state.Cache = undefined;
+    var ids: [4]u32 = undefined;
+    for (0..width) |i| caches[i] = &plain[i];
+    for (1..steps + 1) |step| {
+        for (0..width) |i| ids[i] = want[i * (steps + 1) + step - 1];
+        try batch.step(m, &bs, caches[0..width], ids[0..width], logits[0 .. width * vocab]);
+        for (0..width) |i| want[i * (steps + 1) + step] = argmaxAt(logits[i * vocab ..][0..vocab]);
+    }
+    var speculator = verify.Speculator{ .model = m, .drafter = &d, .verifier = &verifier, .batch = &bs };
+    var rounds: usize = 0;
+    while (true) {
+        var live: [4]*verify.Stream = undefined;
+        var owners: [4]usize = undefined;
+        var count: usize = 0;
+        for (0..width) |i| if (have[i] < steps + 1) {
+            streams[i].limit = steps + 1 - have[i] - 1;
+            live[count] = &streams[i];
+            owners[count] = i;
+            count += 1;
+        };
+        if (count == 0) break;
+        try speculator.round(live[0..count]);
+        rounds += 1;
+        for (live[0..count], owners[0..count]) |st, i| {
+            const n = @min(st.emitted_len, steps + 1 - have[i]);
+            @memcpy(got[i * (steps + 1) + have[i] ..][0..n], st.emitted[0..n]);
+            have[i] += n;
+            st.anchor = st.emitted[st.emitted_len - 1];
+        }
+    }
+    var offered: u64 = 0;
+    var taken: u64 = 0;
+    for (streams[0..width]) |st| {
+        offered += st.offered;
+        taken += st.taken;
+    }
+    try std.testing.expectEqualSlices(u32, want, got);
+    try std.testing.expect(offered > 0);
+    std.debug.print("speculation {s} width={d}: {d} tokens a stream equal plain greedy, {d} rounds, {d} of {d} drafts accepted\n", .{ path, width, steps + 1, rounds, taken, offered });
+}
+
+test "speculative decoding emits plain greedy decode's tokens on real prompts at widths one and four" {
+    var ran = false;
+    for ([_][*:0]const u8{ "TF_INKLING2_LOOP_DIR", "TF_INKLING2_LOOP_OQ4E_DIR" }) |name| {
+        const path = std.c.getenv(name) orelse continue;
+        try checkSpeculation(std.mem.span(path), 1, 128);
+        try checkSpeculation(std.mem.span(path), 4, 64);
+        ran = true;
+    }
+    if (!ran) return error.SkipZigTest;
+}

@@ -198,6 +198,8 @@ pub const Model = struct {
     experts: [2][2]mtl.Pipeline, // [nvfp4, mxfp8][gate/up, down]
     affine_pipes: ?kernels.AffinePipes = null,
     draft: ?DraftWeights = null,
+    /// The checkpoint directory, for weights loaded on request.
+    dir: []const u8 = "",
     t16: mtl.Buffer,
     t256: mtl.Buffer,
 
@@ -214,6 +216,7 @@ pub const Model = struct {
         errdefer arena.deinit();
         m.config = try readConfig(arena.allocator(), io, dir);
         m.arena = arena;
+        m.dir = try m.arena.allocator().dupe(u8, dir);
         m.device = try mtl.Device.init();
         errdefer m.device.deinit();
         m.queue = try m.device.queue();

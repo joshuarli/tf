@@ -268,6 +268,7 @@ pub const PrefillScratch = struct {
     affine_stage_w: ?mtl.Buffer,
     affine_stage_extent: usize,
     fast: bool,
+    half: bool,
     capture: ?mtl.Buffer,
     capture_row: usize,
     routes: ?mtl.Buffer,
@@ -290,6 +291,7 @@ pub const PrefillScratch = struct {
         const profile_env: ?[]const u8 = if (std.c.getenv("INKLING_PROFILE")) |v| std.mem.span(v) else null;
         const fast = try profile(profile_env);
         s.fast = fast;
+        s.half = true;
         s.bf16_input = if (fast and device.tensorUnits()) try device.buffer(@max(chunk * @max(2 * h, @max(qw, @max(kvw, rank))) * 2, 16), mtl.ResourceOptions.private) else null;
         errdefer if (s.bf16_input) |buf| buf.deinit();
         s.half_overflow = if (fast or device.tensorUnits()) try device.buffer(16, mtl.ResourceOptions.shared) else null;
@@ -668,7 +670,7 @@ const Chunk = struct {
         const p = c.m.affine_pipes.?;
         const args = AffineDense{ .n = n, .k = @intCast(width(w)), .rows = rows, .xs = x.xs, .xb = x.xb, .bits = if (w.affine) |q| q.bits() else 0, .cap = cap };
         if (w.affine) |q| {
-            if (rows > 8 and c.s.pipes.affine_stage_gemm != null and n <= c.s.affine_stage_extent and args.k <= c.s.affine_stage_extent) {
+            if (rows > 8 and c.s.half and c.s.pipes.affine_stage_gemm != null and n <= c.s.affine_stage_extent and args.k <= c.s.affine_stage_extent) {
                 const staged_w = b(c.s.affine_stage_w.?);
                 c.setP(c.s.pipes.affine_stage_prepare.?, args, &.{ t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, staged_w, b(c.s.half_overflow.?) });
                 c.enc.dispatchThreads(mtl.Size.of(@as(usize, n) * args.k / 4, 1, 1), mtl.Size.of(256, 1, 1));
@@ -676,13 +678,13 @@ const Chunk = struct {
                 c.enc.dispatchGroups(mtl.Size.of((n + 31) / 32, (rows + 15) / 16, 1), mtl.Size.of(128, 1, 1));
                 return;
             }
-            if (rows > 8 and c.s.pipes.affine_half_rows != null) {
+            if (rows > 8 and c.s.half and c.s.pipes.affine_half_rows != null) {
                 c.setP(c.s.pipes.affine_half_rows.?, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out, b(c.s.half_overflow.?) });
             } else {
                 c.setP(if (rows > 8) p.dense_rows else p.dense, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out });
             }
         } else {
-            if (rows > 8 and c.s.pipes.float_mpp != null) {
+            if (rows > 8 and c.s.half and c.s.pipes.float_mpp != null) {
                 c.setP(c.s.pipes.float_mpp.?, args, &.{ x.buf, t(w), A, out });
                 c.enc.dispatchGroups(mtl.Size.of((n + 31) / 32, (rows + 15) / 16, 1), mtl.Size.of(128, 1, 1));
                 return;
@@ -922,7 +924,7 @@ const Chunk = struct {
         const valbase = bo(c.cache.values, c.slotBase(slot));
         const tiled = c.heads == 24 and c.kv == 8 and c.dim == 128;
         const attn_args = AttnB{ .heads = c.heads, .kv = c.kv, .dim = c.dim, .rel = c.drel, .extent = extent, .window = win, .base = c.base, .rows = c.n, .rmode = @intFromBool(c.ring), .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.dim))), .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha };
-        if (tiled and s.pipes.half_attn != null and (s.fast or (c.n > 8 and c.m.affine_pipes != null))) {
+        if (tiled and s.half and s.pipes.half_attn != null and (s.fast or (c.n > 8 and c.m.affine_pipes != null))) {
             c.setP(s.pipes.half_attn.?, attn_args, &.{ b(s.q), keybase, valbase, b(s.relbias), b(s.sink), A, b(s.attn), b(s.kc), b(s.vc), b(s.half_overflow.?) });
             c.enc.dispatchGroups(mtl.Size.of(c.heads, (c.n + 31) / 32, 1), mtl.Size.of(128, 1, 1));
         } else {
@@ -977,12 +979,12 @@ const Chunk = struct {
                 c.setP(s.pipes.moe_sort, slots, &.{ b(s.picks), b(s.moe_cur), b(s.moe_sorted), A });
                 c.enc.dispatchThreads(mtl.Size.of(slots, 1, 1), mtl.Size.of(32, 1, 1));
                 const up_args = Moeg{ .k = c.h, .n = inter, .slots = slots, .topk = K, .experts = E, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap };
-                if (s.pipes.affine_half_up) |pipe| {
+                if (if (s.half) s.pipes.affine_half_up else null) |pipe| {
                     c.setP(pipe, up_args, &.{ input, t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), b(s.moe_off), b(s.moe_sorted), A, b(s.act), b(s.half_overflow.?) });
                 } else c.setP(p.group_up, up_args, &.{ input, t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), b(s.moe_off), b(s.moe_sorted), A, b(s.act) });
                 c.enc.dispatchGroups(mtl.Size.of((inter * 2 + 63) / 64, E, (c.n + 31) / 32), mtl.Size.of(256, 1, 1));
                 const down_args = Moeg{ .k = inter, .n = c.h, .slots = slots, .topk = K, .experts = E, .gate_cap = 0, .up_cap = 0 };
-                if (s.pipes.affine_half_down) |pipe| {
+                if (if (s.half) s.pipes.affine_half_down else null) |pipe| {
                     c.setP(pipe, down_args, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), t(lay.w2_bias.?), b(s.moe_off), b(s.moe_sorted), A, b(s.down), b(s.half_overflow.?) });
                 } else c.setP(p.group_down, down_args, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), t(lay.w2_bias.?), b(s.moe_off), b(s.moe_sorted), A, b(s.down) });
                 c.enc.dispatchGroups(mtl.Size.of((c.h + 63) / 64, E, (c.n + 31) / 32), mtl.Size.of(256, 1, 1));
@@ -1019,8 +1021,8 @@ const Chunk = struct {
         c.setP(s.pipes.moe_sort, slots, &.{ b(s.picks), b(s.moe_cur), b(s.moe_sorted), A });
         c.enc.dispatchThreads(mtl.Size.of(slots, 1, 1), mtl.Size.of(32, 1, 1));
         const codes = b(if (lay.precision == .mxfp8) m.t256 else m.t16);
-        const wide_matrix = lay.precision != .mxfp8 and !s.fast and m.affine_pipes != null and s.pipes.wide_expert_nv != null;
-        const half_matrix = if (lay.precision == .mxfp8) s.pipes.half_expert_mx else if (wide_matrix) s.pipes.wide_expert_nv else if (s.fast) s.pipes.half_expert_nv else null;
+        const wide_matrix = s.half and lay.precision != .mxfp8 and !s.fast and m.affine_pipes != null and s.pipes.wide_expert_nv != null;
+        const half_matrix = if (!s.half) null else if (lay.precision == .mxfp8) s.pipes.half_expert_mx else if (wide_matrix) s.pipes.wide_expert_nv else if (s.fast) s.pipes.half_expert_nv else null;
         const gu = if (lay.precision == .mxfp8) s.pipes.gu_g_mx else if (wide_matrix) s.pipes.wide_gu_nv.? else s.pipes.gu_g_nv;
         const down = if (lay.precision == .mxfp8) s.pipes.down_g_mx else if (wide_matrix) s.pipes.wide_down_nv.? else s.pipes.down_g_nv;
         const matrix = half_matrix orelse if (lay.precision == .mxfp8) s.pipes.expert_matrix_mx else s.pipes.expert_matrix_nv;

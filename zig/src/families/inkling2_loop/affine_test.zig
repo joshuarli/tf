@@ -577,3 +577,47 @@ test "float mpp projections preserve strided inputs and tile tails" {
         try t.expectApproxEqAbs(want, @as(f64, y.slice(f32, rows * n)[row * n + col]), 0.0001);
     };
 }
+
+test "oQ4e prefill without half pipelines matches per-token decode" {
+    const path = std.c.getenv("TF_INKLING2_LOOP_OQ4E_DIR") orelse return error.SkipZigTest;
+    const model = @import("model.zig");
+    const state = @import("state.zig");
+    const forward = @import("forward.zig");
+    const prefill = @import("prefill.zig");
+    const m = try model.Model.load(t.allocator, t.io, std.mem.span(path));
+    defer m.deinit();
+    const vocab = m.config.text.unpadded_vocab;
+    var ids: [64]u32 = undefined;
+    for (&ids, 0..) |*id, i| id.* = @intCast(1000 + (i * 7919) % 50000);
+    var cache = try state.Cache.init(m.device, &m.config, ids.len);
+    defer cache.deinit();
+    var scratch = try state.Scratch.init(m.device, &m.config);
+    defer scratch.deinit();
+    for (ids) |id| try forward.position(m, &scratch, &cache, id);
+    const want = try t.allocator.dupe(f32, scratch.logits.slice(f32, vocab));
+    defer t.allocator.free(want);
+    var ps = try prefill.PrefillScratch.init(m.device, &m.config, ids.len);
+    defer ps.deinit();
+    for ([_]bool{ false, true }) |half| {
+        var filled = try state.Cache.init(m.device, &m.config, ids.len);
+        defer filled.deinit();
+        ps.half = half;
+        try prefill.prefillWant(m, &ps, &filled, &ids, .last);
+        const got = ps.logits.slice(f32, vocab);
+        var worst: f32 = 0;
+        var scale: f32 = 1;
+        var best_got: usize = 0;
+        var best_want: usize = 0;
+        for (got, want, 0..) |g, w, i| {
+            try t.expect(std.math.isFinite(g));
+            worst = @max(worst, @abs(g - w));
+            scale = @max(scale, @abs(w));
+            if (g > got[best_got]) best_got = i;
+            if (w > want[best_want]) best_want = i;
+        }
+        std.debug.print("oq4e prefill half={} logits_max_diff={e} scale={e}\n", .{ half, worst, scale });
+        try t.expectEqual(best_want, best_got);
+        try t.expectEqual(ids.len, filled.len);
+        if (!half) try t.expect(worst <= scale * 1.5e-5);
+    }
+}

@@ -459,6 +459,16 @@ pub const Host = struct {
             const remaining = if (h.prefix_reuse and at < r.prompt.len - 1) r.prompt.len - 1 - at else r.prompt.len - at;
             const take = @min(h.prefill.chunk, @min(remaining, if (h.prefix_reuse and next > at) next - at else remaining));
             inkling.prefillWant(h.model, &h.prefill, &slot.cache, r.prompt[at..][0..take], if (at + take == r.prompt.len) .last else .none) catch |e| {
+                if (e == error.HalfActivationOverflow and h.prefill.half) {
+                    std.debug.print("inkling prefill: half activation overflow at {d} of {d} prompt tokens; refilling in f32\n", .{ at, r.prompt.len });
+                    slot.cache.len = 0;
+                    slot.resident.clearRetainingCapacity();
+                    slot.points = @splat(0);
+                    h.prefill.half = false;
+                    defer h.prefill.half = true;
+                    h.admit(slot, .{}, null);
+                    return;
+                }
                 emit(job, .{ .prefilled = 0 });
                 h.retire(slot, .failed, @errorName(e));
                 return;

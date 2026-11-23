@@ -13,6 +13,11 @@ const Controller = wts.Controller;
 
 pub const default_chunk: usize = 512;
 
+/// The half-operand expert library: gate/up matrices from 14 rows an expert, down from 8, grouped f32 kernels below.
+pub const half_source = "#define I2P_HALF_OPERANDS 1\n#define I2P_MATRIX_THRESHOLD 14\n#define I2P_DOWN_MATRIX_THRESHOLD 8\n" ++ kernels.prefill ++ kernels.prefill_expert_wide;
+/// The same on tensor units: the matrices there, and half activations from grouped gate/up for down's matrices.
+pub const units_source = "#define I2P_TENSOR_UNITS 1\n#define I2P_HALF_ACT 1\n" ++ half_source;
+
 pub fn profile(text: ?[]const u8) error{BadInklingProfile}!bool {
     const value = text orelse return false;
     if (std.mem.eql(u8, value, "f32")) return false;
@@ -159,6 +164,11 @@ pub const Pipes = struct {
     wide_gu_nv: ?mtl.Pipeline,
     wide_down_nv: ?mtl.Pipeline,
     half_expert_mx: ?mtl.Pipeline,
+    units_up: ?mtl.Pipeline,
+    units_down: ?mtl.Pipeline,
+    affine_units_up: ?mtl.Pipeline,
+    affine_units_down: ?mtl.Pipeline,
+    half_rows: ?mtl.Pipeline,
     moe_zero: mtl.Pipeline,
     moe_count: mtl.Pipeline,
     moe_offsets: mtl.Pipeline,
@@ -181,6 +191,11 @@ pub const Pipes = struct {
         if (p.wide_gu_nv) |pipe| pipe.deinit();
         if (p.wide_down_nv) |pipe| pipe.deinit();
         if (p.half_expert_mx) |pipe| pipe.deinit();
+        if (p.units_up) |pipe| pipe.deinit();
+        if (p.units_down) |pipe| pipe.deinit();
+        if (p.affine_units_up) |pipe| pipe.deinit();
+        if (p.affine_units_down) |pipe| pipe.deinit();
+        if (p.half_rows) |pipe| pipe.deinit();
         inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "gemm", "smallrow", "pick", "gu_g_nv", "down_g_nv", "gu_g_mx", "down_g_mx", "expert_matrix_nv", "expert_matrix_mx", "moe_zero", "moe_count", "moe_offsets", "moe_sort", "embed", "rms", "rms3", "rms_pair", "gather_rms", "scatter", "pass_copy", "mix", "mix4", "ctl", "clips", "clip3", "clip", "conv", "batch_conv", "batch_store_rel", "cstore", "kv", "rel", "attn", "attn_tiled", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
     }
 };
@@ -269,10 +284,14 @@ pub const PrefillScratch = struct {
     logits: mtl.Buffer,
     bf16_input: ?mtl.Buffer,
     half_overflow: ?mtl.Buffer,
+    xh: ?mtl.Buffer,
+    act_h: ?mtl.Buffer,
     affine_stage_w: ?mtl.Buffer,
     affine_stage_extent: usize,
     fast: bool,
     half: bool,
+    /// The half path's routed expert matrices on the tensor units; off selects the shader-core kernels.
+    units: bool,
     capture: ?mtl.Buffer,
     capture_row: usize,
     routes: ?mtl.Buffer,
@@ -296,10 +315,15 @@ pub const PrefillScratch = struct {
         const fast = try profile(profile_env);
         s.fast = fast;
         s.half = true;
+        s.units = true;
         s.bf16_input = if (fast and device.tensorUnits()) try device.buffer(@max(chunk * @max(2 * h, @max(qw, @max(kvw, rank))) * 2, 16), mtl.ResourceOptions.private) else null;
         errdefer if (s.bf16_input) |buf| buf.deinit();
         s.half_overflow = if (fast or device.tensorUnits()) try device.buffer(16, mtl.ResourceOptions.shared) else null;
         errdefer if (s.half_overflow) |buf| buf.deinit();
+        s.xh = if (device.tensorUnits()) try device.buffer(@max(chunk * h * 2, 16), mtl.ResourceOptions.private) else null;
+        errdefer if (s.xh) |buf| buf.deinit();
+        s.act_h = if (device.tensorUnits()) try device.buffer(@max(chunk * topk * inter * 2, 16), mtl.ResourceOptions.private) else null;
+        errdefer if (s.act_h) |buf| buf.deinit();
         s.affine_stage_extent = @max(2 * h, @max(qw, @max(kvw, rank)));
         s.affine_stage_w = if (c.checkpoint == .mlx and device.tensorUnits()) try device.buffer(@max(s.affine_stage_extent * s.affine_stage_extent * 2, 16), mtl.ResourceOptions.private) else null;
         errdefer if (s.affine_stage_w) |buf| buf.deinit();
@@ -504,8 +528,13 @@ pub const PrefillScratch = struct {
         s.pipes.wide_gu_nv = null;
         s.pipes.wide_down_nv = null;
         s.pipes.half_expert_mx = null;
+        s.pipes.units_up = null;
+        s.pipes.units_down = null;
+        s.pipes.affine_units_up = null;
+        s.pipes.affine_units_down = null;
+        s.pipes.half_rows = null;
         if (fast or device.tensorUnits()) {
-            const half_lib = try mtl.Library.fromSource(device, "#define I2P_HALF_OPERANDS 1\n#define I2P_MATRIX_THRESHOLD 14\n#define I2P_DOWN_MATRIX_THRESHOLD 8\n" ++ kernels.prefill ++ kernels.prefill_expert_wide, opts);
+            const half_lib = try mtl.Library.fromSource(device, if (device.tensorUnits()) units_source else half_source, opts);
             defer half_lib.deinit();
             if (device.tensorUnits()) {
                 s.pipes.wide_expert_nv = try mtl.Pipeline.init(device, half_lib, "i2p_expert_matrix_wide", false);
@@ -513,10 +542,25 @@ pub const PrefillScratch = struct {
                 s.pipes.wide_gu_nv = try mtl.Pipeline.init(device, half_lib, "i2p_gu_grouped", false);
                 errdefer s.pipes.wide_gu_nv.?.deinit();
                 s.pipes.wide_down_nv = try mtl.Pipeline.init(device, half_lib, "i2p_down_grouped", false);
+                errdefer s.pipes.wide_down_nv.?.deinit();
+                s.pipes.units_up = try mtl.Pipeline.init(device, half_lib, "i2p_expert_units_up", false);
+                errdefer s.pipes.units_up.?.deinit();
+                s.pipes.units_down = try mtl.Pipeline.init(device, half_lib, "i2p_expert_units_down", false);
+                errdefer s.pipes.units_down.?.deinit();
+                s.pipes.affine_units_up = try mtl.Pipeline.init(device, half_lib, "i2p_affine_units_up", false);
+                errdefer s.pipes.affine_units_up.?.deinit();
+                s.pipes.affine_units_down = try mtl.Pipeline.init(device, half_lib, "i2p_affine_units_down", false);
+                errdefer s.pipes.affine_units_down.?.deinit();
+                s.pipes.half_rows = try mtl.Pipeline.init(device, half_lib, "i2p_half_rows", false);
             }
             errdefer if (s.pipes.wide_expert_nv) |pipe| pipe.deinit();
             errdefer if (s.pipes.wide_gu_nv) |pipe| pipe.deinit();
             errdefer if (s.pipes.wide_down_nv) |pipe| pipe.deinit();
+            errdefer if (s.pipes.units_up) |pipe| pipe.deinit();
+            errdefer if (s.pipes.units_down) |pipe| pipe.deinit();
+            errdefer if (s.pipes.affine_units_up) |pipe| pipe.deinit();
+            errdefer if (s.pipes.affine_units_down) |pipe| pipe.deinit();
+            errdefer if (s.pipes.half_rows) |pipe| pipe.deinit();
             s.pipes.half_attn = try mtl.Pipeline.init(device, half_lib, "i2p_attn_half", false);
             errdefer s.pipes.half_attn.?.deinit();
             if (fast) {
@@ -535,6 +579,11 @@ pub const PrefillScratch = struct {
         errdefer if (s.pipes.wide_gu_nv) |pipe| pipe.deinit();
         errdefer if (s.pipes.wide_down_nv) |pipe| pipe.deinit();
         errdefer if (s.pipes.half_expert_mx) |pipe| pipe.deinit();
+        errdefer if (s.pipes.units_up) |pipe| pipe.deinit();
+        errdefer if (s.pipes.units_down) |pipe| pipe.deinit();
+        errdefer if (s.pipes.affine_units_up) |pipe| pipe.deinit();
+        errdefer if (s.pipes.affine_units_down) |pipe| pipe.deinit();
+        errdefer if (s.pipes.half_rows) |pipe| pipe.deinit();
         s.pipes.moe_zero = try mtl.Pipeline.init(device, lib, "i2p_moe_zero", false);
         errdefer s.pipes.moe_zero.deinit();
         s.pipes.moe_count = try mtl.Pipeline.init(device, lib, "i2p_moe_count", false);
@@ -550,6 +599,8 @@ pub const PrefillScratch = struct {
     pub fn deinit(s: *PrefillScratch) void {
         if (s.bf16_input) |buf| buf.deinit();
         if (s.half_overflow) |buf| buf.deinit();
+        if (s.xh) |buf| buf.deinit();
+        if (s.act_h) |buf| buf.deinit();
         if (s.affine_stage_w) |buf| buf.deinit();
         s.pipes.deinit();
         inline for ([_][]const u8{ "ids", "x", "prelude", "passout", "bank", "n0", "n1", "n2", "m0", "q", "k", "v", "r", "kc", "vc", "kh", "vh", "kdyn", "vdyn", "sink", "relbias", "attn", "gate", "projout", "o", "aconv", "moe", "blocks", "staged", "mixout", "msg", "h2in", "normed", "tanhg", "tanhf", "router", "picks", "wts", "act", "down", "moe_cnt", "moe_off", "moe_cur", "moe_sorted", "logits" }) |f| @field(s, f).deinit();
@@ -994,6 +1045,10 @@ const Chunk = struct {
                 c.setP(s.pipes.moe_sort, slots, &.{ b(s.picks), b(s.moe_cur), b(s.moe_sorted), A });
                 c.enc.dispatchThreads(mtl.Size.of(slots, 1, 1), mtl.Size.of(32, 1, 1));
                 const up_args = Moeg{ .k = c.h, .n = inter, .slots = slots, .topk = K, .experts = E, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap };
+                if (s.units and s.pipes.affine_units_up != null and c.h % 64 == 0 and inter % 64 == 0) {
+                    c.affineUnitExperts(lay, input, up_args);
+                    return;
+                }
                 if (if (s.half) s.pipes.affine_half_up else null) |pipe| {
                     c.setP(pipe, up_args, &.{ input, t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), b(s.moe_off), b(s.moe_sorted), A, b(s.act), b(s.half_overflow.?) });
                 } else c.setP(p.group_up, up_args, &.{ input, t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), b(s.moe_off), b(s.moe_sorted), A, b(s.act) });
@@ -1046,9 +1101,15 @@ const Chunk = struct {
         const gu = if (lay.precision == .mxfp8) s.pipes.gu_g_mx else if (wide_matrix) s.pipes.wide_gu_nv.? else s.pipes.gu_g_nv;
         const down = if (lay.precision == .mxfp8) s.pipes.down_g_mx else if (wide_matrix) s.pipes.wide_down_nv.? else s.pipes.down_g_nv;
         const matrix = half_matrix orelse if (lay.precision == .mxfp8) s.pipes.expert_matrix_mx else s.pipes.expert_matrix_nv;
-        c.setP(gu, Moeg{ .k = c.h, .n = inter, .slots = slots, .topk = K, .experts = E, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes });
-        c.enc.dispatchGroups(mtl.Size.of(inter, E, 1), mtl.Size.of(32, 1, 1));
         const args_gu = Moeg{ .k = c.h, .n = inter, .slots = slots, .topk = K, .experts = E, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap };
+        if (wide_matrix and s.units and s.pipes.units_up != null and c.h % 64 == 0 and inter % 64 == 0) {
+            c.unitExperts(lay, input, args_gu, codes);
+            return;
+        }
+        if (wide_matrix) {
+            c.setP(gu, args_gu, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes, b(s.act_h.?), b(s.half_overflow.?) });
+        } else c.setP(gu, args_gu, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes });
+        c.enc.dispatchGroups(mtl.Size.of(inter, E, 1), mtl.Size.of(32, 1, 1));
         if (half_matrix != null) {
             const overflow = s.half_overflow.?;
             c.setP(matrix, args_gu, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes, b(overflow) });
@@ -1067,6 +1128,47 @@ const Chunk = struct {
         }
         c.enc.dispatchGroups(mtl.Size.of(if (wide_matrix or half_matrix == null) (c.h + 63) / 64 else (c.h + 31) / 32, E, (c.n + 31) / 32), mtl.Size.of(if (wide_matrix or half_matrix == null) 256 else 128, 1, 1));
         c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = K, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
+        c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
+    }
+
+    /// Routed NVFP4 projections on tensor units; experts under the matrix thresholds keep the grouped f32 kernels.
+    fn unitExperts(c: Chunk, lay: *const Layer, input: B, up: Moeg, codes: B) void {
+        const s = c.s;
+        const overflow = b(s.half_overflow.?);
+        const tiles: usize = (up.slots + 63) / 64 + up.experts;
+        c.halfRows(input, true);
+        c.setP(s.pipes.wide_gu_nv.?, up, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes, b(s.act_h.?), overflow });
+        c.enc.dispatchGroups(mtl.Size.of(up.n, up.experts, 1), mtl.Size.of(32, 1, 1));
+        c.setP(s.pipes.units_up.?, up, &.{ b(s.xh.?), t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act_h.?), overflow });
+        c.enc.dispatchGroups(mtl.Size.of(2 * up.n / 64, tiles, 1), mtl.Size.of(128, 1, 1));
+        const down = Moeg{ .k = up.n, .n = c.h, .slots = up.slots, .topk = up.topk, .experts = up.experts, .gate_cap = 0, .up_cap = 0 };
+        c.setP(s.pipes.wide_down_nv.?, down, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.moe_off), b(s.moe_sorted), A, b(s.down), codes });
+        c.enc.dispatchGroups(mtl.Size.of(c.h, up.experts, 1), mtl.Size.of(32, 1, 1));
+        c.setP(s.pipes.units_down.?, down, &.{ b(s.act_h.?), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.moe_off), b(s.moe_sorted), A, b(s.down), overflow });
+        c.enc.dispatchGroups(mtl.Size.of(c.h / 64, tiles, 1), mtl.Size.of(128, 1, 1));
+        c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = up.topk, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
+        c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
+    }
+
+    /// The chunk's expert input rows as halves in `xh`, clamped as the NVFP4 matrices round them when `clamp`.
+    fn halfRows(c: Chunk, input: B, clamp: bool) void {
+        const count: u32 = c.n * c.h / 4;
+        c.setP(c.s.pipes.half_rows.?, [2]u32{ count, @intFromBool(clamp) }, &.{ input, b(c.s.xh.?), b(c.s.half_overflow.?), A });
+        c.enc.dispatchThreads(mtl.Size.of(count, 1, 1), mtl.Size.of(256, 1, 1));
+    }
+
+    /// The routed affine 4-bit projections on the tensor units, every expert's rows as halves.
+    fn affineUnitExperts(c: Chunk, lay: *const Layer, input: B, up: Moeg) void {
+        const s = c.s;
+        const overflow = b(s.half_overflow.?);
+        const tiles: usize = (up.slots + 63) / 64 + up.experts;
+        c.halfRows(input, false);
+        c.setP(s.pipes.affine_units_up.?, up, &.{ b(s.xh.?), t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), A, b(s.moe_off), b(s.moe_sorted), A, b(s.act_h.?), overflow });
+        c.enc.dispatchGroups(mtl.Size.of(2 * up.n / 64, tiles, 1), mtl.Size.of(128, 1, 1));
+        const down = Moeg{ .k = up.n, .n = c.h, .slots = up.slots, .topk = up.topk, .experts = up.experts, .gate_cap = 0, .up_cap = 0 };
+        c.setP(s.pipes.affine_units_down.?, down, &.{ b(s.act_h.?), t(lay.w2), t(lay.w2_scale), t(lay.w2_bias.?), A, b(s.moe_off), b(s.moe_sorted), A, b(s.down), overflow });
+        c.enc.dispatchGroups(mtl.Size.of(c.h / 64, tiles, 1), mtl.Size.of(128, 1, 1));
+        c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = up.topk, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
         c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
     }
 

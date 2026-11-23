@@ -1003,6 +1003,9 @@ struct i2p_moeg_args { uint k, n, slots, topk, experts; float gate_cap, up_cap; 
     const device float* den [[buffer(4)]], const device int* OFF [[buffer(5)]],
     const device int* ROW_OF [[buffer(6)]], constant i2p_moeg_args& a [[buffer(7)]],
     device float* ACT [[buffer(8)]], const device float* CODES [[buffer(9)]],
+#ifdef I2P_HALF_ACT
+    device half* ACT_H [[buffer(10)]], device atomic_uint* overflow [[buffer(11)]],
+#endif
     uint2 tg [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
   const uint c = tg.x;
   const uint e = tg.y;
@@ -1088,7 +1091,14 @@ struct i2p_moeg_args { uint k, n, slots, topk, experts; float gate_cap, up_cap; 
 #ifdef I2P_MXFP8
       ACT[(size_t)slot * a.n + c] = i2p_situ(dg, du, a.gate_cap, a.up_cap);
 #else
-      ACT[(size_t)slot * a.n + c] = i2p_situ(dg * global, du * global, a.gate_cap, a.up_cap);
+      const float value = i2p_situ(dg * global, du * global, a.gate_cap, a.up_cap);
+      ACT[(size_t)slot * a.n + c] = value;
+#ifdef I2P_HALF_ACT
+      if (end - start >= I2P_DOWN_MATRIX_THRESHOLD) {
+        if (abs(value) > 65504.0f) atomic_fetch_add_explicit(overflow, 1u, memory_order_relaxed);
+        ACT_H[(size_t)slot * a.n + c] = half(clamp(value, -65504.0f, 65504.0f));
+      }
+#endif
 #endif
     }
   }

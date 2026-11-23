@@ -29,6 +29,25 @@ pub fn chooseFree(slots: anytype, prompt: []const u32, enabled: bool) ?Choice {
     return if (found) choice else null;
 }
 
+pub const Fork = struct { source: usize, point: usize, common: usize };
+
+pub fn chooseFork(slots: anytype, target: usize, prompt: []const u32, own: usize, enabled: bool) ?Fork {
+    if (!enabled) return null;
+    var best: ?Fork = null;
+    for (slots, 0..) |*slot, i| {
+        if (i == target) continue;
+        var common: usize = 0;
+        const resident = slot.resident.items;
+        while (common < @min(resident.len, prompt.len) and resident[common] == prompt[common]) : (common += 1) {}
+        for (slot.points) |point| {
+            if (point <= common and point < prompt.len and point > own and (best == null or point > best.?.point)) {
+                best = .{ .source = i, .point = point, .common = common };
+            }
+        }
+    }
+    return best;
+}
+
 pub fn cancelled(id: u64, background: bool, closing: bool, foreground_waiting: bool, cancels: []const u64) bool {
     return closing or (background and foreground_waiting) or std.mem.indexOfScalar(u64, cancels, id) != null;
 }
@@ -132,4 +151,20 @@ test "prompt end survives dropped generated text and disabled reuse chooses LRU"
     choice.consider(1, &.{ 1, 2 }, 1, next, false);
     try t.expectEqual(@as(usize, 1), choice.index);
     try t.expectEqual(@as(usize, 0), choice.reused);
+}
+
+test "choose the longest available fork and retain longer own reuse" {
+    const T = struct { job: ?usize = null, resident: std.ArrayList(u32) = .empty, last_used: u64 = 0, points: []const usize = &.{} };
+    var slots = [_]T{ .{ .points = &.{2, 4} }, .{ .job = 1, .points = &.{2, 4, 6} }, .{ .points = &.{2} } };
+    defer for (&slots) |*slot| slot.resident.deinit(std.testing.allocator);
+    try slots[0].resident.appendSlice(std.testing.allocator, &.{ 1, 2, 9 });
+    try slots[1].resident.appendSlice(std.testing.allocator, &.{ 1, 2, 3, 4, 5, 8, 9 });
+    try slots[2].resident.appendSlice(std.testing.allocator, &.{ 1, 2, 3 });
+    const fork = chooseFork(&slots, 0, &.{ 1, 2, 3, 4, 5, 6 }, 0, true).?;
+    try std.testing.expectEqual(@as(usize, 1), fork.source);
+    try std.testing.expectEqual(@as(usize, 4), fork.point);
+    try std.testing.expectEqual(@as(usize, 5), fork.common);
+    try std.testing.expectEqual(null, chooseFork(&slots, 0, &.{ 1, 2, 3, 4, 5, 6 }, 5, true));
+    try std.testing.expectEqual(null, chooseFork(&slots, 0, &.{ 1, 2, 3, 4, 5, 6 }, 0, false));
+    try std.testing.expectEqualSlices(u32, &.{ 1, 2, 3, 4, 5, 8, 9 }, slots[1].resident.items);
 }

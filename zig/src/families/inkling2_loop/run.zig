@@ -14,6 +14,7 @@ const usage =
     \\tf-inkling2-loop-run <model> <tokens.json> verifybench <min-width> <rounds>  time interleaved prefill widths
     \\tf-inkling2-loop-run <model> <tokens.json> verifycheck <accepted>  compare continuation with replay
     \\tf-inkling2-loop-run <model> <tokens.json> roundbench <rounds> [width]  time full verification rounds
+    \\tf-inkling2-loop-run <model> <tokens.json> batchbench <width> <pairs>  alternate batch and sequential decode
     \\tf-inkling2-loop-run <model> <tokens.json> trace <out> [at]  per-tensor summaries in the reference's order, the whole pass or only position <at>
     \\tf-inkling2-loop-run <model> <tokens.json> prefillrow <chunk> <out> <at>  capture a chunked prefill row and router sidecars
     \\tf-inkling2-loop-run <model> <tokens.json> prefillroutes <chunk> <out> <at>  capture per-chunk router picks, logits, and bias
@@ -97,6 +98,68 @@ pub fn main(init: std.process.Init) !void {
     const c = &m.config;
     const vocab: usize = c.text.unpadded_vocab;
     const t0 = now();
+    if (std.mem.eql(u8, mode, "batchbench")) {
+        if (args.len != 6) return error.ExpectedArgs;
+        const width = try std.fmt.parseInt(usize, args[4], 10);
+        const pairs = try std.fmt.parseInt(usize, args[5], 10);
+        if (width == 0 or width > 8 or pairs == 0 or ids.value.len <= width or ids.value.len + 2 * pairs + 2 > 4096) return error.ExpectedArgs;
+        var caches: [8]inkling.Cache = undefined;
+        var refs: [8]*inkling.Cache = undefined;
+        var made: usize = 0;
+        defer for (0..made) |i| caches[i].deinit();
+        var ps = try inkling.PrefillScratch.init(m.device, c, inkling.default_chunk);
+        defer ps.deinit();
+        var ds = try inkling.Scratch.init(m.device, c);
+        defer ds.deinit();
+        var bs = try inkling.BatchScratch.init(m.device, c, width);
+        defer bs.deinit();
+        const logits = try gpa.alloc(f32, width * vocab);
+        defer gpa.free(logits);
+        var tokens: [8]u32 = undefined;
+        for (0..width) |row| {
+            caches[row] = try inkling.Cache.init(m.device, c, 4096);
+            made += 1;
+            refs[row] = &caches[row];
+            const len = ids.value.len - row;
+            var at: usize = 0;
+            while (at < len) {
+                const take = @min(ps.chunk, len - at);
+                try inkling.prefillWant(m, &ps, &caches[row], ids.value[at..][0..take], if (at + take == len) .last else .none);
+                at += take;
+            }
+            tokens[row] = argmax(ps.logits.slice(f32, vocab));
+        }
+        const batch_samples = try gpa.alloc(f64, pairs);
+        defer gpa.free(batch_samples);
+        const serial_samples = try gpa.alloc(f64, pairs);
+        defer gpa.free(serial_samples);
+        for (0..pairs + 1) |pair| {
+            for (0..2) |order| {
+                const is_batch = (order == 0) == (pair % 2 == 0);
+                const start = now();
+                if (is_batch) {
+                    try inkling.batchStep(m, &bs, refs[0..width], tokens[0..width], logits);
+                } else {
+                    for (0..width) |row| {
+                        try inkling.position(m, &ds, &caches[row], tokens[row]);
+                        @memcpy(logits[row * vocab ..][0..vocab], ds.logits.slice(f32, vocab));
+                    }
+                }
+                const elapsed = @as(f64, @floatFromInt(now() - start)) / 1e6;
+                for (0..width) |row| tokens[row] = argmax(logits[row * vocab ..][0..vocab]);
+                if (pair > 0) {
+                    if (is_batch) batch_samples[pair - 1] = elapsed else serial_samples[pair - 1] = elapsed;
+                    std.debug.print("batchbench width={d} pair={d} mode={s} ms={d:.3}\n", .{ width, pair, if (is_batch) "batch" else "serial", elapsed });
+                }
+            }
+        }
+        std.mem.sort(f64, batch_samples, {}, std.sort.asc(f64));
+        std.mem.sort(f64, serial_samples, {}, std.sort.asc(f64));
+        const bm = if (pairs % 2 == 1) batch_samples[pairs / 2] else (batch_samples[pairs / 2 - 1] + batch_samples[pairs / 2]) / 2;
+        const sm = if (pairs % 2 == 1) serial_samples[pairs / 2] else (serial_samples[pairs / 2 - 1] + serial_samples[pairs / 2]) / 2;
+        std.debug.print("batchbench width={d} pairs={d} batch_ms={d:.3} batch_range={d:.3}-{d:.3} serial_ms={d:.3} serial_range={d:.3}-{d:.3} batch_tok_s={d:.3} serial_tok_s={d:.3}\n", .{ width, pairs, bm, batch_samples[0], batch_samples[pairs - 1], sm, serial_samples[0], serial_samples[pairs - 1], @as(f64, @floatFromInt(width)) * 1000 / bm, @as(f64, @floatFromInt(width)) * 1000 / sm });
+        return;
+    }
     if (std.mem.eql(u8, mode, "greedy-prefill") or std.mem.eql(u8, mode, "greedy-copy") or std.mem.eql(u8, mode, "greedy-hybrid") or std.mem.eql(u8, mode, "greedy-decode")) {
         if (args.len != 6) return error.ExpectedArgs;
         const steps = try std.fmt.parseInt(usize, args[4], 10);

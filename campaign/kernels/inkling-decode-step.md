@@ -68,3 +68,9 @@ python3 campaign/kernels/inkling_profile.py trace --trace .work/tmp/d1-base-trac
 ```
 
 The trace process label includes the process ID; substitute the recorded process label when reproducing. The first launch attempt used `sh` instead of `/bin/sh` and exited 2 without running the model; the second exited 0. The `timed-run.sh` wrapper is the one in `inkling-f16-kv.md` and applies the GPU admission, CPU admission and post-checks, and compiler monitor.
+
+## Rejected attention gate fusion
+
+A candidate folded the sigmoid gate into the batch attention combine kernel for affine projections, removing 48 dispatches. The oQ4e family test command exited 0 with 82/82 tests and zero batch/decode logit and cache differences at widths 1, 2 and 4. The candidate was reverted because timings did not establish a reproducible speedup.
+
+Three interleaved K=1 pairs at 2,500 cached IDs gave base 21.590, 21.450 and 21.513 ms and candidate 21.560, 21.436 and 21.713 ms. Five K=4 pairs gave base 45.174, 45.658, 45.236, 39.773 and 39.740 ms, and candidate 43.848, 43.855, 43.123, 44.832 and 39.863 ms. Pair order was base/candidate, candidate/base, base/candidate, candidate/base, base/candidate. The first three pairs favored the candidate but later pairs did not; serial controls varied from approximately 84 to 101 ms. All retained `batchbench K 5` invocations passed GPU and CPU gates and the compiler monitor; gate deferrals were discarded. The spread and serial-control drift make a causal speed claim inconclusive.

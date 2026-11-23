@@ -48,6 +48,24 @@ pub fn chooseFork(slots: anytype, target: usize, prompt: []const u32, own: usize
     return best;
 }
 
+pub const Admission = struct { choice: Choice, fork: ?Fork };
+
+pub fn chooseAdmission(slots: anytype, prompt: []const u32, enabled: bool) ?Admission {
+    var best: ?Admission = null;
+    for (slots, 0..) |*slot, i| {
+        if (slot.job != null) continue;
+        var choice = Choice{};
+        choice.consider(i, slot.resident.items, slot.last_used, prompt, enabled);
+        const fork = chooseFork(slots, i, prompt, choice.reused, enabled);
+        const tokens = if (fork) |f| f.point else choice.reused;
+        const best_tokens = if (best) |b| (if (b.fork) |f| f.point else b.choice.reused) else 0;
+        if (best == null or tokens > best_tokens or (tokens == best_tokens and choice.last_used < best.?.choice.last_used)) {
+            best = .{ .choice = choice, .fork = fork };
+        }
+    }
+    return best;
+}
+
 pub fn cancelled(id: u64, background: bool, closing: bool, foreground_waiting: bool, cancels: []const u64) bool {
     return closing or (background and foreground_waiting) or std.mem.indexOfScalar(u64, cancels, id) != null;
 }
@@ -167,4 +185,11 @@ test "choose the longest available fork and retain longer own reuse" {
     try std.testing.expectEqual(null, chooseFork(&slots, 0, &.{ 1, 2, 3, 4, 5, 6 }, 5, true));
     try std.testing.expectEqual(null, chooseFork(&slots, 0, &.{ 1, 2, 3, 4, 5, 6 }, 0, false));
     try std.testing.expectEqualSlices(u32, &.{ 1, 2, 3, 4, 5, 8, 9 }, slots[1].resident.items);
+    slots[1].job = null;
+    slots[1].last_used = 0;
+    slots[0].last_used = 1;
+    slots[2].last_used = 2;
+    const admission = chooseAdmission(&slots, &.{ 1, 2, 3, 4, 5, 6 }, true).?;
+    try std.testing.expectEqual(@as(usize, 1), admission.fork.?.source);
+    try std.testing.expect(admission.choice.index != 1);
 }

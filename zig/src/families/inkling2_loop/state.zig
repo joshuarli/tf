@@ -99,6 +99,26 @@ pub const Cache = struct {
         }
     };
 
+    pub fn copyFrom(c: *Cache, queue: mtl.Queue, config: *const cfg.Config, source: *const Cache, len: usize) !void {
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
+        const cb = queue.commandBuffer();
+        const blit = cb.blit();
+        for ([_]mtl.Buffer{ source.k_conv, source.v_conv, source.attn_conv, source.mlp_conv }, [_]mtl.Buffer{ c.k_conv, c.v_conv, c.attn_conv, c.mlp_conv }) |src, dst| blit.copy(src, 0, dst, 0, src.length());
+        const row_bytes = config.text.local.kv * config.text.local.dim * 4;
+        for (0..config.slots()) |slot| {
+            const bytes = (if (isLocalSlot(config, slot)) config.text.window else len) * row_bytes;
+            for ([_]mtl.Buffer{ source.keys, source.values }, [_]mtl.Buffer{ c.keys, c.values }) |src, dst| {
+                if (bytes > 0) blit.copy(src, source.baseOffset(config, slot), dst, c.baseOffset(config, slot), bytes);
+            }
+        }
+        blit.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |_| return error.GpuFailed;
+        c.len = len;
+    }
+
     pub fn isLocalSlot(c0: *const cfg.Config, s: usize) bool {
         const phys = c0.loop.physicalLayer(c0.text.layers, @intCast(s));
         return !c0.isFull(phys);
@@ -526,4 +546,52 @@ test "prompt rollback restores the state after generated tokens overwrite rings"
 
 test "bounded prompt rollback restores rows across the ring wrap" {
     try checkPromptRollback(true);
+}
+
+test "fork restores the same cache and continuation as its prefill schedule" {
+    const path = std.c.getenv("TF_INKLING2_LOOP_DIR") orelse return error.SkipZigTest;
+    const model = try @import("model.zig").Model.load(std.testing.allocator, std.testing.io, std.mem.span(path));
+    defer model.deinit();
+    const config = &model.config;
+    const point = config.text.window + 128;
+    var source = try Cache.init(model.device, config, point + 256);
+    defer source.deinit();
+    var direct = try Cache.init(model.device, config, point + 256);
+    defer direct.deinit();
+    var forked = try Cache.init(model.device, config, point + 256);
+    defer forked.deinit();
+    var prefill = try @import("prefill.zig").PrefillScratch.init(model.device, config, 512);
+    defer prefill.deinit();
+    var snapshot = try Cache.Rollback.initRows(model.device, config, 128);
+    defer snapshot.deinit();
+    var ids: [512]u32 = undefined;
+    for (&ids, 0..) |*id, i| id.* = @intCast(100 + i % 71);
+    for ([_]*Cache{ &source, &direct }) |cache| {
+        var at: usize = 0;
+        while (at < point) {
+            const take = @min(ids.len, point - at);
+            try @import("prefill.zig").prefillWant(model, &prefill, cache, ids[0..take], .none);
+            at += take;
+        }
+    }
+    try snapshot.copy(model.queue, config, &source, true);
+    try @import("prefill.zig").prefillWant(model, &prefill, &source, ids[0..128], .none);
+    const before = try readPromptState(model.device, model.queue, config, &source);
+    defer before.deinit();
+    try forked.copyFrom(model.queue, config, &source, point);
+    try snapshot.copy(model.queue, config, &forked, false);
+    try std.testing.expectEqual(point, forked.len);
+    const expected = try readPromptState(model.device, model.queue, config, &direct);
+    defer expected.deinit();
+    const actual = try readPromptState(model.device, model.queue, config, &forked);
+    defer actual.deinit();
+    try std.testing.expectEqualSlices(u8, expected.slice(u8, expected.length()), actual.slice(u8, actual.length()));
+    const after = try readPromptState(model.device, model.queue, config, &source);
+    defer after.deinit();
+    try std.testing.expectEqualSlices(u8, before.slice(u8, before.length()), after.slice(u8, after.length()));
+    try @import("prefill.zig").prefillWant(model, &prefill, &direct, ids[0..128], .last);
+    const logits = try std.testing.allocator.dupe(f32, prefill.logits.slice(f32, config.text.unpadded_vocab));
+    defer std.testing.allocator.free(logits);
+    try @import("prefill.zig").prefillWant(model, &prefill, &forked, ids[0..128], .last);
+    try std.testing.expectEqualSlices(f32, logits, prefill.logits.slice(f32, config.text.unpadded_vocab));
 }

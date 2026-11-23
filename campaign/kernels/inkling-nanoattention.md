@@ -99,6 +99,13 @@ at critical host memory pressure with a 0.0 GB footprint and no worker
 receipt. Those cells remain unmeasured. The structured retry reported a
 5,047 MB host swap increase while waiting.
 
+The first accepted 16K TensorFold process reported only 3.4 GB peak charge,
+far below the shorter-cell charges. `heavy.py` measures host wired growth from
+before it acquires the shared lock (`campaign/heavy.py:151-156`). Existing
+wired pages can therefore be
+absent from the increment charged to a later process. A reported charge is
+the watchdog's measurement, not proof of total model physical memory.
+
 Both engines allocate **65,536 bytes per additional context token** for global
 key and value state. The checkpoint has eight global attention visits after
 expanding the loop. Each visit stores keys and values for eight 128-element

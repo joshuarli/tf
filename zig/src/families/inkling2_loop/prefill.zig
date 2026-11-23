@@ -121,6 +121,8 @@ pub const Pipes = struct {
     affine_half_rows: ?mtl.Pipeline,
     affine_stage_prepare: ?mtl.Pipeline,
     affine_stage_gemm: ?mtl.Pipeline,
+    affine_stage_split: ?mtl.Pipeline,
+    affine_stage_gemm_split: ?mtl.Pipeline,
     float_mpp: ?mtl.Pipeline,
     affine_half_up: ?mtl.Pipeline,
     affine_half_down: ?mtl.Pipeline,
@@ -182,6 +184,8 @@ pub const Pipes = struct {
         if (p.affine_half_rows) |pipe| pipe.deinit();
         if (p.affine_stage_prepare) |pipe| pipe.deinit();
         if (p.affine_stage_gemm) |pipe| pipe.deinit();
+        if (p.affine_stage_split) |pipe| pipe.deinit();
+        if (p.affine_stage_gemm_split) |pipe| pipe.deinit();
         if (p.float_mpp) |pipe| pipe.deinit();
         if (p.affine_half_up) |pipe| pipe.deinit();
         if (p.affine_half_down) |pipe| pipe.deinit();
@@ -292,10 +296,12 @@ pub const PrefillScratch = struct {
     xh: ?mtl.Buffer,
     act_h: ?mtl.Buffer,
     affine_stage_w: ?mtl.Buffer,
+    /// A chunk's staged-projection input as hi and lo halves, [2][rows][k].
+    affine_stage_x: ?mtl.Buffer,
     affine_stage_extent: usize,
     fast: bool,
     half: bool,
-    /// The half path's expert matrices and attention on the tensor units; off selects the shader-core kernels.
+    /// The half path's expert matrices, attention and staged projections on tensor units; off is the shader cores.
     units: bool,
     capture: ?mtl.Buffer,
     capture_row: usize,
@@ -337,6 +343,8 @@ pub const PrefillScratch = struct {
         s.affine_stage_extent = @max(2 * h, @max(qw, @max(kvw, rank)));
         s.affine_stage_w = if (c.checkpoint == .mlx and device.tensorUnits()) try device.buffer(@max(s.affine_stage_extent * s.affine_stage_extent * 2, 16), mtl.ResourceOptions.private) else null;
         errdefer if (s.affine_stage_w) |buf| buf.deinit();
+        s.affine_stage_x = if (s.affine_stage_w != null) try device.buffer(@max(chunk * s.affine_stage_extent * 4, 16), mtl.ResourceOptions.private) else null;
+        errdefer if (s.affine_stage_x) |buf| buf.deinit();
         s.capture = null;
         s.capture_row = 0;
         s.routes = null;
@@ -429,15 +437,23 @@ pub const PrefillScratch = struct {
         errdefer if (s.pipes.float_mpp) |pipe| pipe.deinit();
         s.pipes.affine_stage_prepare = null;
         s.pipes.affine_stage_gemm = null;
+        s.pipes.affine_stage_split = null;
+        s.pipes.affine_stage_gemm_split = null;
         if (s.affine_stage_w != null) {
             const stage_lib = try mtl.Library.fromSource(device, kernels.affine_stage, opts);
             defer stage_lib.deinit();
             s.pipes.affine_stage_prepare = try mtl.Pipeline.init(device, stage_lib, "i2as_prepare", false);
             errdefer s.pipes.affine_stage_prepare.?.deinit();
             s.pipes.affine_stage_gemm = try mtl.Pipeline.init(device, stage_lib, "i2as_gemm", false);
+            errdefer s.pipes.affine_stage_gemm.?.deinit();
+            s.pipes.affine_stage_split = try mtl.Pipeline.init(device, stage_lib, "i2as_split", false);
+            errdefer s.pipes.affine_stage_split.?.deinit();
+            s.pipes.affine_stage_gemm_split = try mtl.Pipeline.init(device, stage_lib, "i2as_gemm_split", false);
         }
         errdefer if (s.pipes.affine_stage_prepare) |pipe| pipe.deinit();
         errdefer if (s.pipes.affine_stage_gemm) |pipe| pipe.deinit();
+        errdefer if (s.pipes.affine_stage_split) |pipe| pipe.deinit();
+        errdefer if (s.pipes.affine_stage_gemm_split) |pipe| pipe.deinit();
         s.pipes.affine_half_rows = null;
         s.pipes.affine_half_up = null;
         s.pipes.affine_half_down = null;
@@ -620,6 +636,7 @@ pub const PrefillScratch = struct {
         if (s.xh) |buf| buf.deinit();
         if (s.act_h) |buf| buf.deinit();
         if (s.affine_stage_w) |buf| buf.deinit();
+        if (s.affine_stage_x) |buf| buf.deinit();
         s.pipes.deinit();
         inline for ([_][]const u8{ "ids", "x", "prelude", "passout", "bank", "n0", "n1", "n2", "m0", "q", "k", "v", "r", "kc", "vc", "kh", "vh", "kdyn", "vdyn", "sink", "relbias", "attn", "gate", "projout", "o", "aconv", "moe", "blocks", "staged", "mixout", "msg", "h2in", "normed", "tanhg", "tanhf", "router", "picks", "wts", "act", "down", "moe_cnt", "moe_off", "moe_cur", "moe_sorted", "logits" }) |f| @field(s, f).deinit();
     }
@@ -749,6 +766,14 @@ const Chunk = struct {
                 const staged_w = b(c.s.affine_stage_w.?);
                 c.setP(c.s.pipes.affine_stage_prepare.?, args, &.{ t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, staged_w, b(c.s.half_overflow.?) });
                 c.enc.dispatchThreads(mtl.Size.of(@as(usize, n) * args.k / 4, 1, 1), mtl.Size.of(256, 1, 1));
+                if (c.s.units and c.s.pipes.affine_stage_gemm_split != null and args.k % 4 == 0) {
+                    const split = b(c.s.affine_stage_x.?);
+                    c.setP(c.s.pipes.affine_stage_split.?, args, &.{ x.buf, A, split, b(c.s.half_overflow.?) });
+                    c.enc.dispatchThreads(mtl.Size.of(@as(usize, rows) * args.k / 4, 1, 1), mtl.Size.of(256, 1, 1));
+                    c.setP(c.s.pipes.affine_stage_gemm_split.?, args, &.{ split, staged_w, A, out });
+                    c.enc.dispatchGroups(mtl.Size.of((n + 63) / 64, (rows + 63) / 64, 1), mtl.Size.of(128, 1, 1));
+                    return;
+                }
                 c.setP(c.s.pipes.affine_stage_gemm.?, args, &.{ x.buf, staged_w, A, out });
                 c.enc.dispatchGroups(mtl.Size.of((n + 31) / 32, (rows + 15) / 16, 1), mtl.Size.of(128, 1, 1));
                 return;

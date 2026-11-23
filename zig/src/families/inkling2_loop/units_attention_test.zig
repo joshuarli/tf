@@ -156,3 +156,107 @@ test "tensor-unit attention meets fp64 bounds across windows, cached keys and ro
         std.debug.print("attention base={d} window={d} rows={d}: units worst {e}, simdgroup worst {e}\n", .{ base, args.window, rows, worst[0], worst[1] });
     }
 }
+
+const StageArgs = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32, bits: u32, cap: f32 };
+
+test "split-half staged projections keep f32 inputs to their representation error" {
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    if (!device.tensorUnits()) return error.SkipZigTest;
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, @import("kernels.zig").affine_stage, mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const split = try mtl.Pipeline.init(device, lib, "i2as_split", false);
+    defer split.deinit();
+    const gemm = try mtl.Pipeline.init(device, lib, "i2as_gemm_split", false);
+    defer gemm.deinit();
+    const gamma = struct {
+        fn of(k: usize) f64 {
+            const u = @as(f64, @floatFromInt(k + 2)) * 0x1p-24;
+            return u / (1.0 - u);
+        }
+    }.of;
+    for ([_]StageArgs{
+        .{ .n = 200, .k = 320, .rows = 77, .xs = 2, .xb = 1, .bits = 8, .cap = 0 },
+        .{ .n = 96, .k = 2304, .rows = 130, .xs = 1, .xb = 0, .bits = 8, .cap = 30 },
+    }) |args| {
+        const k: usize = args.k;
+        const n: usize = args.n;
+        const rows: usize = args.rows;
+        const in_rows = args.xb + rows * args.xs;
+        const x = try device.buffer(in_rows * k * 4, mtl.ResourceOptions.shared);
+        defer x.deinit();
+        for (x.slice(f32, in_rows * k), 0..) |*v, i| {
+            const mantissa: f32 = @floatFromInt(@as(i32, @intCast((i *% 2654435761) % 1000003)) - 500001);
+            v.* = mantissa / 700001.0 * std.math.pow(f32, 2.0, @floatFromInt(@as(i32, @intCast(i % 9)) - 4));
+        }
+        const w = try device.buffer(n * k * 2, mtl.ResourceOptions.shared);
+        defer w.deinit();
+        for (w.slice(f16, n * k), 0..) |*v, i| v.* = @floatCast(@as(f32, @floatFromInt(@as(i32, @intCast((i *% 37 + i / k *% 11) % 255)) - 127)) / 4096.0);
+        const halves = try device.buffer(2 * rows * k * 2, mtl.ResourceOptions.shared);
+        defer halves.deinit();
+        const y = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared);
+        defer y.deinit();
+        @memset(y.slice(f32, rows * n), std.math.nan(f32));
+        const overflow = try device.buffer(16, mtl.ResourceOptions.shared);
+        defer overflow.deinit();
+        overflow.slice(u32, 1)[0] = 0;
+        const cb = queue.commandBuffer();
+        const enc = cb.compute(.serial);
+        enc.setPipeline(split);
+        enc.setBuffer(x, 0, 0);
+        enc.setValue(args, 1);
+        enc.setBuffer(halves, 0, 2);
+        enc.setBuffer(overflow, 0, 3);
+        enc.dispatchThreads(mtl.Size.of(rows * k / 4, 1, 1), mtl.Size.of(256, 1, 1));
+        enc.setPipeline(gemm);
+        enc.setBuffer(halves, 0, 0);
+        enc.setBuffer(w, 0, 1);
+        enc.setValue(args, 2);
+        enc.setBuffer(y, 0, 3);
+        enc.dispatchGroups(mtl.Size.of((n + 63) / 64, (rows + 63) / 64, 1), mtl.Size.of(128, 1, 1));
+        enc.end();
+        try finish(cb);
+        try t.expectEqual(@as(u32, 0), overflow.slice(u32, 1)[0]);
+        const hs = halves.slice(f16, 2 * rows * k);
+        var worst: f64 = 0;
+        for (0..rows) |r| for (0..n) |c| {
+            var sum: f64 = 0;
+            var mag: f64 = 0;
+            var lost: f64 = 0;
+            for (0..k) |j| {
+                const xv: f64 = x.slice(f32, in_rows * k)[(args.xb + r * args.xs) * k + j];
+                const hi: f64 = @floatCast(hs[r * k + j]);
+                const lo: f64 = @floatCast(hs[(rows + r) * k + j]);
+                try t.expectEqual(@as(f16, @floatCast(xv)), hs[r * k + j]);
+                const wv: f64 = @floatCast(w.slice(f16, n * k)[c * k + j]);
+                sum += xv * wv;
+                mag += (@abs(hi) + @abs(lo)) * @abs(wv);
+                lost += @abs(xv - hi - lo) * @abs(wv);
+            }
+            const want = if (args.cap > 0) args.cap * std.math.tanh(sum / args.cap) else sum;
+            const got: f64 = y.slice(f32, rows * n)[r * n + c];
+            const bound = gamma(2 * k) * mag + lost + 4 * 0x1p-24 * @abs(want) + 1e-30;
+            worst = @max(worst, @abs(got - want) / @max(bound, 1e-30));
+            if (!(@abs(got - want) <= bound)) {
+                std.debug.print("split stage n={d} k={d} row={d} col={d} got={e} want={e} bound={e}\n", .{ n, k, r, c, got, want, bound });
+                return error.StageReferenceMismatch;
+            }
+        };
+        std.debug.print("split stage n={d} k={d} rows={d}: worst error/bound {d:.4}\n", .{ n, k, rows, worst });
+        x.slice(f32, in_rows * k)[args.xb * k + 1] = 70000;
+        overflow.slice(u32, 1)[0] = 0;
+        const cb2 = queue.commandBuffer();
+        const enc2 = cb2.compute(.serial);
+        enc2.setPipeline(split);
+        enc2.setBuffer(x, 0, 0);
+        enc2.setValue(args, 1);
+        enc2.setBuffer(halves, 0, 2);
+        enc2.setBuffer(overflow, 0, 3);
+        enc2.dispatchThreads(mtl.Size.of(rows * k / 4, 1, 1), mtl.Size.of(256, 1, 1));
+        enc2.end();
+        try finish(cb2);
+        try t.expect(overflow.slice(u32, 1)[0] > 0);
+    }
+}

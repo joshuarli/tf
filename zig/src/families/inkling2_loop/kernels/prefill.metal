@@ -203,6 +203,51 @@ struct i2p_gemm_args { uint n, k, rows, xs, xb; float cap; };
   }
 }
 
+struct i2p_rms_pair_args { uint width, xs0, xb0, xs1, xb1; float eps; };
+
+[[kernel]] void i2p_rms_pair(const device float* X0 [[buffer(0)]], const device float* X1 [[buffer(1)]],
+    constant i2p_rms_pair_args& a [[buffer(2)]], device float* O [[buffer(3)]],
+    uint group [[threadgroup_position_in_grid]], uint t [[thread_position_in_threadgroup]], uint nth [[threads_per_threadgroup]]) {
+  threadgroup float part[32];
+  const uint j = group % 2u, row = group / 2u;
+  const device float* src = j == 0u ? X0 + (size_t)(a.xb0 + row * a.xs0) * a.width
+                                    : X1 + (size_t)(a.xb1 + row * a.xs1) * a.width;
+  device float* dst = O + ((size_t)row * 2u + j) * a.width;
+  float sum = 0.0f;
+  for (uint i = t; i < a.width; i += nth) sum = fma(src[i], src[i], sum);
+  sum = simd_sum(sum);
+  if (t % 32u == 0u) part[t / 32u] = sum;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float total = 0.0f;
+  for (uint i = 0; i < nth / 32u; ++i) total += part[i];
+  const float inv = 1.0f / sqrt(total / float(a.width) + a.eps);
+  for (uint i = t; i < a.width; i += nth) dst[i] = src[i] * inv;
+}
+
+struct i2p_rms3_args { uint width, xs[3], xb[3]; float eps; };
+
+[[kernel]] void i2p_rms3(const device float* X0 [[buffer(0)]], const device float* X1 [[buffer(1)]],
+    const device float* X2 [[buffer(2)]], const device bfloat* W0 [[buffer(3)]],
+    const device bfloat* W1 [[buffer(4)]], const device bfloat* W2 [[buffer(5)]],
+    constant i2p_rms3_args& a [[buffer(6)]], device float* O0 [[buffer(7)]],
+    device float* O1 [[buffer(8)]], device float* O2 [[buffer(9)]],
+    uint group [[threadgroup_position_in_grid]], uint t [[thread_position_in_threadgroup]], uint nth [[threads_per_threadgroup]]) {
+  threadgroup float part[32];
+  const uint j = group % 3u, row = group / 3u;
+  const device float* src = (j == 0u ? X0 : j == 1u ? X1 : X2) + (size_t)(a.xb[j] + row * a.xs[j]) * a.width;
+  const device bfloat* w = j == 0u ? W0 : j == 1u ? W1 : W2;
+  device float* dst = (j == 0u ? O0 : j == 1u ? O1 : O2) + (size_t)row * a.width;
+  float sum = 0.0f;
+  for (uint i = t; i < a.width; i += nth) sum = fma(src[i], src[i], sum);
+  sum = simd_sum(sum);
+  if (t % 32u == 0u) part[t / 32u] = sum;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float total = 0.0f;
+  for (uint i = 0; i < nth / 32u; ++i) total += part[i];
+  const float inv = 1.0f / sqrt(total / float(a.width) + a.eps);
+  for (uint i = t; i < a.width; i += nth) dst[i] = src[i] * inv * float(w[i]);
+}
+
 [[kernel]] void i2p_ctl(const device float* CUR [[buffer(0)]], const device float* MSG [[buffer(1)]],
     const device float* GAIN [[buffer(2)]], const device float* FORGET [[buffer(3)]],
     constant i2p_ctl_args& a [[buffer(4)]], device float* O [[buffer(5)]], uint2 p [[thread_position_in_grid]]) {
@@ -214,16 +259,47 @@ struct i2p_gemm_args { uint n, k, rows, xs, xb; float cap; };
   O[(size_t)(a.yb + p.y * a.ys) * a.h + p.x] = c - f * c + g * m;
 }
 
-[[kernel]] void i2p_gather(const device float* BLK [[buffer(0)]], const device float* CUR [[buffer(1)]],
+[[kernel]] void i2p_gather_rms(const device float* BLK [[buffer(0)]], const device float* CUR [[buffer(1)]],
     constant i2p_gather_args& a [[buffer(2)]], device float* ST [[buffer(3)]],
-    uint t [[threadgroup_position_in_grid]], uint i [[thread_position_in_threadgroup]], uint nth [[threads_per_threadgroup]]) {
-  for (uint j = 0; j < a.depth; ++j) {
-    const device float* src = j + 1u < a.depth
-      ? BLK + ((size_t)t * a.stride + (a.depth - 2u - j)) * a.width
-      : CUR + (size_t)t * a.width;
-    device float* dst = ST + ((size_t)t * a.depth + j) * a.width;
-    for (uint u = i; u < a.width; u += nth) dst[u] = src[u];
-  }
+    uint group [[threadgroup_position_in_grid]], uint t [[thread_position_in_threadgroup]], uint nth [[threads_per_threadgroup]]) {
+  threadgroup float part[32];
+  const uint j = group % a.depth, row = group / a.depth;
+  const device float* src = j + 1u < a.depth
+    ? BLK + ((size_t)row * a.stride + (a.depth - 2u - j)) * a.width
+    : CUR + (size_t)row * a.width;
+  device float* dst = ST + ((size_t)row * a.depth + j) * a.width;
+  float sum = 0.0f;
+  for (uint i = t; i < a.width; i += nth) sum = fma(src[i], src[i], sum);
+  sum = simd_sum(sum);
+  if (t % 32u == 0u) part[t / 32u] = sum;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float total = 0.0f;
+  for (uint i = 0; i < nth / 32u; ++i) total += part[i];
+  const float inv = 1.0f / sqrt(total / float(a.width) + 1e-6f);
+  for (uint i = t; i < a.width; i += nth) dst[i] = src[i] * inv;
+}
+
+struct i2p_pass_copy_args { uint width, stride, start, count; };
+
+[[kernel]] void i2p_pass_copy(const device float* BLK [[buffer(0)]], device float* X [[buffer(1)]],
+    const device float* PRELUDE [[buffer(2)]], device float* BANK [[buffer(3)]], device float* OUT [[buffer(4)]],
+    constant i2p_pass_copy_args& a [[buffer(5)]], uint2 p [[thread_position_in_grid]]) {
+  if (p.x >= a.width) return;
+  const size_t at = (size_t)p.y * a.width + p.x;
+  for (uint i = 0; i < a.count; ++i)
+    BANK[((size_t)p.y * a.stride + i) * a.width + p.x] = BLK[((size_t)p.y * a.stride + a.start + i) * a.width + p.x];
+  OUT[at] = X[at];
+  X[at] = PRELUDE[at];
+}
+
+struct i2p_scatter_args { uint width, stride, slot; };
+
+[[kernel]] void i2p_scatter(device float* X [[buffer(0)]], constant i2p_scatter_args& a [[buffer(1)]],
+    device float* O [[buffer(2)]], const device float* NEXT [[buffer(3)]], uint2 p [[thread_position_in_grid]]) {
+  if (p.x >= a.width) return;
+  const size_t at = (size_t)p.y * a.width + p.x;
+  O[((size_t)p.y * a.stride + a.slot) * a.width + p.x] = X[at];
+  X[at] = NEXT[at];
 }
 
 [[kernel]] void i2p_mix(const device float* S [[buffer(0)]], const device float* Q [[buffer(1)]],
@@ -338,6 +414,72 @@ struct i2p_gemm_args { uint n, k, rows, xs, xb; float cap; };
   for (uint u = i; u < a.width; u += nth) O[at + u] = X[at + u] * clip;
 }
 
+struct i2p_clip3_args { uint heads, kv, dim, rel; float q_threshold, rel_threshold; };
+
+[[kernel]] void i2p_clip3(device float* Q [[buffer(0)]], const device bfloat* QS [[buffer(1)]],
+    device float* R [[buffer(2)]], const device bfloat* RS [[buffer(3)]], device float* K [[buffer(4)]],
+    constant i2p_clip3_args& a [[buffer(5)]], uint group [[threadgroup_position_in_grid]],
+    uint t [[thread_position_in_threadgroup]], uint nth [[threads_per_threadgroup]]) {
+  threadgroup float part[32];
+  const uint per = 2u * a.heads + a.kv, row = group / per, g = group % per;
+  const bool q = g < a.heads, r = !q && g < 2u * a.heads;
+  const uint head = q ? g : r ? g - a.heads : g - 2u * a.heads;
+  const uint width = r ? a.rel : a.dim;
+  const size_t at = (size_t)head * width;
+  device float* x = q ? Q + (size_t)row * a.heads * a.dim
+                     : r ? R + (size_t)row * a.heads * a.rel : K + (size_t)row * a.kv * a.dim;
+  const device bfloat* scale = q ? QS + at : r ? RS + at : QS;
+  float sum = 0.0f;
+  for (uint i = t; i < width; i += nth) {
+    const float v = r || q ? x[at + i] * float(scale[i]) : x[at + i];
+    sum = fma(v, v, sum);
+  }
+  sum = simd_sum(sum);
+  if (t % 32u == 0u) part[t / 32u] = sum;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float total = 0.0f;
+  for (uint i = 0; i < nth / 32u; ++i) total += part[i];
+  const float threshold = r ? a.rel_threshold : a.q_threshold;
+  const float clip = clamp(threshold / (sqrt(total) + 1e-6f), 0.0f, 1.0f);
+  for (uint i = t; i < width; i += nth) {
+    const float v = r || q ? x[at + i] * float(scale[i]) : x[at + i];
+    x[at + i] = v * clip;
+  }
+}
+
+struct i2p_batch_conv_row { device float* ring; uint pos, pad; };
+struct i2p_batch_conv_args { uint channels, heads, ring, pos, layout; float norm; uint residual; };
+
+[[kernel]] void i2p_batch_conv(const device float* X [[buffer(0)]], const device bfloat* W [[buffer(1)]],
+    const device float* D [[buffer(2)]], constant i2p_batch_conv_args& a [[buffer(3)]],
+    device float* O [[buffer(4)]], constant i2p_batch_conv_row* rows [[buffer(5)]],
+    uint2 p [[thread_position_in_grid]]) {
+  if (p.x >= a.channels) return;
+  const uint c = p.x, pos = rows[p.y].pos;
+  device float* ring = rows[p.y].ring;
+  const device float* x = X + (size_t)p.y * a.channels;
+  float sum = x[c];
+  for (uint k = 0; k < 4u; ++k) {
+    const int at = int(pos) + int(k) - 3;
+    if (at < 0) continue;
+    const float v = at == int(pos) ? x[c] : ring[(uint(at) % a.ring) * a.channels + c];
+    const size_t tap = a.layout ? (size_t)(3u - k) * a.channels + c : (size_t)c * 4u + k;
+    sum = fma(v, i2p_bf(W, tap), sum);
+  }
+  if (a.heads > 0u) {
+    const uint head = c / (a.channels / a.heads);
+    for (uint lag = 0; lag < 4u; ++lag) {
+      if (lag > pos) continue;
+      const float v = lag == 0u ? x[c] : ring[((pos - lag) % a.ring) * a.channels + c];
+      sum = fma(v, D[(size_t)p.y * a.heads * 4u + head * 4u + lag], sum);
+    }
+  }
+  ring[(pos % a.ring) * a.channels + c] = x[c];
+  const size_t out = (size_t)p.y * a.channels + c;
+  const float value = sum * a.norm;
+  if (a.residual) O[out] += value; else O[out] = value;
+}
+
 [[kernel]] void i2p_conv(const device float* X [[buffer(0)]], const device float* RING [[buffer(1)]],
     const device bfloat* W [[buffer(2)]], const device float* D [[buffer(3)]],
     constant i2p_conv_args& a [[buffer(4)]], device float* O [[buffer(5)]],
@@ -387,6 +529,30 @@ struct i2p_gemm_args { uint n, k, rows, xs, xb; float cap; };
   const uint r = a.wring ? (a.base + p.y) % a.wring : a.base + p.y;
   KEYS[(size_t)r * a.count + p.x] = K[(size_t)p.y * a.count + p.x];
   VALUES[(size_t)r * a.count + p.x] = V[(size_t)p.y * a.count + p.x];
+}
+
+struct i2p_batch_store_row { device float* keys; device float* values; uint pos, pad; };
+struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; float scale, floor, alpha; };
+
+[[kernel]] void i2p_batch_store_rel(const device float* K [[buffer(0)]], const device float* V [[buffer(1)]],
+    const device float* R [[buffer(2)]], const device bfloat* P [[buffer(3)]],
+    constant i2p_batch_rel_args& a [[buffer(4)]], device float* O [[buffer(5)]],
+    constant i2p_batch_store_row* rows [[buffer(6)]], uint2 p [[thread_position_in_grid]]) {
+  const uint count = a.kv * a.dim;
+  if (p.x < count) {
+    rows[p.y].keys[p.x] = K[(size_t)p.y * count + p.x];
+    rows[p.y].values[p.x] = V[(size_t)p.y * count + p.x];
+  }
+  const uint cols = a.extent + 1u;
+  if (p.x >= cols * a.heads) return;
+  const uint h = p.x / cols, dist = p.x % cols;
+  const size_t out = (size_t)p.y * cols * a.heads + p.x;
+  if (dist == a.extent) { O[out] = 0.0f; return; }
+  const float tau = a.tau ? 1.0f + a.alpha * precise::log(max(1.0f, (float(rows[p.y].pos) + 1.0f) / a.floor)) : 1.0f;
+  float sum = 0.0f;
+  const device float* r = R + ((size_t)p.y * a.heads + h) * a.rel;
+  for (uint u = 0; u < a.rel; ++u) sum = fma(i2p_bf(P, u * a.extent + dist), r[u], sum);
+  O[out] = sum * tau;
 }
 
 [[kernel]] void i2p_relbias(const device bfloat* P [[buffer(0)]], const device float* R [[buffer(1)]],

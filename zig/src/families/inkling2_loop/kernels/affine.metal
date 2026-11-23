@@ -133,6 +133,41 @@ inline float i2a_dot(const device float* x, const device uint* w, const device b
   if (lane == 0u) out[col] = cur[col] - precise::tanh(f) * cur[col] + precise::tanh(g) * message[col];
 }
 
+struct i2a_batch_control_args { uint k, m0, m1, h, cxs, cxb, mxs, mxb, ys, yb; };
+
+[[kernel]] void i2a_batch_float_control(const device float* x [[buffer(0)]], const device float* gain [[buffer(1)]],
+    const device float* forget [[buffer(2)]], const device float* cur [[buffer(3)]],
+    const device float* message [[buffer(4)]], device float* out [[buffer(5)]],
+    constant i2a_batch_control_args& a [[buffer(6)]], uint2 group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]]) {
+  const uint col = group.x * 8u + tid / 32u;
+  const uint lane = tid % 32u;
+  if (col >= a.m0) return;
+  x += (size_t)group.y * a.k;
+  cur += (size_t)(a.cxb + group.y * a.cxs) * a.h;
+  message += (size_t)(a.mxb + group.y * a.mxs) * a.h;
+  out += (size_t)(a.yb + group.y * a.ys) * a.h;
+  const device float* wg = gain + (size_t)col * a.k;
+  const device float* wf = forget + (size_t)col * a.k;
+  float g = 0.0f, f = 0.0f;
+  uint base = 0u;
+  for (; base + 128u <= a.k; base += 128u) {
+    const uint k = base + lane * 4u;
+    const float4 xv = float4(*reinterpret_cast<const device packed_float4*>(x + k));
+    const float4 gv = float4(*reinterpret_cast<const device packed_float4*>(wg + k));
+    const float4 fv = float4(*reinterpret_cast<const device packed_float4*>(wf + k));
+    g = fma(xv.x, gv.x, g); g = fma(xv.y, gv.y, g); g = fma(xv.z, gv.z, g); g = fma(xv.w, gv.w, g);
+    f = fma(xv.x, fv.x, f); f = fma(xv.y, fv.y, f); f = fma(xv.z, fv.z, f); f = fma(xv.w, fv.w, f);
+  }
+  for (uint k = base + lane; k < a.k; k += 32u) {
+    g = fma(x[k], wg[k], g);
+    f = fma(x[k], wf[k], f);
+  }
+  g = simd_sum(g);
+  f = simd_sum(f);
+  if (lane == 0u) out[col] = cur[col] - precise::tanh(f) * cur[col] + precise::tanh(g) * message[col];
+}
+
 [[kernel]] void i2a_projections(const device float* xq [[buffer(0)]], const device float* xk [[buffer(1)]],
     const device float* xv [[buffer(2)]], const device uint* wq [[buffer(3)]],
     const device bfloat* sq [[buffer(4)]], const device bfloat* bq [[buffer(5)]],
@@ -170,6 +205,45 @@ inline float i2a_dot(const device float* x, const device uint* w, const device b
       : which == 4u ? og : which == 5u ? os : which == 6u ? okd : ovd;
   const float result = i2a_dot(x, w, s, b, row + offset, a.k, 8u, lane);
   if (lane == 0u) out[row] = result;
+}
+
+[[kernel]] void i2a_batch_projections(const device float* xq [[buffer(0)]], const device float* xk [[buffer(1)]],
+    const device float* xv [[buffer(2)]], const device uint* wq [[buffer(3)]],
+    const device bfloat* sq [[buffer(4)]], const device bfloat* bq [[buffer(5)]],
+    const device uint* wk [[buffer(6)]], const device bfloat* sk [[buffer(7)]],
+    const device bfloat* bk [[buffer(8)]], const device uint* wv [[buffer(9)]],
+    const device bfloat* sv [[buffer(10)]], const device bfloat* bv [[buffer(11)]],
+    device float* oq [[buffer(12)]], device float* ok [[buffer(13)]], device float* ov [[buffer(14)]],
+    device float* orl [[buffer(15)]], device float* og [[buffer(16)]], device float* os [[buffer(17)]],
+    device float* okd [[buffer(18)]], device float* ovd [[buffer(19)]],
+    constant i2a_projection_args& a [[buffer(20)]], uint2 group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]]) {
+  uint row = group.x * 8u + tid / 32u;
+  const uint lane = tid % 32u;
+  uint which = 0u;
+  for (; which < 8u; ++which) {
+    if (row < a.m[which]) break;
+    row -= a.m[which];
+  }
+  if (which == 8u) return;
+  const bool key = which == 1u || which == 6u;
+  const bool val = which == 2u || which == 7u;
+  const device float* x = (key ? xk : val ? xv : xq) + (size_t)group.y * a.k;
+  const device uint* w = a.full && key ? wk : a.full && val ? wv : wq;
+  const device bfloat* s = a.full && key ? sk : a.full && val ? sv : sq;
+  const device bfloat* b = a.full && key ? bk : a.full && val ? bv : bq;
+  uint offset = 0u;
+  if (which == 1u) offset = a.full ? 0u : a.m[0];
+  if (which == 2u) offset = a.full ? 0u : a.m[0] + a.m[1];
+  if (which == 3u) offset = a.m[0] + (a.full ? 0u : a.m[1] + a.m[2]);
+  if (which == 4u) offset = a.m[0] + (a.full ? 0u : a.m[1] + a.m[2]) + a.m[3];
+  if (which == 5u) offset = a.m[0] + (a.full ? 0u : a.m[1] + a.m[2]) + a.m[3] + a.m[4];
+  if (which == 6u) offset = a.m[1];
+  if (which == 7u) offset = a.m[2];
+  device float* out = which == 0u ? oq : which == 1u ? ok : which == 2u ? ov : which == 3u ? orl
+      : which == 4u ? og : which == 5u ? os : which == 6u ? okd : ovd;
+  const float result = i2a_dot(x, w, s, b, row + offset, a.k, 8u, lane);
+  if (lane == 0u) out[(size_t)group.y * a.m[which] + row] = result;
 }
 
 [[kernel]] void i2a_dense_rows(const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]],

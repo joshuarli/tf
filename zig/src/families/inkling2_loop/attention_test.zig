@@ -391,3 +391,289 @@ test "ring-backed local attention equals the full cache across the wrap" {
     }
     std.debug.print("ring test: worst pair {e}, worst vs-ref {e}, bound {e}\n", .{ worst_pair, worst_ref, worst_bound });
 }
+
+/// The split and merge kernels before the split staged blocks of rows: one row at a time through threadgroup memory. The staged kernel
+/// must keep its bytes, since prefill's attention and every saved decode result follow this per-row order.
+const serial_split =
+    \\#include <metal_stdlib>
+    \\using namespace metal;
+    \\
+    \\struct i2_attn_parts { uint heads, kv, dim, rel, extent, window, pos, tau, splits, chunk; float scale, floor, alpha; };
+    \\
+    \\[[kernel]] void i2_attn_split(const device float* Q [[buffer(0)]], const device half* KEYS [[buffer(1)]],
+    \\    const device half* VALUES [[buffer(2)]], const device float* B [[buffer(3)]], const device float* sink [[buffer(4)]],
+    \\    constant i2_attn_parts& a [[buffer(5)]], device float* PART [[buffer(6)]],
+    \\    uint tgp [[threadgroup_position_in_grid]], uint tid [[thread_position_in_threadgroup]],
+    \\    uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]],
+    \\    uint nth [[threads_per_threadgroup]]) {
+    \\  const uint G = a.heads / a.kv;
+    \\  const uint D = a.dim, per = max(1u, D / 32u);
+    \\  const uint kv = tgp / a.splits, s = tgp % a.splits, h = kv * G + sg;
+    \\  const float tau = a.tau ? 1.0f + a.alpha * precise::log(max(1.0f, (float(a.pos) + 1.0f) / a.floor)) : 1.0f;
+    \\  float qv[4];
+    \\  for (uint j = 0; j < per; ++j) qv[j] = (lane + 32u * j < D) ? Q[h * D + lane + 32u * j] * a.scale * tau : 0.0f;
+    \\  const float sk = sink[h];
+    \\  const uint lo = a.window ? (a.pos + 1u > a.window ? a.pos + 1u - a.window : 0u) : 0u;
+    \\  const size_t base = ((size_t)h * a.splits + s) * (D + 2u);
+    \\  const uint js = lo + s * a.chunk, je = min(js + a.chunk, a.pos + 1u);
+    \\  if (js >= je) {
+    \\    if (lane == 0u) {
+    \\      PART[base] = -INFINITY;
+    \\      PART[base + 1u] = 0.0f;
+    \\    }
+    \\    for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) PART[base + 2u + lane + 32u * u] = 0.0f;
+    \\    return;
+    \\  }
+    \\  threadgroup float4 KB4[32];
+    \\  threadgroup float4 VB4[32];
+    \\  threadgroup float* KB = (threadgroup float*)KB4;
+    \\  threadgroup float* VB = (threadgroup float*)VB4;
+    \\  float top = -INFINITY, mass = 0.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    \\  for (uint j = js; j < je; ++j) {
+    \\    const uint col = min(a.pos - j, a.extent);
+    \\    const uint rj = a.window ? (j % a.window) : j;
+    \\    const size_t at = ((size_t)rj * a.kv + kv) * D;
+    \\    const float bias = B[h * (a.extent + 1u) + col] - sk;
+    \\    for (uint v = tid; v < D / 4u; v += nth) {
+    \\      KB4[v] = float4(*reinterpret_cast<const device packed_half4*>(KEYS + at + v * 4u));
+    \\      VB4[v] = float4(*reinterpret_cast<const device packed_half4*>(VALUES + at + v * 4u));
+    \\    }
+    \\    for (uint i = (D / 4u) * 4u + tid; i < D; i += nth) {
+    \\      KB[i] = KEYS[at + i];
+    \\      VB[i] = VALUES[at + i];
+    \\    }
+    \\    threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\    float dot = 0.0f;
+    \\    for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) dot = fma(qv[u], KB[lane + 32u * u], dot);
+    \\    const float score = simd_sum(dot) + bias;
+    \\    const float peak = max(top, score);
+    \\    const float rescale = precise::exp(top - peak);
+    \\    const float w = precise::exp(score - peak);
+    \\    mass = mass * rescale + w;
+    \\    for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) acc[u] = acc[u] * rescale + w * VB[lane + 32u * u];
+    \\    top = peak;
+    \\    threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\  }
+    \\  if (lane == 0u) {
+    \\    PART[base] = top;
+    \\    PART[base + 1u] = mass;
+    \\  }
+    \\  for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) PART[base + 2u + lane + 32u * u] = acc[u];
+    \\}
+    \\
+    \\[[kernel]] void i2_attn_combine(const device float* PART [[buffer(0)]],
+    \\    constant i2_attn_parts& a [[buffer(1)]], device float* O [[buffer(2)]],
+    \\    uint h [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
+    \\  const uint D = a.dim, S = a.splits, per = max(1u, D / 32u);
+    \\  float top = 0.0f, mass = 1.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    \\  for (uint s = 0; s < S; ++s) {
+    \\    const size_t base = ((size_t)h * S + s) * (D + 2u);
+    \\    const float ptop = PART[base];
+    \\    const float pmass = PART[base + 1u];
+    \\    if (pmass == 0.0f) continue;
+    \\    const float peak = max(top, ptop);
+    \\    const float r0 = precise::exp(top - peak);
+    \\    const float r1 = precise::exp(ptop - peak);
+    \\    mass = mass * r0 + pmass * r1;
+    \\    for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) acc[u] = acc[u] * r0 + r1 * PART[base + 2u + lane + 32u * u];
+    \\    top = peak;
+    \\  }
+    \\  for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) O[h * D + lane + 32u * u] = acc[u] / mass;
+    \\}
+    \\
+;
+
+const BatchRow = extern struct { keys: u64, values: u64, args: AttnParts };
+
+fn splitInputs(rng: std.Random, device: mtl.Device, rows: usize) ![5]mtl.Buffer {
+    const q = try device.buffer(heads * dim * 4, mtl.ResourceOptions.shared);
+    errdefer q.deinit();
+    const kh = try device.buffer(rows * kv * dim * 2, mtl.ResourceOptions.shared);
+    errdefer kh.deinit();
+    const vh = try device.buffer(rows * kv * dim * 2, mtl.ResourceOptions.shared);
+    errdefer vh.deinit();
+    const bb = try device.buffer(heads * (extent + 1) * 4, mtl.ResourceOptions.shared);
+    errdefer bb.deinit();
+    const sk = try device.buffer(heads * 4, mtl.ResourceOptions.shared);
+    fill(rng, q.slice(f32, heads * dim));
+    for (kh.slice(f16, rows * kv * dim)) |*x| x.* = @floatCast(rng.float(f32) * 4.0 - 2.0);
+    for (vh.slice(f16, rows * kv * dim)) |*x| x.* = @floatCast(rng.float(f32) * 4.0 - 2.0);
+    fill(rng, bb.slice(f32, heads * (extent + 1)));
+    fill(rng, sk.slice(f32, heads));
+    return .{ q, kh, vh, bb, sk };
+}
+
+fn sameBits(a: []const f32, b: []const f32) bool {
+    for (a, b) |x, y| if (@as(u32, @bitCast(x)) != @as(u32, @bitCast(y))) return false;
+    return true;
+}
+
+test "staged split attention keeps the serial kernel's bytes, single and batched" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = mtl.Device.init() catch return error.SkipZigTest;
+    defer device.deinit();
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, kernels.attention, mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const old_lib = try mtl.Library.fromSource(device, serial_split, mtl.CompileOptions.mlx());
+    defer old_lib.deinit();
+    const old = try mtl.Pipeline.init(device, old_lib, "i2_attn_split", false);
+    defer old.deinit();
+    const old_combine = try mtl.Pipeline.init(device, old_lib, "i2_attn_combine", false);
+    defer old_combine.deinit();
+    const split = try mtl.Pipeline.init(device, lib, "i2_attn_split", false);
+    defer split.deinit();
+    const combine = try mtl.Pipeline.init(device, lib, "i2_attn_combine", false);
+    defer combine.deinit();
+    const batch_split = try mtl.Pipeline.init(device, lib, "i2_batch_split", false);
+    defer batch_split.deinit();
+    const batch_combine = try mtl.Pipeline.init(device, lib, "i2_batch_combine", false);
+    defer batch_combine.deinit();
+
+    var prng = std.Random.DefaultPrng.init(0x73746167);
+    const rng = prng.random();
+    const positions = [_]u32{ 0, 1, 30, 31, 32, 33, 63, 64, 65, 95, 96, 127, 128, 1023, 1024, 1025, 1100, 2047, 2499, 4100 };
+    var checked: usize = 0;
+    for ([_]bool{ false, true }) |full| {
+        for (positions) |pos| {
+            const rows: usize = if (full) @as(usize, pos) + 1 else window;
+            const n: usize = if (full) rows else @min(@as(usize, pos) + 1, window);
+            const inputs = try splitInputs(rng, device, rows);
+            defer for (inputs) |buf| buf.deinit();
+            const p = st.attnPartition(n);
+            const pargs = AttnParts{ .heads = heads, .kv = kv, .dim = dim, .rel = drel, .extent = extent, .window = if (full) 0 else window, .pos = pos, .tau = @intFromBool(full), .splits = p.splits, .chunk = p.chunk, .scale = scale, .floor = floor, .alpha = alpha };
+            var parts: [2]mtl.Buffer = undefined;
+            var outs: [2]mtl.Buffer = undefined;
+            for (0..2) |i| {
+                parts[i] = try device.buffer(heads * p.splits * (dim + 2) * 4, mtl.ResourceOptions.shared);
+                outs[i] = try device.buffer(heads * dim * 4, mtl.ResourceOptions.shared);
+            }
+            defer for (0..2) |i| {
+                parts[i].deinit();
+                outs[i].deinit();
+            };
+            const cb = queue.commandBuffer();
+            const enc = cb.compute(.serial);
+            for ([_]mtl.Pipeline{ old, split }, 0..) |pipe, i| {
+                enc.setPipeline(pipe);
+                for (inputs, 0..) |buf, at| enc.setBuffer(buf, 0, at);
+                enc.setValue(pargs, 5);
+                enc.setBuffer(parts[i], 0, 6);
+                enc.dispatchGroups(mtl.Size.of(kv * p.splits, 1, 1), mtl.Size.of((heads / kv) * 32, 1, 1));
+                enc.setPipeline(if (i == 0) old_combine else combine);
+                enc.setBuffer(parts[i], 0, 0);
+                enc.setValue(pargs, 1);
+                enc.setBuffer(outs[i], 0, 2);
+                enc.dispatchGroups(mtl.Size.of(heads, 1, 1), mtl.Size.of(32, 1, 1));
+            }
+            enc.end();
+            cb.commit();
+            cb.wait();
+            if (cb.failure()) |msg| {
+                std.debug.print("staged split test: {s}\n", .{msg});
+                return error.GpuFailed;
+            }
+            const count = heads * p.splits * (dim + 2);
+            if (!sameBits(parts[0].slice(f32, count), parts[1].slice(f32, count)) or !sameBits(outs[0].slice(f32, heads * dim), outs[1].slice(f32, heads * dim))) {
+                std.debug.print("staged split test full={} pos={d}: bytes differ from the serial kernel, worst {e}\n", .{ full, pos, maxAbs(outs[0].slice(f32, heads * dim), outs[1].slice(f32, heads * dim)) });
+                return error.TestUnexpectedResult;
+            }
+            checked += 1;
+        }
+    }
+
+    const width = 3;
+    for ([_]bool{ false, true }) |full| {
+        const picks = [_][width]u32{ .{ 5, 64, 2499 }, .{ 1023, 1500, 31 }, .{ 0, 1024, 4100 } };
+        for (picks) |at| {
+            var rowbufs: [width][5]mtl.Buffer = undefined;
+            var made: usize = 0;
+            defer for (rowbufs[0..made]) |set| for (set) |buf| buf.deinit();
+            var rows: [width]BatchRow = undefined;
+            var argsets: [width]AttnParts = undefined;
+            var most: u32 = 0;
+            for (at, 0..) |pos, r| {
+                const cap: usize = if (full) @as(usize, pos) + 1 else window;
+                rowbufs[r] = try splitInputs(rng, device, cap);
+                made += 1;
+                const n: usize = if (full) cap else @min(@as(usize, pos) + 1, window);
+                const p = st.attnPartition(n);
+                argsets[r] = .{ .heads = heads, .kv = kv, .dim = dim, .rel = drel, .extent = extent, .window = if (full) 0 else window, .pos = pos, .tau = @intFromBool(full), .splits = p.splits, .chunk = p.chunk, .scale = scale, .floor = floor, .alpha = alpha };
+                rows[r] = .{ .keys = rowbufs[r][1].gpuAddress(), .values = rowbufs[r][2].gpuAddress(), .args = argsets[r] };
+                most = @max(most, p.splits);
+            }
+            const q = try device.buffer(width * heads * dim * 4, mtl.ResourceOptions.shared);
+            defer q.deinit();
+            const bb = try device.buffer(width * heads * (extent + 1) * 4, mtl.ResourceOptions.shared);
+            defer bb.deinit();
+            const sk = try device.buffer(width * heads * 4, mtl.ResourceOptions.shared);
+            defer sk.deinit();
+            for (0..width) |r| {
+                @memcpy(q.slice(f32, width * heads * dim)[r * heads * dim ..][0 .. heads * dim], rowbufs[r][0].slice(f32, heads * dim));
+                @memcpy(bb.slice(f32, width * heads * (extent + 1))[r * heads * (extent + 1) ..][0 .. heads * (extent + 1)], rowbufs[r][3].slice(f32, heads * (extent + 1)));
+                @memcpy(sk.slice(f32, width * heads)[r * heads ..][0..heads], rowbufs[r][4].slice(f32, heads));
+            }
+            const bpart = try device.buffer(width * heads * st.attn_splits * (dim + 2) * 4, mtl.ResourceOptions.shared);
+            defer bpart.deinit();
+            const bout = try device.buffer(width * heads * dim * 4, mtl.ResourceOptions.shared);
+            defer bout.deinit();
+            var singles: [width][2]mtl.Buffer = undefined;
+            var single_made: usize = 0;
+            defer for (singles[0..single_made]) |pair| for (pair) |buf| buf.deinit();
+            for (0..width) |r| {
+                singles[r] = .{ try device.buffer(heads * argsets[r].splits * (dim + 2) * 4, mtl.ResourceOptions.shared), try device.buffer(heads * dim * 4, mtl.ResourceOptions.shared) };
+                single_made += 1;
+            }
+            const cb = queue.commandBuffer();
+            const enc = cb.compute(.serial);
+            enc.setPipeline(batch_split);
+            enc.setBuffer(q, 0, 0);
+            enc.setBuffer(bb, 0, 1);
+            enc.setBuffer(sk, 0, 2);
+            enc.setBytes(std.mem.sliceAsBytes(rows[0..]), 3);
+            enc.setBuffer(bpart, 0, 4);
+            for (0..width) |r| {
+                enc.useResource(rowbufs[r][1], mtl.ResourceUsage.read);
+                enc.useResource(rowbufs[r][2], mtl.ResourceUsage.read);
+            }
+            enc.dispatchGroups(mtl.Size.of(kv * most, width, 1), mtl.Size.of((heads / kv) * 32, 1, 1));
+            enc.setPipeline(batch_combine);
+            enc.setBuffer(bpart, 0, 0);
+            enc.setBytes(std.mem.sliceAsBytes(rows[0..]), 1);
+            enc.setBuffer(bout, 0, 2);
+            enc.dispatchGroups(mtl.Size.of(heads, width, 1), mtl.Size.of(32, 1, 1));
+            for (0..width) |r| {
+                enc.setPipeline(split);
+                for (rowbufs[r], 0..) |buf, i| enc.setBuffer(buf, 0, i);
+                enc.setValue(argsets[r], 5);
+                enc.setBuffer(singles[r][0], 0, 6);
+                enc.dispatchGroups(mtl.Size.of(kv * argsets[r].splits, 1, 1), mtl.Size.of((heads / kv) * 32, 1, 1));
+                enc.setPipeline(combine);
+                enc.setBuffer(singles[r][0], 0, 0);
+                enc.setValue(argsets[r], 1);
+                enc.setBuffer(singles[r][1], 0, 2);
+                enc.dispatchGroups(mtl.Size.of(heads, 1, 1), mtl.Size.of(32, 1, 1));
+            }
+            enc.end();
+            cb.commit();
+            cb.wait();
+            if (cb.failure()) |msg| {
+                std.debug.print("staged batch test: {s}\n", .{msg});
+                return error.GpuFailed;
+            }
+            for (0..width) |r| {
+                const got = bout.slice(f32, width * heads * dim)[r * heads * dim ..][0 .. heads * dim];
+                if (!sameBits(got, singles[r][1].slice(f32, heads * dim))) {
+                    std.debug.print("staged batch test full={} pos={d}: batch row differs from its single-stream bytes\n", .{ full, at[r] });
+                    return error.TestUnexpectedResult;
+                }
+            }
+            checked += width;
+        }
+    }
+    std.debug.print("staged split test: {d} cases byte-equal to the serial kernel and across batch rows\n", .{checked});
+}
+

@@ -2,6 +2,8 @@
 
 ## Status
 
+**Winding down (2026-11-23).** No lane starts; running lanes commit, report and stop.
+
 - **Frontier campaign T3 (owner, 2026-11-23; specification `campaign/frontier-brief.md`).** This supersedes earlier
   roadmap entries where they conflict.
   - **Scope.** Advance Inkling 2 Mini (`inkling2_loop`) inference on this M5 Max against the strongest reproducible

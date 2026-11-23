@@ -160,7 +160,7 @@
 The owner made the first two decisions on 2026-11-21:
 
 1. **Owner: layout.** One repo at `~/repos/tensorfold-m5`, a TensorFold clone with `upstream` as a fetch-only remote (push URL `DISABLED`). Campaign tooling and records live in `campaign/`. The original draft lived at `~/d/infer/plan.md`; this file supersedes it.
-2. **Owner: no push.** Commits stay local and the owner pushes.
+2. **Owner: push to `origin` (`joshuarli/tf`) only.** The earlier no-push rule is lifted. Never push to `upstream` (ashhart/TensorFold); its push URL is disabled.
 3. **Owner: build inputs through `laputa-buildlib`.** Every downloaded input is pinned in `campaign/sources.lock.json` (schema 1, see the [build repository contract](https://github.com/laputa-systems/stuff/blob/main/docs/build-repos.md)) and fetched through `buildlib.locks.fetch_input`. Downloaded inputs include weights, comparator sources and the xgrammar sources. Pin buildlib in `campaign/pyproject.toml` as follows and commit `campaign/uv.lock`:
    - version `laputa-buildlib==0.1.0`;
    - index `https://pypi.17166969.xyz/current/simple/`;

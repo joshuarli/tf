@@ -146,6 +146,7 @@ pub const Pipes = struct {
     cstore: mtl.Pipeline,
     kv: mtl.Pipeline,
     rel: mtl.Pipeline,
+    rel_rows: mtl.Pipeline,
     attn: mtl.Pipeline,
     attn_tiled: mtl.Pipeline,
     gu_nv: mtl.Pipeline,
@@ -196,7 +197,7 @@ pub const Pipes = struct {
         if (p.affine_units_up) |pipe| pipe.deinit();
         if (p.affine_units_down) |pipe| pipe.deinit();
         if (p.half_rows) |pipe| pipe.deinit();
-        inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "gemm", "smallrow", "pick", "gu_g_nv", "down_g_nv", "gu_g_mx", "down_g_mx", "expert_matrix_nv", "expert_matrix_mx", "moe_zero", "moe_count", "moe_offsets", "moe_sort", "embed", "rms", "rms3", "rms_pair", "gather_rms", "scatter", "pass_copy", "mix", "mix4", "ctl", "clips", "clip3", "clip", "conv", "batch_conv", "batch_store_rel", "cstore", "kv", "rel", "attn", "attn_tiled", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
+        inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "gemm", "smallrow", "pick", "gu_g_nv", "down_g_nv", "gu_g_mx", "down_g_mx", "expert_matrix_nv", "expert_matrix_mx", "moe_zero", "moe_count", "moe_offsets", "moe_sort", "embed", "rms", "rms3", "rms_pair", "gather_rms", "scatter", "pass_copy", "mix", "mix4", "ctl", "clips", "clip3", "clip", "conv", "batch_conv", "batch_store_rel", "cstore", "kv", "rel", "rel_rows", "attn", "attn_tiled", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
     }
 };
 
@@ -506,6 +507,8 @@ pub const PrefillScratch = struct {
         errdefer s.pipes.kv.deinit();
         s.pipes.rel = try mtl.Pipeline.init(device, lib, "i2p_relbias", false);
         errdefer s.pipes.rel.deinit();
+        s.pipes.rel_rows = try mtl.Pipeline.init(device, lib, "i2p_relbias_rows", false);
+        errdefer s.pipes.rel_rows.deinit();
         s.pipes.attn = try mtl.Pipeline.init(device, lib, "i2p_attn", false);
         errdefer s.pipes.attn.deinit();
         s.pipes.attn_tiled = try mtl.Pipeline.init(device, lib, "i2p_attn_tiled", false);
@@ -880,7 +883,13 @@ const Chunk = struct {
 
     fn relative(c: Chunk, lay: *const Layer, r: B, extent: u32, full: bool) void {
         const text = &c.m.config.text;
-        c.setP(c.s.pipes.rel, RelB{ .heads = c.heads, .rel = c.drel, .extent = extent, .rows = c.n, .base = c.base, .tau = @intFromBool(full), .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha }, &.{ t(lay.attn.rel_bias), r, A, b(c.s.relbias) });
+        const args = RelB{ .heads = c.heads, .rel = c.drel, .extent = extent, .rows = c.n, .base = c.base, .tau = @intFromBool(full), .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha };
+        if (c.heads * c.drel <= 1024 and c.drel <= 32) {
+            c.setP(c.s.pipes.rel_rows, args, &.{ t(lay.attn.rel_bias), r, A, b(c.s.relbias) });
+            c.enc.dispatchGroups(mtl.Size.of((extent + 1 + 255) / 256, c.n, 1), mtl.Size.of(256, 1, 1));
+            return;
+        }
+        c.setP(c.s.pipes.rel, args, &.{ t(lay.attn.rel_bias), r, A, b(c.s.relbias) });
         c.enc.dispatchThreads(mtl.Size.of(c.heads * (extent + 1), c.n, 1), mtl.Size.of(256, 1, 1));
     }
 

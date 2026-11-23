@@ -588,6 +588,41 @@ struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; 
   O[(size_t)p.y * cols * a.heads + p.x] = sum * tau;
 }
 
+// i2p_relbias a row a threadgroup: a thread keeps its distance's column, serves every head, same fma order.
+[[kernel]] void i2p_relbias_rows(const device bfloat* P [[buffer(0)]], const device float* R [[buffer(1)]],
+    constant i2p_rel_args& a [[buffer(2)]], device float* O [[buffer(3)]], uint2 tg [[threadgroup_position_in_grid]],
+    uint ti [[thread_index_in_threadgroup]]) {
+  threadgroup float r[1024];
+  const uint row = tg.y, cols = a.extent + 1u, dist = tg.x * 256u + ti;
+  for (uint i = ti; i < a.heads * a.rel; i += 256u) r[i] = R[(size_t)row * a.heads * a.rel + i];
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (dist >= cols) return;
+  device float* out = O + (size_t)row * cols * a.heads + dist;
+  if (dist == a.extent) {
+    for (uint h = 0; h < a.heads; ++h) out[h * cols] = 0.0f;
+    return;
+  }
+  const uint pos = a.base + row;
+  const float tau = a.tau ? 1.0f + a.alpha * precise::log(max(1.0f, (float(pos) + 1.0f) / a.floor)) : 1.0f;
+  if (a.rel == 16u) {
+    float p[16];
+    _Pragma("clang loop unroll(full)")
+    for (uint u = 0; u < 16u; ++u) p[u] = i2p_bf(P, u * a.extent + dist);
+    for (uint h = 0; h < a.heads; ++h) {
+      float sum = 0.0f;
+      _Pragma("clang loop unroll(full)")
+      for (uint u = 0; u < 16u; ++u) sum = fma(p[u], r[h * 16u + u], sum);
+      out[h * cols] = sum * tau;
+    }
+    return;
+  }
+  for (uint h = 0; h < a.heads; ++h) {
+    float sum = 0.0f;
+    for (uint u = 0; u < a.rel; ++u) sum = fma(i2p_bf(P, u * a.extent + dist), r[h * a.rel + u], sum);
+    out[h * cols] = sum * tau;
+  }
+}
+
 [[kernel]] void i2p_attn(const device float* Q [[buffer(0)]], const device half* KEYS [[buffer(1)]],
     const device half* VALUES [[buffer(2)]], const device float* B [[buffer(3)]], const device float* sink [[buffer(4)]],
     constant i2p_attn_args& a [[buffer(5)]], device float* O [[buffer(6)]],

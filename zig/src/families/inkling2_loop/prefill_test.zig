@@ -1406,6 +1406,62 @@ const serialRoute =
 
 const RouteArgs = extern struct { experts: u32, topk: u32, rows: u32, route_scale: f32 };
 
+const RelArgs = extern struct { heads: u32, rel: u32, extent: u32, rows: u32, base: u32, tau: u32, floor: f32, alpha: f32 };
+
+test "row-staged relative bias matches the per-output kernel bit for bit" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, @import("kernels.zig").prefill, mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const each = try mtl.Pipeline.init(device, lib, "i2p_relbias", false);
+    defer each.deinit();
+    const rows_pipe = try mtl.Pipeline.init(device, lib, "i2p_relbias_rows", false);
+    defer rows_pipe.deinit();
+    for ([_]RelArgs{
+        .{ .heads = 24, .rel = 16, .extent = 1024, .rows = 37, .base = 9000, .tau = 1, .floor = 8192, .alpha = 0.1 },
+        .{ .heads = 24, .rel = 16, .extent = 1024, .rows = 5, .base = 3, .tau = 0, .floor = 8192, .alpha = 0.1 },
+        .{ .heads = 4, .rel = 4, .extent = 16, .rows = 9, .base = 20, .tau = 1, .floor = 8, .alpha = 0.25 },
+    }) |args| {
+        const cols: usize = args.extent + 1;
+        const p_buf = try device.buffer(args.rel * args.extent * 2, mtl.ResourceOptions.shared);
+        defer p_buf.deinit();
+        for (p_buf.slice(u16, args.rel * args.extent), 0..) |*v, i| {
+            const value: f32 = @as(f32, @floatFromInt(@as(i32, @intCast((i * 37) % 201)) - 100)) / 53.0;
+            v.* = @truncate(@as(u32, @bitCast(value)) >> 16);
+        }
+        const r_buf = try device.buffer(args.rows * args.heads * args.rel * 4, mtl.ResourceOptions.shared);
+        defer r_buf.deinit();
+        for (r_buf.slice(f32, args.rows * args.heads * args.rel), 0..) |*v, i| v.* = @as(f32, @floatFromInt(@as(i32, @intCast((i * 29 + i / 16) % 173)) - 86)) / 41.0;
+        var outs: [2]mtl.Buffer = undefined;
+        for (&outs, 0..) |*out, side| {
+            out.* = try device.buffer(args.rows * args.heads * cols * 4, mtl.ResourceOptions.shared);
+            @memset(out.slice(f32, args.rows * args.heads * cols), std.math.nan(f32));
+            const cb = queue.commandBuffer();
+            const enc = cb.compute(.serial);
+            enc.setPipeline(if (side == 0) each else rows_pipe);
+            enc.setBuffer(p_buf, 0, 0);
+            enc.setBuffer(r_buf, 0, 1);
+            enc.setValue(args, 2);
+            enc.setBuffer(out.*, 0, 3);
+            if (side == 0) enc.dispatchThreads(mtl.Size.of(args.heads * cols, args.rows, 1), mtl.Size.of(256, 1, 1)) else enc.dispatchGroups(mtl.Size.of((cols + 255) / 256, args.rows, 1), mtl.Size.of(256, 1, 1));
+            enc.end();
+            cb.commit();
+            cb.wait();
+            if (cb.failure()) |msg| {
+                std.debug.print("relbias: {s}\n", .{msg});
+                return error.GpuFailed;
+            }
+        }
+        defer for (outs) |out| out.deinit();
+        const want = outs[0].slice(f32, args.rows * args.heads * cols);
+        for (want) |v| try t.expect(std.math.isFinite(v));
+        try t.expectEqualSlices(u8, std.mem.sliceAsBytes(want), std.mem.sliceAsBytes(outs[1].slice(f32, args.rows * args.heads * cols)));
+    }
+}
+
 test "parallel route selection matches serial picks and weights" {
     if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
     const device = try mtl.Device.init();

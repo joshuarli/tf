@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "oracle": {
+    "dir": ".work/parity/inkling2-mini/omlx-ref",
+    "digest": "b01512f0396eeb235f756913c6f9688e27e2d1fe117e48e49db9f0dd39b45816",
+    "engine": "oMLX 0.8.3 e72868dac12d on MLX 0.32.4, 2,048-token forwards, MTP off",
+    "checkpoint": "Inkling-2-Mini-oQ4e-mtp@3eea042751cd"
+  },
+  "candidate": {
+    "runner_mode": "prefill",
+    "prefill_chunk": 512,
+    "arithmetic_policy": "f32-activations+prefill-512"
+  },
+  "baseline": {
+    "revision": "c053f52b2",
+    "runner_sha256": "edc7b33f2604dae73d393827dac2f46613f6132278f5ceca4ebda70529d49210",
+    "positions": 3015,
+    "top1": 2861,
+    "mean_kl": 0.019508461951105317,
+    "row_mean_kl": 0.06419708449338804,
+    "max_kl": 8.012051897837756
+  },
+  "margin": {
+    "top1_points": 0.5,
+    "mean_kl_factor": 1.5
+  }
+}

@@ -51,6 +51,11 @@ def model_identity(model_dir: Path) -> str:
     return hashlib.sha256(json.dumps(manifest).encode("utf-8")).hexdigest()
 
 
+def capture_digest(output_sha256: dict[str, str]) -> str:
+    """One digest naming a set of captures: the sha256 of their name-to-output-sha256 map, keys sorted."""
+    return hashlib.sha256(json.dumps(output_sha256, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 def receipt_path_for(output: Path) -> Path:
     return output.with_name(output.name + ".receipt.json")
 

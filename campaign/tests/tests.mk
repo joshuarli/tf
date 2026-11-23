@@ -11,3 +11,4 @@ evidence-tests:
 	PYTHONDONTWRITEBYTECODE=1 $(UV) run --project $(CURDIR) python $(CURDIR)/comparators/nanoattention/test_inkling.py
 	PYTHONDONTWRITEBYTECODE=1 $(UV) run --project $(CURDIR) python $(CURDIR)/comparators/nanoattention/test_setup.py
 	PYTHONDONTWRITEBYTECODE=1 $(UV) run --project $(CURDIR)/ref python $(CURDIR)/parity/inkling2-mini/test_parity_gate.py
+	PYTHONDONTWRITEBYTECODE=1 $(UV) run --project $(CURDIR)/ref python $(CURDIR)/parity/inkling2-mini/test_omlx_gate.py

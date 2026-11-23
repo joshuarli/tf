@@ -43,12 +43,14 @@ class BenchmarkTests(unittest.TestCase):
                 agent('http://example/v1', 'model', 1, threading.Barrier(1), 0)
 
     def test_aggregate_counts_all_committed_output(self):
-        agents = [{'seconds': 4, 'turns': [{'tokens': 8, 'ttft': 1}]},
-                  {'seconds': 2, 'turns': [{'tokens': 4, 'ttft': 2}]}]
+        agents = [{'seconds': 4, 'turns': [{'tokens': 8, 'ttft': 1, 'cached_tokens': 0, 'id': 'a'}]},
+                  {'seconds': 2, 'turns': [{'tokens': 4, 'ttft': 2, 'cached_tokens': 2432, 'id': 'b'}]}]
         result = aggregate(agents, 6)
         self.assertEqual(result['aggregate_tokens_per_second'], 2)
         self.assertEqual(result['agent_tokens_per_second'], [2, 2])
         self.assertEqual(result['ttft_seconds'], [1, 2])
+        self.assertEqual(result['cached_tokens'], [0, 2432])
+        self.assertEqual(result['request_ids'], ['a', 'b'])
 
 
 if __name__ == '__main__':

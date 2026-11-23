@@ -45,3 +45,7 @@ Three interleaved 2,500-token `batchbench 1 5` pairs passed the GPU and CPU gate
 A candidate packed eight independent NVFP4 expert output columns into each 256-thread threadgroup while retaining the same per-column reductions. The family GPU tests exited 0 (82/82) with zero reported batch/decode logit and cache differences. The candidate was reverted because the measurements showed no benefit beyond noise.
 
 Three interleaved 2,500-token `batchbench K 5` pairs passed the gates and compiler monitor, with base/candidate, candidate/base, base/candidate order. At K=1 the base medians were 21.678, 21.756 and 26.797 ms; candidate medians were 21.770, 21.637 and 21.546 ms. Outer medians were 21.756 and 21.637 ms; the slow base sample also had a slow serial control. At K=4 the base medians were 40.012, 40.046 and 39.902 ms; candidate medians were 39.934, 39.954 and 40.063 ms. Outer medians were 40.012 and 39.954 ms; all K=4 inner samples spanned 39.257–40.635 ms. The 0.058 ms K=4 difference is within this spread. Repeated gate deferrals were discarded.
+
+## Rejected attention reduction layout
+
+A candidate assigned adjacent dimensions to each SIMD lane instead of strided dimensions. `python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1 -j1 --summary all` exited 1: `batch_test.test.batched independent cache steps match decode` failed the unchanged finite-logit and `1.5e-5` difference check at `batch_test.zig:113`. The candidate was reverted without timing or tolerance changes.

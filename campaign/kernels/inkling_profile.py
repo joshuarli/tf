@@ -32,19 +32,14 @@ def read_config(model: Path) -> dict:
     return json.loads((model / "config.json").read_text())["text_config"]
 
 
-def text_shard(model: Path) -> Path:
-    index = json.loads((model / "model.safetensors.index.json").read_text())["weight_map"]
-    names = set(index.values())
-    if len(names) != 1:
-        raise SystemExit(f"the text stack must be one shard, found {sorted(names)}")
-    return model / names.pop()
-
-
 def read_header(model: Path) -> dict:
-    with text_shard(model).open("rb") as f:
-        length = struct.unpack("<Q", f.read(8))[0]
-        header = json.loads(f.read(length))
-    header.pop("__metadata__", None)
+    index = json.loads((model / "model.safetensors.index.json").read_text())["weight_map"]
+    header = {}
+    for shard in set(index.values()):
+        with (model / shard).open("rb") as f:
+            length = struct.unpack("<Q", f.read(8))[0]
+            entries = json.loads(f.read(length))
+        header.update({name: entry for name, entry in entries.items() if index.get(name) == shard})
     return header
 
 
@@ -135,9 +130,62 @@ def bucket_of(suffix: str) -> str:
     raise SystemExit(f"unclassified tensor {suffix}")
 
 
+def mlx_weight_floor(c: dict, header: dict, expert_read: str) -> dict:
+    order = executed_layers(c)
+    experts = c["n_routed_experts"]
+    selected = experts if expert_read == "all" else c["num_experts_per_tok"]
+    key = "routed experts (all)" if expert_read == "all" else "routed experts (top-k)"
+    buckets = {name: 0 for name in ("attention projections", "convolutions", "norms and router", key,
+                                      "controllers", "depth-mix queries", "embedding row + norms", "unembedding", "cross-pass")}
+    per_layer = []
+    for layer in order:
+        prefix = f"model.layers.{layer}."
+        before = sum(buckets.values())
+        full = is_full(c, layer)
+        projections = ("q_proj", "k_proj", "v_proj", "o_proj") if full else ("in_proj", "o_proj")
+        for proj in projections:
+            for suffix in ("weight", "scales", "biases"):
+                buckets["attention projections"] += tensor_bytes(header, prefix + f"attn.{proj}.{suffix}")
+        for suffix in ("attn.q_scale", "attn.r_scale", "attn.rel_proj"):
+            buckets["attention projections"] += tensor_bytes(header, prefix + suffix)
+        for suffix in (("attn.k_static", "attn.v_static") if full else ("attn.k_conv", "attn.v_conv")) + ("attn_conv", "mlp_conv"):
+            buckets["convolutions"] += tensor_bytes(header, prefix + suffix)
+        for suffix in (("q_input_norm.weight", "k_input_norm.weight", "v_input_norm.weight") if full else ("attn_norm.weight",)) + ("mlp_norm.weight", "mlp.router_weight", "mlp.router_bias"):
+            buckets["norms and router"] += tensor_bytes(header, prefix + suffix)
+        for proj in ("w13", "w2"):
+            base = prefix + f"mlp.experts.{proj}."
+            suffixes = ("weight", "scales", "global_scale" if layer < 20 else "biases")
+            for suffix in suffixes:
+                size = tensor_bytes(header, base + suffix)
+                if size % experts:
+                    raise SystemExit(f"expert tensor is not evenly divided: {base + suffix}")
+                buckets[key] += size // experts * selected
+        if c["loop_config"]["core_start"] <= layer < c["loop_config"]["core_end"]:
+            for suffix in ("loop_down", "loop_gain_forget"):
+                buckets["controllers"] += tensor_bytes(header, prefix + suffix)
+        buckets["depth-mix queries"] += tensor_bytes(header, prefix + "mlp_input.query")
+        if layer > 0:
+            buckets["depth-mix queries"] += tensor_bytes(header, prefix + "attn_input.query")
+        per_layer.append((layer, sum(buckets.values()) - before))
+    for suffix in ("weight", "scales", "biases"):
+        name = "model.embed." + suffix
+        size = tensor_bytes(header, name)
+        rows = header[name]["shape"][0]
+        buckets["embedding row + norms"] += size // rows
+        buckets["unembedding"] += tensor_bytes(header, "lm_head." + suffix)
+    buckets["embedding row + norms"] += sum(tensor_bytes(header, name) for name in ("model.embed_norm.weight", "model.norm.weight"))
+    loop = c["loop_config"]
+    buckets["cross-pass"] = 2 * sum(tensor_bytes(header, f"model.layers.{layer}.loop_message.query")
+                                    for layer in range(loop["core_start"], loop["core_end"]))
+    buckets["cross-pass"] += tensor_bytes(header, "model.final_input.query")
+    return {"config": c, "order": order, "buckets": buckets, "total": sum(buckets.values()), "per_layer": per_layer}
+
+
 def weight_floor(model: Path, expert_read: str = "topk") -> dict:
     c = read_config(model)
     header = read_header(model)
+    if "model.embed.weight" in header:
+        return mlx_weight_floor(c, header, expert_read)
     layers = c["num_hidden_layers"]
     experts = c["n_routed_experts"]
     topk = c["num_experts_per_tok"]

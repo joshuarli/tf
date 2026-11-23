@@ -483,8 +483,6 @@ pub const Speculator = struct {
     verifier: *const Verifier,
     batch: *batch_mod.BatchScratch,
     costs: mtp.Costs = .{ .base = 0.020, .row = 0.007, .propose = 0.005 },
-    /// Rounds a stream goes without drafts before one round probes its acceptance with a single draft.
-    probe_every: u32 = 16,
     /// Off: every stream decodes one token a round, the drafter only following the context.
     drafting: bool = true,
     /// Seconds spent in each phase over every round so far.
@@ -507,7 +505,7 @@ pub const Speculator = struct {
             var rows = n;
             for (counts[0..n]) |k| rows += k;
             for (streams, 0..) |st, i| {
-                if (counts[i] == 0 and st.estimate.idle >= s.probe_every and limits[i] > 0 and rows < group_rows) {
+                if (limits[i] > 0 and rows < group_rows and st.estimate.probe(counts[i])) {
                     counts[i] = 1;
                     rows += 1;
                 }

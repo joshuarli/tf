@@ -84,3 +84,21 @@ test "the planner drafts when acceptance pays for the rows and falls back when i
     c.note(3, 0.050);
     try t.expectApproxEqAbs(@as(f32, 0.040 * 0.8 + 0.050 * 0.2), c.verify(3), 1e-7);
 }
+
+test "fallback probes back off while they leave the stream without drafts" {
+    const t = std.testing;
+    var e: mtp.Estimate = .{};
+    for (0..mtp.Estimate.first_gap - 1) |_| {
+        try t.expect(!e.probe(0));
+        e.note(0, 0);
+    }
+    e.note(0, 0);
+    try t.expect(e.probe(0));
+    e.note(1, 0);
+    var waited: u32 = 0;
+    while (!e.probe(0)) : (waited += 1) e.note(0, 0);
+    try t.expectEqual(2 * mtp.Estimate.first_gap, waited);
+    e.note(1, 1);
+    try t.expect(!e.probe(3));
+    try t.expectEqual(mtp.Estimate.first_gap, e.gap);
+}

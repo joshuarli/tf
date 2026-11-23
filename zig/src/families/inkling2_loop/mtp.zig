@@ -38,8 +38,30 @@ pub const Estimate = struct {
     misses: f32 = 0,
     /// Rounds since the stream last verified a draft.
     idle: u32 = 0,
+    /// Idle rounds before a probe: doubles while probes leave the stream without drafts, back to `first_gap` once the
+    /// planner drafts for it again.
+    gap: u32 = first_gap,
+    probed: bool = false,
 
     pub const decay: f32 = 0.9;
+    pub const first_gap: u32 = 16;
+    pub const last_gap: u32 = 256;
+
+    /// Whether the stream probes this round, given the planner left it `planned` drafts.
+    pub fn probe(e: *Estimate, planned: usize) bool {
+        if (planned > 0) {
+            e.gap = first_gap;
+            e.probed = false;
+            return false;
+        }
+        if (e.probed) {
+            e.gap = @min(last_gap, e.gap * 2);
+            e.probed = false;
+        }
+        if (e.idle < e.gap) return false;
+        e.probed = true;
+        return true;
+    }
 
     pub fn rate(e: Estimate) f32 {
         return (e.hits + 2) / (e.hits + e.misses + 3);

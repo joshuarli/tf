@@ -312,6 +312,28 @@ fn checkGrouped(path: []const u8) !void {
     try batch.step(m, &bs, &.{ &accepted_only[0], &accepted_only[1], &accepted_only[2] }, &next, logits);
     try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(logits), std.mem.sliceAsBytes(single_logits));
     for (0..3) |i| try expectSameCache(m, &grouped[i], &accepted_only[i]);
+    const full_rows = [_][]const u32{ &.{ 40, 41, 42 }, &.{ 43, 44 }, &.{ 45, 46, 47 } };
+    const full_sizes = [_]usize{ 3, 2, 3 };
+    n = 0;
+    for (full_rows) |r| {
+        @memcpy(ids[n..][0..r.len], r);
+        n += r.len;
+    }
+    const g2 = try verifier.group(&caches, &full_sizes);
+    try verifier.forward(m, &bs, &g2, ids[0..n]);
+    try verifier.commit(m, &g2, &.{ 2, 1, 2 });
+    for (0..3) |step| {
+        var live: [3]*state.Cache = undefined;
+        var step_ids: [3]u32 = undefined;
+        var count: usize = 0;
+        for (0..3) |i| if (step < full_sizes[i]) {
+            live[count] = &accepted_only[i];
+            step_ids[count] = full_rows[i][step];
+            count += 1;
+        };
+        try batch.step(m, &bs, live[0..count], step_ids[0..count], logits[0 .. count * vocab]);
+    }
+    for (0..3) |i| try expectSameCache(m, &grouped[i], &accepted_only[i]);
     std.debug.print("grouped verification {s}: rows {d}, logits and caches equal batch decoding bit for bit\n", .{ path, n });
 }
 

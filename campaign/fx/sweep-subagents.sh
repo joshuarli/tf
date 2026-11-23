@@ -9,10 +9,23 @@ export INKLING_AGENTS="${1:-1}"
 context="${2:-4096}"
 base="$PWD/.work/tmp/sessions-$INKLING_AGENTS-$context"
 mkdir -p "$base"
+rm -f "$base/server.pid"
 port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
-python3 campaign/heavy.py -- sh -c 'python3 -c "import sys; sys.path.insert(0, \"campaign\"); import heavy; print(heavy.wired_bytes())" > "$1"; shift; exec "$@"' sh "$base/wired" "$PWD/zig-out/native/bin/tensorfold-native" serve "$HOME/models/Inkling-2-Mini@ed40e7da625f" --host 127.0.0.1 --port "$port" --parallel "$INKLING_AGENTS" --prompt-cache-gib 2 --no-update-check --context "$context" --temperature 0 >"$base/server.log" 2>&1 &
+python3 campaign/heavy.py -- sh -c 'python3 -c "import sys; sys.path.insert(0, \"campaign\"); import heavy; print(heavy.wired_bytes())" > "$1"; printf "%s\n" "$$" > "$2"; shift 2; exec "$@"' sh "$base/wired" "$base/server.pid" "$PWD/zig-out/native/bin/tensorfold-native" serve "$HOME/models/Inkling-2-Mini@ed40e7da625f" --host 127.0.0.1 --port "$port" --parallel "$INKLING_AGENTS" --prompt-cache-gib 2 --no-update-check --context "$context" --temperature 0 >"$base/server.log" 2>&1 &
 server=$!
-stop() { kill -TERM "$server" 2>/dev/null || true; wait "$server" || true; }
+stop() {
+    if [ -f "$base/server.pid" ]; then
+        model_pid=$(cat "$base/server.pid")
+        lock_pid=$(ps -o ppid= -p "$model_pid" | tr -d ' ' || true)
+        if [ -n "$lock_pid" ]; then
+            parent_pid=$(ps -o ppid= -p "$lock_pid" | tr -d ' ' || true)
+            if [ "$parent_pid" = "$server" ]; then kill -TERM "$model_pid" 2>/dev/null || true; fi
+        fi
+    else
+        kill -TERM "$server" 2>/dev/null || true
+    fi
+    wait "$server" || true
+}
 trap stop EXIT HUP INT TERM
 while :; do
     if curl -fsS "http://127.0.0.1:$port/v1/models" >"$base/models.json" 2>/dev/null; then break; fi
@@ -26,3 +39,9 @@ python3 -c 'import os, sys; p = "campaign/comparators/omlx/bench_subagents.py"; 
 perf-gate-ready -1
 python3 -c 'import sys; sys.path.insert(0, "campaign/fx"); import bench_subagents; events = bench_subagents.parse_log(open(sys.argv[1]).read()); expected = int(sys.argv[2]) * 8; assert len(events["prefix"]) == expected and len(events["done"]) == expected, events; assert all(row["reused"] + row["prefilled"] + 256 <= int(sys.argv[3]) for row in events["prefix"]), events' "$base/server.log" "$INKLING_AGENTS" "$context"
 jaq -e -s 'length == 2 and all(.[]; ((.cached_tokens | length) == (.n * 4)) and ([.cached_tokens | to_entries[] | select(.key % 4 != 0) | (.value != null and .value > 0)] | all))' "$base/results.jsonl"
+
+if [ "$INKLING_AGENTS" = 4 ]; then
+    perf-gate-ready
+    python3 tools/bench_concurrent.py "http://127.0.0.1:$port" "$model" --levels 1,2,4 --tokens 256 --reps 2 --temperatures 0 --alone --serial --output "$base/concurrent.json"
+    perf-gate-ready -1
+fi

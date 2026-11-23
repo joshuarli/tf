@@ -601,7 +601,7 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
     errdefer batch.deinit();
     const batch_logits = try gpa.alloc(f32, count * model.config.text.unpadded_vocab);
     errdefer gpa.free(batch_logits);
-    var prefill = try inkling.PrefillScratch.init(model.device, &model.config, inkling.default_chunk);
+    var prefill = try inkling.PrefillScratch.initRows(model.device, &model.config, inkling.default_chunk, 1);
     errdefer prefill.deinit();
     const image_token: u32 = model.config.image_token;
     h.* = .{

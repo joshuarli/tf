@@ -421,6 +421,88 @@ test "chunked prefill matches per-token position on the tiny fixture" {
     try t.expect(maxAbsDiff(ref_logits[0..vocab], got_logits[0..vocab]) <= @max(1.0, maxAbs(ref_logits[0..vocab])) * 1.5e-5);
 }
 
+test "chunks longer than the local window leave the state of window-bounded chunks on the tiny fixture" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = mtl.Device.init() catch return error.SkipZigTest;
+    defer device.deinit();
+    const gpa = t.allocator;
+    const io = t.io;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const dir = try tinyDir(a) orelse return error.SkipZigTest;
+    {
+        const probe = try std.fs.path.join(a, &.{ dir, "model.safetensors" });
+        var pf = std.Io.Dir.cwd().openFile(io, probe, .{}) catch return error.SkipZigTest;
+        pf.close(io);
+    }
+    const tmpbase = std.mem.span(std.c.getenv("TMPDIR") orelse "/tmp");
+    const shim = try std.fs.path.join(a, &.{ tmpbase, "i2-prefill-shim" });
+    std.Io.Dir.cwd().createDirPath(io, shim) catch {};
+    try writeShim(gpa, io, shim, dir);
+    var m = try model_mod.Model.load(gpa, io, shim);
+    defer m.deinit();
+    const window: usize = m.config.text.window;
+    const N: usize = 3 * window;
+    const bounded = window - 4;
+    try t.expect(N <= 64 and bounded > 8);
+    const K: usize = m.config.text.topk;
+    var ids: [64]u32 = undefined;
+    for (0..N) |i| ids[i] = @intCast(100 + (i * 7) % 61);
+    const vocab: usize = m.config.text.unpadded_vocab;
+    const kvw: usize = m.config.text.local.kv * m.config.text.local.dim;
+    const h: usize = m.config.text.hidden;
+    const conv_elems = m.config.slots() * state_mod.ring * kvw;
+    const mlp_elems = m.config.slots() * state_mod.ring * h;
+    var ps = try prefill_mod.PrefillScratch.init(device, &m.config, N);
+    defer ps.deinit();
+    ps.half = false;
+    var logits: [4][]f32 = undefined;
+    var picks: [4][]i32 = undefined;
+    var stages: [4]StageBufs = undefined;
+    var kv_bytes: usize = 0;
+    const chunks = [_]usize{ bounded, window + 1, window + 8, N };
+    for (chunks, 0..) |chunk, side| {
+        var cache = try state_mod.Cache.init(device, &m.config, N + 1);
+        defer cache.deinit();
+        kv_bytes = cache.keys.length();
+        logits[side] = try gpa.alloc(f32, N * vocab);
+        picks[side] = try gpa.alloc(i32, N * K);
+        var at: usize = 0;
+        while (at < N) {
+            const take = @min(chunk, N - at);
+            try t.expect(take > 8);
+            try prefill_mod.prefill(m, &ps, &cache, ids[at..][0..take]);
+            @memcpy(logits[side][at * vocab ..][0 .. take * vocab], ps.logits.slice(f32, take * vocab));
+            @memcpy(picks[side][at * K ..][0 .. take * K], ps.picks.slice(i32, take * K));
+            at += take;
+        }
+        try t.expectEqual(N, cache.len);
+        stages[side] = try stageInit(device, kv_bytes, conv_elems * 4, mlp_elems * 4);
+        try snapshot(m, &cache, &stages[side]);
+    }
+    defer for (0..chunks.len) |side| {
+        gpa.free(logits[side]);
+        gpa.free(picks[side]);
+        stageDeinit(&stages[side]);
+    };
+    var probe = try state_mod.Cache.init(device, &m.config, N + 1);
+    defer probe.deinit();
+    for (1..chunks.len) |side| {
+        const kd = kvStateDiff(&m.config, &probe, stages[0].keys.slice(f16, kv_bytes / 2), stages[side].keys.slice(f16, kv_bytes / 2), N);
+        const vd = kvStateDiff(&m.config, &probe, stages[0].values.slice(f16, kv_bytes / 2), stages[side].values.slice(f16, kv_bytes / 2), N);
+        std.debug.print("long chunk {d} vs {d}: logits {e} keys {e} values {e}\n", .{ chunks[side], bounded, maxAbsDiff(logits[0], logits[side]), kd, vd });
+        try t.expectEqualSlices(i32, picks[0], picks[side]);
+        try t.expectEqualSlices(f32, logits[0], logits[side]);
+        try t.expectEqualSlices(u8, std.mem.sliceAsBytes(stages[0].keys.slice(f16, kv_bytes / 2)), std.mem.sliceAsBytes(stages[side].keys.slice(f16, kv_bytes / 2)));
+        try t.expectEqualSlices(u8, std.mem.sliceAsBytes(stages[0].values.slice(f16, kv_bytes / 2)), std.mem.sliceAsBytes(stages[side].values.slice(f16, kv_bytes / 2)));
+        try t.expectEqualSlices(f32, stages[0].kc.slice(f32, conv_elems), stages[side].kc.slice(f32, conv_elems));
+        try t.expectEqualSlices(f32, stages[0].vc.slice(f32, conv_elems), stages[side].vc.slice(f32, conv_elems));
+        try t.expectEqualSlices(f32, stages[0].ac.slice(f32, mlp_elems), stages[side].ac.slice(f32, mlp_elems));
+        try t.expectEqualSlices(f32, stages[0].mc.slice(f32, mlp_elems), stages[side].mc.slice(f32, mlp_elems));
+    }
+}
+
 const legacyGemm =
     \\#include <metal_stdlib>
     \\using namespace metal;

@@ -526,6 +526,7 @@ struct i2p_batch_conv_args { uint channels, heads, ring, pos, layout; float norm
     device half* KEYS [[buffer(2)]], device half* VALUES [[buffer(3)]], constant i2p_kv_args& a [[buffer(4)]],
     uint2 p [[thread_position_in_grid]]) {
   if (p.x >= a.count || p.y >= a.rows) return;
+  if (a.wring && p.y + a.wring < a.rows) return;
   const uint r = a.wring ? (a.base + p.y) % a.wring : a.base + p.y;
   KEYS[(size_t)r * a.count + p.x] = K[(size_t)p.y * a.count + p.x];
   VALUES[(size_t)r * a.count + p.x] = V[(size_t)p.y * a.count + p.x];

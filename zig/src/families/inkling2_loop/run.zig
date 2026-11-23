@@ -515,7 +515,7 @@ pub fn main(init: std.process.Init) !void {
         if (chunk == 0 or ids.value.len % chunk != 0 or 8 % (ids.value.len / chunk) != 0) return error.ExpectedArgs;
         var cache = try inkling.Cache.init(m.device, c, ids.value.len);
         defer cache.deinit();
-        var ps = try inkling.PrefillScratch.init(m.device, c, chunk);
+        var ps = try inkling.PrefillScratch.initRows(m.device, c, chunk, 1);
         defer ps.deinit();
         for (0..8 / (ids.value.len / chunk) + 1) |_| {
             cache.len = 0;
@@ -553,7 +553,7 @@ pub fn main(init: std.process.Init) !void {
         if (chunk == 0) {
             try run(m, &scratch, &cache, ids.value);
         } else {
-            var ps = try inkling.PrefillScratch.init(m.device, c, chunk);
+            var ps = try inkling.PrefillScratch.initRows(m.device, c, chunk, 1);
             defer ps.deinit();
             for (0..prefills) |pass| {
                 cache.len = 0;

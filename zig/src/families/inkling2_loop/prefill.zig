@@ -11,7 +11,7 @@ const Tensor = wts.Tensor;
 const Layer = wts.Layer;
 const Controller = wts.Controller;
 
-pub const default_chunk: usize = 512;
+pub const default_chunk: usize = 1024;
 
 /// The half-operand expert library: gate/up matrices from 14 rows an expert, down from 8, grouped f32 kernels below.
 pub const half_source = "#define I2P_HALF_OPERANDS 1\n#define I2P_MATRIX_THRESHOLD 14\n#define I2P_DOWN_MATRIX_THRESHOLD 8\n" ++ kernels.prefill ++ kernels.prefill_expert_wide;
@@ -232,6 +232,8 @@ pub const ConvCapture = struct {
 pub const PrefillScratch = struct {
     pipes: Pipes,
     chunk: usize,
+    /// Rows of logits `.all` can return; a chunk asking for more is refused.
+    logit_rows: usize,
     h: u32,
     heads: u32,
     kv: u32,
@@ -298,6 +300,11 @@ pub const PrefillScratch = struct {
     verify_conv: ?*ConvCapture,
 
     pub fn init(device: mtl.Device, c: *const cfg.Config, chunk: usize) !PrefillScratch {
+        return initRows(device, c, chunk, chunk);
+    }
+
+    /// Scratch for chunks of up to `chunk` rows that keeps logits for `logit_rows` of them (1 for `.last` only).
+    pub fn initRows(device: mtl.Device, c: *const cfg.Config, chunk: usize, logit_rows: usize) !PrefillScratch {
         const h: usize = c.text.hidden;
         const qw: usize = @max(c.text.local.q * c.text.local.dim, c.text.global.q * c.text.global.dim);
         const kvw: usize = @max(c.text.local.kv * c.text.local.dim, c.text.global.kv * c.text.global.dim);
@@ -332,6 +339,7 @@ pub const PrefillScratch = struct {
         s.routes = null;
         s.verify_conv = null;
         s.chunk = chunk;
+        s.logit_rows = @min(@max(logit_rows, 1), chunk);
         s.h = @intCast(h);
         s.heads = c.text.local.q;
         s.kv = c.text.local.kv;
@@ -390,7 +398,7 @@ pub const PrefillScratch = struct {
         }
         s.ids = try device.buffer(@max(chunk * 4, 16), mtl.ResourceOptions.shared);
         errdefer s.ids.deinit();
-        s.logits = try device.buffer(@max(chunk * vocab * 4, 16), mtl.ResourceOptions.shared);
+        s.logits = try device.buffer(@max(s.logit_rows * vocab * 4, 16), mtl.ResourceOptions.shared);
         const opts = mtl.CompileOptions.mlx();
         const lib = try mtl.Library.fromSource(device, kernels.prefill, opts);
         defer lib.deinit();
@@ -1303,9 +1311,8 @@ pub fn batchStep(m: *const Model, s: *@import("batch.zig").BatchScratch, caches:
 }
 
 fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, want: WantLogits, batch: ?*BatchContext) !void {
-    if (ids.len == 0 or ids.len > s.chunk) return error.BadChunk;
+    if (ids.len == 0 or ids.len > s.chunk or (want == .all and ids.len > s.logit_rows)) return error.BadChunk;
     if (batch == null and ids.len + cache.len > cache.capacity) return error.ContextFull;
-    if (ids.len > m.config.text.window) return error.ChunkTooLarge;
     if (s.half_overflow) |buf| buf.slice(u32, 1)[0] = 0;
     @memcpy(s.ids.slice(u32, ids.len), ids);
     const kvw: usize = m.config.text.local.kv * m.config.text.local.dim;

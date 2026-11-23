@@ -84,7 +84,6 @@ Never leave a line blank or claim a check you did not run.
   ```sh
   zig build test test-golden
   zig build dev-tools        # macOS, after changing an API the tf-* tools call
-  zig fmt --check build.zig zig
   git diff --check
   ```
 
@@ -118,7 +117,7 @@ Before `gh pr create`, or before marking a draft ready, confirm these on the hea
 
 - [ ] One behavior; split layers stacked; Issue, Stacked on and the overlap result filled.
 - [ ] `atc overlap --json` run after the last rebase; every conflict resolved or shown to be inherited.
-- [ ] Head commit, both lean counts and zero new findings; `zig fmt --check` and `git diff --check` pass.
+- [ ] Head commit, both lean counts and zero new findings; `git diff --check` passes.
 - [ ] CI on this head green, or each failure classified.
 - [ ] Each line filled or "n/a" with a reason; only the sections the template says to delete are gone.
 - [ ] Platforms named by chip or target, run and not run.

@@ -10,6 +10,10 @@ the Metal, CUDA and HIP builds, and `-Dcpu` and `-Dfixed-cpu` selection.
 `version:`, so the action reads `minimum_zig_version`. Zig cache keys use `hashFiles('build.zig.zon')`, so a
 toolchain change starts a new cache.
 
+## Formatting
+
+No workflow, Makefile or hook runs `zig fmt`, including `zig fmt --check`.
+
 ## Entry points
 
 | Command | macOS | Linux |

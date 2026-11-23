@@ -12,7 +12,6 @@ zig build native -Dcpu=apple_m1
 zig build test test-golden -Dcpu=apple_m1
 MTL_DEBUG_LAYER=1 zig build test-glm-sampling -Dcpu=apple_m1
 python3 -m unittest discover -s tools/zig -p test_check_glm_sampling.py
-zig fmt --check build.zig zig
 python3 tools/zig/lean_check.py
 ```
 

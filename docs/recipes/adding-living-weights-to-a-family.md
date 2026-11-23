@@ -199,7 +199,7 @@ On a fresh copy for each run, greedy, with the checkpoint's revision, the GPU, d
   Drafted equals `"draft": false`, concurrent equals solo, a resumed prompt equals a fresh one, and the decode cost of
   the pocket (Flash Next: 5% drafted and 1% plain with three facts).
 - **Tests.** A plain `zig build` (every step), `zig build test-cuda-host` and `zig build test-living` from a fresh
-  cache, `zig fmt --check build.zig zig`, and `python3 tools/zig/lean_check.py` with no new problems.
+  cache, and `python3 tools/zig/lean_check.py` with no new problems.
 
 ## Traps
 

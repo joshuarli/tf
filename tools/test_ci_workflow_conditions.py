@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class WorkflowConditionTests(unittest.TestCase):
     def test_only_same_repository_landing_trains_can_skip_jobs(self):
-        expected_skips = {"app.yml": 5, "no-gpu.yml": 7, "web.yml": 3, "zig-fmt.yml": 1}
+        expected_skips = {"app.yml": 5, "no-gpu.yml": 7, "web.yml": 3}
         train_condition = (
             "${{ !(startsWith(github.head_ref, 'lead/train-') && "
             "github.event.pull_request.head.repo.full_name == github.repository) }}"

@@ -68,7 +68,6 @@ jobs:
       # Two of its tests run Zig (the build options and the cache tool), so it needs the compiler but no build.
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          version: 0.17.0
           use-cache: false
       - name: pytest from the root, as an outside evaluator runs it
         run: |
@@ -114,7 +113,6 @@ jobs:
           python3 tools/zig/lean_new.py ../lean-base.txt ../lean-head.txt
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          version: 0.17.0
           use-cache: false
       # Main and pull requests restore main's newest build, so each compiles and runs only what changed since; only main
       # saves, and the nightly run starts from nothing.
@@ -123,8 +121,8 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .zig-cache
-          key: zig-build-v3-Linux-0.17.0-${{ github.sha }}
-          restore-keys: zig-build-v3-Linux-0.17.0-
+          key: zig-build-v3-Linux-${{ hashFiles('build.zig.zon') }}-${{ github.sha }}
+          restore-keys: zig-build-v3-Linux-${{ hashFiles('build.zig.zon') }}-
       # A checkout or a restored cache gives every file a new id, and Zig 0.17's cache misses on one even when the
       # contents match (fixed on Zig's master, ziglang/zig#37238). A failure here costs time, never a check.
       # --prune deletes the entries this checkout can't hit, so a cache that main restores and saves stays one build.
@@ -212,7 +210,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .zig-cache
-          key: zig-build-v3-Linux-0.17.0-${{ github.sha }}${{ github.event_name == 'schedule' && '-nightly' || '' }}
+          key: zig-build-v3-Linux-${{ hashFiles('build.zig.zon') }}-${{ github.sha }}${{ github.event_name == 'schedule' && '-nightly' || '' }}
 
   # The second half of the host aggregate, on its own runner so the two shards run in parallel inside the 90-minute
   # budget. Same git inputs, Zig setup and restored cache as `zig`; no lean/fmt/python checks and no cache save (only
@@ -228,7 +226,6 @@ jobs:
           persist-credentials: false
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          version: 0.17.0
           use-cache: false
       # Same restore key as `zig`; `zig` is the only job that saves it, and the nightly run starts from nothing.
       # -Dfixed-cpu: a compile's cache key carries its CPU and these runners differ, so all of them compile for one CPU.
@@ -236,8 +233,8 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .zig-cache
-          key: zig-build-v3-Linux-0.17.0-${{ github.sha }}
-          restore-keys: zig-build-v3-Linux-0.17.0-
+          key: zig-build-v3-Linux-${{ hashFiles('build.zig.zon') }}-${{ github.sha }}
+          restore-keys: zig-build-v3-Linux-${{ hashFiles('build.zig.zon') }}-
       # A checkout or a restored cache gives every file a new id, and Zig 0.17's cache misses on one even when the
       # contents match (fixed on Zig's master, ziglang/zig#37238). A failure here costs time, never a check.
       # --prune deletes the entries this checkout can't hit, so a cache that main restores and saves stays one build.
@@ -275,7 +272,6 @@ jobs:
           persist-credentials: false
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          version: 0.17.0
           use-cache: false
       # Main and pull requests restore main's newest build, so each compiles and runs only what changed since; only main
       # saves, and the nightly run starts from nothing.
@@ -284,8 +280,8 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .zig-cache
-          key: zig-build-v3-Windows-0.17.0-${{ github.sha }}
-          restore-keys: zig-build-v3-Windows-0.17.0-
+          key: zig-build-v3-Windows-${{ hashFiles('build.zig.zon') }}-${{ github.sha }}
+          restore-keys: zig-build-v3-Windows-${{ hashFiles('build.zig.zon') }}-
       - name: Let a restored cache fit this checkout
         shell: bash
         run: zig run -OReleaseFast -mcpu=baseline tools/zig/zig_cache_restat.zig -- .zig-cache "$(dirname "$(command -v zig)")/lib" --prune || echo "::warning::zig_cache_restat failed, so this job rebuilds and reruns more than it needs to"
@@ -308,7 +304,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .zig-cache
-          key: zig-build-v3-Windows-0.17.0-${{ github.sha }}${{ github.event_name == 'schedule' && '-nightly' || '' }}
+          key: zig-build-v3-Windows-${{ hashFiles('build.zig.zon') }}-${{ github.sha }}${{ github.event_name == 'schedule' && '-nightly' || '' }}
   # The release's own path check on each platform's dist server (no fatbins), so a leak fails here, not at release.
   # Pull requests check Linux x86_64 only; main's pushes and the nightly run check all three platforms.
   release-paths:
@@ -325,7 +321,6 @@ jobs:
           persist-credentials: false
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          version: 0.17.0
           use-cache: false
       # The same cache as `zig`: main saves, and a pull request restores main's newest and adds nothing to the budget.
       - name: Cache key
@@ -338,10 +333,10 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .zig-cache
-          key: zig-build-v3-paths-${{ matrix.os }}-0.17.0-${{ steps.cache-key.outputs.shared }}-${{ github.sha }}
+          key: zig-build-v3-paths-${{ matrix.os }}-${{ hashFiles('build.zig.zon') }}-${{ steps.cache-key.outputs.shared }}-${{ github.sha }}
           restore-keys: |
-            zig-build-v3-paths-${{ matrix.os }}-0.17.0-${{ steps.cache-key.outputs.shared }}-
-            ${{ github.event_name == 'pull_request' && format('zig-build-v3-paths-{0}-0.17.0-', matrix.os) || '' }}
+            zig-build-v3-paths-${{ matrix.os }}-${{ hashFiles('build.zig.zon') }}-${{ steps.cache-key.outputs.shared }}-
+            ${{ github.event_name == 'pull_request' && format('zig-build-v3-paths-{0}-${{ hashFiles('build.zig.zon') }}-', matrix.os) || '' }}
       - name: Let a restored cache fit this checkout
         shell: bash
         run: zig run -OReleaseFast -mcpu=baseline tools/zig/zig_cache_restat.zig -- .zig-cache "$(dirname "$(command -v zig)")/lib" --prune || echo "::warning::zig_cache_restat failed, so this job rebuilds and reruns more than it needs to"
@@ -355,7 +350,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .zig-cache
-          key: zig-build-v3-paths-${{ matrix.os }}-0.17.0-${{ steps.cache-key.outputs.shared }}-${{ github.sha }}${{ github.event_name == 'schedule' && '-nightly' || '' }}
+          key: zig-build-v3-paths-${{ matrix.os }}-${{ hashFiles('build.zig.zon') }}-${{ steps.cache-key.outputs.shared }}-${{ github.sha }}${{ github.event_name == 'schedule' && '-nightly' || '' }}
   zig-macos-dev-tools:
     if: ${{ !(startsWith(github.head_ref, 'lead/train-') && github.event.pull_request.head.repo.full_name == github.repository) }}  # a landing train's tip: see the note above jobs
     runs-on: macos-26
@@ -366,7 +361,6 @@ jobs:
           persist-credentials: false
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          version: 0.17.0
           use-cache: false
       # The same cache as `zig`: main saves, and a pull request restores main's newest and adds nothing to the budget.
       - name: Cache key
@@ -379,10 +373,10 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .zig-cache
-          key: zig-build-v3-macOS-dev-tools-0.17.0-${{ steps.cache-key.outputs.shared }}-${{ github.sha }}
+          key: zig-build-v3-macOS-dev-tools-${{ hashFiles('build.zig.zon') }}-${{ steps.cache-key.outputs.shared }}-${{ github.sha }}
           restore-keys: |
-            zig-build-v3-macOS-dev-tools-0.17.0-${{ steps.cache-key.outputs.shared }}-
-            ${{ github.event_name == 'pull_request' && 'zig-build-v3-macOS-dev-tools-0.17.0-' || '' }}
+            zig-build-v3-macOS-dev-tools-${{ hashFiles('build.zig.zon') }}-${{ steps.cache-key.outputs.shared }}-
+            ${{ github.event_name == 'pull_request' && 'zig-build-v3-macOS-dev-tools-${{ hashFiles('build.zig.zon') }}-' || '' }}
       - name: Let a restored cache fit this checkout
         shell: bash
         run: zig run -OReleaseFast -mcpu=baseline tools/zig/zig_cache_restat.zig -- .zig-cache "$(dirname "$(command -v zig)")/lib" --prune || echo "::warning::zig_cache_restat failed, so this job rebuilds and reruns more than it needs to"
@@ -397,7 +391,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .zig-cache
-          key: zig-build-v3-macOS-dev-tools-0.17.0-${{ steps.cache-key.outputs.shared }}-${{ github.sha }}${{ github.event_name == 'schedule' && '-nightly' || '' }}
+          key: zig-build-v3-macOS-dev-tools-${{ hashFiles('build.zig.zon') }}-${{ steps.cache-key.outputs.shared }}-${{ github.sha }}${{ github.event_name == 'schedule' && '-nightly' || '' }}
 
   # New host checks stay nightly until these exact runner classes establish the fast groups' wall time.
   host-nightly-linux:
@@ -414,7 +408,6 @@ jobs:
           persist-credentials: false
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          version: 0.17.0
           use-cache: false
       - name: Host checks and aggregate wall time
         shell: bash
@@ -443,7 +436,6 @@ jobs:
           persist-credentials: false
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          version: 0.17.0
           use-cache: false
       - name: Metal toolchain for native engine host checks
         if: matrix.suite == 'native'

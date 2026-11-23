@@ -38,13 +38,13 @@ def agent(base, model, turns, barrier, agent_id):
     started = time.monotonic()
     for _ in range(turns):
         body = {'model': model, 'messages': messages, 'max_tokens': 256, 'temperature': 0,
-                'stream': True, 'stream_options': {'include_usage': True}, 'reasoning_effort': 'minimal',
-                'chat_template_kwargs': {'enable_thinking': False}}
+                'stream': True, 'stream_options': {'include_usage': True}, 'reasoning_effort': 'minimal'}
         req = urllib.request.Request(base + '/chat/completions', data=json.dumps(body).encode(),
                                      headers={'Content-Type': 'application/json'})
         sent = time.monotonic()
         first = None
         content = []
+        reasoning = []
         tokens = None
         finished = False
         cached_tokens = None
@@ -69,12 +69,16 @@ def agent(base, model, turns, barrier, agent_id):
                     if piece and first is None:
                         first = time.monotonic()
                     content.append(delta.get('content') or '')
+                    reasoning.append(delta.get('reasoning_content') or '')
         answer = ''.join(content)
         if not finished or tokens is None or first is None or not answer:
             raise ValueError(f'incomplete streamed response: done={finished}, tokens={tokens}, '
                              f'first_output={first is not None}, answer_chars={len(answer)}')
         records.append({'tokens': tokens, 'ttft': first - sent, 'cached_tokens': cached_tokens, 'id': request_id})
-        messages.extend([{'role': 'assistant', 'content': answer},
+        reply = {'role': 'assistant', 'content': answer}
+        if ''.join(reasoning):
+            reply = {'role': 'assistant', 'reasoning_content': ''.join(reasoning), 'content': answer}
+        messages.extend([reply,
                          {'role': 'user', 'content': 'What does transform_1(42) return? Explain in one sentence.'}])
     return {'turns': records, 'seconds': time.monotonic() - started}
 

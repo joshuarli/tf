@@ -45,6 +45,8 @@ pub const Mtp = struct {
     taps_n: u32,
 };
 
+pub const Checkpoint = enum { modelopt, mlx };
+
 pub const Config = struct {
     text: small.Text,
     vision: small.Vision,
@@ -52,6 +54,7 @@ pub const Config = struct {
     mtp: ?Mtp,
     eos: u32,
     image_token: u32,
+    checkpoint: Checkpoint = .modelopt,
     /// `layer_types`: which layers attend over the whole context. The checkpoint carries it, and a checkpoint whose
     /// every-other layer is global is not the published every-sixth one the shared package assumes.
     local: [small.max_layers]bool = @splat(false),
@@ -273,7 +276,58 @@ fn parseMtp(o: std.json.ObjectMap, text_hidden: u32, slots: u32, why: *Why) !Mtp
     return m;
 }
 
-fn quantization(o: std.json.ObjectMap, why: *Why) !void {
+fn mlxWidth(o: std.json.ObjectMap, bits: i64, group: i64, mode: []const u8) bool {
+    const b = o.get("bits") orelse return false;
+    const g = o.get("group_size") orelse return false;
+    return b == .integer and b.integer == bits and g == .integer and g.integer == group and
+        std.mem.eql(u8, text(o, "mode") orelse "", mode);
+}
+
+fn mlxEntry(o: std.json.ObjectMap, key: []const u8, bits: i64, group: i64, mode: []const u8, why: *Why) !void {
+    const entry = o.get(key) orelse {
+        why.set("quantization has no {s} override", .{key});
+        return error.Quant;
+    };
+    if (entry != .object or !mlxWidth(entry.object, bits, group, mode)) {
+        why.set("quantization override {s} has an unsupported format", .{key});
+        return error.Quant;
+    }
+}
+
+fn quantization(o: std.json.ObjectMap, layers: u32, local: *const [small.max_layers]bool, why: *Why) !Checkpoint {
+    if (o.get("quantization")) |v| {
+        if (v != .object or !mlxWidth(v.object, 4, 64, "affine")) {
+            why.set("quantization must default to affine 4-bit group 64", .{});
+            return error.Quant;
+        }
+        const q = v.object;
+        try mlxEntry(q, "model.embed", 8, 64, "affine", why);
+        try mlxEntry(q, "lm_head", 8, 64, "affine", why);
+        if (layers != 24) {
+            why.set("quantization requires 24 layers", .{});
+            return error.Quant;
+        }
+        var expected: usize = 5;
+        for (0..layers) |i| {
+            var key: [128]u8 = undefined;
+            const projections: []const []const u8 = if (local[i]) &.{ "in_proj", "o_proj" } else &.{ "q_proj", "k_proj", "v_proj", "o_proj" };
+            for (projections) |p| {
+                const name = try std.fmt.bufPrint(&key, "model.layers.{d}.attn.{s}", .{ i, p });
+                try mlxEntry(q, name, 8, 64, "affine", why);
+                expected += 1;
+            }
+            if (i < 20) for ([_][]const u8{ "w13", "w2" }) |p| {
+                const name = try std.fmt.bufPrint(&key, "model.layers.{d}.mlp.experts.{s}", .{ i, p });
+                try mlxEntry(q, name, 4, 16, "nvfp4", why);
+                expected += 1;
+            };
+        }
+        if (q.count() != expected) {
+            why.set("quantization has unknown overrides", .{});
+            return error.Quant;
+        }
+        return .mlx;
+    }
     const v = o.get("quantization_config") orelse {
         why.set("config.json has no ModelOpt quantization_config", .{});
         return error.Quant;
@@ -289,6 +343,7 @@ fn quantization(o: std.json.ObjectMap, why: *Why) !void {
         why.set("quantization_config: the loader reads ModelOpt NVFP4 experts (MXFP8 layers follow from their tensors)", .{});
         return error.Quant;
     }
+    return .modelopt;
 }
 
 /// config.json as the reference and the checkpoint read it; a refusal is in `why`.
@@ -331,13 +386,14 @@ pub fn parse(gpa: std.mem.Allocator, json: []const u8, why: *Why) !Config {
             return error.Unsupported;
         }
     }
-    try quantization(o, why);
+    var layout: [small.max_layers]bool = @splat(false);
+    try parseLayout(tc, layers, &layout, why);
+    const checkpoint = try quantization(o, layers, &layout, why);
 
     doc.object.getPtr("architectures").?.array.items[0] = .{ .string = "Inkling2ForConditionalGeneration" };
     doc.object.getPtr("model_type").?.* = .{ .string = "inkling2" };
     _ = doc.object.orderedRemove("mtp_config");
-    var layout: [small.max_layers]bool = @splat(false);
-    try parseLayout(tc, layers, &layout, why);
+    if (checkpoint == .mlx) _ = doc.object.orderedRemove("quantization_config");
     // The shared package checks `local_layer_ids` against its own every-sixth layout. Only its shapes are used here:
     // `parseLayout` above holds the checkpoint's real mask, and every layout question goes through `Config`.
     const base_tc = &doc.object.getPtr("text_config").?.object;
@@ -356,6 +412,7 @@ pub fn parse(gpa: std.mem.Allocator, json: []const u8, why: *Why) !Config {
         .mtp = mtp,
         .eos = base.eos,
         .image_token = base.image_token,
+        .checkpoint = checkpoint,
         .local = layout,
     };
 }

@@ -1,13 +1,9 @@
 # Inkling 2 Mini oQ4e
 
-Status: blocked by the lane's writable scope. No implementation or model measurements were completed.
+Status: implementation in progress. No model measurements have been completed.
 
-The requested affine dense and expert Metal operators need kernel contract registrations. The native contributor
-instructions require registration in `zig/tests/contract/metal_main.zig` and launch records in
-`zig/src/core/contract/registry.zig` (`docs/recipes/SKILL.md:80-88`). Both paths are outside the lane's writable
-paths. `docs/kernel-contract.md:151-160` also requires a contract test type under `zig/tests/contract/`.
-The required family-local FP64 test does not replace those registrations. The parent must coordinate those changes
-or expand this lane's scope before the operators can satisfy the repository's correctness requirements.
+The new affine kernels join the family-wide kernel-contract registration item required before promotion out of the
+campaign. This lane uses family-local FP64 tests and parity under the campaign's explicit ruling.
 
 The checkpoint's four `model-*.safetensors` headers contain 1,102 tensors in total. Layer 0's attention uses
 `model.layers.0.attn.in_proj.weight` with shape `[8600, 576]` and dtype U32, plus BF16 scales and biases.

@@ -6,6 +6,17 @@ const quant = @import("quant.zig");
 const t = std.testing;
 const real = @embedFile("fixtures/config.json");
 const hf_quant = @embedFile("fixtures/hf_quant_config.json");
+const oq4e = @embedFile("fixtures/oq4e-config.json");
+
+test "oQ4e config admits affine weights and rejects a changed default" {
+    var why: config.Why = .{};
+    const c = try config.parse(t.allocator, oq4e, &why);
+    try t.expectEqual(@as(u32, 24), c.text.layers);
+    try t.expectEqual(config.Checkpoint.mlx, c.checkpoint);
+    const edited = try std.mem.replaceOwned(u8, t.allocator, oq4e, "\"group_size\": 64,\n    \"bits\": 4,\n    \"mode\": \"affine\",", "\"group_size\": 32,\n    \"bits\": 4,\n    \"mode\": \"affine\",");
+    defer t.allocator.free(edited);
+    try t.expectError(error.Quant, config.parse(t.allocator, edited, &why));
+}
 
 fn failed(json: []const u8, from: []const u8, to: []const u8, want: anyerror, says: []const u8) !void {
     if (std.mem.count(u8, json, from) != 1) return error.EditAnchor;

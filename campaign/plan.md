@@ -6,7 +6,7 @@
 - Resume prompt: "Resume the Inkling frontier campaign (Decision 16) from `campaign/plan.md` **Status**."
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
 - **Last accepted revision: `61d62b6a1`, green.** Passing: `evidence-tests`, `inkling-host`, `zig build native` and the `inkling-omlx-oracle` report (mean KL 0.0195). `inkling-gpu` last passed at `4c2af5d2a`; since then Zig and Metal changed only in comments.
-- **Parked branches**, with item, cause and retry:
+- **Parked branches** (all on `origin`), with item, cause and retry:
   - `lane/p3c-prefill`: cold prefill on TensorOps with chunk 1,024. Through `997eb064a`, the suite is green and gated single screens give 4K 591 → 1,603 tok/s. The 3-pair matrix and the sweeps never ran, and `f0ff849e6` is wip. Retry: the matrix in its receipt, then the 2- and 4-agent sweeps, then integrate through `997eb064a`.
   - `lane/d2-attn`: decode attention plus five batch kernels, byte-equal to what they replace; the attention microbenchmark went 4.0 → 1.3 ms per step. Step timing never ran, because outside CPU load deferred the gates. Retry: the `batchbench` pairs in `inkling-decode-step.md`.
   - `lane/m1-mtp`: greedy-exact MTP serving, suite green at `dc7a4dba3`, but negligible gain: proposals take 10–14 ms and one-row verification 20–23 ms. `2cd5f9561` is wip. Retry after D2 makes few-row verification cheaper, with corrected sweeps for MTP on, off and paused. The earlier drafter, `lane/ds1-dspark-drafter` (16.7 / 29.7 ms per round), is superseded by it.
@@ -16,7 +16,7 @@
   - Old wip records: `c0-ground`, `k2-inkling-experts`.
 - **Next slice:**
   1. Qualify and integrate P3c, then D2.
-  2. B2: corrected baselines, TensorFold and oMLX with MTP off and on, at 1/2/4/8 agents.
+  2. B2: corrected baselines at 1/2/4/8 agents, cold and warm. Measure llama.cpp upstream and its best Inkling stack first, since they likely set the T3 bar. Then measure oMLX with MTP off and on.
   3. R1: the source map and ledger, per `frontier-brief.md`.
 
   Run one GPU-timing lane at a time: the shared lock and outside load (OrbStack at 4–10 cores) left parallel lanes unmeasurable.
@@ -119,9 +119,21 @@ The owner made the first two decisions on 2026-11-21:
 15. **Prescribed: Exo's M5 exclusions.** Exo PR #2533 (head `c4685725bf6a71fb424e668744744499d44a4fea`, open) gates its fused kernels to M1/M3/M4. The reason it gives is "until verified on that hardware". That is missing validation, not a known numerical difference. Enable a port on M5 only after a bit-exact check against the unfused path on this machine. Exo PR #2530 (open) targets Inkling-**Small**, not Mini; its ideas transfer only where the Mini graph has the same operator.
 
 16. **Owner: frontier campaign T3 (2026-11-23).** The specification is `campaign/frontier-brief.md`.
-    - **Target (T2).** At least 1.10× oMLX aggregate tok/s in every same-weights 1/2/4/8-agent cell, on both
-      repetitions, with thresholds recalculated on the corrected workload. If TensorFold serves with MTP, compare
-      against oMLX with MTP on, and keep the MTP-off comparison.
+    - **Target (T3, owner, 2026-11-23).** In every cell, at least 1.10× the strongest reproducible engine on this
+      machine under the same memory budget. The cells cover cold-turn prefill, warm decode, and 1/2/4/8-agent
+      aggregate throughput, each on both repetitions. The comparators are:
+      - current llama.cpp upstream;
+      - llama.cpp's best Inkling PR or fork stack;
+      - oMLX;
+      - mlx-serve;
+      - MTPLX.
+
+      The bar is measured, not assumed. Same-weights cells go in the controlled table, and other quantizations go in
+      the best-practical table at a declared quality standard. If either side speculates, compare speculation on
+      against speculation on, and keep the off comparison.
+    - **Stretch.** 2,000 tok/s cold prefill and 80 tok/s single-stream decode.
+    - **Floor (T2).** At least 1.10× oMLX in every same-weights 1/2/4/8-agent cell, on both repetitions,
+      recalculated on the corrected workload.
     - **Workload.** Both engines use the reasoning-replay clients from `69651393c`. Earlier sweeps are not comparable.
     - **Correctness.** Consistency tests and greedy equality are the gates. Fidelity is reporting-only. At integration
       milestones and at final integration, report:

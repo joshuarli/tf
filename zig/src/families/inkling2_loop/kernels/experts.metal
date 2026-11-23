@@ -317,3 +317,153 @@ inline void i2_plain_row(const device uchar* w, const device float* x, uint k0, 
   OUT[(size_t)slot * a.n + r] = d * (amax[e] / den[0]);
 #endif
 }
+
+#ifndef I2_MXFP8
+struct i2_rows_moe { uint k, n, slots, topk; float gate_cap, up_cap; };
+
+// The slots routed to expert `e`, lowest first, at most eight: one a batch row, since a row picks an expert once.
+inline uint i2_members(const device int* PICKS, uint slots, int e, uint lane, thread uint (&member)[8]) {
+  const bool lo = lane < slots && PICKS[lane] == e;
+  const bool hi = lane + 32u < slots && PICKS[lane + 32u] == e;
+  uint ml = uint(ulong(simd_vote::vote_t(simd_ballot(lo))));
+  uint mh = uint(ulong(simd_vote::vote_t(simd_ballot(hi))));
+  uint count = 0u;
+#pragma unroll
+  for (uint i = 0; i < 8u; ++i) {
+    uint s = 64u;
+    if (ml != 0u) {
+      s = ctz(ml);
+      ml &= ml - 1u;
+    } else if (mh != 0u) {
+      s = 32u + ctz(mh);
+      mh &= mh - 1u;
+    }
+    member[i] = s;
+    count += s < 64u ? 1u : 0u;
+  }
+  return count;
+}
+
+// i2p_gu for a batch: the lowest slot routed to an expert decodes each gate/up group once for every slot routed to
+// it, each slot's sums in i2p_gu's order; the expert's other slots return at once.
+[[kernel]] void i2_gu_rows(const device float* X [[buffer(0)]], const device uchar* W [[buffer(1)]],
+    const device uchar* S [[buffer(2)]], const device float* amax [[buffer(3)]],
+    const device float* den [[buffer(4)]], const device int* PICKS [[buffer(5)]],
+    constant i2_rows_moe& a [[buffer(6)]], device float* ACT [[buffer(7)]],
+    const device float* CODES [[buffer(8)]],
+    uint2 tg [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
+  const uint c = tg.x;
+  const uint slot = tg.y;
+  if (c >= a.n || slot >= a.slots) return;
+  const int e = PICKS[slot];
+  uint member[8];
+  const uint count = i2_members(PICKS, a.slots, e, lane, member);
+  if (member[0] != slot) return;
+  const size_t row = (size_t)uint(e) * a.n * 2u + 2u * c;
+  const device uchar* wg = W + row * I2_CODE_STRIDE(a.k);
+  const device uchar* wu = wg + I2_CODE_STRIDE(a.k);
+  const uint groups = a.k / I2_GROUP;
+  float dg[8], du[8];
+#pragma unroll
+  for (uint i = 0; i < 8u; ++i) {
+    dg[i] = 0.0f;
+    du[i] = 0.0f;
+  }
+  for (uint g = lane; g < groups; g += 32u) {
+    const uint k0 = g * I2_GROUP;
+    const ulong ag = *(const device ulong*)(wg + I2_BYTE_OFF(k0));
+    const ulong au = *(const device ulong*)(wu + I2_BYTE_OFF(k0));
+    const float sg = i2_decode_scale(S, row * I2_SCALE_STRIDE(a.k) + g);
+    const float su = i2_decode_scale(S, (row + 1u) * I2_SCALE_STRIDE(a.k) + g);
+    float cg[16], cu[16];
+#pragma unroll
+    for (uint j = 0; j < 8u; ++j) {
+      const uint ab = i2_lane_byte(ag, j);
+      const uint ub = i2_lane_byte(au, j);
+      cg[2u * j] = CODES[ab & 15u];
+      cg[2u * j + 1u] = CODES[ab >> 4u];
+      cu[2u * j] = CODES[ub & 15u];
+      cu[2u * j + 1u] = CODES[ub >> 4u];
+    }
+#pragma unroll
+    for (uint i = 0; i < 8u; ++i) {
+      if (i >= count) break;
+      const device float* x = X + (size_t)(member[i] / a.topk) * a.k;
+      float pg = 0.0f;
+      float pu = 0.0f;
+#pragma unroll
+      for (uint j = 0; j < 8u; ++j) {
+        const float x0 = x[k0 + 2u * j];
+        const float x1 = x[k0 + 2u * j + 1u];
+        pg = fma(cg[2u * j], x0, pg);
+        pg = fma(cg[2u * j + 1u], x1, pg);
+        pu = fma(cu[2u * j], x0, pu);
+        pu = fma(cu[2u * j + 1u], x1, pu);
+      }
+      dg[i] = fma(sg, pg, dg[i]);
+      du[i] = fma(su, pu, du[i]);
+    }
+  }
+  const float global = amax[e] / den[0];
+#pragma unroll
+  for (uint i = 0; i < 8u; ++i) {
+    if (i >= count) break;
+    const float g = simd_sum(dg[i]);
+    const float u = simd_sum(du[i]);
+    if (lane == 0u) ACT[(size_t)member[i] * a.n + c] = i2_situ(g * global, u * global, a.gate_cap, a.up_cap);
+  }
+}
+
+// i2p_down for a batch, shared the same way: each slot keeps its own activation row and i2p_down's sums.
+[[kernel]] void i2_down_rows(const device float* ACT [[buffer(0)]], const device uchar* W [[buffer(1)]],
+    const device uchar* S [[buffer(2)]], const device float* amax [[buffer(3)]],
+    const device float* den [[buffer(4)]], const device int* PICKS [[buffer(5)]],
+    constant i2_rows_moe& a [[buffer(6)]], device float* OUT [[buffer(7)]],
+    const device float* CODES [[buffer(8)]],
+    uint2 tg [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
+  const uint r = tg.x;
+  const uint slot = tg.y;
+  if (r >= a.n || slot >= a.slots) return;
+  const int e = PICKS[slot];
+  uint member[8];
+  const uint count = i2_members(PICKS, a.slots, e, lane, member);
+  if (member[0] != slot) return;
+  const size_t row = (size_t)uint(e) * a.n + r;
+  const device uchar* w = W + row * I2_CODE_STRIDE(a.k);
+  const uint groups = a.k / I2_GROUP;
+  float d[8];
+#pragma unroll
+  for (uint i = 0; i < 8u; ++i) d[i] = 0.0f;
+  for (uint g = lane; g < groups; g += 32u) {
+    const uint k0 = g * I2_GROUP;
+    const ulong aw = *(const device ulong*)(w + I2_BYTE_OFF(k0));
+    const float sw = i2_decode_scale(S, row * I2_SCALE_STRIDE(a.k) + g);
+    float cw[16];
+#pragma unroll
+    for (uint j = 0; j < 8u; ++j) {
+      const uint b = i2_lane_byte(aw, j);
+      cw[2u * j] = CODES[b & 15u];
+      cw[2u * j + 1u] = CODES[b >> 4u];
+    }
+#pragma unroll
+    for (uint i = 0; i < 8u; ++i) {
+      if (i >= count) break;
+      const device float* x = ACT + (size_t)member[i] * a.k;
+      float p = 0.0f;
+#pragma unroll
+      for (uint j = 0; j < 8u; ++j) {
+        p = fma(cw[2u * j], x[k0 + 2u * j], p);
+        p = fma(cw[2u * j + 1u], x[k0 + 2u * j + 1u], p);
+      }
+      d[i] = fma(sw, p, d[i]);
+    }
+  }
+  const float global = amax[e] / den[0];
+#pragma unroll
+  for (uint i = 0; i < 8u; ++i) {
+    if (i >= count) break;
+    const float v = simd_sum(d[i]);
+    if (lane == 0u) OUT[(size_t)member[i] * a.n + r] = v * global;
+  }
+}
+#endif

@@ -819,3 +819,105 @@ test "batched route selection keeps the prefill selection's picks and weights" {
     }
     std.debug.print("batched route selection test: 12 cases equal to the prefill selection\n", .{});
 }
+
+const MoeArgs = extern struct { k: u32, n: u32, slots: u32, topk: u32, gate_cap: f32, up_cap: f32 };
+
+test "batched expert projections keep the per-slot kernels' bytes" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = mtl.Device.init() catch return error.SkipZigTest;
+    defer device.deinit();
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, kernels.expertSource(false), mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const prefill_lib = try mtl.Library.fromSource(device, kernels.prefillSource(false), mtl.CompileOptions.mlx());
+    defer prefill_lib.deinit();
+    const gu = [_]mtl.Pipeline{ try mtl.Pipeline.init(device, prefill_lib, "i2p_gu", false), try mtl.Pipeline.init(device, lib, "i2_gu_rows", false) };
+    defer for (gu) |p| p.deinit();
+    const down = [_]mtl.Pipeline{ try mtl.Pipeline.init(device, prefill_lib, "i2p_down", false), try mtl.Pipeline.init(device, lib, "i2_down_rows", false) };
+    defer for (down) |p| p.deinit();
+    const experts = 12;
+    const h = 2304;
+    const inter = 48;
+    const topk = 8;
+    const most = 8 * topk;
+    var prng = std.Random.DefaultPrng.init(0x6578_7073);
+    const rng = prng.random();
+    const w13 = try device.buffer(experts * 2 * inter * h / 2, mtl.ResourceOptions.shared);
+    defer w13.deinit();
+    const s13 = try device.buffer(experts * 2 * inter * h / 16, mtl.ResourceOptions.shared);
+    defer s13.deinit();
+    const w2 = try device.buffer(experts * h * inter / 2, mtl.ResourceOptions.shared);
+    defer w2.deinit();
+    const s2 = try device.buffer(experts * h * inter / 16, mtl.ResourceOptions.shared);
+    defer s2.deinit();
+    for (w13.slice(u8, experts * 2 * inter * h / 2)) |*v| v.* = rng.int(u8);
+    for (w2.slice(u8, experts * h * inter / 2)) |*v| v.* = rng.int(u8);
+    for (s13.slice(u8, experts * 2 * inter * h / 16)) |*v| v.* = 0x20 + rng.uintLessThan(u8, 0x30);
+    for (s2.slice(u8, experts * h * inter / 16)) |*v| v.* = 0x20 + rng.uintLessThan(u8, 0x30);
+    const amax = try device.buffer(experts * 4, mtl.ResourceOptions.shared);
+    defer amax.deinit();
+    for (amax.slice(f32, experts)) |*v| v.* = rng.float(f32) * 4 + 1;
+    const den = try device.buffer(16, mtl.ResourceOptions.shared);
+    defer den.deinit();
+    den.slice(f32, 1)[0] = 448.0 * 6.0;
+    const codes = try device.buffer(16 * 4, mtl.ResourceOptions.shared);
+    defer codes.deinit();
+    for (codes.slice(f32, 16), [_]f32{ 0, 0.5, 1, 1.5, 2, 3, 4, 6, -0.0, -0.5, -1, -1.5, -2, -3, -4, -6 }) |*v, c| v.* = c;
+    const x = try device.buffer(8 * h * 4, mtl.ResourceOptions.shared);
+    defer x.deinit();
+    fill(rng, x.slice(f32, 8 * h));
+    const act = try device.buffer(most * inter * 4, mtl.ResourceOptions.shared);
+    defer act.deinit();
+    fill(rng, act.slice(f32, most * inter));
+    const picks = try device.buffer(most * 4, mtl.ResourceOptions.shared);
+    defer picks.deinit();
+    var outs: [2]mtl.Buffer = undefined;
+    for (&outs) |*o| o.* = try device.buffer(most * h * 4, mtl.ResourceOptions.shared);
+    defer for (outs) |o| o.deinit();
+    var checked: usize = 0;
+    for (2..9) |rows| {
+        const slots = rows * topk;
+        const ps = picks.slice(i32, most);
+        for (0..rows) |r| {
+            var order: [experts]i32 = undefined;
+            for (&order, 0..) |*o, i| o.* = @intCast(i);
+            rng.shuffle(i32, &order);
+            for (0..topk) |k| ps[r * topk + k] = order[k];
+        }
+        for ([_]bool{ true, false }) |up| {
+            const args = if (up) MoeArgs{ .k = h, .n = inter, .slots = @intCast(slots), .topk = topk, .gate_cap = 30, .up_cap = 20 } else MoeArgs{ .k = inter, .n = h, .slots = @intCast(slots), .topk = topk, .gate_cap = 0, .up_cap = 0 };
+            const cb = queue.commandBuffer();
+            const enc = cb.compute(.serial);
+            for (0..2) |side| {
+                enc.setPipeline(if (up) gu[side] else down[side]);
+                enc.setBuffer(if (up) x else act, 0, 0);
+                enc.setBuffer(if (up) w13 else w2, 0, 1);
+                enc.setBuffer(if (up) s13 else s2, 0, 2);
+                enc.setBuffer(amax, 0, 3);
+                enc.setBuffer(den, 0, 4);
+                enc.setBuffer(picks, 0, 5);
+                enc.setValue(args, 6);
+                enc.setBuffer(outs[side], 0, 7);
+                enc.setBuffer(codes, 0, 8);
+                enc.dispatchGroups(mtl.Size.of(if (up) inter else h, slots, 1), mtl.Size.of(32, 1, 1));
+            }
+            enc.end();
+            cb.commit();
+            cb.wait();
+            if (cb.failure()) |msg| {
+                std.debug.print("expert test: {s}\n", .{msg});
+                return error.GpuFailed;
+            }
+            const count = slots * (if (up) @as(usize, inter) else h);
+            if (!sameBits(outs[0].slice(f32, count), outs[1].slice(f32, count))) {
+                std.debug.print("expert test rows={d} up={}: bytes differ\n", .{ rows, up });
+                return error.TestUnexpectedResult;
+            }
+            checked += 1;
+        }
+    }
+    std.debug.print("batched expert test: {d} cases byte-equal to the per-slot kernels\n", .{checked});
+}

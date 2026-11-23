@@ -1031,8 +1031,9 @@ const Chunk = struct {
         }
         if (c.n <= 8 or !s.half) {
             const codes = b(if (lay.precision == .mxfp8) m.t256 else m.t16);
-            const gu = if (lay.precision == .mxfp8) s.pipes.gu_mx else s.pipes.gu_nv;
-            const down = if (lay.precision == .mxfp8) s.pipes.down_mx else s.pipes.down_nv;
+            const shared = c.batch != null and c.n >= 2 and lay.precision != .mxfp8;
+            const gu = if (lay.precision == .mxfp8) s.pipes.gu_mx else if (shared) c.batch.?.scratch.gu_rows else s.pipes.gu_nv;
+            const down = if (lay.precision == .mxfp8) s.pipes.down_mx else if (shared) c.batch.?.scratch.down_rows else s.pipes.down_nv;
             c.setP(gu, MoeB{ .k = c.h, .n = inter, .slots = slots, .topk = K, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.picks), A, b(s.act), codes });
             c.enc.dispatchGroups(mtl.Size.of(inter, slots, 1), mtl.Size.of(32, 1, 1));
             if (lay.precision == .mxfp8) {

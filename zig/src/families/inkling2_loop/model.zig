@@ -128,7 +128,7 @@ pub const Model = struct {
     queue: mtl.Queue,
     config: cfg.Config,
     arena: std.heap.ArenaAllocator,
-    shard: Shard,
+    shards: []Shard,
     formats: []cfg.Expert,
     weights: Weights,
     glue: [glue_names.len]mtl.Pipeline,
@@ -150,10 +150,22 @@ pub const Model = struct {
         errdefer m.device.deinit();
         m.queue = try m.device.queue();
         errdefer m.queue.deinit();
-        m.shard = try mapShard(m, io, dir);
-        errdefer m.unmapShard();
+        const names = try cfg.shards(m.arena.allocator(), io, dir);
+        m.shards = try m.arena.allocator().alloc(Shard, names.len);
+        var mapped: usize = 0;
+        errdefer for (m.shards[0..mapped]) |s| {
+            s.buffer.deinit();
+            s.map.deinit();
+        };
+        for (names, 0..) |name, i| {
+            m.shards[i] = try mapShard(m, dir, name);
+            mapped += 1;
+        }
         m.formats = try m.arena.allocator().alloc(cfg.Expert, m.config.text.layers);
-        try cfg.expertFormats(m.shard.header, m.config.text.layers, m.formats);
+        if (m.config.checkpoint == .modelopt) {
+            if (m.shards.len != 1) return error.MultipleShards;
+            try cfg.expertFormats(m.shards[0].header, m.config.text.layers, m.formats);
+        } else @memset(m.formats, .nvfp4);
         m.weights = try m.mapWeights();
         m.t16 = try m.device.buffer(16 * 4, mtl.ResourceOptions.shared);
         errdefer m.t16.deinit();
@@ -170,28 +182,30 @@ pub const Model = struct {
         for (m.experts) |row| for (row) |p| p.deinit();
         m.t16.deinit();
         m.t256.deinit();
+        m.unmapShards();
         m.arena.deinit();
-        m.unmapShard();
         m.queue.deinit();
         m.device.deinit();
         m.gpa.destroy(m);
     }
 
-    fn unmapShard(m: *Model) void {
-        m.shard.buffer.deinit();
-        m.shard.map.deinit();
+    fn unmapShards(m: *Model) void {
+        for (m.shards) |s| {
+            s.buffer.deinit();
+            s.map.deinit();
+        }
     }
 
-    fn mapShard(m: *Model, io: std.Io, dir: []const u8) !Shard {
+    fn mapShard(m: *Model, dir: []const u8, file: []const u8) !Shard {
         const a = m.arena.allocator();
-        const file = try cfg.shard(a, io, dir);
         const path = try std.fs.path.joinZ(a, &.{ dir, file });
         const map = try mtl.MappedFile.open(path.ptr);
         errdefer map.deinit();
         if (map.size < 8) return error.BadSafetensors;
         const n = try st.headerSize(std.mem.readInt(u64, map.bytes[0..8], .little), map.size);
         const data = 8 + n;
-        const header = try st.parseHeaderPrefix(a, map.bytes[8..data], map.size - data, "model.llm.");
+        const prefixes: []const []const u8 = if (m.config.checkpoint == .mlx) &.{ "model.", "lm_head." } else &.{"model.llm."};
+        const header = try st.parseHeaderPrefixes(a, map.bytes[8..data], map.size - data, prefixes);
         const buffer = try m.device.bufferNoCopy(map.bytes.ptr, map.bytes.len, mtl.ResourceOptions.shared | mtl.ResourceOptions.untracked);
         return .{ .map = map, .buffer = buffer, .data = data, .header = header };
     }
@@ -208,13 +222,13 @@ pub const Model = struct {
     }
 
     pub fn get(m: *Model, name: []const u8) !Tensor {
-        const e = m.shard.header.get(name) orelse {
-            std.log.err("inkling2_loop: the checkpoint has no {s}", .{name});
-            return error.MissingTensor;
+        for (m.shards) |s| if (s.header.get(name)) |e| {
+            var t = Tensor{ .buffer = s.buffer, .offset = s.data + e.begin, .bytes = e.end - e.begin, .dtype = e.dtype, .rank = e.rank };
+            for (0..e.rank) |i| t.shape[i] = e.shape[i];
+            return t;
         };
-        var t = Tensor{ .buffer = m.shard.buffer, .offset = m.shard.data + e.begin, .bytes = e.end - e.begin, .dtype = e.dtype, .rank = e.rank };
-        for (0..e.rank) |i| t.shape[i] = e.shape[i];
-        return t;
+        std.log.err("inkling2_loop: the checkpoint has no {s}", .{name});
+        return error.MissingTensor;
     }
 
     fn want(m: *Model, name: []const u8, dtype: st.DType, dims: []const usize) !Tensor {

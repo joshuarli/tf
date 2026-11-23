@@ -1372,3 +1372,93 @@ test "parallel route selection matches serial picks and weights" {
         try t.expectEqualSlices(u8, std.mem.sliceAsBytes(expected_weights.slice(f32, rows * topk)), std.mem.sliceAsBytes(actual_weights.slice(f32, rows * topk)));
     };
 }
+
+test "wide half expert preserves routed gate and down products" {
+    const device = try mtl.Device.init(); defer device.deinit();
+    if (!device.tensorUnits()) return error.SkipZigTest;
+    const queue = try device.queue(); defer queue.deinit();
+    const source = "#define I2P_HALF_OPERANDS 1\n" ++ @import("kernels.zig").prefill ++ @import("kernels.zig").prefill_expert_wide;
+    const lib = try mtl.Library.fromSource(device, source, mtl.CompileOptions.mlx()); defer lib.deinit();
+    const narrow = try mtl.Pipeline.init(device, lib, "i2p_expert_matrix", false); defer narrow.deinit();
+    const wide = try mtl.Pipeline.init(device, lib, "i2p_expert_matrix_wide", false); defer wide.deinit();
+    const rows = 65; const n = 70; const k = 128;
+    const x = try device.buffer(rows * k * 4, mtl.ResourceOptions.shared); defer x.deinit();
+    for (x.slice(f32, rows * k), 0..) |*v, i| v.* = @as(f32, @floatFromInt(@as(i32, @intCast((i * 17 + i / k * 11) % 97)) - 48)) / 31.0;
+    const weights = try device.buffer(n * k, mtl.ResourceOptions.shared); defer weights.deinit();
+    for (weights.slice(u8, n * k), 0..) |*v, i| {
+        const lo: u8 = @intCast((i * 7 + i / (k / 2) * 3) % 16);
+        const hi: u8 = @intCast((i * 11 + i / (k / 2) * 5) % 16);
+        v.* = lo | (hi << 4);
+    }
+    const scales = try device.buffer(2 * n * (k / 16), mtl.ResourceOptions.shared); defer scales.deinit();
+    @memset(scales.slice(u8, 2 * n * (k / 16)), 0x38);
+    const global = try device.buffer(16, mtl.ResourceOptions.shared); defer global.deinit(); global.slice(f32, 1)[0] = 1;
+    const off = try device.buffer(16, mtl.ResourceOptions.shared); defer off.deinit(); off.slice(i32, 2)[0] = 0; off.slice(i32, 2)[1] = rows;
+    const route = try device.buffer(rows * 4, mtl.ResourceOptions.shared); defer route.deinit();
+    for (route.slice(i32, rows), 0..) |*v, i| v.* = @intCast(rows - 1 - i);
+    const reference = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared); defer reference.deinit();
+    const actual = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared); defer actual.deinit();
+    const codes = try device.buffer(16 * 4, mtl.ResourceOptions.shared); defer codes.deinit();
+    for (codes.slice(f32, 16), 0..) |*v, i| v.* = @floatCast(expertCode(@intCast(i), false));
+    const overflow = try device.buffer(16, mtl.ResourceOptions.shared); defer overflow.deinit();
+    for ([_]bool{ false, true }) |up| {
+        const args = ExpertArgs{ .k = k, .n = n, .slots = rows, .topk = 1, .experts = 1, .gate_cap = if (up) 4 else 0, .up_cap = if (up) 25 else 0 };
+        for ([_]mtl.Pipeline{ narrow, wide }, [_]mtl.Buffer{ reference, actual }, [_]bool{ false, true }) |pipe, out, is_wide| {
+            overflow.slice(u32, 1)[0] = 0;
+            @memset(out.slice(f32, rows * n), std.math.nan(f32));
+            const cb = queue.commandBuffer(); const enc = cb.compute(.serial);
+            enc.setPipeline(pipe); enc.setBuffer(x, 0, 0); enc.setBuffer(weights, 0, 1); enc.setBuffer(scales, 0, 2);
+            enc.setBuffer(global, 0, 3); enc.setBuffer(global, 0, 4); enc.setBuffer(off, 0, 5); enc.setBuffer(route, 0, 6);
+            enc.setValue(args, 7); enc.setBuffer(out, 0, 8); enc.setBuffer(codes, 0, 9); enc.setBuffer(overflow, 0, 10);
+            const columns: usize = if (up) 2 * n else n;
+            enc.dispatchGroups(mtl.Size.of(if (is_wide) (columns + 63) / 64 else (columns + 31) / 32, 1, (rows + 31) / 32), mtl.Size.of(if (is_wide) 256 else 128, 1, 1));
+            enc.end(); cb.commit(); cb.wait();
+            if (cb.failure()) |_| return error.GpuFailed;
+            try t.expectEqual(@as(u32, 0), overflow.slice(u32, 1)[0]);
+        }
+        for (reference.slice(f32, rows * n), actual.slice(f32, rows * n)) |want, got| {
+            try t.expect(std.math.isFinite(want) and std.math.isFinite(got));
+            try t.expectApproxEqAbs(want, got, 0.0001);
+        }
+    }
+}
+
+test "wide expert and grouped fallback partition threshold occupancy" {
+    const device = try mtl.Device.init(); defer device.deinit();
+    if (!device.tensorUnits()) return error.SkipZigTest;
+    const queue = try device.queue(); defer queue.deinit();
+    const source = "#define I2P_HALF_OPERANDS 1\n#define I2P_MATRIX_THRESHOLD 14\n#define I2P_DOWN_MATRIX_THRESHOLD 8\n" ++ @import("kernels.zig").prefill ++ @import("kernels.zig").prefill_expert_wide;
+    const lib = try mtl.Library.fromSource(device, source, mtl.CompileOptions.mlx()); defer lib.deinit();
+    const wide = try mtl.Pipeline.init(device, lib, "i2p_expert_matrix_wide", false); defer wide.deinit();
+    const low_up = try mtl.Pipeline.init(device, lib, "i2p_gu_grouped", false); defer low_up.deinit();
+    const low_down = try mtl.Pipeline.init(device, lib, "i2p_down_grouped", false); defer low_down.deinit();
+    const rows = 15; const n = 8; const k = 64;
+    const x = try device.buffer(rows * k * 4, mtl.ResourceOptions.shared); defer x.deinit(); @memset(x.slice(f32, rows * k), 0.25);
+    const weights = try device.buffer(n * k, mtl.ResourceOptions.shared); defer weights.deinit(); @memset(weights.slice(u8, n * k), 0x22);
+    const scales = try device.buffer(2 * n * (k / 16), mtl.ResourceOptions.shared); defer scales.deinit(); @memset(scales.slice(u8, 2 * n * (k / 16)), 0x38);
+    const global = try device.buffer(16, mtl.ResourceOptions.shared); defer global.deinit(); global.slice(f32, 1)[0] = 1;
+    const off = try device.buffer(16, mtl.ResourceOptions.shared); defer off.deinit(); off.slice(i32, 2)[0] = 0;
+    const route = try device.buffer(rows * 4, mtl.ResourceOptions.shared); defer route.deinit(); for (route.slice(i32, rows), 0..) |*v, i| v.* = @intCast(i);
+    const out = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared); defer out.deinit();
+    const codes = try device.buffer(16 * 4, mtl.ResourceOptions.shared); defer codes.deinit(); for (codes.slice(f32, 16), 0..) |*v, i| v.* = @floatCast(expertCode(@intCast(i), false));
+    const overflow = try device.buffer(16, mtl.ResourceOptions.shared); defer overflow.deinit();
+    for ([_]u32{ 7, 8, 13, 14, 15 }) |count| for ([_]bool{ false, true }) |up| for ([_]bool{ false, true }) |is_wide| {
+        off.slice(i32, 2)[1] = @intCast(count);
+        overflow.slice(u32, 1)[0] = 0;
+        @memset(out.slice(f32, rows * n), std.math.nan(f32));
+        const args = ExpertArgs{ .k = k, .n = n, .slots = count, .topk = 1, .experts = 1, .gate_cap = if (up) 4 else 0, .up_cap = if (up) 25 else 0 };
+        const cb = queue.commandBuffer(); const enc = cb.compute(.serial);
+        enc.setPipeline(if (is_wide) wide else if (up) low_up else low_down);
+        enc.setBuffer(x, 0, 0); enc.setBuffer(weights, 0, 1); enc.setBuffer(scales, 0, 2); enc.setBuffer(global, 0, 3); enc.setBuffer(global, 0, 4);
+        enc.setBuffer(off, 0, 5); enc.setBuffer(route, 0, 6); enc.setValue(args, 7); enc.setBuffer(out, 0, 8); enc.setBuffer(codes, 0, 9);
+        if (is_wide) enc.setBuffer(overflow, 0, 10);
+        enc.dispatchGroups(if (is_wide) mtl.Size.of(1, 1, 1) else mtl.Size.of(n, 1, 1), mtl.Size.of(if (is_wide) 256 else 32, 1, 1));
+        enc.end(); cb.commit(); cb.wait(); if (cb.failure()) |_| return error.GpuFailed;
+        const active = (count >= (if (up) @as(u32, 14) else 8)) == is_wide;
+        const expected: f32 = if (up) 4 * std.math.tanh(@as(f32, 16) / 4) / (1 + @exp(@as(f32, -16))) * 25 * std.math.tanh(@as(f32, 16) / 25) else 16;
+        for (out.slice(f32, rows * n)[0 .. @as(usize, count) * n]) |value| {
+            if (active) try t.expectApproxEqAbs(expected, value, 0.001) else try t.expect(std.math.isNan(value));
+        }
+        try t.expectEqual(@as(u32, 0), overflow.slice(u32, 1)[0]);
+    };
+}

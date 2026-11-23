@@ -352,3 +352,228 @@ test "misaligned oQ4e shard data produces finite decode logits" {
     }
     try t.expectEqual(@as(usize, 12), best);
 }
+
+test "half affine rows match rounded operands across tiles and strides" {
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    if (!device.tensorUnits()) return error.SkipZigTest;
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, "#define I2A_HALF_OPERANDS 1\n" ++ @embedFile("kernels/affine.metal"), mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const pipe = try mtl.Pipeline.init(device, lib, "i2a_dense_half_rows", false);
+    defer pipe.deinit();
+    const rows = 65;
+    const n = 68;
+    const k = 128;
+    const x = try device.buffer(rows * 2 * k * 4, mtl.ResourceOptions.shared);
+    defer x.deinit();
+    const words = try device.buffer(n * k, mtl.ResourceOptions.shared);
+    defer words.deinit();
+    const scales = try device.buffer(n * (k / 64) * 2, mtl.ResourceOptions.shared);
+    defer scales.deinit();
+    const biases = try device.buffer(n * (k / 64) * 2, mtl.ResourceOptions.shared);
+    defer biases.deinit();
+    const y = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared);
+    defer y.deinit();
+    const overflow = try device.buffer(16, mtl.ResourceOptions.shared);
+    defer overflow.deinit();
+    for (x.slice(f32, rows * 2 * k), 0..) |*v, i| v.* = @as(f32, @floatFromInt(@as(i32, @intCast((i * 7) % 97)) - 48)) / 37.0;
+    @memset(scales.slice(u16, n * (k / 64)), 0x3b83);
+    @memset(biases.slice(u16, n * (k / 64)), 0xbd0d);
+    const scale: f32 = @bitCast(@as(u32, 0x3b830000));
+    const bias: f32 = @bitCast(@as(u32, 0xbd0d0000));
+    for ([_]u32{ 4, 8 }) |bits| {
+        fill(words.slice(u32, n * k / 4), n, k, bits);
+        overflow.slice(u32, 1)[0] = 0;
+        const cb = queue.commandBuffer();
+        const enc = cb.compute(.serial);
+        enc.setPipeline(pipe);
+        for ([_]mtl.Buffer{ x, words, scales, biases }, 0..) |buf, i| enc.setBuffer(buf, 0, i);
+        enc.setValue(Dense{ .n = n, .k = k, .rows = rows, .xs = 2, .xb = 1, .bits = bits, .cap = 0 }, 4);
+        enc.setBuffer(y, 0, 5);
+        enc.setBuffer(overflow, 0, 6);
+        enc.dispatchGroups(mtl.Size.of((n + 63) / 64, (rows + 31) / 32, 1), mtl.Size.of(256, 1, 1));
+        enc.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |_| return error.GpuFailed;
+        try t.expectEqual(@as(u32, 0), overflow.slice(u32, 1)[0]);
+        for (0..rows) |row| for (0..n) |col| {
+            var want: f64 = 0;
+            for (0..k) |j| {
+                const code: f32 = @floatFromInt(@as(u32, @intCast((col * 17 + j * 7) % 256)) & ((@as(u32, 1) << @intCast(bits)) - 1));
+                const value = @mulAdd(f32, code, scale, bias);
+                const w: f16 = @floatCast(value);
+                const input: f16 = @floatCast(x.slice(f32, rows * 2 * k)[(row * 2 + 1) * k + j]);
+                want += @as(f64, @floatCast(w)) * @as(f64, @floatCast(input));
+            }
+            try t.expectApproxEqAbs(want, @as(f64, y.slice(f32, rows * n)[row * n + col]), 0.001);
+        };
+    }
+    x.slice(f32, rows * 2 * k)[k] = 70000;
+    overflow.slice(u32, 1)[0] = 0;
+    const cb = queue.commandBuffer();
+    const enc = cb.compute(.serial);
+    enc.setPipeline(pipe);
+    for ([_]mtl.Buffer{ x, words, scales, biases }, 0..) |buf, i| enc.setBuffer(buf, 0, i);
+    enc.setValue(Dense{ .n = n, .k = k, .rows = rows, .xs = 2, .xb = 1, .bits = 8, .cap = 0 }, 4);
+    enc.setBuffer(y, 0, 5);
+    enc.setBuffer(overflow, 0, 6);
+    enc.dispatchGroups(mtl.Size.of((n + 63) / 64, (rows + 31) / 32, 1), mtl.Size.of(256, 1, 1));
+    enc.end();
+    cb.commit();
+    cb.wait();
+    if (cb.failure()) |_| return error.GpuFailed;
+    try t.expect(overflow.slice(u32, 1)[0] > 0);
+}
+
+test "half grouped affine experts honor sorted routes and tile tails" {
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    if (!device.tensorUnits()) return error.SkipZigTest;
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, "#define I2A_HALF_OPERANDS 1\n" ++ @embedFile("kernels/affine.metal"), mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const k = 64;
+    const n = 68;
+    const slots = 70;
+    const x = try device.buffer(slots * k * 4, mtl.ResourceOptions.shared);
+    defer x.deinit();
+    const words = try device.buffer(2 * 2 * n * k / 2, mtl.ResourceOptions.shared);
+    defer words.deinit();
+    const scales = try device.buffer(2 * 2 * n * 2, mtl.ResourceOptions.shared);
+    defer scales.deinit();
+    const biases = try device.buffer(2 * 2 * n * 2, mtl.ResourceOptions.shared);
+    defer biases.deinit();
+    const offsets = try device.buffer(3 * 4, mtl.ResourceOptions.shared);
+    defer offsets.deinit();
+    const sorted = try device.buffer(slots * 4, mtl.ResourceOptions.shared);
+    defer sorted.deinit();
+    const y = try device.buffer(slots * n * 4, mtl.ResourceOptions.shared);
+    defer y.deinit();
+    const overflow = try device.buffer(16, mtl.ResourceOptions.shared);
+    defer overflow.deinit();
+    for (x.slice(f32, slots * k), 0..) |*v, i| v.* = @as(f32, @floatFromInt(@as(i32, @intCast(i % 13)) - 6)) / 8;
+    fill(words.slice(u32, 2 * 2 * n * k / 8), 2 * 2 * n, k, 4);
+    @memset(scales.slice(u16, 2 * 2 * n), 0x3d80);
+    @memset(biases.slice(u16, 2 * 2 * n), 0xbf00);
+    offsets.slice(u32, 3)[0] = 0;
+    offsets.slice(u32, 3)[1] = 35;
+    offsets.slice(u32, 3)[2] = slots;
+    for (0..slots) |slot| sorted.slice(u32, slots)[if (slot % 2 == 0) slot / 2 else 35 + slot / 2] = @intCast(slot);
+    for ([_]bool{ true, false }) |up| {
+        const pipe = try mtl.Pipeline.init(device, lib, if (up) "i2a_half_group_up" else "i2a_half_group_down", false);
+        defer pipe.deinit();
+        overflow.slice(u32, 1)[0] = 0;
+        const cb = queue.commandBuffer();
+        const enc = cb.compute(.serial);
+        enc.setPipeline(pipe);
+        for ([_]mtl.Buffer{ x, words, scales, biases, offsets, sorted }, 0..) |buf, i| enc.setBuffer(buf, 0, i);
+        enc.setValue(Group{ .k = k, .n = n, .slots = slots, .topk = 2, .experts = 2, .gate_cap = if (up) 4 else 0, .up_cap = if (up) 25 else 0 }, 6);
+        enc.setBuffer(y, 0, 7);
+        enc.setBuffer(overflow, 0, 8);
+        enc.dispatchGroups(mtl.Size.of(((if (up) @as(usize, 2 * n) else @as(usize, n)) + 63) / 64, 2, (slots + 31) / 32), mtl.Size.of(256, 1, 1));
+        enc.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |_| return error.GpuFailed;
+        try t.expectEqual(@as(u32, 0), overflow.slice(u32, 1)[0]);
+        for (0..slots) |slot| for (0..n) |col| {
+            const expert = slot % 2;
+            var first: f64 = 0;
+            var second: f64 = 0;
+            for (0..k) |j| {
+                const v: f64 = x.slice(f32, slots * k)[(if (up) slot / 2 else slot) * k + j];
+                first += v * weight(if (up) expert * 2 * n + 2 * col else expert * n + col, j, 4);
+                if (up) second += v * weight(expert * 2 * n + 2 * col + 1, j, 4);
+            }
+            const want = if (up) 4 * std.math.tanh(first / 4) / (1 + @exp(-first)) * 25 * std.math.tanh(second / 25) else first;
+            try t.expectApproxEqAbs(want, @as(f64, y.slice(f32, slots * n)[slot * n + col]), 0.001);
+        };
+    }
+}
+
+test "staged affine matmul honors strides tails and half weights" {
+    const pool = mtl.objc.Pool.push(); defer pool.pop();
+    const device = try mtl.Device.init(); defer device.deinit();
+    if (!device.tensorUnits()) return error.SkipZigTest;
+    const queue = try device.queue(); defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, @embedFile("kernels/affine_stage.metal"), mtl.CompileOptions.mlx()); defer lib.deinit();
+    const prepare = try mtl.Pipeline.init(device, lib, "i2as_prepare", false); defer prepare.deinit();
+    const gemm = try mtl.Pipeline.init(device, lib, "i2as_gemm", false); defer gemm.deinit();
+    const rows = 33; const n = 68; const k = 128;
+    const x = try device.buffer(rows * 2 * k * 4, mtl.ResourceOptions.shared); defer x.deinit();
+    const w = try device.buffer(n * k, mtl.ResourceOptions.shared); defer w.deinit();
+    const scales = try device.buffer(n * (k / 64) * 2, mtl.ResourceOptions.shared); defer scales.deinit();
+    const biases = try device.buffer(n * (k / 64) * 2, mtl.ResourceOptions.shared); defer biases.deinit();
+    const staged_w = try device.buffer(n * k * 2, mtl.ResourceOptions.private); defer staged_w.deinit();
+    const y = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared); defer y.deinit();
+    const overflow = try device.buffer(16, mtl.ResourceOptions.shared); defer overflow.deinit();
+    for (x.slice(f32, rows * 2 * k), 0..) |*v, i| v.* = @as(f32, @floatFromInt(@as(i32, @intCast((i * 7) % 97)) - 48)) / 37.0;
+    @memset(scales.slice(u16, n * (k / 64)), 0x3b83); @memset(biases.slice(u16, n * (k / 64)), 0xbd0d);
+    const scale: f32 = @bitCast(@as(u32, 0x3b830000)); const bias: f32 = @bitCast(@as(u32, 0xbd0d0000));
+    for ([_]u32{ 4, 8 }) |bits| {
+        fill(w.slice(u32, n * k / 4), n, k, bits);
+        overflow.slice(u32, 1)[0] = 0;
+        const args = Dense{ .n = n, .k = k, .rows = rows, .xs = 2, .xb = 1, .bits = bits, .cap = 0 };
+        const cb = queue.commandBuffer(); const enc = cb.compute(.serial);
+        enc.setPipeline(prepare); enc.setBuffer(w, 0, 0); enc.setBuffer(scales, 0, 1); enc.setBuffer(biases, 0, 2); enc.setValue(args, 3); enc.setBuffer(staged_w, 0, 4); enc.setBuffer(overflow, 0, 5);
+        enc.dispatchThreads(mtl.Size.of(n * k / 4, 1, 1), mtl.Size.of(256, 1, 1));
+        enc.setPipeline(gemm); enc.setBuffer(x, 0, 0); enc.setBuffer(staged_w, 0, 1); enc.setValue(args, 2); enc.setBuffer(y, 0, 3);
+        enc.dispatchGroups(mtl.Size.of((n + 31) / 32, (rows + 15) / 16, 1), mtl.Size.of(128, 1, 1));
+        enc.end(); cb.commit(); cb.wait();
+        if (cb.failure()) |_| return error.GpuFailed;
+        try t.expectEqual(@as(u32, 0), overflow.slice(u32, 1)[0]);
+        for (0..rows) |row| for (0..n) |col| {
+            var want: f64 = 0;
+            for (0..k) |j| {
+                const code: f32 = @floatFromInt(@as(u32, @intCast((col * 17 + j * 7) % 256)) & ((@as(u32, 1) << @intCast(bits)) - 1));
+                const hw: f16 = @floatCast(@mulAdd(f32, code, scale, bias));
+                const input: f32 = x.slice(f32, rows * 2 * k)[(row * 2 + 1) * k + j];
+                want += @as(f64, @floatCast(hw)) * @as(f64, @floatCast(input));
+            }
+            try t.expectApproxEqAbs(want, @as(f64, y.slice(f32, rows * n)[row * n + col]), 0.001);
+        };
+    }
+    @memset(scales.slice(u16, n * (k / 64)), 0x4780);
+    overflow.slice(u32, 1)[0] = 0;
+    const args = Dense{ .n = n, .k = k, .rows = rows, .xs = 2, .xb = 1, .bits = 8, .cap = 0 };
+    const cb = queue.commandBuffer(); const enc = cb.compute(.serial);
+    enc.setPipeline(prepare); enc.setBuffer(w, 0, 0); enc.setBuffer(scales, 0, 1); enc.setBuffer(biases, 0, 2); enc.setValue(args, 3); enc.setBuffer(staged_w, 0, 4); enc.setBuffer(overflow, 0, 5);
+    enc.dispatchThreads(mtl.Size.of(n * k / 4, 1, 1), mtl.Size.of(256, 1, 1));
+    enc.end(); cb.commit(); cb.wait();
+    if (cb.failure()) |_| return error.GpuFailed;
+    try t.expect(overflow.slice(u32, 1)[0] > 0);
+}
+
+test "float mpp projections preserve strided inputs and tile tails" {
+    const pool = mtl.objc.Pool.push(); defer pool.pop();
+    const device = try mtl.Device.init(); defer device.deinit();
+    if (!device.tensorUnits()) return error.SkipZigTest;
+    const queue = try device.queue(); defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, @embedFile("kernels/float_mpp.metal"), mtl.CompileOptions.mlx()); defer lib.deinit();
+    const pipe = try mtl.Pipeline.init(device, lib, "i2af_gemm", false); defer pipe.deinit();
+    const rows = 33; const n = 68; const k = 128;
+    const x = try device.buffer(rows * 2 * k * 4, mtl.ResourceOptions.shared); defer x.deinit();
+    const w = try device.buffer(n * k * 4, mtl.ResourceOptions.shared); defer w.deinit();
+    const y = try device.buffer(rows * n * 4, mtl.ResourceOptions.shared); defer y.deinit();
+    for (x.slice(f32, rows * 2 * k), 0..) |*v, i| v.* = @as(f32, @floatFromInt(@as(i32, @intCast((i * 7) % 97)) - 48)) / 37.0;
+    for (w.slice(f32, n * k), 0..) |*v, i| v.* = @as(f32, @floatFromInt(@as(i32, @intCast((i * 13) % 83)) - 41)) / 29.0;
+    const args = Dense{ .n = n, .k = k, .rows = rows, .xs = 2, .xb = 1, .bits = 0, .cap = 0 };
+    const cb = queue.commandBuffer(); const enc = cb.compute(.serial);
+    enc.setPipeline(pipe); enc.setBuffer(x, 0, 0); enc.setBuffer(w, 0, 1); enc.setValue(args, 2); enc.setBuffer(y, 0, 3);
+    enc.dispatchGroups(mtl.Size.of((n + 31) / 32, (rows + 15) / 16, 1), mtl.Size.of(128, 1, 1));
+    enc.end(); cb.commit(); cb.wait();
+    if (cb.failure()) |_| return error.GpuFailed;
+    for (0..rows) |row| for (0..n) |col| {
+        var want: f64 = 0;
+        for (0..k) |j| want += @as(f64, x.slice(f32, rows * 2 * k)[(row * 2 + 1) * k + j]) * @as(f64, w.slice(f32, n * k)[col * k + j]);
+        try t.expectApproxEqAbs(want, @as(f64, y.slice(f32, rows * n)[row * n + col]), 0.0001);
+    };
+}

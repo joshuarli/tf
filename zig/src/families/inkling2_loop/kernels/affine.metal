@@ -290,6 +290,66 @@ struct i2a_batch_control_args { uint k, m0, m1, h, cxs, cxb, mxs, mxb, ys, yb; }
   }
 }
 
+#ifdef I2A_HALF_OPERANDS
+[[kernel]] void i2a_dense_half_rows(const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]],
+    const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
+    constant i2a_dense_args& a [[buffer(4)]], device float* y [[buffer(5)]], device atomic_uint* overflow [[buffer(6)]],
+    uint2 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
+  constexpr uint bm = 32u, bn = 64u, bk = 32u, ap = 40u, bp = 72u;
+  const uint sg = tid / 32u, m0 = group.y * bm, n0 = group.x * bn;
+  threadgroup half inputs[bm * ap], weights[bk * bp];
+  threadgroup float output[bm * bp];
+  simdgroup_matrix<float, 8, 8> acc[4] = {simdgroup_matrix<float, 8, 8>(0.0f),
+    simdgroup_matrix<float, 8, 8>(0.0f), simdgroup_matrix<float, 8, 8>(0.0f),
+    simdgroup_matrix<float, 8, 8>(0.0f)};
+  for (uint k0 = 0; k0 < a.k; k0 += bk) {
+    for (uint i = tid; i < bm * bk; i += 256u) {
+      const uint row = i / bk, k = i % bk;
+      const float value = m0 + row < a.rows && k0 + k < a.k
+        ? x[(size_t)(a.xb + (m0 + row) * a.xs) * a.k + k0 + k] : 0.0f;
+      if (group.x == 0u && abs(value) > 65504.0f) atomic_fetch_add_explicit(overflow, 1u, memory_order_relaxed);
+      inputs[row * ap + k] = half(value);
+    }
+    for (uint i = tid; i < bk * bn / 4u; i += 256u) {
+      const uint col = i / (bk / 4u), k = (i % (bk / 4u)) * 4u;
+      const uint per = 32u / a.bits, mask = (1u << a.bits) - 1u;
+      const bool valid = n0 + col < a.n && k0 + k < a.k;
+      const size_t row = n0 + col;
+      const uint packed = valid ? w[row * (a.k / per) + (k0 + k) / per] : 0u;
+      const uint shift = ((k0 + k) % per) * a.bits;
+      const size_t g = row * (a.k / 64u) + (k0 + k) / 64u;
+      const float scale = valid ? float(s[g]) : 0.0f, bias = valid ? float(b[g]) : 0.0f;
+      for (uint j = 0; j < 4u; ++j) {
+        const float value = valid && k0 + k + j < a.k ? fma(float((packed >> (shift + j * a.bits)) & mask), scale, bias) : 0.0f;
+        if (group.y == 0u && abs(value) > 65504.0f) atomic_fetch_add_explicit(overflow, 1u, memory_order_relaxed);
+        weights[(k + j) * bp + col] = half(value);
+      }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint k = 0; k < bk; k += 8u) {
+      simdgroup_matrix<half, 8, 8> rhs;
+      simdgroup_load(rhs, weights + k * bp + sg * 8u, ulong(bp));
+      for (uint r = 0; r < 4u; ++r) {
+        simdgroup_matrix<half, 8, 8> lhs;
+        simdgroup_load(lhs, inputs + r * 8u * ap + k, ulong(ap));
+        simdgroup_multiply_accumulate(acc[r], lhs, rhs, acc[r]);
+      }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  for (uint r = 0; r < 4u; ++r) simdgroup_store(acc[r], output + r * 8u * bp + sg * 8u, ulong(bp));
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint i = tid; i < bm * bn; i += 256u) {
+    const uint row = i / bn, col = i % bn;
+    if (m0 + row < a.rows && n0 + col < a.n) {
+      const float value = output[row * bp + col];
+      y[(size_t)(m0 + row) * a.n + n0 + col] = a.cap > 0.0f ? a.cap * precise::tanh(value / a.cap) : value;
+    }
+  }
+}
+
+#endif
+
 [[kernel]] void i2a_expert_up(const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]],
     const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
     const device int* picks [[buffer(4)]], constant i2a_expert_args& a [[buffer(5)]],
@@ -399,3 +459,93 @@ inline void i2a_group_matrix(const device float* x, const device uint* w, const 
   threadgroup float inputs[32 * 40], weights[32 * 72], output[32 * 72];
   i2a_group_matrix(x, w, s, b, offsets, sorted, a, y, group, tid, false, inputs, weights, output);
 }
+
+#ifdef I2A_HALF_OPERANDS
+inline void i2a_half_group_matrix(const device float* x, const device uint* w, const device bfloat* s,
+    const device bfloat* b, const device uint* offsets, const device uint* sorted,
+    constant i2a_group_args& a, device float* y, uint3 group, uint tid, bool up,
+    threadgroup half* inputs, threadgroup half* weights, threadgroup float* output, device atomic_uint* overflow) {
+  constexpr uint bm = 32u, bn = 64u, bk = 32u, ap = 40u, bp = 72u;
+  const uint sg = tid / 32u, m0 = group.z * bm, n0 = group.x * bn;
+  const uint start = offsets[group.y], end = offsets[group.y + 1u];
+  if (start + m0 >= end) return;
+  const uint cols = up ? 2u * a.n : a.n;
+  simdgroup_matrix<float, 8, 8> acc[4] = {simdgroup_matrix<float, 8, 8>(0.0f),
+    simdgroup_matrix<float, 8, 8>(0.0f), simdgroup_matrix<float, 8, 8>(0.0f),
+    simdgroup_matrix<float, 8, 8>(0.0f)};
+  for (uint k0 = 0; k0 < a.k; k0 += bk) {
+    for (uint i = tid; i < bm * bk; i += 256u) {
+      const uint row = i / bk, k = i % bk;
+      const bool valid = start + m0 + row < end && k0 + k < a.k;
+      const uint slot = valid ? sorted[start + m0 + row] : 0u;
+      const uint xr = up ? slot / a.topk : slot;
+      const float value = valid ? x[(size_t)xr * a.k + k0 + k] : 0.0f;
+      if (group.x == 0u && abs(value) > 65504.0f) atomic_fetch_add_explicit(overflow, 1u, memory_order_relaxed);
+      inputs[row * ap + k] = half(value);
+    }
+    for (uint i = tid; i < bk * bn / 4u; i += 256u) {
+      const uint col = i / (bk / 4u), k = (i % (bk / 4u)) * 4u;
+      const size_t row = (size_t)group.y * cols + n0 + col;
+      const bool valid = n0 + col < cols && k0 + k < a.k;
+      const uint packed = valid ? w[row * (a.k / 8u) + (k0 + k) / 8u] : 0u;
+      const uint shift = ((k0 + k) % 8u) * 4u;
+      const size_t g = row * (a.k / 64u) + (k0 + k) / 64u;
+      const float scale = valid ? float(s[g]) : 0.0f, bias = valid ? float(b[g]) : 0.0f;
+      for (uint j = 0; j < 4u; ++j) {
+        const float value = valid && k0 + k + j < a.k ? fma(float((packed >> (shift + j * 4u)) & 15u), scale, bias) : 0.0f;
+        if (group.z == 0u && abs(value) > 65504.0f) atomic_fetch_add_explicit(overflow, 1u, memory_order_relaxed);
+        weights[(k + j) * bp + col] = half(value);
+      }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint k = 0; k < bk; k += 8u) {
+      simdgroup_matrix<half, 8, 8> rhs;
+      simdgroup_load(rhs, weights + k * bp + sg * 8u, ulong(bp));
+      for (uint r = 0; r < 4u; ++r) {
+        simdgroup_matrix<half, 8, 8> lhs;
+        simdgroup_load(lhs, inputs + r * 8u * ap + k, ulong(ap));
+        simdgroup_multiply_accumulate(acc[r], lhs, rhs, acc[r]);
+      }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  for (uint r = 0; r < 4u; ++r) simdgroup_store(acc[r], output + r * 8u * bp + sg * 8u, ulong(bp));
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  const uint outcols = up ? bn / 2u : bn;
+  for (uint i = tid; i < bm * outcols; i += 256u) {
+    const uint row = i / outcols, col = i % outcols;
+    const uint target = up ? n0 / 2u + col : n0 + col;
+    if (start + m0 + row < end && target < a.n) {
+      const uint slot = sorted[start + m0 + row];
+      float value = output[row * bp + (up ? col * 2u : col)];
+      if (up) {
+        const float u = output[row * bp + col * 2u + 1u];
+        const float gate = a.gate_cap * precise::tanh(value / a.gate_cap) / (1.0f + precise::exp(-value));
+        value = gate * (a.up_cap > 0.0f ? a.up_cap * precise::tanh(u / a.up_cap) : u);
+      }
+      y[(size_t)slot * a.n + target] = value;
+    }
+  }
+}
+
+[[kernel]] void i2a_half_group_up(const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]],
+    const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
+    const device uint* offsets [[buffer(4)]], const device uint* sorted [[buffer(5)]],
+    constant i2a_group_args& a [[buffer(6)]], device float* y [[buffer(7)]], device atomic_uint* overflow [[buffer(8)]],
+    uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
+  threadgroup half inputs[32 * 40], weights[32 * 72];
+  threadgroup float output[32 * 72];
+  i2a_half_group_matrix(x, w, s, b, offsets, sorted, a, y, group, tid, true, inputs, weights, output, overflow);
+}
+
+[[kernel]] void i2a_half_group_down(const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]],
+    const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
+    const device uint* offsets [[buffer(4)]], const device uint* sorted [[buffer(5)]],
+    constant i2a_group_args& a [[buffer(6)]], device float* y [[buffer(7)]], device atomic_uint* overflow [[buffer(8)]],
+    uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
+  threadgroup half inputs[32 * 40], weights[32 * 72];
+  threadgroup float output[32 * 72];
+  i2a_half_group_matrix(x, w, s, b, offsets, sorted, a, y, group, tid, false, inputs, weights, output, overflow);
+}
+
+#endif

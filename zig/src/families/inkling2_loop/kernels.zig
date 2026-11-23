@@ -12,6 +12,9 @@ const mtl = @import("metal");
 pub const glue = @embedFile("kernels/glue.metal");
 
 pub const prefill = @embedFile("kernels/prefill.metal");
+pub const prefill_expert_wide = @embedFile("kernels/prefill_expert_wide.metal");
+pub const affine_stage = @embedFile("kernels/affine_stage.metal");
+pub const float_mpp = @embedFile("kernels/float_mpp.metal");
 pub const prefill_smallrow = @embedFile("kernels/prefill_smallrow.metal");
 pub const prefill_gemm_mpp = @embedFile("kernels/prefill_gemm_mpp.metal");
 

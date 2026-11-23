@@ -780,16 +780,23 @@ struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; 
 
 #ifdef I2P_MXFP8
 #define I2P_GROUP 32u
+#ifndef I2P_MATRIX_THRESHOLD
 #define I2P_MATRIX_THRESHOLD 8
+#endif
 #define I2P_CODE_STRIDE(k) (k)
 #define I2P_SCALE_STRIDE(k) ((k) / 32u)
 #define I2P_BYTE_OFF(k) (k)
 #else
 #define I2P_GROUP 16u
+#ifndef I2P_MATRIX_THRESHOLD
 #define I2P_MATRIX_THRESHOLD 16
+#endif
 #define I2P_CODE_STRIDE(k) ((k) / 2u)
 #define I2P_SCALE_STRIDE(k) ((k) / 16u)
 #define I2P_BYTE_OFF(k) ((k) / 2u)
+#endif
+#ifndef I2P_DOWN_MATRIX_THRESHOLD
+#define I2P_DOWN_MATRIX_THRESHOLD I2P_MATRIX_THRESHOLD
 #endif
 
 inline float i2p_e4m3(uchar c) {
@@ -1086,7 +1093,7 @@ struct i2p_moeg_args { uint k, n, slots, topk, experts; float gate_cap, up_cap; 
   if (r >= a.n || e >= a.experts) return;
   const int start = OFF[e];
   const int end = OFF[e + 1u];
-  if (start >= end || end - start >= I2P_MATRIX_THRESHOLD) return;
+  if (start >= end || end - start >= I2P_DOWN_MATRIX_THRESHOLD) return;
   const size_t row = (size_t)e * a.n + r;
   const device uchar* w_base = W + row * I2P_CODE_STRIDE(a.k);
   const uint groups = a.k / I2P_GROUP;

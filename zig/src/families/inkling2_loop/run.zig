@@ -22,6 +22,7 @@ const usage =
     \\tf-inkling2-loop-run <model> <tokens.json> tracerow <out> <at>  the raw per-tensor rows of position <at> as f32, [slots][9][hidden], and router sidecars
     \\tf-inkling2-loop-run <model> <tokens.json> reset <out>        the same logits twice from a fresh cache, byte-compared
     \\tf-inkling2-loop-run <model> <tokens.json> bench <steps> [warmup] [chunk]  the prompt, warmup, then steps: wall, encode, GPU ms
+    \\tf-inkling2-loop-run <model> <tokens.json> profile-prefill <chunk>  warm and profile fresh-cache prompt chunks
     \\tf-inkling2-loop-run <tokenizer.json> <text> tokenize <out>   the text's token ids, for the modes above
     \\tf-inkling2-loop-run <tokenizer.json> <ids.json> detokenize <out>  the ids' text
     \\
@@ -508,6 +509,24 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("inkling2_loop prefill: {d} tokens in {d:.1} ms, {d:.1} tok/s chunk {d}\n", .{ ids.value.len, ms, rate, chunk });
         return;
     }
+    if (std.mem.eql(u8, mode, "profile-prefill")) {
+        if (args.len != 5) return error.ExpectedArgs;
+        const chunk = try std.fmt.parseInt(usize, args[4], 10);
+        if (chunk == 0 or ids.value.len % chunk != 0 or 8 % (ids.value.len / chunk) != 0) return error.ExpectedArgs;
+        var cache = try inkling.Cache.init(m.device, c, ids.value.len);
+        defer cache.deinit();
+        var ps = try inkling.PrefillScratch.init(m.device, c, chunk);
+        defer ps.deinit();
+        for (0..8 / (ids.value.len / chunk) + 1) |_| {
+            cache.len = 0;
+            var at: usize = 0;
+            while (at < ids.value.len) : (at += chunk) {
+                try inkling.prefillWant(m, &ps, &cache, ids.value[at..][0..chunk], if (at + chunk == ids.value.len) .last else .none);
+            }
+        }
+        return;
+    }
+
     if (std.mem.eql(u8, mode, "bench")) {
         if (args.len < 5 or args.len > 7) {
             std.debug.print("{s}", .{usage});

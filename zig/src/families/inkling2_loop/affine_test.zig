@@ -621,3 +621,121 @@ test "oQ4e prefill without half pipelines matches per-token decode" {
         if (!half) try t.expect(worst <= scale * 1.5e-5);
     }
 }
+
+const SharedProjections = extern struct { k: u32, full: u32, rows: u32, m: [8]u32 };
+
+fn sameWords(a: []const f32, b: []const f32) bool {
+    for (a, b) |x, y| if (@as(u32, @bitCast(x)) != @as(u32, @bitCast(y))) return false;
+    return true;
+}
+
+test "shared-row affine kernels give each row the per-row kernel's bytes" {
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, @embedFile("kernels/affine.metal"), mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const dense = try mtl.Pipeline.init(device, lib, "i2a_dense", false);
+    defer dense.deinit();
+    const dense_shared = try mtl.Pipeline.init(device, lib, "i2a_dense_shared", false);
+    defer dense_shared.deinit();
+    const batch = try mtl.Pipeline.init(device, lib, "i2a_batch_projections", false);
+    defer batch.deinit();
+    const shared = try mtl.Pipeline.init(device, lib, "i2a_shared_projections", false);
+    defer shared.deinit();
+    const k = 2304;
+    const n = 37;
+    const wrows = 64;
+    var prng = std.Random.DefaultPrng.init(0x72_6f_77_73);
+    const rng = prng.random();
+    const x = try device.buffer(3 * 8 * k * 4, mtl.ResourceOptions.shared);
+    defer x.deinit();
+    for (x.slice(f32, 3 * 8 * k)) |*v| v.* = rng.float(f32) * 4 - 2;
+    var w: [3]mtl.Buffer = undefined;
+    var sc: [3]mtl.Buffer = undefined;
+    var bi: [3]mtl.Buffer = undefined;
+    for (0..3) |i| {
+        w[i] = try device.buffer(wrows * k, mtl.ResourceOptions.shared);
+        for (w[i].slice(u32, wrows * k / 4)) |*v| v.* = rng.int(u32);
+        sc[i] = try device.buffer(wrows * (k / 64) * 2, mtl.ResourceOptions.shared);
+        bi[i] = try device.buffer(wrows * (k / 64) * 2, mtl.ResourceOptions.shared);
+        for (sc[i].slice(u16, wrows * (k / 64)), bi[i].slice(u16, wrows * (k / 64))) |*s, *b| {
+            s.* = @truncate(@as(u32, @bitCast(rng.float(f32) * 0.02 + 0.001)) >> 16);
+            b.* = @truncate(@as(u32, @bitCast(rng.float(f32) * 0.5 - 0.25)) >> 16);
+        }
+    }
+    defer for (0..3) |i| {
+        w[i].deinit();
+        sc[i].deinit();
+        bi[i].deinit();
+    };
+    const out_a = try device.buffer(8 * 8 * wrows * 4, mtl.ResourceOptions.shared);
+    defer out_a.deinit();
+    const out_b = try device.buffer(8 * 8 * wrows * 4, mtl.ResourceOptions.shared);
+    defer out_b.deinit();
+    var checked: usize = 0;
+    for ([_]u32{ 4, 8 }) |bits| for ([_]f32{ 0, 30 }) |cap| for (2..9) |rows| {
+        const args = Dense{ .n = n, .k = k, .rows = @intCast(rows), .xs = 2, .xb = 1, .bits = bits, .cap = cap };
+        const cb = queue.commandBuffer();
+        const enc = cb.compute(.serial);
+        for ([_]mtl.Pipeline{ dense, dense_shared }, [_]mtl.Buffer{ out_a, out_b }, 0..) |pipe, out, i| {
+            enc.setPipeline(pipe);
+            enc.setBuffer(x, 0, 0);
+            enc.setBuffer(w[0], 0, 1);
+            enc.setBuffer(sc[0], 0, 2);
+            enc.setBuffer(bi[0], 0, 3);
+            enc.setValue(args, 4);
+            enc.setBuffer(out, 0, 5);
+            enc.dispatchGroups(mtl.Size.of((n + 7) / 8, if (i == 0) rows else 1, 1), mtl.Size.of(256, 1, 1));
+        }
+        enc.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |_| return error.GpuFailed;
+        if (!sameWords(out_a.slice(f32, rows * n), out_b.slice(f32, rows * n))) {
+            std.debug.print("shared dense bits={d} cap={d} rows={d}: bytes differ\n", .{ bits, cap, rows });
+            return error.TestUnexpectedResult;
+        }
+        checked += 1;
+    };
+    for ([_]bool{ false, true }) |full| for (2..9) |rows| {
+        const ms: [8]u32 = .{ 13, 9, 7, 5, 11, 3, if (full) 6 else 0, if (full) 4 else 0 };
+        var total: usize = 0;
+        for (ms) |m| total += m;
+        const cb = queue.commandBuffer();
+        const enc = cb.compute(.serial);
+        for ([_]mtl.Pipeline{ batch, shared }, [_]mtl.Buffer{ out_a, out_b }, 0..) |pipe, out, i| {
+            enc.setPipeline(pipe);
+            for (0..3) |j| enc.setBuffer(x, j * 8 * k * 4, j);
+            for (0..3) |j| {
+                enc.setBuffer(w[j], 0, 3 + j * 3);
+                enc.setBuffer(sc[j], 0, 4 + j * 3);
+                enc.setBuffer(bi[j], 0, 5 + j * 3);
+            }
+            for (0..8) |j| enc.setBuffer(out, j * 8 * wrows * 4, 12 + j);
+            if (i == 0) {
+                enc.setValue(Projections{ .k = k, .full = @intFromBool(full), .m = ms }, 20);
+                enc.dispatchGroups(mtl.Size.of((total + 7) / 8, rows, 1), mtl.Size.of(256, 1, 1));
+            } else {
+                enc.setValue(SharedProjections{ .k = k, .full = @intFromBool(full), .rows = @intCast(rows), .m = ms }, 20);
+                enc.dispatchGroups(mtl.Size.of((total + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+            }
+        }
+        enc.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |_| return error.GpuFailed;
+        for (ms, 0..) |m, j| {
+            const at = j * 8 * wrows;
+            if (!sameWords(out_a.slice(f32, 8 * 8 * wrows)[at..][0 .. rows * m], out_b.slice(f32, 8 * 8 * wrows)[at..][0 .. rows * m])) {
+                std.debug.print("shared projections full={} rows={d} output={d}: bytes differ\n", .{ full, rows, j });
+                return error.TestUnexpectedResult;
+            }
+        }
+        checked += 1;
+    };
+    std.debug.print("shared-row affine kernels: {d} cases byte-equal to the per-row kernels\n", .{checked});
+}

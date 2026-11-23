@@ -30,8 +30,10 @@ pub const affine = @embedFile("kernels/affine.metal");
 
 pub const AffinePipes = struct {
     dense: mtl.Pipeline,
+    dense_shared: mtl.Pipeline,
     projections: mtl.Pipeline,
     batch_projections: mtl.Pipeline,
+    shared_projections: mtl.Pipeline,
     dense_rows: mtl.Pipeline,
     float: mtl.Pipeline,
     float_control: mtl.Pipeline,
@@ -47,10 +49,14 @@ pub const AffinePipes = struct {
         defer lib.deinit();
         const dense_pipe = try mtl.Pipeline.init(device, lib, "i2a_dense", false);
         errdefer dense_pipe.deinit();
+        const dense_shared_pipe = try mtl.Pipeline.init(device, lib, "i2a_dense_shared", false);
+        errdefer dense_shared_pipe.deinit();
         const projections_pipe = try mtl.Pipeline.init(device, lib, "i2a_projections", false);
         errdefer projections_pipe.deinit();
         const batch_projections_pipe = try mtl.Pipeline.init(device, lib, "i2a_batch_projections", false);
         errdefer batch_projections_pipe.deinit();
+        const shared_projections_pipe = try mtl.Pipeline.init(device, lib, "i2a_shared_projections", false);
+        errdefer shared_projections_pipe.deinit();
         const dense_rows_pipe = try mtl.Pipeline.init(device, lib, "i2a_dense_rows", false);
         errdefer dense_rows_pipe.deinit();
         const float_pipe = try mtl.Pipeline.init(device, lib, "i2a_float", false);
@@ -68,13 +74,15 @@ pub const AffinePipes = struct {
         const group_up_pipe = try mtl.Pipeline.init(device, lib, "i2a_group_up", false);
         errdefer group_up_pipe.deinit();
         const group_down_pipe = try mtl.Pipeline.init(device, lib, "i2a_group_down", false);
-        return .{ .group_up = group_up_pipe, .group_down = group_down_pipe, .dense = dense_pipe, .projections = projections_pipe, .batch_projections = batch_projections_pipe, .dense_rows = dense_rows_pipe, .float = float_pipe, .float_control = float_control_pipe, .batch_float_control = batch_float_control_pipe, .embed = embed_pipe, .up = up_pipe, .down = down_pipe };
+        return .{ .group_up = group_up_pipe, .group_down = group_down_pipe, .dense = dense_pipe, .dense_shared = dense_shared_pipe, .projections = projections_pipe, .batch_projections = batch_projections_pipe, .shared_projections = shared_projections_pipe, .dense_rows = dense_rows_pipe, .float = float_pipe, .float_control = float_control_pipe, .batch_float_control = batch_float_control_pipe, .embed = embed_pipe, .up = up_pipe, .down = down_pipe };
     }
 
     pub fn deinit(p: AffinePipes) void {
         p.dense.deinit();
+        p.dense_shared.deinit();
         p.projections.deinit();
         p.batch_projections.deinit();
+        p.shared_projections.deinit();
         p.dense_rows.deinit();
         p.float.deinit();
         p.float_control.deinit();

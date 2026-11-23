@@ -40,6 +40,8 @@ const Slot = struct {
     points: [8]usize = @splat(0),
     job: ?*Job = null,
     live_generated: u64 = 0,
+    admission: ?prefix.Progress = null,
+    prefill_start: i96 = 0,
 };
 
 const Entry = struct {
@@ -298,7 +300,9 @@ pub const Host = struct {
         const stats: api.Stats = .{ .rounds = job.rounds, .drafted = 0, .accepted = 0, .min_rows = 1, .prefill_seconds = job.prefill_seconds, .queued_seconds = @as(f64, @floatFromInt(@max(0, job.began - job.queued))) / 1e9 };
         h.lock();
         if (!restored) slot.points = @splat(0);
+        slot.admission = null;
         prefix.release(slot, restored);
+        h.prefilling = prefix.admittingIndex(h.slots) != null;
         if (std.mem.indexOfScalar(api.Id, h.cancels.items, job.id)) |i| _ = h.cancels.swapRemove(i);
         h.unlock();
         _ = h.invalidated.swap(false, .acq_rel);
@@ -428,44 +432,43 @@ pub const Host = struct {
             slot.resident.clearRetainingCapacity();
         }
         std.debug.print("inkling session: slot {d}\n", .{choice.index});
-        const prefill_start = h.now();
-        var at = job.reused;
-        const first = ((r.prompt.len -| h.fork_window) + h.fork_interval - 1) / h.fork_interval * h.fork_interval;
-        var next = @max(h.fork_interval, @max(first, ((at + h.fork_interval - 1) / h.fork_interval) * h.fork_interval));
-        var saved: usize = 0;
-        while (at < r.prompt.len) {
-            if (h.cancelled(job)) {
-                emit(job, .{ .prefilled = 0 });
-                h.retire(slot, .cancelled, "");
-                return;
-            }
-            if (h.prefix_reuse and next == at and next < r.prompt.len and next > 0) {
-                slot.snapshots[saved].?.copyRows(h.model.queue, &h.model.config, &slot.cache, true, r.prompt.len - at) catch |e| {
-                    h.retire(slot, .failed, @errorName(e));
-                    return;
-                };
-                slot.points[saved] = at;
-                if (job.reused == 0 and saved == 0) h.store(slot) catch |e| {
-                    h.retire(slot, .failed, @errorName(e));
-                    return;
-                };
-                saved += 1;
-                next += h.fork_interval;
-            }
-            if (h.prefix_reuse and at == r.prompt.len - 1) h.store(slot) catch |e| {
-                h.retire(slot, .failed, @errorName(e));
-                return;
-            };
-            const remaining = if (h.prefix_reuse and at < r.prompt.len - 1) r.prompt.len - 1 - at else r.prompt.len - at;
-            const take = @min(h.prefill.chunk, @min(remaining, if (h.prefix_reuse and next > at) next - at else remaining));
-            inkling.prefillWant(h.model, &h.prefill, &slot.cache, r.prompt[at..][0..take], if (at + take == r.prompt.len) .last else .none) catch |e| {
-                emit(job, .{ .prefilled = 0 });
-                h.retire(slot, .failed, @errorName(e));
-                return;
-            };
-            slot.resident.appendSliceAssumeCapacity(r.prompt[at..][0..take]);
-            at += take;
+        slot.prefill_start = h.now();
+        slot.admission = prefix.Progress.init(r.prompt.len, job.reused, h.fork_window, h.fork_interval);
+    }
+
+    fn prefillChunk(h: *Host, slot: *Slot) void {
+        const job = slot.job.?;
+        const r = job.request;
+        const progress = &slot.admission.?;
+        if (h.cancelled(job)) {
+            emit(job, .{ .prefilled = 0 });
+            h.retire(slot, .cancelled, "");
+            return;
         }
+        const step = progress.step(r.prompt.len, h.prefill.chunk, h.fork_interval, h.prefix_reuse, job.reused);
+        if (step.snapshot) |index| {
+            slot.snapshots[index].?.copyRows(h.model.queue, &h.model.config, &slot.cache, true, r.prompt.len - step.at) catch |e| {
+                h.retire(slot, .failed, @errorName(e));
+                return;
+            };
+            slot.points[index] = step.at;
+        }
+        if (step.first_store) h.store(slot) catch |e| {
+            h.retire(slot, .failed, @errorName(e));
+            return;
+        };
+        if (step.last_store) h.store(slot) catch |e| {
+            h.retire(slot, .failed, @errorName(e));
+            return;
+        };
+        inkling.prefillWant(h.model, &h.prefill, &slot.cache, r.prompt[step.at..][0..step.take], if (step.at + step.take == r.prompt.len) .last else .none) catch |e| {
+            emit(job, .{ .prefilled = 0 });
+            h.retire(slot, .failed, @errorName(e));
+            return;
+        };
+        slot.resident.appendSliceAssumeCapacity(r.prompt[step.at..][0..step.take]);
+        if (!step.done) return;
+        slot.admission = null;
         if (slot.rollback) |*rollback| {
             rollback.copyRows(h.model.queue, &h.model.config, &slot.cache, true, r.max_tokens -| 1) catch |e| {
                 h.retire(slot, .failed, @errorName(e));
@@ -474,7 +477,7 @@ pub const Host = struct {
             job.saved = true;
         }
         const end = h.now();
-        job.prefill_seconds = if (end > prefill_start) @as(f64, @floatFromInt(end - prefill_start)) / 1e9 else null;
+        job.prefill_seconds = if (end > slot.prefill_start) @as(f64, @floatFromInt(end - slot.prefill_start)) / 1e9 else null;
         h.lock();
         if (job.prefill_seconds) |seconds| h.prefill_rate = @as(f64, @floatFromInt(r.prompt.len - job.reused)) / seconds;
         h.prefill_at = end;
@@ -500,8 +503,10 @@ pub const Host = struct {
             h.lock();
             var free = false;
             var active = false;
+            var admitting = false;
             for (h.slots) |*slot| {
                 if (slot.job == null) free = true else active = true;
+                if (slot.admission != null) admitting = true;
             }
             if (h.closing and !active and h.queued.items.len == 0) {
                 h.unlock();
@@ -512,7 +517,7 @@ pub const Host = struct {
                 h.unlock();
                 continue;
             }
-            if (free and h.queued.items.len > 0 and !h.closing) {
+            if (free and !admitting and h.queued.items.len > 0 and !h.closing) {
                 const job = h.queued.orderedRemove(0);
                 for (h.slots) |*source| if (source.job) |active_job| {
                     if (!active_job.saved or !prefix.canRestore(source.rollback.?.len, source.cache.len, source.rollback.?.saved_rows, h.model.config.text.window, source.rollback.?.limit, active_job.emitted.items.len)) source.points = @splat(0);
@@ -525,9 +530,6 @@ pub const Host = struct {
                 h.prefilling = true;
                 h.unlock();
                 h.admit(slot, choice, fork);
-                h.lock();
-                h.prefilling = false;
-                h.unlock();
                 continue;
             }
             if (h.closing and h.queued.items.len > 0) {
@@ -538,11 +540,20 @@ pub const Host = struct {
                 continue;
             }
             h.unlock();
+            if (prefix.admittingIndex(h.slots)) |index| h.prefillChunk(&h.slots[index]);
+            h.lock();
+            h.prefilling = false;
+            for (h.slots) |*slot| if (slot.admission != null) {
+                h.prefilling = true;
+                break;
+            };
+            h.unlock();
             var caches: [8]*inkling.Cache = undefined;
             var ids: [8]u32 = undefined;
             var selected: [8]*Slot = undefined;
             var count: usize = 0;
             for (h.slots) |*slot| if (slot.job) |job| {
+                if (!prefix.decoding(slot.*)) continue;
                 if (h.cancelled(job)) {
                     h.retire(slot, .cancelled, "");
                 } else {

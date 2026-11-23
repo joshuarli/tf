@@ -297,3 +297,90 @@ test "shared prefixes remain recent as later prompts grow" {
     try std.testing.expect(entries[0].last_used > entries[1].last_used);
     try std.testing.expectEqual(@as(u64, 3), entries[2].last_used);
 }
+
+
+pub const Progress = struct {
+    at: usize,
+    next: usize,
+    saved: usize = 0,
+
+    pub const Step = struct { at: usize, take: usize, snapshot: ?usize, first_store: bool, last_store: bool, done: bool };
+
+    pub fn init(length: usize, reused: usize, window: usize, interval: usize) Progress {
+        const first = ((length -| window) + interval - 1) / interval * interval;
+        return .{ .at = reused, .next = @max(interval, @max(first, ((reused + interval - 1) / interval) * interval)) };
+    }
+
+    pub fn step(p: *Progress, length: usize, chunk: usize, interval: usize, enabled: bool, reused: usize) Step {
+        const at = p.at;
+        var snapshot: ?usize = null;
+        var first_store = false;
+        if (enabled and p.next == at and p.next < length and p.next > 0) {
+            snapshot = p.saved;
+            first_store = reused == 0 and p.saved == 0;
+            p.saved += 1;
+            p.next += interval;
+        }
+        const last_store = enabled and at == length - 1;
+        const remaining = if (enabled and at < length - 1) length - 1 - at else length - at;
+        const take = @min(chunk, @min(remaining, if (enabled and p.next > at) p.next - at else remaining));
+        p.at += take;
+        return .{ .at = at, .take = take, .snapshot = snapshot, .first_store = first_store, .last_store = last_store, .done = p.at == length };
+    }
+};
+
+
+pub fn admittingIndex(slots: anytype) ?usize {
+    for (slots, 0..) |slot, i| if (slot.job != null and slot.admission != null) return i;
+    return null;
+}
+
+pub fn decoding(slot: anytype) bool {
+    return slot.job != null and slot.admission == null;
+}
+
+test "inkling scheduler: prefill chunks alternate with decode and preserve boundaries" {
+    const Slot = struct { job: ?u8, admission: ?Progress };
+    var slots = [_]Slot{
+        .{ .job = 1, .admission = null },
+        .{ .job = 2, .admission = Progress.init(13, 0, 8, 4) },
+    };
+    const expected_at = [_]usize{ 0, 3, 6, 8, 11, 12 };
+    const expected_take = [_]usize{ 3, 3, 2, 3, 1, 1 };
+    var decode_steps: usize = 0;
+    for (expected_at, expected_take) |at, take| {
+        const index = admittingIndex(&slots).?;
+        const step = slots[index].admission.?.step(13, 3, 4, true, 0);
+        try std.testing.expectEqual(at, step.at);
+        try std.testing.expectEqual(take, step.take);
+        try std.testing.expectEqual(if (at == 8) @as(?usize, 0) else if (at == 12) @as(?usize, 1) else null, step.snapshot);
+        try std.testing.expectEqual(at == 8, step.first_store);
+        try std.testing.expectEqual(at == 12, step.last_store);
+        try std.testing.expectEqual(at + take == 13, step.done);
+        try std.testing.expect(decoding(slots[0]));
+        try std.testing.expect(!decoding(slots[1]));
+        decode_steps += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 6), decode_steps);
+    try std.testing.expectEqual(@as(usize, 13), slots[1].admission.?.at);
+    slots[1].admission = null;
+    try std.testing.expect(decoding(slots[1]));
+    try std.testing.expectEqual(@as(?usize, null), admittingIndex(&slots));
+    var reused = Progress.init(13, 8, 8, 4);
+    const fork = reused.step(13, 3, 4, true, 8);
+    try std.testing.expectEqual(@as(?usize, 0), fork.snapshot);
+    try std.testing.expect(!fork.first_store);
+    try std.testing.expect(!fork.last_store);
+    var coincident = Progress.init(5, 0, 4, 4);
+    _ = coincident.step(5, 4, 4, true, 0);
+    const last = coincident.step(5, 4, 4, true, 0);
+    try std.testing.expect(last.first_store and last.last_store and last.done);
+    try std.testing.expectEqual(@as(?usize, 0), last.snapshot);
+    var disabled = Progress.init(13, 0, 8, 4);
+    while (disabled.at < 13) {
+        const step = disabled.step(13, 3, 4, false, 0);
+        try std.testing.expectEqual(@as(?usize, null), step.snapshot);
+        try std.testing.expect(!step.first_store);
+        try std.testing.expect(!step.last_store);
+    }
+}

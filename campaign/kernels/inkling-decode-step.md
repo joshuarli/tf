@@ -33,3 +33,9 @@ python3 campaign/heavy.py -- sh -c 'gpu-gate-ready -1 || exit 75; perf-gate-read
 ```
 
 Set `K` to 1 or 4. Generate the input and base runner as in `inkling-f16-kv.md`, using base `b9bdf4e55`. The base build command is recorded in the previous blocker receipt at `00c3711a7`.
+
+## Rejected attention experiment
+
+A candidate replaced shared KV staging and two threadgroup barriers per token in `i2_batch_split` with direct half-precision KV loads by each SIMD group. The unchanged family GPU test command exited 0: 82/82 tests passed and width 1, 2 and 4 batch/decode comparisons reported zero maximum logit and cache differences. It is rejected because it regressed K=1.
+
+Three interleaved 2,500-token `batchbench 1 5` pairs passed the GPU and CPU gates and compiler monitor. Pair order was base/candidate, candidate/base, base/candidate. Base medians were 24.223, 21.633 and 21.749 ms (outer median 21.749); candidate medians were 26.110, 26.186 and 26.236 ms (outer median 26.186). Across all inner samples the base spanned 21.540–25.761 ms and candidate 25.977–26.310 ms. Candidate serial controls were 21.483, 21.669 and 21.592 ms. The host caused repeated admission deferrals; no deferred attempt was counted. The experimental matrix was stopped after the K=1 regression was established, after its current K=4 base invocation completed; the orchestrator exited 143. The candidate source was reverted.

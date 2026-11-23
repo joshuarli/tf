@@ -151,7 +151,6 @@ pub const Model = struct {
     arena: std.heap.ArenaAllocator,
     shards: []Shard,
     owned: std.ArrayList(mtl.Buffer) = .empty,
-    formats: []cfg.Expert,
     weights: Weights,
     glue: [glue_names.len]mtl.Pipeline,
     experts: [2][2]mtl.Pipeline, // [nvfp4, mxfp8][gate/up, down]
@@ -187,12 +186,12 @@ pub const Model = struct {
             m.shards[i] = try mapShard(m, dir, name);
             mapped += 1;
         }
-        m.formats = try m.arena.allocator().alloc(cfg.Expert, m.config.text.layers);
         if (m.config.checkpoint == .modelopt) {
             if (m.shards.len != 1) return error.MultipleShards;
-            try cfg.expertFormats(m.shards[0].header, m.config.text.layers, m.formats);
-        } else @memset(m.formats, .nvfp4);
-        m.weights = if (m.config.checkpoint == .mlx) try m.mapMlxWeights() else try m.mapWeights();
+            const formats = try m.arena.allocator().alloc(cfg.Expert, m.config.text.layers);
+            try cfg.expertFormats(m.shards[0].header, m.config.text.layers, formats);
+            m.weights = try m.mapWeights(formats);
+        } else m.weights = try m.mapMlxWeights();
         m.t16 = try m.device.buffer(16 * 4, mtl.ResourceOptions.shared);
         errdefer m.t16.deinit();
         m.t256 = try m.device.buffer(256 * 4, mtl.ResourceOptions.shared);
@@ -323,7 +322,7 @@ pub const Model = struct {
         return t;
     }
 
-    fn mapWeights(m: *Model) !Weights {
+    fn mapWeights(m: *Model, formats: []const cfg.Expert) !Weights {
         const c = &m.config;
         const a = m.arena.allocator();
         const h: usize = c.text.hidden;
@@ -350,7 +349,7 @@ pub const Model = struct {
             else
                 try m.want(name, .f32, &.{h});
         }
-        for (0..L) |i| w.layers[i] = try mapLayer(m, @intCast(i));
+        for (0..L) |i| w.layers[i] = try mapLayer(m, @intCast(i), formats[i]);
         return w;
     }
 
@@ -473,7 +472,7 @@ fn mapMlxControllers(m: *Model, prefix: []const u8, out: *Layer) !void {
     }
 }
 
-fn mapLayer(m: *Model, i: u32) !Layer {
+fn mapLayer(m: *Model, i: u32, prec: cfg.Expert) !Layer {
     const c = &m.config;
     const a = m.arena.allocator();
     const h: usize = c.text.hidden;
@@ -485,7 +484,6 @@ fn mapLayer(m: *Model, i: u32) !Layer {
     const extent: usize = c.extent(i);
     const inter: usize = c.text.expert_inter;
     const E: usize = c.text.experts;
-    const prec: cfg.Expert = m.formats[i];
     var out: Layer = undefined;
     out.precision = if (prec == .mxfp8) .mxfp8 else .nvfp4;
     out.w13_bias = null;

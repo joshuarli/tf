@@ -421,6 +421,88 @@ test "chunked prefill matches per-token position on the tiny fixture" {
     try t.expect(maxAbsDiff(ref_logits[0..vocab], got_logits[0..vocab]) <= @max(1.0, maxAbs(ref_logits[0..vocab])) * 1.5e-5);
 }
 
+test "chunks longer than the local window leave the state of window-bounded chunks on the tiny fixture" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = mtl.Device.init() catch return error.SkipZigTest;
+    defer device.deinit();
+    const gpa = t.allocator;
+    const io = t.io;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const dir = try tinyDir(a) orelse return error.SkipZigTest;
+    {
+        const probe = try std.fs.path.join(a, &.{ dir, "model.safetensors" });
+        var pf = std.Io.Dir.cwd().openFile(io, probe, .{}) catch return error.SkipZigTest;
+        pf.close(io);
+    }
+    const tmpbase = std.mem.span(std.c.getenv("TMPDIR") orelse "/tmp");
+    const shim = try std.fs.path.join(a, &.{ tmpbase, "i2-prefill-shim" });
+    std.Io.Dir.cwd().createDirPath(io, shim) catch {};
+    try writeShim(gpa, io, shim, dir);
+    var m = try model_mod.Model.load(gpa, io, shim);
+    defer m.deinit();
+    const window: usize = m.config.text.window;
+    const N: usize = 3 * window;
+    const bounded = window - 4;
+    try t.expect(N <= 64 and bounded > 8);
+    const K: usize = m.config.text.topk;
+    var ids: [64]u32 = undefined;
+    for (0..N) |i| ids[i] = @intCast(100 + (i * 7) % 61);
+    const vocab: usize = m.config.text.unpadded_vocab;
+    const kvw: usize = m.config.text.local.kv * m.config.text.local.dim;
+    const h: usize = m.config.text.hidden;
+    const conv_elems = m.config.slots() * state_mod.ring * kvw;
+    const mlp_elems = m.config.slots() * state_mod.ring * h;
+    var ps = try prefill_mod.PrefillScratch.init(device, &m.config, N);
+    defer ps.deinit();
+    ps.half = false;
+    var logits: [4][]f32 = undefined;
+    var picks: [4][]i32 = undefined;
+    var stages: [4]StageBufs = undefined;
+    var kv_bytes: usize = 0;
+    const chunks = [_]usize{ bounded, window + 1, window + 8, N };
+    for (chunks, 0..) |chunk, side| {
+        var cache = try state_mod.Cache.init(device, &m.config, N + 1);
+        defer cache.deinit();
+        kv_bytes = cache.keys.length();
+        logits[side] = try gpa.alloc(f32, N * vocab);
+        picks[side] = try gpa.alloc(i32, N * K);
+        var at: usize = 0;
+        while (at < N) {
+            const take = @min(chunk, N - at);
+            try t.expect(take > 8);
+            try prefill_mod.prefill(m, &ps, &cache, ids[at..][0..take]);
+            @memcpy(logits[side][at * vocab ..][0 .. take * vocab], ps.logits.slice(f32, take * vocab));
+            @memcpy(picks[side][at * K ..][0 .. take * K], ps.picks.slice(i32, take * K));
+            at += take;
+        }
+        try t.expectEqual(N, cache.len);
+        stages[side] = try stageInit(device, kv_bytes, conv_elems * 4, mlp_elems * 4);
+        try snapshot(m, &cache, &stages[side]);
+    }
+    defer for (0..chunks.len) |side| {
+        gpa.free(logits[side]);
+        gpa.free(picks[side]);
+        stageDeinit(&stages[side]);
+    };
+    var probe = try state_mod.Cache.init(device, &m.config, N + 1);
+    defer probe.deinit();
+    for (1..chunks.len) |side| {
+        const kd = kvStateDiff(&m.config, &probe, stages[0].keys.slice(f16, kv_bytes / 2), stages[side].keys.slice(f16, kv_bytes / 2), N);
+        const vd = kvStateDiff(&m.config, &probe, stages[0].values.slice(f16, kv_bytes / 2), stages[side].values.slice(f16, kv_bytes / 2), N);
+        std.debug.print("long chunk {d} vs {d}: logits {e} keys {e} values {e}\n", .{ chunks[side], bounded, maxAbsDiff(logits[0], logits[side]), kd, vd });
+        try t.expectEqualSlices(i32, picks[0], picks[side]);
+        try t.expectEqualSlices(f32, logits[0], logits[side]);
+        try t.expectEqualSlices(u8, std.mem.sliceAsBytes(stages[0].keys.slice(f16, kv_bytes / 2)), std.mem.sliceAsBytes(stages[side].keys.slice(f16, kv_bytes / 2)));
+        try t.expectEqualSlices(u8, std.mem.sliceAsBytes(stages[0].values.slice(f16, kv_bytes / 2)), std.mem.sliceAsBytes(stages[side].values.slice(f16, kv_bytes / 2)));
+        try t.expectEqualSlices(f32, stages[0].kc.slice(f32, conv_elems), stages[side].kc.slice(f32, conv_elems));
+        try t.expectEqualSlices(f32, stages[0].vc.slice(f32, conv_elems), stages[side].vc.slice(f32, conv_elems));
+        try t.expectEqualSlices(f32, stages[0].ac.slice(f32, mlp_elems), stages[side].ac.slice(f32, mlp_elems));
+        try t.expectEqualSlices(f32, stages[0].mc.slice(f32, mlp_elems), stages[side].mc.slice(f32, mlp_elems));
+    }
+}
+
 const legacyGemm =
     \\#include <metal_stdlib>
     \\using namespace metal;
@@ -1323,6 +1405,62 @@ const serialRoute =
 ;
 
 const RouteArgs = extern struct { experts: u32, topk: u32, rows: u32, route_scale: f32 };
+
+const RelArgs = extern struct { heads: u32, rel: u32, extent: u32, rows: u32, base: u32, tau: u32, floor: f32, alpha: f32 };
+
+test "row-staged relative bias matches the per-output kernel bit for bit" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, @import("kernels.zig").prefill, mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const each = try mtl.Pipeline.init(device, lib, "i2p_relbias", false);
+    defer each.deinit();
+    const rows_pipe = try mtl.Pipeline.init(device, lib, "i2p_relbias_rows", false);
+    defer rows_pipe.deinit();
+    for ([_]RelArgs{
+        .{ .heads = 24, .rel = 16, .extent = 1024, .rows = 37, .base = 9000, .tau = 1, .floor = 8192, .alpha = 0.1 },
+        .{ .heads = 24, .rel = 16, .extent = 1024, .rows = 5, .base = 3, .tau = 0, .floor = 8192, .alpha = 0.1 },
+        .{ .heads = 4, .rel = 4, .extent = 16, .rows = 9, .base = 20, .tau = 1, .floor = 8, .alpha = 0.25 },
+    }) |args| {
+        const cols: usize = args.extent + 1;
+        const p_buf = try device.buffer(args.rel * args.extent * 2, mtl.ResourceOptions.shared);
+        defer p_buf.deinit();
+        for (p_buf.slice(u16, args.rel * args.extent), 0..) |*v, i| {
+            const value: f32 = @as(f32, @floatFromInt(@as(i32, @intCast((i * 37) % 201)) - 100)) / 53.0;
+            v.* = @truncate(@as(u32, @bitCast(value)) >> 16);
+        }
+        const r_buf = try device.buffer(args.rows * args.heads * args.rel * 4, mtl.ResourceOptions.shared);
+        defer r_buf.deinit();
+        for (r_buf.slice(f32, args.rows * args.heads * args.rel), 0..) |*v, i| v.* = @as(f32, @floatFromInt(@as(i32, @intCast((i * 29 + i / 16) % 173)) - 86)) / 41.0;
+        var outs: [2]mtl.Buffer = undefined;
+        for (&outs, 0..) |*out, side| {
+            out.* = try device.buffer(args.rows * args.heads * cols * 4, mtl.ResourceOptions.shared);
+            @memset(out.slice(f32, args.rows * args.heads * cols), std.math.nan(f32));
+            const cb = queue.commandBuffer();
+            const enc = cb.compute(.serial);
+            enc.setPipeline(if (side == 0) each else rows_pipe);
+            enc.setBuffer(p_buf, 0, 0);
+            enc.setBuffer(r_buf, 0, 1);
+            enc.setValue(args, 2);
+            enc.setBuffer(out.*, 0, 3);
+            if (side == 0) enc.dispatchThreads(mtl.Size.of(args.heads * cols, args.rows, 1), mtl.Size.of(256, 1, 1)) else enc.dispatchGroups(mtl.Size.of((cols + 255) / 256, args.rows, 1), mtl.Size.of(256, 1, 1));
+            enc.end();
+            cb.commit();
+            cb.wait();
+            if (cb.failure()) |msg| {
+                std.debug.print("relbias: {s}\n", .{msg});
+                return error.GpuFailed;
+            }
+        }
+        defer for (outs) |out| out.deinit();
+        const want = outs[0].slice(f32, args.rows * args.heads * cols);
+        for (want) |v| try t.expect(std.math.isFinite(v));
+        try t.expectEqualSlices(u8, std.mem.sliceAsBytes(want), std.mem.sliceAsBytes(outs[1].slice(f32, args.rows * args.heads * cols)));
+    }
+}
 
 test "parallel route selection matches serial picks and weights" {
     if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;

@@ -621,3 +621,68 @@ test "oQ4e prefill without half pipelines matches per-token decode" {
         if (!half) try t.expect(worst <= scale * 1.5e-5);
     }
 }
+
+test "oQ4e prefill chunks longer than the local window match window-bounded chunks" {
+    const path = std.c.getenv("TF_INKLING2_LOOP_OQ4E_DIR") orelse return error.SkipZigTest;
+    const model = @import("model.zig");
+    const state = @import("state.zig");
+    const forward = @import("forward.zig");
+    const prefill = @import("prefill.zig");
+    const m = try model.Model.load(t.allocator, t.io, std.mem.span(path));
+    defer m.deinit();
+    const vocab = m.config.text.unpadded_vocab;
+    const n = m.config.text.window + 76;
+    const ids = try t.allocator.alloc(u32, n);
+    defer t.allocator.free(ids);
+    for (ids, 0..) |*id, i| id.* = @intCast(1000 + (i * 7919) % 50000);
+    var scratch = try state.Scratch.init(m.device, &m.config);
+    defer scratch.deinit();
+    var best_want: usize = 0;
+    {
+        var cache = try state.Cache.init(m.device, &m.config, n);
+        defer cache.deinit();
+        for (ids) |id| try forward.position(m, &scratch, &cache, id);
+        const want = scratch.logits.slice(f32, vocab);
+        for (want, 0..) |w, i| if (w > want[best_want]) {
+            best_want = i;
+        };
+    }
+    var ps = try prefill.PrefillScratch.initRows(m.device, &m.config, n, 1);
+    defer ps.deinit();
+    for ([_]bool{ false, true }) |half| {
+        ps.half = half;
+        var logits: [2][]f32 = undefined;
+        var next: [2][]f32 = undefined;
+        for ([_]usize{ n, 512 }, 0..) |chunk, side| {
+            var cache = try state.Cache.init(m.device, &m.config, n + 1);
+            defer cache.deinit();
+            var at: usize = 0;
+            while (at < n) {
+                const take = @min(chunk, n - at);
+                try prefill.prefillWant(m, &ps, &cache, ids[at..][0..take], if (at + take == n) .last else .none);
+                at += take;
+            }
+            try t.expectEqual(n, cache.len);
+            logits[side] = try t.allocator.dupe(f32, ps.logits.slice(f32, vocab));
+            try forward.position(m, &scratch, &cache, 4242);
+            next[side] = try t.allocator.dupe(f32, scratch.logits.slice(f32, vocab));
+        }
+        defer for (logits, next) |a, b| {
+            t.allocator.free(a);
+            t.allocator.free(b);
+        };
+        var worst: f32 = 0;
+        var best: usize = 0;
+        for (logits[0], logits[1], 0..) |a, b, i| {
+            try t.expect(std.math.isFinite(a) and std.math.isFinite(b));
+            worst = @max(worst, @abs(a - b));
+            if (a > logits[0][best]) best = i;
+        }
+        std.debug.print("oq4e chunk {d} vs 512 half={} logits_max_diff={e}\n", .{ n, half, worst });
+        try t.expectEqual(best_want, best);
+        if (!half) {
+            try t.expectEqualSlices(f32, logits[1], logits[0]);
+            try t.expectEqualSlices(f32, next[1], next[0]);
+        }
+    }
+}

@@ -526,6 +526,7 @@ struct i2p_batch_conv_args { uint channels, heads, ring, pos, layout; float norm
     device half* KEYS [[buffer(2)]], device half* VALUES [[buffer(3)]], constant i2p_kv_args& a [[buffer(4)]],
     uint2 p [[thread_position_in_grid]]) {
   if (p.x >= a.count || p.y >= a.rows) return;
+  if (a.wring && p.y + a.wring < a.rows) return;
   const uint r = a.wring ? (a.base + p.y) % a.wring : a.base + p.y;
   KEYS[(size_t)r * a.count + p.x] = K[(size_t)p.y * a.count + p.x];
   VALUES[(size_t)r * a.count + p.x] = V[(size_t)p.y * a.count + p.x];
@@ -585,6 +586,41 @@ struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; 
   const device float* r = R + ((size_t)p.y * a.heads + h) * a.rel;
   for (uint u = 0; u < a.rel; ++u) sum = fma(i2p_bf(P, u * a.extent + dist), r[u], sum);
   O[(size_t)p.y * cols * a.heads + p.x] = sum * tau;
+}
+
+// i2p_relbias a row a threadgroup: a thread keeps its distance's column, serves every head, same fma order.
+[[kernel]] void i2p_relbias_rows(const device bfloat* P [[buffer(0)]], const device float* R [[buffer(1)]],
+    constant i2p_rel_args& a [[buffer(2)]], device float* O [[buffer(3)]], uint2 tg [[threadgroup_position_in_grid]],
+    uint ti [[thread_index_in_threadgroup]]) {
+  threadgroup float r[1024];
+  const uint row = tg.y, cols = a.extent + 1u, dist = tg.x * 256u + ti;
+  for (uint i = ti; i < a.heads * a.rel; i += 256u) r[i] = R[(size_t)row * a.heads * a.rel + i];
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (dist >= cols) return;
+  device float* out = O + (size_t)row * cols * a.heads + dist;
+  if (dist == a.extent) {
+    for (uint h = 0; h < a.heads; ++h) out[h * cols] = 0.0f;
+    return;
+  }
+  const uint pos = a.base + row;
+  const float tau = a.tau ? 1.0f + a.alpha * precise::log(max(1.0f, (float(pos) + 1.0f) / a.floor)) : 1.0f;
+  if (a.rel == 16u) {
+    float p[16];
+    _Pragma("clang loop unroll(full)")
+    for (uint u = 0; u < 16u; ++u) p[u] = i2p_bf(P, u * a.extent + dist);
+    for (uint h = 0; h < a.heads; ++h) {
+      float sum = 0.0f;
+      _Pragma("clang loop unroll(full)")
+      for (uint u = 0; u < 16u; ++u) sum = fma(p[u], r[h * 16u + u], sum);
+      out[h * cols] = sum * tau;
+    }
+    return;
+  }
+  for (uint h = 0; h < a.heads; ++h) {
+    float sum = 0.0f;
+    for (uint u = 0; u < a.rel; ++u) sum = fma(i2p_bf(P, u * a.extent + dist), r[h * a.rel + u], sum);
+    out[h * cols] = sum * tau;
+  }
 }
 
 [[kernel]] void i2p_attn(const device float* Q [[buffer(0)]], const device half* KEYS [[buffer(1)]],
@@ -1003,6 +1039,9 @@ struct i2p_moeg_args { uint k, n, slots, topk, experts; float gate_cap, up_cap; 
     const device float* den [[buffer(4)]], const device int* OFF [[buffer(5)]],
     const device int* ROW_OF [[buffer(6)]], constant i2p_moeg_args& a [[buffer(7)]],
     device float* ACT [[buffer(8)]], const device float* CODES [[buffer(9)]],
+#ifdef I2P_HALF_ACT
+    device half* ACT_H [[buffer(10)]], device atomic_uint* overflow [[buffer(11)]],
+#endif
     uint2 tg [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
   const uint c = tg.x;
   const uint e = tg.y;
@@ -1088,7 +1127,14 @@ struct i2p_moeg_args { uint k, n, slots, topk, experts; float gate_cap, up_cap; 
 #ifdef I2P_MXFP8
       ACT[(size_t)slot * a.n + c] = i2p_situ(dg, du, a.gate_cap, a.up_cap);
 #else
-      ACT[(size_t)slot * a.n + c] = i2p_situ(dg * global, du * global, a.gate_cap, a.up_cap);
+      const float value = i2p_situ(dg * global, du * global, a.gate_cap, a.up_cap);
+      ACT[(size_t)slot * a.n + c] = value;
+#ifdef I2P_HALF_ACT
+      if (end - start >= I2P_DOWN_MATRIX_THRESHOLD) {
+        if (abs(value) > 65504.0f) atomic_fetch_add_explicit(overflow, 1u, memory_order_relaxed);
+        ACT_H[(size_t)slot * a.n + c] = half(clamp(value, -65504.0f, 65504.0f));
+      }
+#endif
 #endif
     }
   }

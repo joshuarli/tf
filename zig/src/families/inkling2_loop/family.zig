@@ -34,6 +34,8 @@ test {
     _ = @import("refuse.zig");
     _ = @import("prefill.zig");
     _ = @import("prefill_test.zig");
+    _ = @import("units_test.zig");
+    _ = @import("units_attention_test.zig");
     _ = @import("verify_test.zig");
     _ = @import("batch_test.zig");
 }

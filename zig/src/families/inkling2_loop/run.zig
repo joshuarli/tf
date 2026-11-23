@@ -21,7 +21,7 @@ const usage =
     \\tf-inkling2-loop-run <model> <tokens.json> routes <out> <at>  capture decode router picks, logits, and bias
     \\tf-inkling2-loop-run <model> <tokens.json> tracerow <out> <at>  the raw per-tensor rows of position <at> as f32, [slots][9][hidden], and router sidecars
     \\tf-inkling2-loop-run <model> <tokens.json> reset <out>        the same logits twice from a fresh cache, byte-compared
-    \\tf-inkling2-loop-run <model> <tokens.json> bench <steps> [warmup] [chunk]  the prompt, warmup, then steps: wall, encode, GPU ms
+    \\tf-inkling2-loop-run <model> <tokens.json> bench <steps> [warmup] [chunk] [prefills]  the prompt (prefills times from an empty cache), warmup, then steps
     \\tf-inkling2-loop-run <model> <tokens.json> profile-prefill <chunk>  warm and profile fresh-cache prompt chunks
     \\tf-inkling2-loop-run <tokenizer.json> <text> tokenize <out>   the text's token ids, for the modes above
     \\tf-inkling2-loop-run <tokenizer.json> <ids.json> detokenize <out>  the ids' text
@@ -515,7 +515,7 @@ pub fn main(init: std.process.Init) !void {
         if (chunk == 0 or ids.value.len % chunk != 0 or 8 % (ids.value.len / chunk) != 0) return error.ExpectedArgs;
         var cache = try inkling.Cache.init(m.device, c, ids.value.len);
         defer cache.deinit();
-        var ps = try inkling.PrefillScratch.init(m.device, c, chunk);
+        var ps = try inkling.PrefillScratch.initRows(m.device, c, chunk, 1);
         defer ps.deinit();
         for (0..8 / (ids.value.len / chunk) + 1) |_| {
             cache.len = 0;
@@ -528,7 +528,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (std.mem.eql(u8, mode, "bench")) {
-        if (args.len < 5 or args.len > 7) {
+        if (args.len < 5 or args.len > 8) {
             std.debug.print("{s}", .{usage});
             return error.ExpectedArgs;
         }
@@ -538,7 +538,12 @@ pub fn main(init: std.process.Init) !void {
             return error.ExpectedArgs;
         }
         const warm = if (args.len >= 6) try std.fmt.parseInt(usize, args[5], 10) else 8;
-        const chunk: usize = if (args.len == 7) try std.fmt.parseInt(usize, args[6], 10) else 0;
+        const chunk: usize = if (args.len >= 7) try std.fmt.parseInt(usize, args[6], 10) else 0;
+        const prefills: usize = if (args.len == 8) try std.fmt.parseInt(usize, args[7], 10) else 1;
+        if (prefills == 0 or (prefills > 1 and chunk == 0)) {
+            std.debug.print("{s}", .{usage});
+            return error.ExpectedArgs;
+        }
         var cache = try inkling.Cache.init(m.device, c, ids.value.len + warm + steps + 1);
         defer cache.deinit();
         var scratch = try inkling.Scratch.init(m.device, c);
@@ -548,20 +553,25 @@ pub fn main(init: std.process.Init) !void {
         if (chunk == 0) {
             try run(m, &scratch, &cache, ids.value);
         } else {
-            var ps = try inkling.PrefillScratch.init(m.device, c, chunk);
+            var ps = try inkling.PrefillScratch.initRows(m.device, c, chunk, 1);
             defer ps.deinit();
-            const p0 = now();
-            var at: usize = 0;
-            while (at < ids.value.len) {
-                const take = @min(chunk, ids.value.len - at);
-                const last = at + take >= ids.value.len;
-                try inkling.prefillWant(m, &ps, &cache, ids.value[at..][0..take], if (last) .last else .none);
-                at += take;
+            for (0..prefills) |pass| {
+                cache.len = 0;
+                const p0 = now();
+                var at: usize = 0;
+                while (at < ids.value.len) {
+                    const take = @min(chunk, ids.value.len - at);
+                    const last = at + take >= ids.value.len;
+                    try inkling.prefillWant(m, &ps, &cache, ids.value[at..][0..take], if (last) .last else .none);
+                    at += take;
+                }
+                const p1 = now();
+                const ms: f64 = @as(f64, @floatFromInt(p1 - p0)) / 1e6;
+                const rate: f64 = @as(f64, @floatFromInt(ids.value.len)) / (ms / 1000.0);
+                if (pass == 0) {
+                    std.debug.print("inkling2_loop prefill: {d} tokens in {d:.1} ms, {d:.1} tok/s chunk {d}\n", .{ ids.value.len, ms, rate, chunk });
+                } else std.debug.print("inkling2_loop prefill repeat {d}: {d} tokens in {d:.1} ms, {d:.1} tok/s chunk {d}\n", .{ pass + 1, ids.value.len, ms, rate, chunk });
             }
-            const p1 = now();
-            const ms: f64 = @as(f64, @floatFromInt(p1 - p0)) / 1e6;
-            const rate: f64 = @as(f64, @floatFromInt(ids.value.len)) / (ms / 1000.0);
-            std.debug.print("inkling2_loop prefill: {d} tokens in {d:.1} ms, {d:.1} tok/s chunk {d}\n", .{ ids.value.len, ms, rate, chunk });
             @memcpy(scratch.logits.slice(f32, vocab), ps.logits.slice(f32, vocab));
         }
         var tok = argmax(scratch.logits.slice(f32, vocab));

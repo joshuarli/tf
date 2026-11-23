@@ -91,3 +91,374 @@
     }
   }
 }
+
+#ifdef I2P_TENSOR_UNITS
+#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>
+
+typedef vec<half, 8> i2p_h8;
+typedef vec<float, 8> i2p_f8;
+
+// Lane l holds rows home.y and home.y + 8, columns home.x to home.x + 3, of a 16 x 16 tensor-unit fragment.
+inline short2 i2p_home(ushort l) {
+  return short2(short((l & 8) + ((l & 1) << 2)), short(((l & 16) >> 2) | ((l >> 1) & 3)));
+}
+
+// (lo | hi) += a (b0 | b1)^T: a 16 x 32 x 16 multiply-accumulate of half operands into f32 sums.
+inline void i2p_mma(thread i2p_f8& lo, thread i2p_f8& hi, thread const i2p_h8& a, thread const i2p_h8& b0,
+    thread const i2p_h8& b1) {
+  using namespace mpp::tensor_ops;
+  constexpr auto shape = matmul2d_descriptor(16, 32, 16, false, true, false, matmul2d_descriptor::mode::multiply_accumulate);
+  matmul2d<shape, execution_simdgroup> op;
+  auto left = op.template get_left_input_cooperative_tensor<half, half, float>();
+  auto right = op.template get_right_input_cooperative_tensor<half, half, float>();
+  auto acc = op.template get_destination_cooperative_tensor<metal::remove_addrspace_t<decltype(left)>,
+      metal::remove_addrspace_t<decltype(right)>, float>();
+  _Pragma("clang loop unroll(full)")
+  for (short e = 0; e < 8; e++) {
+    left[e] = a[e];
+    right[e] = b0[e];
+    right[8 + e] = b1[e];
+    acc[e] = lo[e];
+    acc[8 + e] = hi[e];
+  }
+  op.run(left, right, acc);
+  _Pragma("clang loop unroll(full)")
+  for (short e = 0; e < 8; e++) {
+    lo[e] = acc[e];
+    hi[e] = acc[8 + e];
+  }
+}
+
+// (lo | hi) += a (b0 | b1): as i2p_mma with a K x N right operand, b0 holding columns 0 to 15 and b1 16 to 31.
+inline void i2p_mma_nn(thread i2p_f8& lo, thread i2p_f8& hi, thread const i2p_h8& a, thread const i2p_h8& b0,
+    thread const i2p_h8& b1) {
+  using namespace mpp::tensor_ops;
+  constexpr auto shape = matmul2d_descriptor(16, 32, 16, false, false, false, matmul2d_descriptor::mode::multiply_accumulate);
+  matmul2d<shape, execution_simdgroup> op;
+  auto left = op.template get_left_input_cooperative_tensor<half, half, float>();
+  auto right = op.template get_right_input_cooperative_tensor<half, half, float>();
+  auto acc = op.template get_destination_cooperative_tensor<metal::remove_addrspace_t<decltype(left)>,
+      metal::remove_addrspace_t<decltype(right)>, float>();
+  _Pragma("clang loop unroll(full)")
+  for (short e = 0; e < 8; e++) {
+    left[e] = a[e];
+    right[e] = b0[e];
+    right[8 + e] = b1[e];
+    acc[e] = lo[e];
+    acc[8 + e] = hi[e];
+  }
+  op.run(left, right, acc);
+  _Pragma("clang loop unroll(full)")
+  for (short e = 0; e < 8; e++) {
+    lo[e] = acc[e];
+    hi[e] = acc[8 + e];
+  }
+}
+
+// The tile'th 64-row tile over the experts holding at least `least` sorted rows: its expert, first row and rows.
+inline bool i2p_expert_tile(const device int* OFF, int experts, int least, int tile, ushort lane,
+    thread int& expert, thread int& row, thread int& rows) {
+  int before = 0;
+  for (int base = 0; base < experts; base += 32) {
+    const int e = base + int(lane);
+    const int first = e < experts ? OFF[e] : 0, last = e < experts ? OFF[e + 1] : 0;
+    const int count = last - first >= least ? (last - first + 63) / 64 : 0;
+    const int upto = before + simd_prefix_inclusive_sum(count);
+    const int owner = simd_sum(int(upto <= tile));
+    if (owner < 32) {
+      expert = base + owner;
+      row = simd_shuffle(first, ushort(owner)) + (tile - simd_shuffle(upto - count, ushort(owner))) * 64;
+      rows = min(64, simd_shuffle(last, ushort(owner)) - row);
+      return true;
+    }
+    before = simd_shuffle(upto, ushort(31));
+  }
+  return false;
+}
+
+// The e2m1 codes in bits 0 to 15 of w as halves.
+inline half4 i2p_fp4x4(uint w) {
+  const uint4 c = (uint4(w) >> uint4(0u, 4u, 8u, 12u)) & 15u;
+  const uint4 mag = c & 7u;
+  const uint4 bits = select(0x3800u + (mag << 9), mag * 0x3800u, mag < 2u) | ((c & 8u) << 12);
+  return as_type<half4>(ushort4(bits));
+}
+
+// f32 rows as halves, clamped when a.y is set (as the NVFP4 matrix rounds them); values past half range counted.
+[[kernel]] void i2p_half_rows(const device float4* X [[buffer(0)]], device half4* Y [[buffer(1)]],
+    device atomic_uint* overflow [[buffer(2)]], constant uint2& a [[buffer(3)]], uint i [[thread_position_in_grid]]) {
+  if (i >= a.x) return;
+  const float4 v = X[i];
+  const uint over = uint(abs(v.x) > 65504.0f) + uint(abs(v.y) > 65504.0f) + uint(abs(v.z) > 65504.0f) + uint(abs(v.w) > 65504.0f);
+  if (over) atomic_fetch_add_explicit(overflow, over, memory_order_relaxed);
+  Y[i] = a.y ? half4(clamp(v, -65504.0f, 65504.0f)) : half4(v);
+}
+
+// A 64 x 64 routed expert tile on the tensor units: half rows times half weights (as the half matrices round them).
+template <bool GU, bool AFFINE>
+inline void i2p_expert_units(const device half* X, const device uchar* W, const device uchar* S,
+    const device uchar* G, const device float* den, const device int* OFF, const device int* ROW_OF,
+    constant i2p_moeg_args& a, device half* ACT, device float* OUT, device atomic_uint* overflow,
+    threadgroup half* w, uint3 tg, ushort sg, ushort lane) {
+  constexpr int BK = 64, PAD = 72;
+  const int least = AFFINE ? 1 : (GU ? I2P_MATRIX_THRESHOLD : I2P_DOWN_MATRIX_THRESHOLD);
+  int expert = 0, row0 = 0, rows = 0;
+  if (!i2p_expert_tile(OFF, int(a.experts), least, int(tg.y), lane, expert, row0, rows)) return;
+  const int cols = GU ? 2 * int(a.n) : int(a.n), K = int(a.k), n0 = int(tg.x) * 64;
+  const int t = int(sg) * 32 + int(lane);
+  const int tm = 32 * (int(sg) / 2), tn = 32 * (int(sg) % 2);
+  const short2 home = i2p_home(lane);
+  const device half* xr[2][2];
+  _Pragma("clang loop unroll(full)")
+  for (short m = 0; m < 2; m++) {
+    _Pragma("clang loop unroll(full)")
+    for (short h = 0; h < 2; h++) {
+      const int i = tm + 16 * m + home.y + 8 * h;
+      const uint slot = uint(ROW_OF[row0 + (i < rows ? i : 0)]);
+      xr[m][h] = X + size_t(GU ? slot / a.topk : slot) * size_t(K) + home.x;
+    }
+  }
+  const int wr = t / 2, wk = (t % 2) * 32;
+  const bool wvalid = n0 + wr < cols;
+  const bool count_w = AFFINE && row0 == OFF[expert];
+  const size_t wrow = size_t(expert) * size_t(cols) + size_t(n0 + wr);
+  const device uchar* wp = W + wrow * size_t(K / 2) + wk / 2;
+  const device uchar* sp = S + (AFFINE ? 2 * wrow * size_t(K / 64) : wrow * size_t(K / 16) + wk / 16);
+  const device bfloat* bp = (const device bfloat*)G + wrow * size_t(K / 64);
+  threadgroup half* mine = w + wr * PAD + wk;
+  i2p_f8 acc[2][2];
+  _Pragma("clang loop unroll(full)")
+  for (short m = 0; m < 2; m++) {
+    acc[m][0] = i2p_f8(0.0f);
+    acc[m][1] = i2p_f8(0.0f);
+  }
+  uint over = 0u;
+  for (int k0 = 0; k0 < K; k0 += BK) {
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const uint4 c = wvalid ? *(const device uint4*)(wp + k0 / 2) : uint4(0u);
+    if (AFFINE) {
+      const float scale = wvalid ? float(((const device bfloat*)sp)[k0 / 64]) : 0.0f;
+      const float bias = wvalid ? float(bp[k0 / 64]) : 0.0f;
+      _Pragma("clang loop unroll(full)")
+      for (short i = 0; i < 8; i++) {
+        const float4 v = fma(float4((uint4(c[i / 2] >> (16 * (i % 2))) >> uint4(0u, 4u, 8u, 12u)) & 15u), scale, bias);
+        if (count_w) over += uint(abs(v.x) > 65504.0f) + uint(abs(v.y) > 65504.0f) + uint(abs(v.z) > 65504.0f) + uint(abs(v.w) > 65504.0f);
+        *(threadgroup half4*)(mine + 4 * i) = half4(v);
+      }
+    } else {
+      const half s0 = wvalid ? half(i2p_e4m3(sp[k0 / 16])) : 0.0h;
+      const half s1 = wvalid ? half(i2p_e4m3(sp[k0 / 16 + 1])) : 0.0h;
+      _Pragma("clang loop unroll(full)")
+      for (short i = 0; i < 4; i++) {
+        const half s = i < 2 ? s0 : s1;
+        *(threadgroup half4*)(mine + 8 * i) = i2p_fp4x4(c[i]) * s;
+        *(threadgroup half4*)(mine + 8 * i + 4) = i2p_fp4x4(c[i] >> 16) * s;
+      }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    _Pragma("clang loop unroll(full)")
+    for (short q = 0; q < 4; q++) {
+      const threadgroup half* b = w + (tn + home.y) * PAD + 16 * q + home.x;
+      const i2p_h8 b0 = i2p_h8(*(const threadgroup half4*)b, *(const threadgroup half4*)(b + 8 * PAD));
+      const i2p_h8 b1 = i2p_h8(*(const threadgroup half4*)(b + 16 * PAD), *(const threadgroup half4*)(b + 24 * PAD));
+      _Pragma("clang loop unroll(full)")
+      for (short m = 0; m < 2; m++) {
+        const i2p_h8 x = i2p_h8(*(const device half4*)(xr[m][0] + k0 + 16 * q), *(const device half4*)(xr[m][1] + k0 + 16 * q));
+        i2p_mma(acc[m][0], acc[m][1], x, b0, b1);
+      }
+    }
+  }
+  const float global = AFFINE ? 1.0f : ((const device float*)G)[expert] / den[0];
+  _Pragma("clang loop unroll(full)")
+  for (short m = 0; m < 2; m++) {
+    _Pragma("clang loop unroll(full)")
+    for (short h = 0; h < 2; h++) {
+      const int r = tm + 16 * m + home.y + 8 * h;
+      if (r >= rows) continue;
+      const size_t slot = size_t(ROW_OF[row0 + r]);
+      _Pragma("clang loop unroll(full)")
+      for (short j = 0; j < 2; j++) {
+        const int col = n0 + tn + 16 * j + home.x;
+        const i2p_f8 v = acc[m][j];
+        if (GU) {
+          _Pragma("clang loop unroll(full)")
+          for (short e = 0; e < 2; e++) {
+            if (col / 2 + e >= int(a.n)) continue;
+            const float value = i2p_situ(v[4 * h + 2 * e] * global, v[4 * h + 2 * e + 1] * global, a.gate_cap, a.up_cap);
+            over += uint(abs(value) > 65504.0f);
+            ACT[slot * a.n + col / 2 + e] = AFFINE ? half(value) : half(clamp(value, -65504.0f, 65504.0f));
+          }
+        } else {
+          _Pragma("clang loop unroll(full)")
+          for (short e = 0; e < 4; e++) if (col + e < int(a.n)) OUT[slot * a.n + col + e] = v[4 * h + e] * global;
+        }
+      }
+    }
+  }
+  if (over) atomic_fetch_add_explicit(overflow, over, memory_order_relaxed);
+}
+
+// i2p_attn_half on the tensor units: a KV head's 3 query heads x 32 rows a threadgroup, 32 keys a block.
+[[kernel]] void i2p_attn_units(const device float* Q [[buffer(0)]], const device half* KEYS [[buffer(1)]],
+    const device half* VALUES [[buffer(2)]], const device float* B [[buffer(3)]], const device float* sink [[buffer(4)]],
+    constant i2p_attn_args& a [[buffer(5)]], device float* O [[buffer(6)]],
+    const device half* KC [[buffer(7)]], const device half* VC [[buffer(8)]],
+    device atomic_uint* overflow [[buffer(9)]], uint2 tg [[threadgroup_position_in_grid]],
+    ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
+  constexpr int D = 128, R = 32, KB = 32, PAD = 136, THREADS = 192;
+  threadgroup half keys[KB * PAD], values[KB * PAD];
+  const int kv = int(tg.x), q0 = int(tg.y) * R, t = int(sg) * 32 + int(lane);
+  const int h = kv * 3 + int(sg) / 2, r0 = q0 + 16 * (int(sg) % 2);
+  const short2 home = i2p_home(lane);
+  const int rows = int(a.rows);
+  int row[2], pos[2];
+  bool active[2];
+  float tau[2], sk[2];
+  _Pragma("clang loop unroll(full)")
+  for (short i = 0; i < 2; i++) {
+    row[i] = r0 + home.y + 8 * i;
+    active[i] = row[i] < rows;
+    pos[i] = int(a.base) + row[i];
+    tau[i] = a.window ? 1.0f : 1.0f + a.alpha * precise::log(max(1.0f, (float(pos[i]) + 1.0f) / a.floor));
+    sk[i] = active[i] ? sink[size_t(row[i]) * a.heads + h] : 0.0f;
+  }
+  uint over = 0u;
+  i2p_h8 q[D / 16];
+  _Pragma("clang loop unroll(full)")
+  for (short d = 0; d < D / 16; d++) {
+    float4 v[2];
+    _Pragma("clang loop unroll(full)")
+    for (short i = 0; i < 2; i++) {
+      v[i] = active[i] ? *(const device float4*)(Q + (size_t(row[i]) * a.heads + h) * D + 16 * d + home.x) : float4(0.0f);
+      over += uint(abs(v[i].x) > 65504.0f) + uint(abs(v[i].y) > 65504.0f) + uint(abs(v[i].z) > 65504.0f) + uint(abs(v[i].w) > 65504.0f);
+    }
+    q[d] = i2p_h8(half4(clamp(v[0], -65504.0f, 65504.0f)), half4(clamp(v[1], -65504.0f, 65504.0f)));
+  }
+  i2p_f8 acc[D / 16];
+  _Pragma("clang loop unroll(full)")
+  for (short d = 0; d < D / 16; d++) acc[d] = i2p_f8(0.0f);
+  float maximum[2] = {0.0f, 0.0f}, denominator[2] = {1.0f, 1.0f};
+  const int first = int(a.base) + q0, last = int(a.base) + min(q0 + R, rows) - 1;
+  const int lower = a.window && first + 1 > int(a.window) ? first + 1 - int(a.window) : 0;
+  const int cols = int(a.extent) + 1;
+  for (int block = lower / KB * KB; block <= last; block += KB) {
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (int e = t; e < KB * D / 8; e += THREADS) {
+      const int k = e / (D / 8), c = (e % (D / 8)) * 8, j = block + k;
+      half4 kk[2] = {half4(0.0h), half4(0.0h)}, vv[2] = {half4(0.0h), half4(0.0h)};
+      if (j <= last) {
+        const int rj = a.rmode && a.window ? j % int(a.window) : j;
+        const size_t at = ((j < int(a.base) ? size_t(rj) : size_t(j - int(a.base))) * a.kv + kv) * D + c;
+        const device half* ks = j < int(a.base) ? KEYS : KC;
+        const device half* vs = j < int(a.base) ? VALUES : VC;
+        _Pragma("clang loop unroll(full)")
+        for (short u = 0; u < 2; u++) {
+          kk[u] = *(const device half4*)(ks + at + 4 * u);
+          vv[u] = *(const device half4*)(vs + at + 4 * u);
+          over += uint(isinf(kk[u].x)) + uint(isinf(kk[u].y)) + uint(isinf(kk[u].z)) + uint(isinf(kk[u].w));
+          over += uint(isinf(vv[u].x)) + uint(isinf(vv[u].y)) + uint(isinf(vv[u].z)) + uint(isinf(vv[u].w));
+          kk[u] = clamp(kk[u], half4(-65504.0h), half4(65504.0h));
+          vv[u] = clamp(vv[u], half4(-65504.0h), half4(65504.0h));
+        }
+      }
+      *(threadgroup half4*)(keys + k * PAD + c) = kk[0];
+      *(threadgroup half4*)(keys + k * PAD + c + 4) = kk[1];
+      *(threadgroup half4*)(values + k * PAD + c) = vv[0];
+      *(threadgroup half4*)(values + k * PAD + c + 4) = vv[1];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (r0 >= rows) continue;
+    i2p_f8 s[2] = {i2p_f8(0.0f), i2p_f8(0.0f)};
+    _Pragma("clang loop unroll(full)")
+    for (short d = 0; d < D / 16; d++) {
+      const threadgroup half* kp = keys + home.y * PAD + 16 * d + home.x;
+      const i2p_h8 k0 = i2p_h8(*(const threadgroup half4*)kp, *(const threadgroup half4*)(kp + 8 * PAD));
+      const i2p_h8 k1 = i2p_h8(*(const threadgroup half4*)(kp + 16 * PAD), *(const threadgroup half4*)(kp + 24 * PAD));
+      i2p_mma(s[0], s[1], q[d], k0, k1);
+    }
+    float bound[2] = {-INFINITY, -INFINITY};
+    _Pragma("clang loop unroll(full)")
+    for (short j = 0; j < 2; j++) {
+      _Pragma("clang loop unroll(full)")
+      for (short e = 0; e < 8; e++) {
+        const short i = e >> 2;
+        const int key = block + 16 * j + home.x + (e & 3);
+        float score = -INFINITY;
+        if (active[i] && key <= pos[i] && (!a.window || pos[i] - key < int(a.window))) {
+          const int distance = min(pos[i] - key, int(a.extent));
+          score = (s[j][e] * a.scale * tau[i] + B[(size_t(row[i]) * a.heads + h) * cols + distance] - sk[i]) * M_LOG2E_F;
+        }
+        s[j][e] = score;
+        bound[i] = max(bound[i], score);
+      }
+    }
+    float rescale[2];
+    _Pragma("clang loop unroll(full)")
+    for (short i = 0; i < 2; i++) {
+      bound[i] = max(bound[i], simd_shuffle_xor(bound[i], ushort(1)));
+      bound[i] = max(bound[i], simd_shuffle_xor(bound[i], ushort(8)));
+      bound[i] = max(bound[i], maximum[i]);
+      rescale[i] = precise::exp2(maximum[i] - bound[i]);
+      maximum[i] = bound[i];
+    }
+    float total[2] = {0.0f, 0.0f};
+    i2p_h8 p[2];
+    _Pragma("clang loop unroll(full)")
+    for (short j = 0; j < 2; j++) {
+      _Pragma("clang loop unroll(full)")
+      for (short e = 0; e < 8; e++) {
+        const short i = e >> 2;
+        const float weight = precise::exp2(s[j][e] - bound[i]);
+        total[i] += weight;
+        p[j][e] = half(weight);
+      }
+    }
+    _Pragma("clang loop unroll(full)")
+    for (short i = 0; i < 2; i++) {
+      total[i] += simd_shuffle_xor(total[i], ushort(1));
+      total[i] += simd_shuffle_xor(total[i], ushort(8));
+      denominator[i] = rescale[i] * denominator[i] + total[i];
+    }
+    _Pragma("clang loop unroll(full)")
+    for (short d = 0; d < D / 16; d++) {
+      _Pragma("clang loop unroll(full)")
+      for (short e = 0; e < 8; e++) acc[d][e] *= rescale[e >> 2];
+    }
+    _Pragma("clang loop unroll(full)")
+    for (short j = 0; j < 2; j++) {
+      _Pragma("clang loop unroll(full)")
+      for (short d = 0; d < D / 32; d++) {
+        const threadgroup half* vp = values + (16 * j + home.y) * PAD + 32 * d + home.x;
+        const i2p_h8 v0 = i2p_h8(*(const threadgroup half4*)vp, *(const threadgroup half4*)(vp + 8 * PAD));
+        const i2p_h8 v1 = i2p_h8(*(const threadgroup half4*)(vp + 16), *(const threadgroup half4*)(vp + 8 * PAD + 16));
+        i2p_mma_nn(acc[2 * d], acc[2 * d + 1], p[j], v0, v1);
+      }
+    }
+  }
+  if (over) atomic_fetch_add_explicit(overflow, over, memory_order_relaxed);
+  _Pragma("clang loop unroll(full)")
+  for (short i = 0; i < 2; i++) {
+    if (!active[i]) continue;
+    device float* out = O + (size_t(row[i]) * a.heads + h) * D + home.x;
+    _Pragma("clang loop unroll(full)")
+    for (short d = 0; d < D / 16; d++) {
+      *(device float4*)(out + 16 * d) = float4(acc[d][4 * i], acc[d][4 * i + 1], acc[d][4 * i + 2], acc[d][4 * i + 3]) / denominator[i];
+    }
+  }
+}
+
+#define I2P_EXPERT_UNITS(NAME, GU, AFFINE) \
+[[kernel]] void NAME(const device half* X [[buffer(0)]], const device uchar* W [[buffer(1)]], \
+    const device uchar* S [[buffer(2)]], const device uchar* G [[buffer(3)]], const device float* den [[buffer(4)]], \
+    const device int* OFF [[buffer(5)]], const device int* ROW_OF [[buffer(6)]], constant i2p_moeg_args& a [[buffer(7)]], \
+    device void* Y [[buffer(8)]], device atomic_uint* overflow [[buffer(9)]], \
+    uint3 tg [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]], \
+    ushort lane [[thread_index_in_simdgroup]]) { \
+  threadgroup half w[64 * 72]; \
+  i2p_expert_units<GU, AFFINE>(X, W, S, G, den, OFF, ROW_OF, a, (device half*)Y, (device float*)Y, overflow, w, tg, sg, lane); \
+}
+I2P_EXPERT_UNITS(i2p_expert_units_up, true, false)
+I2P_EXPERT_UNITS(i2p_expert_units_down, false, false)
+I2P_EXPERT_UNITS(i2p_affine_units_up, true, true)
+I2P_EXPERT_UNITS(i2p_affine_units_down, false, true)
+#endif

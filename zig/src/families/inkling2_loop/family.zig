@@ -5,6 +5,8 @@ pub const config = @import("config.zig");
 pub const Model = @import("model.zig").Model;
 pub const Cache = @import("state.zig").Cache;
 pub const Scratch = @import("state.zig").Scratch;
+pub const BatchScratch = @import("batch.zig").BatchScratch;
+pub const batchStep = @import("batch.zig").step;
 pub const Trace = @import("state.zig").Trace;
 pub const position = @import("forward.zig").position;
 pub const positionTrace = @import("forward.zig").positionTrace;
@@ -33,4 +35,5 @@ test {
     _ = @import("prefill.zig");
     _ = @import("prefill_test.zig");
     _ = @import("verify_test.zig");
+    _ = @import("batch_test.zig");
 }

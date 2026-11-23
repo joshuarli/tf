@@ -49,6 +49,9 @@ const AttnB = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u
 const MoeB = extern struct { k: u32, n: u32, slots: u32, topk: u32, gate_cap: f32, up_cap: f32 };
 const Moeg = extern struct { k: u32, n: u32, slots: u32, topk: u32, experts: u32, gate_cap: f32, up_cap: f32 };
 const CombineB = extern struct { width: u32, topk: u32, rows: u32 };
+const DecodeConv = extern struct { channels: u32, heads: u32, ring: u32, pos: u32, layout: u32, norm: f32 };
+const DecodeAttn = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, scale: f32, floor: f32, alpha: f32 };
+const DecodeParts = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, splits: u32, chunk: u32, scale: f32, floor: f32, alpha: f32 };
 const Rms = extern struct { width: u32, blocks: u32, eps: f32 };
 const Pair = extern struct { count: u32 };
 
@@ -455,6 +458,7 @@ const Chunk = struct {
     drel: u32,
     ring: bool = false,
     count: usize = 0,
+    batch: ?*BatchContext = null,
 
     fn isLocal(c: Chunk, slot: usize) bool {
         const m = c.m;
@@ -610,6 +614,27 @@ const Chunk = struct {
         const mul: u32 = if (dyn != null) 2 else 1;
         const norm: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(mul * taps + 1)));
         if (dyn) |dw| c.lin(dw, dyn_in, dyn_out);
+        if (c.batch) |batch| {
+            for (batch.caches, 0..) |cache, row| {
+                const buf = switch (site) {
+                    .key => cache.k_conv,
+                    .value => cache.v_conv,
+                    .attention => cache.attn_conv,
+                    .mlp => cache.mlp_conv,
+                };
+                const cb = bo(buf, cache.convAt(slot, channels));
+                const offset = row * channels * 4;
+                const xr = bo(x.buf, x.off + offset);
+                const yr = bo(out.buf, out.off + offset);
+                const dr = bo(dyn_out.buf, dyn_out.off + row * conv_heads * cfg.conv_taps * 4);
+                const args = DecodeConv{ .channels = channels, .heads = conv_heads, .ring = st.ring, .pos = @intCast(cache.len), .layout = layout, .norm = norm };
+                c.setG(.conv, args, &.{ xr, cb, t(weight), if (dyn != null) dr else A, A, yr });
+                c.enc.dispatchThreads(mtl.Size.of(channels, 1, 1), mtl.Size.of(256, 1, 1));
+                c.setG(.conv_store, args, &.{ xr, cb, A });
+                c.enc.dispatchThreads(mtl.Size.of(channels, 1, 1), mtl.Size.of(256, 1, 1));
+            }
+            return;
+        }
         c.setP(c.s.pipes.conv, ConvB{ .channels = channels, .heads = conv_heads, .ring = st.ring, .base = c.base, .rows = c.n, .layout = layout, .norm = norm }, &.{ x, ring, t(weight), if (dyn != null) dyn_out else A, A, out });
         c.enc.dispatchThreads(mtl.Size.of(channels, c.n, 1), mtl.Size.of(256, 1, 1));
         c.setP(c.s.pipes.cstore, CStore{ .channels = channels, .ring = st.ring, .base = c.base, .rows = c.n }, &.{ x, ring, A });
@@ -637,6 +662,29 @@ const Chunk = struct {
         const text = &c.m.config.text;
         c.setP(c.s.pipes.rel, RelB{ .heads = c.heads, .rel = c.drel, .extent = extent, .rows = c.n, .base = c.base, .tau = @intFromBool(full), .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha }, &.{ t(lay.attn.rel_bias), r, A, b(c.s.relbias) });
         c.enc.dispatchThreads(mtl.Size.of(c.heads * (extent + 1), c.n, 1), mtl.Size.of(256, 1, 1));
+    }
+
+    fn batchAttention(c: Chunk, lay: *const Layer, slot: u32, full: bool, extent: u32, batch: *BatchContext) void {
+        const s = c.s;
+        const text = &c.m.config.text;
+        const win: u32 = if (full) 0 else text.window;
+        for (batch.caches, 0..) |cache, row| {
+            const pos: u32 = @intCast(cache.len);
+            const at = cache.row(&c.m.config, slot, pos);
+            c.setG(.kv_store, Pair{ .count = c.kvw }, &.{ bo(s.kc, row * c.kvw * 4), bo(s.vc, row * c.kvw * 4), bo(cache.keys, at), bo(cache.values, at), A });
+            c.enc.dispatchThreads(mtl.Size.of(c.kvw, 1, 1), mtl.Size.of(256, 1, 1));
+            const rel = bo(s.relbias, row * c.heads * (extent + 1) * 4);
+            const args = DecodeAttn{ .heads = c.heads, .kv = c.kv, .dim = c.dim, .rel = c.drel, .extent = extent, .window = 0, .pos = pos, .tau = @intFromBool(full), .scale = 0, .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha };
+            c.setG(.relbias, args, &.{ t(lay.attn.rel_bias), bo(s.r, row * c.heads * c.drel * 4), A, rel });
+            c.enc.dispatchThreads(mtl.Size.of(c.heads * (extent + 1), 1, 1), mtl.Size.of(256, 1, 1));
+            const lo: u32 = if (win != 0 and pos + 1 > win) pos + 1 - win else 0;
+            const part = st.attnPartition(pos + 1 - lo);
+            const parts = DecodeParts{ .heads = c.heads, .kv = c.kv, .dim = c.dim, .rel = c.drel, .extent = extent, .window = win, .pos = pos, .tau = @intFromBool(full), .splits = part.splits, .chunk = part.chunk, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.dim))), .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha };
+            c.setP(batch.scratch.decode.attn_split, parts, &.{ bo(s.q, row * c.qw * 4), bo(cache.keys, cache.row(&c.m.config, slot, 0)), bo(cache.values, cache.row(&c.m.config, slot, 0)), rel, bo(s.sink, row * c.heads * 4), A, b(batch.scratch.decode.attn_part) });
+            c.enc.dispatchGroups(mtl.Size.of(c.kv * part.splits, 1, 1), mtl.Size.of((c.heads / c.kv) * 32, 1, 1));
+            c.setP(batch.scratch.decode.attn_combine, parts, &.{ b(batch.scratch.decode.attn_part), A, bo(s.attn, row * c.qw * 4) });
+            c.enc.dispatchGroups(mtl.Size.of(c.heads, 1, 1), mtl.Size.of(32, 1, 1));
+        }
     }
 
     fn control(c: Chunk, ctl: Controller, cur: In, msg: In, out: B, ys: u32, yb: u32) void {
@@ -685,6 +733,9 @@ const Chunk = struct {
         c.convolve(b(s.v), b(s.vc), lay.attn.v_conv, lay.attn.v_dyn, ins[2], b(s.vdyn), ring[1], c.kvw, if (full) c.kv else 0, @intFromBool(full), slot, .value);
         c.rmsU(b(s.vc), b(s.vc), @as(usize, c.n) * c.kv, c.dim, text.eps);
         c.lin(lay.attn.sink, ins[0], b(s.sink));
+        if (c.batch) |batch| {
+            c.batchAttention(lay, slot, full, extent, batch);
+        } else {
         c.relative(lay, b(s.r), extent, full);
         const win: u32 = if (full) 0 else text.window;
         const keybase = bo(c.cache.keys, c.slotBase(slot));
@@ -699,6 +750,7 @@ const Chunk = struct {
             if (tiled) c.enc.dispatchGroups(mtl.Size.of(c.kv, (c.n + 7) / 8, 1), mtl.Size.of(768, 1, 1)) else c.enc.dispatchGroups(mtl.Size.of(c.heads, c.n, 1), mtl.Size.of(32, 1, 1));
         }
         c.kvStore(slot);
+        }
         c.lin(lay.attn.gate, ins[0], b(s.gate));
         c.flat(.sig_mul, Pair{ .count = c.qw * c.n }, &.{ b(s.attn), b(s.gate), A, b(s.attn) }, @as(usize, c.qw) * c.n);
         c.lin(lay.attn.o, .{ .buf = b(s.attn), .xs = 1, .xb = 0 }, b(s.projout));
@@ -887,13 +939,27 @@ fn profileOccupancy(rounds: *ProfileRounds, c: *Chunk, slot: u32, name: []const 
 
 pub const Bank = struct { states: B, out: B, n: usize };
 
+const BatchContext = struct {
+    scratch: *@import("batch.zig").BatchScratch,
+    caches: []const *Cache,
+};
+
 pub fn prefill(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32) !void {
     return prefillWant(m, s, cache, ids, .all);
 }
 
 pub fn prefillWant(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, want: WantLogits) !void {
+    return run(m, s, cache, ids, want, null);
+}
+
+pub fn batchStep(m: *const Model, s: *@import("batch.zig").BatchScratch, caches: []const *Cache, ids: []const u32) !void {
+    var context = BatchContext{ .scratch = s, .caches = caches };
+    try run(m, &s.rows, caches[0], ids, .all, &context);
+}
+
+fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, want: WantLogits, batch: ?*BatchContext) !void {
     if (ids.len == 0 or ids.len > s.chunk) return error.BadChunk;
-    if (ids.len + cache.len > cache.capacity) return error.ContextFull;
+    if (batch == null and ids.len + cache.len > cache.capacity) return error.ContextFull;
     if (ids.len > m.config.text.window) return error.ChunkTooLarge;
     if (s.half_overflow) |buf| buf.slice(u32, 1)[0] = 0;
     @memcpy(s.ids.slice(u32, ids.len), ids);
@@ -905,7 +971,7 @@ pub fn prefillWant(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []co
     m.queue.roundBegin("inkling2-prefill");
     defer m.queue.roundEnd();
     const threshold = if (std.c.getenv("TF_INKLING_PREFILL_PROFILE_BASE")) |v| std.fmt.parseInt(usize, std.mem.span(v), 10) catch 0 else null;
-    const profiling = if (threshold) |base| cache.len >= base else false;
+    const profiling = if (threshold) |base| batch == null and cache.len >= base else false;
     var rounds = ProfileRounds{ .queue = m.queue, .cb = m.queue.commandBuffer(), .enabled = profiling };
     const config = &m.config;
     const text = &config.text;
@@ -924,6 +990,7 @@ pub fn prefillWant(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []co
         .dim = text.local.dim,
         .drel = text.d_rel,
         .ring = ring,
+        .batch = batch,
     };
     c.setP(s.pipes.embed, EmbedA{ .width = s.h, .rows = c.n, .eps = text.eps }, &.{ b(s.ids), t(m.weights.embed), t(m.weights.embed_norm), A, b(s.x) });
     c.enc.dispatchGroups(mtl.Size.of(c.n, 1, 1), mtl.Size.of(256, 1, 1));
@@ -981,5 +1048,7 @@ pub fn prefillWant(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []co
         return error.GpuFailed;
     }
     if (s.half_overflow) |buf| std.debug.print("inkling2 half activation overflow: {d}\n", .{buf.slice(u32, 1)[0]});
-    cache.len += ids.len;
+    if (batch) |value| {
+        for (value.caches) |item| item.len += 1;
+    } else cache.len += ids.len;
 }

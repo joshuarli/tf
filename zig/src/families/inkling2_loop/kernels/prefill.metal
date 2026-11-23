@@ -522,8 +522,8 @@ struct i2p_batch_conv_args { uint channels, heads, ring, pos, layout; float norm
   RING[((a.base + p.y) % a.ring) * a.channels + p.x] = X[(size_t)p.y * a.channels + p.x];
 }
 
-[[kernel]] void i2p_kv_store(const device float* K [[buffer(0)]], const device float* V [[buffer(1)]],
-    device float* KEYS [[buffer(2)]], device float* VALUES [[buffer(3)]], constant i2p_kv_args& a [[buffer(4)]],
+[[kernel]] void i2p_kv_store(const device half* K [[buffer(0)]], const device half* V [[buffer(1)]],
+    device half* KEYS [[buffer(2)]], device half* VALUES [[buffer(3)]], constant i2p_kv_args& a [[buffer(4)]],
     uint2 p [[thread_position_in_grid]]) {
   if (p.x >= a.count || p.y >= a.rows) return;
   const uint r = a.wring ? (a.base + p.y) % a.wring : a.base + p.y;
@@ -531,7 +531,7 @@ struct i2p_batch_conv_args { uint channels, heads, ring, pos, layout; float norm
   VALUES[(size_t)r * a.count + p.x] = V[(size_t)p.y * a.count + p.x];
 }
 
-struct i2p_batch_store_row { device float* keys; device float* values; uint pos, pad; };
+struct i2p_batch_store_row { device half* keys; device half* values; uint pos, pad; };
 struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; float scale, floor, alpha, eps; };
 
 [[kernel]] void i2p_batch_store_rel(const device float* K [[buffer(0)]], const device float* V [[buffer(1)]],
@@ -587,10 +587,10 @@ struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; 
   O[(size_t)p.y * cols * a.heads + p.x] = sum * tau;
 }
 
-[[kernel]] void i2p_attn(const device float* Q [[buffer(0)]], const device float* KEYS [[buffer(1)]],
-    const device float* VALUES [[buffer(2)]], const device float* B [[buffer(3)]], const device float* sink [[buffer(4)]],
+[[kernel]] void i2p_attn(const device float* Q [[buffer(0)]], const device half* KEYS [[buffer(1)]],
+    const device half* VALUES [[buffer(2)]], const device float* B [[buffer(3)]], const device float* sink [[buffer(4)]],
     constant i2p_attn_args& a [[buffer(5)]], device float* O [[buffer(6)]],
-    const device float* KC [[buffer(7)]], const device float* VC [[buffer(8)]],
+    const device half* KC [[buffer(7)]], const device half* VC [[buffer(8)]],
     uint2 tg [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
   const uint h = tg.x, t = tg.y;
   if (h >= a.heads || t >= a.rows) return;
@@ -605,7 +605,7 @@ struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; 
   const float sk = sink[(size_t)t * a.heads + h];
   const uint lo = a.window ? (pos + 1u > a.window ? pos + 1u - a.window : 0u) : 0u;
   const device float* b = B + (size_t)t * a.heads * (a.extent + 1u);
-  float top = 0.0f, mass = 1.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+  float top = -INFINITY, mass = 0.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
   for (uint j = lo; j <= pos; ++j) {
     const uint col = min(pos - j, a.extent);
     const uint rj = (a.rmode && a.window) ? j % a.window : j;
@@ -615,7 +615,7 @@ struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; 
       const float kk = (j < a.base ? KEYS[at * D + lane + 32u * u] : KC[at * D + lane + 32u * u]);
       dot = fma(qv[u], kk, dot);
     }
-    const float score = simd_sum(dot) + b[h * (a.extent + 1u) + col] - sk;
+    const float score = simd_sum(dot) + (b[h * (a.extent + 1u) + col] - sk);
     const float peak = max(top, score);
     const float rescale = precise::exp(top - peak);
     const float w = precise::exp(score - peak);
@@ -627,13 +627,19 @@ struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; 
     }
     top = peak;
   }
-  for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) O[(size_t)t * a.heads * D + h * D + lane + 32u * u] = acc[u] / mass;
+  float merged_top = 0.0f, merged_mass = 1.0f, merged_acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+  const float peak = max(merged_top, top);
+  const float r0 = precise::exp(merged_top - peak);
+  const float r1 = precise::exp(top - peak);
+  merged_mass = merged_mass * r0 + mass * r1;
+  for (uint u = 0; u < 4u; ++u) merged_acc[u] = merged_acc[u] * r0 + r1 * acc[u];
+  for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) O[(size_t)t * a.heads * D + h * D + lane + 32u * u] = merged_acc[u] / merged_mass;
 }
 
-[[kernel]] void i2p_attn_tiled(const device float* Q [[buffer(0)]], const device float* KEYS [[buffer(1)]],
-    const device float* VALUES [[buffer(2)]], const device float* B [[buffer(3)]], const device float* sink [[buffer(4)]],
+[[kernel]] void i2p_attn_tiled(const device float* Q [[buffer(0)]], const device half* KEYS [[buffer(1)]],
+    const device half* VALUES [[buffer(2)]], const device float* B [[buffer(3)]], const device float* sink [[buffer(4)]],
     constant i2p_attn_args& a [[buffer(5)]], device float* O [[buffer(6)]],
-    const device float* KC [[buffer(7)]], const device float* VC [[buffer(8)]],
+    const device half* KC [[buffer(7)]], const device half* VC [[buffer(8)]],
     uint2 tg [[threadgroup_position_in_grid]], uint ti [[thread_index_in_threadgroup]]) {
   const uint sg = ti / 32u, lane = ti % 32u, kv = tg.x, row0 = tg.y * 8u;
   const uint t = row0 + sg % 8u, h = kv * 3u + sg / 8u;
@@ -648,7 +654,7 @@ struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; 
   const uint first = a.base + row0;
   const uint lo0 = a.window && first + 1u > a.window ? first + 1u - a.window : 0u;
   const uint last = a.base + min(row0 + 7u, a.rows - 1u);
-  float top = 0.0f, mass = 1.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+  float top = -INFINITY, mass = 0.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
   threadgroup float keys[8 * 128], values[8 * 128];
   for (uint j0 = lo0 / 8u * 8u; j0 <= last; j0 += 8u) {
     for (uint e = ti; e < 8u * 128u; e += 768u) {
@@ -669,7 +675,7 @@ struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; 
       float dot = 0.0f;
       for (uint u = 0; u < 4u; ++u) dot = fma(qv[u], keys[x * 128u + lane + 32u * u], dot);
       const uint col = min(pos - j, a.extent);
-      const float score = simd_sum(dot) + B[((size_t)t * a.heads + h) * (a.extent + 1u) + col] - sk;
+      const float score = simd_sum(dot) + (B[((size_t)t * a.heads + h) * (a.extent + 1u) + col] - sk);
       const float peak = max(top, score);
       const float rescale = precise::exp(top - peak);
       const float w = precise::exp(score - peak);
@@ -679,15 +685,21 @@ struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; 
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
   }
+  float merged_top = 0.0f, merged_mass = 1.0f, merged_acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+  const float peak = max(merged_top, top);
+  const float r0 = precise::exp(merged_top - peak);
+  const float r1 = precise::exp(top - peak);
+  merged_mass = merged_mass * r0 + mass * r1;
+  for (uint u = 0; u < 4u; ++u) merged_acc[u] = merged_acc[u] * r0 + r1 * acc[u];
   if (t < a.rows) for (uint u = 0; u < 4u; ++u)
-    O[((size_t)t * a.heads + h) * 128u + lane + 32u * u] = acc[u] / mass;
+    O[((size_t)t * a.heads + h) * 128u + lane + 32u * u] = merged_acc[u] / merged_mass;
 }
 
 #ifdef I2P_HALF_OPERANDS
-[[kernel]] void i2p_attn_half(const device float* Q [[buffer(0)]], const device float* KEYS [[buffer(1)]],
-    const device float* VALUES [[buffer(2)]], const device float* B [[buffer(3)]], const device float* sink [[buffer(4)]],
+[[kernel]] void i2p_attn_half(const device float* Q [[buffer(0)]], const device half* KEYS [[buffer(1)]],
+    const device half* VALUES [[buffer(2)]], const device float* B [[buffer(3)]], const device float* sink [[buffer(4)]],
     constant i2p_attn_args& a [[buffer(5)]], device float* O [[buffer(6)]],
-    const device float* KC [[buffer(7)]], const device float* VC [[buffer(8)]],
+    const device half* KC [[buffer(7)]], const device half* VC [[buffer(8)]],
     device atomic_uint* overflow [[buffer(9)]], uint2 tg [[threadgroup_position_in_grid]], uint ti [[thread_index_in_threadgroup]]) {
   constexpr uint D = 128, R = 32, K = 16, KP = 24, VP = 136;
   const uint h = tg.x, kv = h / (a.heads / a.kv), q0 = tg.y * R;

@@ -129,6 +129,12 @@ test "split-K decode attention matches i2_attn across the sliding window" {
             fill(rng, q.slice(f32, heads * dim));
             fill(rng, kk.slice(f32, rows * kv * dim));
             fill(rng, vv.slice(f32, rows * kv * dim));
+            const kh = try device.buffer(rows * kv * dim * 2, mtl.ResourceOptions.shared);
+            defer kh.deinit();
+            const vh = try device.buffer(rows * kv * dim * 2, mtl.ResourceOptions.shared);
+            defer vh.deinit();
+            for (kk.slice(f32, rows * kv * dim), kh.slice(f16, rows * kv * dim)) |*src, *dst| { dst.* = @floatCast(src.*); src.* = dst.*; }
+            for (vv.slice(f32, rows * kv * dim), vh.slice(f16, rows * kv * dim)) |*src, *dst| { dst.* = @floatCast(src.*); src.* = dst.*; }
             fill(rng, bb.slice(f32, heads * (extent + 1)));
             fill(rng, sk.slice(f32, heads));
             const p = st.attnPartition(n);
@@ -143,14 +149,14 @@ test "split-K decode attention matches i2_attn across the sliding window" {
             var vr: ?mtl.Buffer = null;
             defer if (vr) |b| b.deinit();
             if (!full) {
-                const rbuf = try device.buffer(window * kv * dim * 4, mtl.ResourceOptions.shared);
+                const rbuf = try device.buffer(window * kv * dim * 2, mtl.ResourceOptions.shared);
                 kr = rbuf;
-                const vbuf = try device.buffer(window * kv * dim * 4, mtl.ResourceOptions.shared);
+                const vbuf = try device.buffer(window * kv * dim * 2, mtl.ResourceOptions.shared);
                 vr = vbuf;
-                const ks = kk.slice(f32, rows * kv * dim);
-                const vs = vv.slice(f32, rows * kv * dim);
-                const kd = rbuf.slice(f32, window * kv * dim);
-                const vd = vbuf.slice(f32, window * kv * dim);
+                const ks = kh.slice(f16, rows * kv * dim);
+                const vs = vh.slice(f16, rows * kv * dim);
+                const kd = rbuf.slice(f16, window * kv * dim);
+                const vd = vbuf.slice(f16, window * kv * dim);
                 @memset(kd, 0);
                 @memset(vd, 0);
                 const lo: usize = if (rows > window) rows - window else 0;
@@ -159,8 +165,8 @@ test "split-K decode attention matches i2_attn across the sliding window" {
                     @memcpy(vd[(j % window) * kv * dim ..][0 .. kv * dim], vs[j * kv * dim ..][0 .. kv * dim]);
                 }
             }
-            const k_new = kr orelse kk;
-            const v_new = vr orelse vv;
+            const k_new = kr orelse kh;
+            const v_new = vr orelse vh;
 
             const args = Attn{ .heads = heads, .kv = kv, .dim = dim, .rel = drel, .extent = extent, .window = if (full) 0 else window, .pos = pos, .tau = @intFromBool(full), .scale = scale, .floor = floor, .alpha = alpha };
             const cb = queue.commandBuffer();
@@ -262,6 +268,12 @@ test "ring-backed local attention equals the full cache across the wrap" {
             fill(rng, q.slice(f32, heads * dim));
             fill(rng, kf.slice(f32, rows * kv * dim));
             fill(rng, vf.slice(f32, rows * kv * dim));
+            const kh = try device.buffer(rows * kv * dim * 2, mtl.ResourceOptions.shared);
+            defer kh.deinit();
+            const vh = try device.buffer(rows * kv * dim * 2, mtl.ResourceOptions.shared);
+            defer vh.deinit();
+            for (kf.slice(f32, rows * kv * dim), kh.slice(f16, rows * kv * dim)) |*src, *dst| { dst.* = @floatCast(src.*); src.* = dst.*; }
+            for (vf.slice(f32, rows * kv * dim), vh.slice(f16, rows * kv * dim)) |*src, *dst| { dst.* = @floatCast(src.*); src.* = dst.*; }
             fill(rng, bb.slice(f32, heads * (extent + 1)));
             fill(rng, sk.slice(f32, heads));
             const p = st.attnPartition(n);
@@ -280,14 +292,14 @@ test "ring-backed local attention equals the full cache across the wrap" {
             var out_lin: ?mtl.Buffer = null;
             defer if (out_lin) |b| b.deinit();
             if (!full) {
-                const rbuf = try device.buffer(window * kv * dim * 4, mtl.ResourceOptions.shared);
+                const rbuf = try device.buffer(window * kv * dim * 2, mtl.ResourceOptions.shared);
                 kr = rbuf;
-                const vbuf = try device.buffer(window * kv * dim * 4, mtl.ResourceOptions.shared);
+                const vbuf = try device.buffer(window * kv * dim * 2, mtl.ResourceOptions.shared);
                 vr = vbuf;
-                const ks = kf.slice(f32, rows * kv * dim);
-                const vs = vf.slice(f32, rows * kv * dim);
-                const kd = rbuf.slice(f32, window * kv * dim);
-                const vd = vbuf.slice(f32, window * kv * dim);
+                const ks = kh.slice(f16, rows * kv * dim);
+                const vs = vh.slice(f16, rows * kv * dim);
+                const kd = rbuf.slice(f16, window * kv * dim);
+                const vd = vbuf.slice(f16, window * kv * dim);
                 @memset(kd, 0);
                 @memset(vd, 0);
                 for (lo..rows) |j| {
@@ -301,8 +313,8 @@ test "ring-backed local attention equals the full cache across the wrap" {
             }
             const part = try device.buffer(heads * p.splits * (dim + 2) * 4, mtl.ResourceOptions.shared);
             defer part.deinit();
-            const k_new = kr orelse kf;
-            const v_new = vr orelse vf;
+            const k_new = kr orelse kh;
+            const v_new = vr orelse vh;
             const cb = queue.commandBuffer();
             const enc = cb.compute(.serial);
             enc.setPipeline(old);
@@ -331,8 +343,8 @@ test "ring-backed local attention equals the full cache across the wrap" {
             if (part_lin) |pl| {
                 enc.setPipeline(split);
                 enc.setBuffer(q, 0, 0);
-                enc.setBuffer(kf, 0, 1);
-                enc.setBuffer(vf, 0, 2);
+                enc.setBuffer(kh, 0, 1);
+                enc.setBuffer(vh, 0, 2);
                 enc.setBuffer(bb, 0, 3);
                 enc.setBuffer(sk, 0, 4);
                 enc.setValue(pargs, 5);

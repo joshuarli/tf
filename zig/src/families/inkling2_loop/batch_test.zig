@@ -23,7 +23,7 @@ fn copyCache(m: *const model.Model, src: *state.Cache, dst: *state.Cache) !void 
     dst.len = src.len;
 }
 
-fn compare(m: *const model.Model, a: mtl.Buffer, b: mtl.Buffer) !f32 {
+fn compare(m: *const model.Model, a: mtl.Buffer, b: mtl.Buffer, half: bool) !f32 {
     const x = try m.device.buffer(a.length(), mtl.ResourceOptions.shared);
     defer x.deinit();
     const y = try m.device.buffer(b.length(), mtl.ResourceOptions.shared);
@@ -39,6 +39,15 @@ fn compare(m: *const model.Model, a: mtl.Buffer, b: mtl.Buffer) !f32 {
     cb.wait();
     if (cb.failure()) |_| return error.GpuFailed;
     var worst: f32 = 0;
+    if (half) {
+        for (x.slice(f16, x.length() / 2), y.slice(f16, y.length() / 2)) |av, bv| {
+            if (@as(u16, @bitCast(av)) == @as(u16, @bitCast(bv))) continue;
+            const diff = @abs(@as(f32, av) - @as(f32, bv));
+            if (!std.math.isFinite(diff) or diff > 1.5e-5) return error.CacheMismatch;
+            worst = @max(worst, diff);
+        }
+        return worst;
+    }
     for (x.slice(f32, x.length() / 4), y.slice(f32, y.length() / 4)) |av, bv| {
         if (@as(u32, @bitCast(av)) == @as(u32, @bitCast(bv))) continue;
         const diff = @abs(av - bv);
@@ -107,7 +116,7 @@ test "batched independent cache steps match decode" {
             try std.testing.expectEqual(argmax(want), argmax(got));
             try std.testing.expectEqual(expected[i].len, actual[i].len);
             var state_worst: f32 = 0;
-            for (buffers(&actual[i]), buffers(&expected[i])) |a, b| state_worst = @max(state_worst, try compare(m, a, b));
+            for (buffers(&actual[i]), buffers(&expected[i]), 0..) |a, b, index| state_worst = @max(state_worst, try compare(m, a, b, index < 2));
             std.debug.print("batch width={d} row={d} logits_max={e} cache_max={e} absolute_tolerance=1.5e-5\n", .{ width, i, worst, state_worst });
         }
     }

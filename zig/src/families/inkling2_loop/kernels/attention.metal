@@ -3,8 +3,8 @@ using namespace metal;
 
 struct i2_attn_parts { uint heads, kv, dim, rel, extent, window, pos, tau, splits, chunk; float scale, floor, alpha; };
 
-[[kernel]] void i2_attn_split(const device float* Q [[buffer(0)]], const device float* KEYS [[buffer(1)]],
-    const device float* VALUES [[buffer(2)]], const device float* B [[buffer(3)]], const device float* sink [[buffer(4)]],
+[[kernel]] void i2_attn_split(const device float* Q [[buffer(0)]], const device half* KEYS [[buffer(1)]],
+    const device half* VALUES [[buffer(2)]], const device float* B [[buffer(3)]], const device float* sink [[buffer(4)]],
     constant i2_attn_parts& a [[buffer(5)]], device float* PART [[buffer(6)]],
     uint tgp [[threadgroup_position_in_grid]], uint tid [[thread_position_in_threadgroup]],
     uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]],
@@ -78,7 +78,7 @@ struct i2_attn_parts { uint heads, kv, dim, rel, extent, window, pos, tau, split
   for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) O[h * D + lane + 32u * u] = acc[u] / mass;
 }
 
-struct i2_batch_row { device float* keys; device float* values; i2_attn_parts args; };
+struct i2_batch_row { device half* keys; device half* values; i2_attn_parts args; };
 
 [[kernel]] void i2_batch_split(const device float* Q [[buffer(0)]], const device float* B [[buffer(1)]],
     const device float* sink [[buffer(2)]], constant i2_batch_row* rows [[buffer(3)]], device float* PART [[buffer(4)]],
@@ -87,8 +87,8 @@ struct i2_batch_row { device float* keys; device float* values; i2_attn_parts ar
     uint2 nth2 [[threads_per_threadgroup]]) {
   const uint tid = tid2.x, nth = nth2.x;
   constant i2_attn_parts& a = rows[tg.y].args;
-  const device float* KEYS = rows[tg.y].keys;
-  const device float* VALUES = rows[tg.y].values;
+  const device half* KEYS = rows[tg.y].keys;
+  const device half* VALUES = rows[tg.y].values;
   Q += size_t(tg.y) * a.heads * a.dim;
   B += size_t(tg.y) * a.heads * (a.extent + 1u);
   sink += size_t(tg.y) * a.heads;

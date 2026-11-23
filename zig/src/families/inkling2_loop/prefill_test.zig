@@ -118,27 +118,27 @@ fn maxAbs(x: []const f32) f32 {
 }
 
 fn kvRowOff(cfg: anytype, cache: anytype, slot: usize, at: usize, kvw: usize) usize {
-    const linear: usize = cfg.slots() * cache.capacity * kvw * 4;
-    if (cache.keys.length() == linear) return slot * cache.capacity * kvw * 4 + at * kvw * 4;
+    const linear: usize = cfg.slots() * cache.capacity * kvw * 2;
+    if (cache.keys.length() == linear) return slot * cache.capacity * kvw * 2 + at * kvw * 2;
     const phys = cfg.loop.physicalLayer(cfg.text.layers, @intCast(slot));
     const win: usize = cfg.text.window;
     var base: usize = 0;
     for (0..slot) |s| {
         const p = cfg.loop.physicalLayer(cfg.text.layers, @intCast(s));
-        base += (if (!cfg.isFull(p)) win else cache.capacity) * kvw * 4;
+        base += (if (!cfg.isFull(p)) win else cache.capacity) * kvw * 2;
     }
     const r: usize = if (!cfg.isFull(phys)) at % win else at;
-    return base + r * kvw * 4;
+    return base + r * kvw * 2;
 }
 
-fn kvStateDiff(cfg: anytype, cache: anytype, a: []const f32, b: []const f32, len: usize) f32 {
+fn kvStateDiff(cfg: anytype, cache: anytype, a: []const f16, b: []const f16, len: usize) f32 {
     const kvw: usize = cfg.text.local.kv * cfg.text.local.dim;
     var m: f32 = 0;
     for (0..cfg.slots()) |s| {
         for (0..len) |j| {
-            const off = kvRowOff(cfg, cache, s, j, kvw) / 4;
+            const off = kvRowOff(cfg, cache, s, j, kvw) / 2;
             for (0..kvw) |i| {
-                const d = @abs(a[off + i] - b[off + i]);
+                const d = @abs(@as(f32, a[off + i]) - @as(f32, b[off + i]));
                 if (d > m) m = d;
             }
         }
@@ -250,12 +250,13 @@ test "chunk self-consistency n=4 vs 4x1" {
     defer stageDeinit(&sb);
     try snapshot(m, &cache_a, &sa);
     try snapshot(m, &cache_b, &sb);
-    const xa = sa.keys.slice(f32, kv_bytes / 4);
-    const xb = sb.keys.slice(f32, kv_bytes / 4);
+    const xa = sa.keys.slice(f16, kv_bytes / 2);
+    const xb = sb.keys.slice(f16, kv_bytes / 2);
     for (0..m.config.slots()) |s| {
         for (0..4) |j| {
-            const off = kvRowOff(&m.config, &cache_a, s, j, kvw) / 4;
-            const dd = maxAbsDiff(xa[off..][0..kvw], xb[off..][0..kvw]);
+            const off = kvRowOff(&m.config, &cache_a, s, j, kvw) / 2;
+            var dd: f32 = 0;
+            for (xa[off..][0..kvw], xb[off..][0..kvw]) |x, y| dd = @max(dd, @abs(@as(f32, x) - @as(f32, y)));
             if (dd != 0) std.debug.print("self slot {d} pos {d} kdiff {e}\n", .{ s, j, dd });
         }
     }
@@ -375,8 +376,8 @@ test "chunked prefill matches per-token position on the tiny fixture" {
         defer stageDeinit(&stage_b);
         try snapshot(m, &cache_b, &stage_b);
         const bound = @max(1.0, maxAbs(ref_logits)) * 1.5e-5;
-        const kd = kvStateDiff(&m.config, &cache_a, stage_a.keys.slice(f32, kv_bytes / 4), stage_b.keys.slice(f32, kv_bytes / 4), N);
-        const vd = kvStateDiff(&m.config, &cache_a, stage_a.values.slice(f32, kv_bytes / 4), stage_b.values.slice(f32, kv_bytes / 4), N);
+        const kd = kvStateDiff(&m.config, &cache_a, stage_a.keys.slice(f16, kv_bytes / 2), stage_b.keys.slice(f16, kv_bytes / 2), N);
+        const vd = kvStateDiff(&m.config, &cache_a, stage_a.values.slice(f16, kv_bytes / 2), stage_b.values.slice(f16, kv_bytes / 2), N);
         std.debug.print("chunk {d}: logits {e} keys {e} values {e} conv {e} mlp {e} bound {e}\n", .{
             chunk,
             maxAbsDiff(ref_logits, got_logits),
@@ -1145,14 +1146,14 @@ test "half attention uses rounded query key probability and value" {
     const pipe = try mtl.Pipeline.init(device, lib, "i2p_attn_half", false); defer pipe.deinit();
     const heads = 3; const dim = 128;
     const q = try device.buffer(heads * dim * 4, mtl.ResourceOptions.shared); defer q.deinit();
-    const k = try device.buffer(dim * 4, mtl.ResourceOptions.shared); defer k.deinit();
-    const v = try device.buffer(dim * 4, mtl.ResourceOptions.shared); defer v.deinit();
+    const k = try device.buffer(dim * 2, mtl.ResourceOptions.shared); defer k.deinit();
+    const v = try device.buffer(dim * 2, mtl.ResourceOptions.shared); defer v.deinit();
     const bias = try device.buffer(heads * 4, mtl.ResourceOptions.shared); defer bias.deinit();
     const sink = try device.buffer(heads * 4, mtl.ResourceOptions.shared); defer sink.deinit();
     const out = try device.buffer(heads * dim * 4, mtl.ResourceOptions.shared); defer out.deinit();
     const overflow = try device.buffer(16, mtl.ResourceOptions.shared); defer overflow.deinit();
-    @memset(q.slice(f32, heads * dim), 1.0006); @memset(k.slice(f32, dim), 0.01);
-    @memset(v.slice(f32, dim), 0.5003); @memset(bias.slice(f32, heads), 0); @memset(sink.slice(f32, heads), 0);
+    @memset(q.slice(f32, heads * dim), 1.0006); @memset(k.slice(f16, dim), 0.01);
+    @memset(v.slice(f16, dim), 0.5003); @memset(bias.slice(f32, heads), 0); @memset(sink.slice(f32, heads), 0);
     overflow.slice(u32, 1)[0] = 0;
     const args = AttnArgs{ .heads = heads, .kv = 1, .dim = dim, .rel = 0, .extent = 0, .window = 0, .base = 0, .rows = 1, .rmode = 0, .scale = 0.125, .floor = 128, .alpha = 0 };
     const cb = queue.commandBuffer(); const enc = cb.compute(.serial);
@@ -1182,15 +1183,15 @@ test "half attention masks future and expired keys" {
     const pipe = try mtl.Pipeline.init(device, lib, "i2p_attn_half", false); defer pipe.deinit();
     const heads = 3; const dim = 128; const rows = 35; const window = 3;
     const q = try device.buffer(rows * heads * dim * 4, mtl.ResourceOptions.shared); defer q.deinit();
-    const k = try device.buffer(rows * dim * 4, mtl.ResourceOptions.shared); defer k.deinit();
-    const v = try device.buffer(rows * dim * 4, mtl.ResourceOptions.shared); defer v.deinit();
+    const k = try device.buffer(rows * dim * 2, mtl.ResourceOptions.shared); defer k.deinit();
+    const v = try device.buffer(rows * dim * 2, mtl.ResourceOptions.shared); defer v.deinit();
     const bias = try device.buffer(rows * heads * 4, mtl.ResourceOptions.shared); defer bias.deinit();
     const sink = try device.buffer(rows * heads * 4, mtl.ResourceOptions.shared); defer sink.deinit();
     const out = try device.buffer(rows * heads * dim * 4, mtl.ResourceOptions.shared); defer out.deinit();
     const overflow = try device.buffer(16, mtl.ResourceOptions.shared); defer overflow.deinit();
-    @memset(q.slice(f32, rows * heads * dim), 0); @memset(k.slice(f32, rows * dim), 0);
+    @memset(q.slice(f32, rows * heads * dim), 0); @memset(k.slice(f16, rows * dim), 0);
     @memset(bias.slice(f32, rows * heads), 0); @memset(sink.slice(f32, rows * heads), 0);
-    for (0..rows) |row| @memset(v.slice(f32, rows * dim)[row * dim ..][0..dim], 0.5003 + @as(f32, @floatFromInt(row)) * 0.125);
+    for (0..rows) |row| @memset(v.slice(f16, rows * dim)[row * dim ..][0..dim], @floatCast(0.5003 + @as(f32, @floatFromInt(row)) * 0.125));
     overflow.slice(u32, 1)[0] = 0;
     const args = AttnArgs{ .heads = heads, .kv = 1, .dim = dim, .rel = 0, .extent = 0, .window = window, .base = 0, .rows = rows, .rmode = 1, .scale = 0.125, .floor = 128, .alpha = 0 };
     const cb = queue.commandBuffer(); const enc = cb.compute(.serial);
@@ -1230,21 +1231,21 @@ test "tiled attention matches fp64 and original attention" {
     for ([_]usize{ 0, 900, 5000 }) |base| {
         for ([_]usize{ 0, 1024 }) |window| {
             const cache_rows = if (window > 0) window else @max(base, 1);
-            const keys = try device.buffer(cache_rows * kv * dim * 4, mtl.ResourceOptions.shared);
+            const keys = try device.buffer(cache_rows * kv * dim * 2, mtl.ResourceOptions.shared);
             defer keys.deinit();
-            const values = try device.buffer(cache_rows * kv * dim * 4, mtl.ResourceOptions.shared);
+            const values = try device.buffer(cache_rows * kv * dim * 2, mtl.ResourceOptions.shared);
             defer values.deinit();
             const start = if (window > 0 and base > window) base - window else 0;
             for (start..base) |j| for (0..kv) |h| for (0..dim) |d| {
                 const at = ((if (window > 0) j % window else j) * kv + h) * dim + d;
-                keys.slice(f32, cache_rows * kv * dim)[at] = attnKey(j, h, d);
-                values.slice(f32, cache_rows * kv * dim)[at] = attnValue(j, h, d);
+                keys.slice(f16, cache_rows * kv * dim)[at] = @floatCast(attnKey(j, h, d));
+                values.slice(f16, cache_rows * kv * dim)[at] = @floatCast(attnValue(j, h, d));
             };
             for ([_]usize{ 35, 1, 7, 9, 17, 33, 63, 100, 128 }) |rows| {
                 if (base == 5000 and rows != 1 and rows != 7 and rows != 128) continue;
                 const q = try device.buffer(rows * heads * dim * 4, mtl.ResourceOptions.shared); defer q.deinit();
-                const kc = try device.buffer(rows * kv * dim * 4, mtl.ResourceOptions.shared); defer kc.deinit();
-                const vc = try device.buffer(rows * kv * dim * 4, mtl.ResourceOptions.shared); defer vc.deinit();
+                const kc = try device.buffer(rows * kv * dim * 2, mtl.ResourceOptions.shared); defer kc.deinit();
+                const vc = try device.buffer(rows * kv * dim * 2, mtl.ResourceOptions.shared); defer vc.deinit();
                 const bias = try device.buffer(rows * heads * (extent + 1) * 4, mtl.ResourceOptions.shared); defer bias.deinit();
                 const sink = try device.buffer(rows * heads * 4, mtl.ResourceOptions.shared); defer sink.deinit();
                 const got = try device.buffer(rows * heads * dim * 4, mtl.ResourceOptions.shared); defer got.deinit();
@@ -1252,8 +1253,8 @@ test "tiled attention matches fp64 and original attention" {
                 for (q.slice(f32, rows * heads * dim), 0..) |*x, i| x.* = @as(f32, @floatFromInt(@as(i32, @intCast((i * 7 + i / dim * 3) % 67)) - 33)) / 64;
                 for (0..rows) |r| for (0..kv) |h| for (0..dim) |d| {
                     const at = (r * kv + h) * dim + d;
-                    kc.slice(f32, rows * kv * dim)[at] = attnKey(base + r, h, d);
-                    vc.slice(f32, rows * kv * dim)[at] = attnValue(base + r, h, d);
+                    kc.slice(f16, rows * kv * dim)[at] = @floatCast(attnKey(base + r, h, d));
+                    vc.slice(f16, rows * kv * dim)[at] = @floatCast(attnValue(base + r, h, d));
                 };
                 for (bias.slice(f32, rows * heads * (extent + 1)), 0..) |*x, i| x.* = @as(f32, @floatFromInt(@as(i32, @intCast((i * 19) % 61)) - 30)) / 128;
                 for (sink.slice(f32, rows * heads), 0..) |*x, i| x.* = @as(f32, @floatFromInt(@as(i32, @intCast(i % 13)) - 6)) / 16;

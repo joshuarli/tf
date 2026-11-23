@@ -65,7 +65,7 @@ pub const Cache = struct {
                 if (save) blit.copy(buf, 0, r.buffer, at, buf.length()) else blit.copy(r.buffer, at, buf, 0, buf.length());
                 at += buf.length();
             }
-            const row_bytes = config.text.local.kv * config.text.local.dim * 4;
+            const row_bytes = config.text.local.kv * config.text.local.dim * 2;
             const start = (if (save) cache.len else r.len) % config.text.window;
             const first = @min(count, config.text.window - start);
             const second = count - first;
@@ -105,7 +105,7 @@ pub const Cache = struct {
         const cb = queue.commandBuffer();
         const blit = cb.blit();
         for ([_]mtl.Buffer{ source.k_conv, source.v_conv, source.attn_conv, source.mlp_conv }, [_]mtl.Buffer{ c.k_conv, c.v_conv, c.attn_conv, c.mlp_conv }) |src, dst| blit.copy(src, 0, dst, 0, src.length());
-        const row_bytes = config.text.local.kv * config.text.local.dim * 4;
+        const row_bytes = config.text.local.kv * config.text.local.dim * 2;
         for (0..config.slots()) |slot| {
             const bytes = (if (isLocalSlot(config, slot)) config.text.window else len) * row_bytes;
             for ([_]mtl.Buffer{ source.keys, source.values }, [_]mtl.Buffer{ c.keys, c.values }) |src, dst| {
@@ -143,27 +143,27 @@ pub const Cache = struct {
     pub fn keysBytes(c0: *const cfg.Config, capacity: usize) usize {
         const kv: usize = c0.text.local.kv * c0.text.local.dim;
         var total: usize = 0;
-        for (0..c0.slots()) |s| total += slotRows(c0, s, capacity) * kv * 4;
+        for (0..c0.slots()) |s| total += slotRows(c0, s, capacity) * kv * 2;
         return total;
     }
 
     pub fn bytesPerToken(c0: *const cfg.Config) usize {
         const kv: usize = c0.text.local.kv * c0.text.local.dim;
-        return globalSlots(c0) * kv * 4 * 2;
+        return globalSlots(c0) * kv * 2 * 2;
     }
 
     pub fn rollbackBytes(c0: *const cfg.Config, rows: usize) usize {
         const kv: usize = c0.text.local.kv * c0.text.local.dim;
         const h: usize = c0.text.hidden;
         const slots: usize = c0.slots();
-        return localSlots(c0) * @min(rows, c0.text.window) * kv * 4 * 2 + slots * ring * (kv + h) * 4 * 2;
+        return localSlots(c0) * @min(rows, c0.text.window) * kv * 2 * 2 + slots * ring * (kv + h) * 4 * 2;
     }
 
     pub fn fixedBytes(c0: *const cfg.Config) usize {
         const kv: usize = c0.text.local.kv * c0.text.local.dim;
         const h: usize = c0.text.hidden;
         const slots: usize = c0.slots();
-        const rings = localSlots(c0) * c0.text.window * kv * 4 * 2;
+        const rings = localSlots(c0) * c0.text.window * kv * 2 * 2;
         const conv = slots * ring * kv * 4 * 2 + slots * ring * h * 4 * 2;
         return rings + conv;
     }
@@ -178,7 +178,7 @@ pub const Cache = struct {
     pub fn baseOffset(c: *const Cache, c0: *const cfg.Config, s: usize) usize {
         const kv: usize = c0.text.local.kv * c0.text.local.dim;
         var base: usize = 0;
-        for (0..s) |t| base += slotRows(c0, t, c.capacity) * kv * 4;
+        for (0..s) |t| base += slotRows(c0, t, c.capacity) * kv * 2;
         return base;
     }
 
@@ -217,7 +217,7 @@ pub const Cache = struct {
     pub fn row(c: *const Cache, c0: *const cfg.Config, s: usize, at: usize) usize {
         const kvw: usize = c0.text.local.kv * c0.text.local.dim;
         const r: usize = if (isLocalSlot(c0, s)) at % c0.text.window else at;
-        return c.baseOffset(c0, s) + r * kvw * 4;
+        return c.baseOffset(c0, s) + r * kvw * 2;
     }
 
     /// Slot `s`'s convolution ring for a site `channels` wide, in bytes.
@@ -372,12 +372,15 @@ test "local slots ring while global slots keep the full capacity" {
     try std.testing.expectEqual(@as(usize, 8), Cache.globalSlots(&c));
     try std.testing.expectEqual(@as(usize, 40), Cache.localSlots(&c));
     const kvw: usize = 8 * 128;
-    try std.testing.expectEqual(8 * kvw * 4 * 2, Cache.bytesPerToken(&c));
+    try std.testing.expectEqual(8 * kvw * 2 * 2, Cache.bytesPerToken(&c));
+    const conv_bytes = 48 * ring * (kvw + c.text.hidden) * 4 * 2;
+    try std.testing.expectEqual(40 * 1024 * kvw * 2 * 2 + conv_bytes, Cache.fixedBytes(&c));
+    try std.testing.expectEqual(40 * 17 * kvw * 2 * 2 + conv_bytes, Cache.rollbackBytes(&c, 17));
     const cap: usize = 9000;
-    try std.testing.expectEqual((40 * 1024 + 8 * cap) * kvw * 4, Cache.keysBytes(&c, cap));
+    try std.testing.expectEqual((40 * 1024 + 8 * cap) * kvw * 2, Cache.keysBytes(&c, cap));
     var probe = Cache{ .keys = undefined, .values = undefined, .k_conv = undefined, .v_conv = undefined, .attn_conv = undefined, .mlp_conv = undefined, .capacity = cap };
     for (0..c.slots()) |s| {
-        const want = Cache.slotRows(&c, s, cap) * kvw * 4;
+        const want = Cache.slotRows(&c, s, cap) * kvw * 2;
         try std.testing.expectEqual(want, probe.baseOffset(&c, s + 1) - probe.baseOffset(&c, s));
     }
     var local: usize = 0;
@@ -388,7 +391,7 @@ test "local slots ring while global slots keep the full capacity" {
     try std.testing.expect(probe.row(&c, local, 0) != probe.row(&c, local, 1));
     var global: usize = 0;
     while (global < c.slots() and Cache.isLocalSlot(&c, global)) global += 1;
-    try std.testing.expectEqual(probe.baseOffset(&c, global) + 2048 * kvw * 4, probe.row(&c, global, 2048));
+    try std.testing.expectEqual(probe.baseOffset(&c, global) + 2048 * kvw * 2, probe.row(&c, global, 2048));
     const budget: u64 = Cache.fixedBytes(&c) + 8259 * Cache.bytesPerToken(&c);
     try std.testing.expectEqual(@as(usize, 8259), Cache.longestFitting(&c, budget, 1 << 20));
 }
@@ -475,7 +478,7 @@ pub const Trace = struct {
 };
 
 fn readPromptState(device: mtl.Device, queue: mtl.Queue, config: *const cfg.Config, cache: *Cache) !mtl.Buffer {
-    const row_bytes: usize = config.text.local.kv * config.text.local.dim * 4;
+    const row_bytes: usize = config.text.local.kv * config.text.local.dim * 2;
     const kv_bytes = (Cache.localSlots(config) * config.text.window + Cache.globalSlots(config) * cache.len) * row_bytes * 2;
     const conv_bytes = cache.k_conv.length() + cache.v_conv.length() + cache.attn_conv.length() + cache.mlp_conv.length();
     const output = try device.buffer(kv_bytes + conv_bytes, mtl.ResourceOptions.shared);

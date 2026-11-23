@@ -52,7 +52,7 @@ fn reconstructReference(v: *Verification, accepted: usize) !void {
         blit.copy(snapshot, at, buf, 0, buf.length());
         at += buf.length();
     }
-    const row_bytes: usize = config.text.local.kv * config.text.local.dim * 4;
+    const row_bytes: usize = config.text.local.kv * config.text.local.dim * 2;
     for (0..config.slots()) |slot| {
         if (!state.Cache.isLocalSlot(config, slot)) continue;
         for (0..v.rows) |row| {
@@ -79,7 +79,7 @@ fn expectCacheEqual(m: *const model.Model, a: *state.Cache, b: *state.Cache, sta
         defer y.deinit();
         try std.testing.expectEqualSlices(u8, x.slice(u8, x.length()), y.slice(u8, y.length()));
     }
-    const row_bytes: usize = config.text.local.kv * config.text.local.dim * 4;
+    const row_bytes: usize = config.text.local.kv * config.text.local.dim * 2;
     const bytes = config.slots() * rows * row_bytes * 2;
     const x = try m.device.buffer(bytes, mtl.ResourceOptions.shared);
     defer x.deinit();

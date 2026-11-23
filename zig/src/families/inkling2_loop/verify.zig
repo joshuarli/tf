@@ -30,7 +30,7 @@ pub const Verification = struct {
         const started = if (round_times != null) now() else 0;
         if (ids.len == 0 or ids.len > scratch.chunk or ids.len > model.config.text.window or argmax.len != ids.len) return error.BadChunk;
         const c = &model.config;
-        const row_bytes: usize = c.text.local.kv * c.text.local.dim * 4;
+        const row_bytes: usize = c.text.local.kv * c.text.local.dim * 2;
         const conv_bytes = cache.k_conv.length() + cache.v_conv.length() + cache.attn_conv.length() + cache.mlp_conv.length();
         const bytes = conv_bytes + Cache.localSlots(c) * ids.len * row_bytes * 2;
         const snapshot = try model.device.buffer(@max(bytes, 16), mtl.ResourceOptions.private);
@@ -82,7 +82,7 @@ pub const Verification = struct {
 
     fn commit(v: *Verification, accepted: usize) !void {
         const c = &v.model.config;
-        const row_bytes: usize = c.text.local.kv * c.text.local.dim * 4;
+        const row_bytes: usize = c.text.local.kv * c.text.local.dim * 2;
         const pool = mtl.objc.Pool.push();
         defer pool.pop();
         const cb = v.model.queue.commandBuffer();
@@ -130,7 +130,7 @@ pub const Verification = struct {
 
     fn copy(v: *Verification, save: bool) !void {
         const c = &v.model.config;
-        const row_bytes: usize = c.text.local.kv * c.text.local.dim * 4;
+        const row_bytes: usize = c.text.local.kv * c.text.local.dim * 2;
         const pool = mtl.objc.Pool.push();
         defer pool.pop();
         const cb = v.model.queue.commandBuffer();

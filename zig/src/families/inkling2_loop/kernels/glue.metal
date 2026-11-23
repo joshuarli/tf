@@ -107,7 +107,7 @@ inline float i2_bf(const device bfloat* p, size_t i) { return float(p[i]); }
 }
 
 [[kernel]] void i2_rms_kv_store(const device float* K [[buffer(0)]], const device float* V [[buffer(1)]],
-    device float* KEYS [[buffer(2)]], device float* VALUES [[buffer(3)]],
+    device half* KEYS [[buffer(2)]], device half* VALUES [[buffer(3)]],
     constant i2_rms_args& a [[buffer(4)]], uint blk [[threadgroup_position_in_grid]],
     uint t [[thread_position_in_threadgroup]], uint nth [[threads_per_threadgroup]]) {
   threadgroup float part[32];

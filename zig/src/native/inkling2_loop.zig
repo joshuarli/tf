@@ -25,6 +25,13 @@ fn prefixReuse(text: ?[]const u8) error{BadPrefixReuse}!bool {
     return error.BadPrefixReuse;
 }
 
+fn rollbackRows(text: ?[]const u8) error{BadRollbackRows}!usize {
+    const value = text orelse return 512;
+    const n = std.fmt.parseInt(usize, value, 10) catch return error.BadRollbackRows;
+    if (n == 0) return error.BadRollbackRows;
+    return n;
+}
+
 fn loadLimit(ram: u64, working_set: u64, text: ?[]const u8) error{BadLoadLimit}!u64 {
     const t = std.mem.trim(u8, text orelse "", " \t");
     if (t.len == 0) return @as(u64, @intFromFloat(@as(f64, @floatFromInt(ram)) * 0.75));
@@ -69,6 +76,11 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
         problem.* = "INKLING_PREFIX_REUSE must be 0 or 1";
         return null;
     };
+    const rollback_env: ?[]const u8 = if (std.c.getenv("INKLING_ROLLBACK_ROWS")) |v| std.mem.span(v) else null;
+    const rollback_rows = rollbackRows(rollback_env) catch {
+        problem.* = "INKLING_ROLLBACK_ROWS must be a positive integer";
+        return null;
+    };
     const pool = mtl.objc.Pool.push();
     defer pool.pop();
     const m = inkling.Model.load(gpa, io, o.dir) catch |err| {
@@ -94,12 +106,12 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
         break :blk st.size + scratch_reserve;
     };
     const count: usize = if (o.lanes_fixed) o.lanes else 1;
-    if (count == 0) {
+    if (count == 0 or count > 8) {
         m.deinit();
-        problem.* = "--parallel must be at least 1";
+        problem.* = "--parallel must be between 1 and 8";
         return null;
     }
-    const rollback: u64 = if (prefix_reuse) inkling.Cache.fixedBytes(&m.config) else 0;
+    const rollback: u64 = if (prefix_reuse) count *| inkling.Cache.rollbackBytes(&m.config, rollback_rows) else 0;
     const budget = if (limit > resident + load_margin + rollback) limit - resident - load_margin - rollback else 0;
     const most: usize = m.config.text.max_context;
     const fits = inkling.Cache.longestFitting(&m.config, budget / count, most);
@@ -112,9 +124,9 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
         return null;
     }
     const per_slot = inkling.Cache.fixedBytes(&m.config) + @as(usize, @intCast(window)) * inkling.Cache.bytesPerToken(&m.config);
-    std.log.info("inkling2_loop: {d} session caches, {d:.3} GiB per slot, {d:.3} GiB shared rollback, context {d}", .{ count, @as(f64, @floatFromInt(per_slot)) / (1 << 30), @as(f64, @floatFromInt(rollback)) / (1 << 30), window });
+    std.log.info("inkling2_loop: {d} session caches, {d:.3} GiB per slot, {d:.3} GiB total rollback, context {d}", .{ count, @as(f64, @floatFromInt(per_slot)) / (1 << 30), @as(f64, @floatFromInt(rollback)) / (1 << 30), window });
     const eos = readEos(a, io, o.dir, m.config.eos);
-    const h = host_mod.openHost(gpa, io, m, @intCast(window), count, eos, limit, copy_drafts, prefix_reuse) catch |err| {
+    const h = host_mod.openHost(gpa, io, m, @intCast(window), count, eos, limit, copy_drafts, prefix_reuse, rollback_rows) catch |err| {
         m.deinit();
         problem.* = try std.fmt.allocPrint(a, "the native Inkling 2 Mini engine cannot hold {d} sessions of {d} tokens ({s})", .{ count, window, @errorName(err) });
         return null;

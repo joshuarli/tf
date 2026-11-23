@@ -18,6 +18,80 @@ pub const Choice = struct {
     }
 };
 
+pub fn chooseFree(slots: anytype, prompt: []const u32, enabled: bool) ?Choice {
+    var choice = Choice{};
+    var found = false;
+    for (slots, 0..) |*slot, i| {
+        if (slot.job != null) continue;
+        choice.consider(i, slot.resident.items, slot.last_used, prompt, enabled);
+        found = true;
+    }
+    return if (found) choice else null;
+}
+
+pub fn cancelled(id: u64, background: bool, closing: bool, foreground_waiting: bool, cancels: []const u64) bool {
+    return closing or (background and foreground_waiting) or std.mem.indexOfScalar(u64, cancels, id) != null;
+}
+
+pub fn canRestore(saved_len: usize, current_len: usize, saved_rows: usize, window: usize, cap: usize, emitted: usize) bool {
+    return emitted <= cap and current_len >= saved_len and (current_len - saved_len <= saved_rows or saved_rows == window);
+}
+
+pub fn release(slot: anytype, restored: bool) void {
+    if (!restored) {
+        slot.cache.len = 0;
+        slot.resident.clearRetainingCapacity();
+    }
+    slot.job = null;
+    slot.live_generated = 0;
+}
+
+test "busy slots queue admissions and freed slots retain their own prefixes" {
+    const T = struct { job: ?usize = null, resident: std.ArrayList(u32) = .empty, last_used: u64 = 0, cache: struct { len: usize = 0 } = .{}, live_generated: u64 = 0 };
+    var slots = [_]T{ .{}, .{} };
+    defer for (&slots) |*slot| slot.resident.deinit(std.testing.allocator);
+    try slots[0].resident.appendSlice(std.testing.allocator, &.{ 1, 2 });
+    try slots[1].resident.appendSlice(std.testing.allocator, &.{ 1, 2, 3 });
+    const first = chooseFree(&slots, &.{ 1, 2, 3, 4 }, true).?;
+    try std.testing.expectEqual(@as(usize, 1), first.index);
+    slots[first.index].job = 1;
+    const second = chooseFree(&slots, &.{ 1, 2, 3, 4 }, true).?;
+    try std.testing.expectEqual(@as(usize, 0), second.index);
+    slots[second.index].job = 2;
+    try std.testing.expectEqual(null, chooseFree(&slots, &.{ 1, 2, 3, 4 }, true));
+    slots[first.index].cache.len = 3;
+    slots[second.index].cache.len = 2;
+    slots[first.index].live_generated = 8;
+    slots[second.index].live_generated = 8;
+    release(&slots[first.index], true);
+    try std.testing.expectEqual(@as(usize, 1), chooseFree(&slots, &.{ 1, 2, 3, 4 }, true).?.index);
+    try std.testing.expectEqual(@as(?usize, 2), slots[second.index].job);
+    slots[first.index].job = 3;
+    try std.testing.expect(cancelled(2, false, false, false, &.{2}));
+    try std.testing.expect(!cancelled(3, false, false, false, &.{2}));
+    release(&slots[second.index], true);
+    try std.testing.expectEqual(@as(usize, 0), chooseFree(&slots, &.{ 1, 2, 3, 4 }, true).?.index);
+    try std.testing.expectEqual(@as(?usize, 3), slots[first.index].job);
+}
+
+test "rollback cap invalidates only the overflowing session" {
+    const T = struct { job: ?usize = null, resident: std.ArrayList(u32) = .empty, cache: struct { len: usize = 0 } = .{}, live_generated: u64 = 0 };
+    var slots = [_]T{ .{ .job = 1, .cache = .{ .len = 613 }, .live_generated = 513 }, .{ .job = 2, .cache = .{ .len = 300 }, .live_generated = 100 } };
+    defer for (&slots) |*slot| slot.resident.deinit(std.testing.allocator);
+    try slots[0].resident.appendSlice(std.testing.allocator, &.{ 1, 2 });
+    try slots[1].resident.appendSlice(std.testing.allocator, &.{ 3, 4 });
+    try std.testing.expect(canRestore(100, 612, 512, 1024, 512, 512));
+    release(&slots[0], canRestore(100, 613, 512, 1024, 512, 513));
+    try std.testing.expectEqual(@as(usize, 0), slots[0].resident.items.len);
+    try std.testing.expectEqual(@as(usize, 0), slots[0].cache.len);
+    try std.testing.expectEqual(@as(?usize, 2), slots[1].job);
+    try std.testing.expectEqualSlices(u32, &.{ 3, 4 }, slots[1].resident.items);
+    try std.testing.expect(canRestore(200, 300, 512, 1024, 512, 100));
+    try std.testing.expect(!canRestore(200, 199, 512, 1024, 512, 100));
+    try std.testing.expect(canRestore(200, 1700, 1024, 1024, 2048, 1500));
+    try std.testing.expect(!canRestore(200, 2250, 1024, 1024, 2048, 2050));
+}
+
 test "prefix reuse requires a strict exact prefix" {
     const t = std.testing;
     try t.expectEqual(2, reuse(&.{ 1, 2 }, &.{ 1, 2, 3 }, true));

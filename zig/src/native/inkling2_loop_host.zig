@@ -15,6 +15,10 @@ const Job = struct {
     queued: i96 = 0,
     began: i96 = 0,
     prefill_sent: bool = false,
+    prefill_seconds: ?f64 = null,
+    rounds: u64 = 0,
+    reused: usize = 0,
+    saved: bool = false,
 };
 
 pub const sampling_refusal = "Inkling 2 Mini decodes greedily only: send temperature 0 or leave it out";
@@ -31,6 +35,9 @@ const Slot = struct {
     cache: inkling.Cache,
     resident: std.ArrayList(u32) = .empty,
     last_used: u64 = 0,
+    rollback: ?inkling.Cache.Rollback = null,
+    job: ?*Job = null,
+    live_generated: u64 = 0,
 };
 
 pub const Host = struct {
@@ -38,13 +45,12 @@ pub const Host = struct {
     io: std.Io,
     model: *inkling.Model,
     slots: []Slot,
-    rollback: ?inkling.Cache.Rollback,
+    batch: inkling.BatchScratch,
+    batch_logits: []f32,
     sequence: u64 = 0,
-    scratch: inkling.Scratch,
     prefill: inkling.PrefillScratch,
     capacity: usize,
     eos: u32,
-    copy_drafts: bool,
     prefix_reuse: bool,
     invalidated: std.atomic.Value(bool) = .init(false),
     info_: api.Info,
@@ -54,14 +60,11 @@ pub const Host = struct {
     wake: std.Io.Condition = .init,
     queued: std.ArrayList(*Job) = .empty,
     cancels: std.ArrayList(api.Id) = .empty,
-    running: ?*Job = null,
     closing: bool = false,
     thread: ?std.Thread = null,
     decoded: std.ArrayList(Mark) = .empty,
     prefill_rate: f64 = 0,
     prefill_at: i96 = 0,
-    live_prompt: u64 = 0,
-    live_generated: u64 = 0,
     prefilling: bool = false,
     const Mark = struct { at: i96, tokens: u64 };
     const window_ns: i96 = 2 * std.time.ns_per_s;
@@ -92,9 +95,11 @@ pub const Host = struct {
         for (h.slots) |*slot| {
             slot.resident.deinit(h.gpa);
             slot.cache.deinit();
+            if (slot.rollback) |*rollback| rollback.deinit();
         }
         h.gpa.free(h.slots);
-        if (h.rollback) |*rollback| rollback.deinit();
+        h.batch.deinit();
+        h.gpa.free(h.batch_logits);
     }
     fn self(ctx: *anyopaque) *Host {
         return @ptrCast(@alignCast(ctx));
@@ -167,14 +172,20 @@ pub const Host = struct {
         }
         var n: usize = 0;
         var generation_tokens: u64 = 0;
-        if (h.running != null and stream_tokens.len > 0) {
-            stream_tokens[0] = @intCast(h.live_prompt + h.live_generated);
-            generation_tokens = h.live_generated;
-            n = 1;
+        var running: usize = 0;
+        for (h.slots) |*slot| {
+            if (slot.job) |job| {
+                running += 1;
+                generation_tokens += slot.live_generated;
+                if (n < stream_tokens.len) {
+                    stream_tokens[n] = @intCast(job.request.prompt.len + slot.live_generated);
+                    n += 1;
+                }
+            }
         }
         out.* = .{
             .healthy = !h.closing,
-            .running = @intFromBool(h.running != null),
+            .running = @intCast(running),
             .waiting = @intCast(h.queued.items.len),
             .decode_tokens_per_second = @as(f64, @floatFromInt(tokens)) / 2.0,
             .prefill_tokens_per_second = if (t - h.prefill_at <= window_ns) h.prefill_rate else 0,
@@ -224,9 +235,6 @@ pub const Host = struct {
     }
 
     fn finish(h: *Host, job: *Job, reason: api.Reason, stats: api.Stats, message: []const u8) void {
-        h.lock();
-        if (h.running == job) h.running = null;
-        h.unlock();
         emit(job, .{ .finished = .{ .reason = reason, .stats = stats, .message = message } });
         job.emitted.deinit(h.gpa);
         h.gpa.destroy(job);
@@ -246,310 +254,224 @@ pub const Host = struct {
         h.decoded.append(h.gpa, .{ .at = t, .tokens = n }) catch {};
     }
 
-    fn run(h: *Host) void {
-        while (true) {
-            h.lock();
-            if (h.queued.items.len == 0 and !h.closing) {
-                h.wake.waitTimeout(h.io, &h.mutex, .{ .duration = .{ .raw = .fromMilliseconds(100), .clock = .awake } }) catch {};
-                h.unlock();
-                continue;
-            }
-            if (h.closing) {
-                var left = h.queued;
-                h.queued = .empty;
-                h.unlock();
-                for (left.items) |job| {
-                    std.debug.print("inkling prefix: reused 0 of {d} prompt tokens\n", .{job.request.prompt.len});
-                    h.finish(job, .cancelled, .{}, "");
-                }
-                left.deinit(h.gpa);
-                return;
-            }
-            if (h.queued.items.len == 0) {
-                h.unlock();
-                continue;
-            }
-            const job = h.queued.orderedRemove(0);
-            h.running = job;
-            h.live_prompt = job.request.prompt.len;
-            h.live_generated = 0;
-            h.prefilling = true;
-            h.cancels.clearRetainingCapacity();
-            h.unlock();
-            h.serve(job);
-            h.lock();
-            h.running = null;
-            h.prefilling = false;
-            h.live_generated = 0;
-            h.unlock();
-        }
-    }
-
     fn cancelled(h: *Host, job: *Job) bool {
         h.lock();
         defer h.unlock();
-        if (h.closing) return true;
-        if (job.request.background and h.queued.items.len > 0 and !h.queued.items[0].request.background) return true;
-        return std.mem.indexOfScalar(api.Id, h.cancels.items, job.id) != null;
+        const foreground_waiting = h.queued.items.len > 0 and !h.queued.items[0].request.background;
+        return prefix.cancelled(job.id, job.request.background, h.closing, foreground_waiting, h.cancels.items);
     }
 
-    const Fin = struct { reason: api.Reason = .failed, stats: api.Stats = .{}, message: []const u8 = "" };
-
-    fn serve(h: *Host, job: *Job) void {
-        var fin: Fin = .{};
-        var reused: usize = 0;
-        var selected: ?*Slot = null;
-        var saved = false;
-        defer {
-            std.debug.print("inkling prefix: reused {d} of {d} prompt tokens\n", .{ reused, job.request.prompt.len });
-            if (selected) |slot| {
-                if (saved) {
-                    const started = h.now();
-                    h.rollback.?.copy(h.model.queue, &h.model.config, &slot.cache, false) catch |e| {
-                        fin.reason = .failed;
-                        fin.message = @errorName(e);
-                        slot.cache.len = 0;
-                        slot.resident.clearRetainingCapacity();
-                    };
-                    std.debug.print("inkling rollback: restore {d:.3} ms\n", .{@as(f64, @floatFromInt(h.now() - started)) / 1e6});
-                } else if (!h.prefix_reuse or (fin.reason != .stop and fin.reason != .length)) {
-                    slot.cache.len = 0;
-                    slot.resident.clearRetainingCapacity();
-                }
+    fn retire(h: *Host, slot: *Slot, reason0: api.Reason, message0: []const u8) void {
+        const job = slot.job.?;
+        var reason = reason0;
+        var message = message0;
+        var restored = false;
+        if (job.saved and prefix.canRestore(slot.rollback.?.len, slot.cache.len, slot.rollback.?.saved_rows, h.model.config.text.window, slot.rollback.?.limit, job.emitted.items.len)) {
+            if (slot.rollback.?.copy(h.model.queue, &h.model.config, &slot.cache, false)) |_| {
+                restored = true;
+            } else |e| {
+                reason = .failed;
+                message = @errorName(e);
             }
-            _ = h.invalidated.swap(false, .acq_rel);
-            h.finish(job, fin.reason, fin.stats, fin.message);
         }
+        std.debug.print("inkling prefix: reused {d} of {d} prompt tokens\n", .{ job.reused, job.request.prompt.len });
+        const stats: api.Stats = .{ .rounds = job.rounds, .drafted = 0, .accepted = 0, .min_rows = 1, .prefill_seconds = job.prefill_seconds, .queued_seconds = @as(f64, @floatFromInt(@max(0, job.began - job.queued))) / 1e9 };
+        h.lock();
+        prefix.release(slot, restored);
+        if (std.mem.indexOfScalar(api.Id, h.cancels.items, job.id)) |i| _ = h.cancels.swapRemove(i);
+        h.unlock();
+        _ = h.invalidated.swap(false, .acq_rel);
+        h.finish(job, reason, stats, message);
+    }
+
+    fn argmax(logits: []const f32) u32 {
+        var best: u32 = 0;
+        var value = logits[0];
+        for (logits[1..], 1..) |v, i| if (v > value) {
+            value = v;
+            best = @intCast(i);
+        };
+        return best;
+    }
+
+    fn token(h: *Host, slot: *Slot, best: u32) void {
+        const job = slot.job.?;
+        const r = job.request;
+        job.emitted.append(h.gpa, best) catch {
+            h.retire(slot, .failed, @errorName(error.OutOfMemory));
+            return;
+        };
+        var one: [1]u32 = .{best};
+        emit(job, .{ .tokens = &one });
+        h.lock();
+        slot.live_generated = @intCast(job.emitted.items.len);
+        h.unlock();
+        h.noteDecoded(1);
+        const stop_hit = if (r.stop) |stop_rule| stop_rule.check(stop_rule.ctx, job.emitted.items) else false;
+        const is_eos = r.eos.len > 0 and (std.mem.indexOfScalar(u32, r.eos, best) != null or best == h.eos);
+        if (stop_hit or is_eos) {
+            h.retire(slot, .stop, "");
+        } else if (job.emitted.items.len >= r.max_tokens) {
+            h.retire(slot, .length, "");
+        }
+    }
+
+    fn admit(h: *Host, slot: *Slot, choice: prefix.Choice) void {
+        const job = slot.job.?;
         const r = job.request;
         job.began = h.now();
-        if (r.images.len > 0) {
+        if (r.images.len > 0 or r.prompt.len == 0 or r.prompt.len + r.max_tokens > h.capacity or r.sampling != null) {
             emit(job, .{ .prefilled = 0 });
             job.prefill_sent = true;
-            fin.message = inkling.refuse.image;
+            const message: []const u8 = if (r.images.len > 0) inkling.refuse.image else if (r.sampling != null) sampling_refusal else if (r.prompt.len == 0) "rendered prompt is empty" else "the prompt and max_tokens do not fit this server's --context";
+            h.retire(slot, .failed, message);
             return;
         }
-        if (r.sampling) |s| {
-            if (s.temperature > 0) {
-                emit(job, .{ .prefilled = 0 });
-                job.prefill_sent = true;
-                fin.message = sampling_refusal;
-                return;
-            }
-        }
-        if (r.prompt.len == 0) {
-            emit(job, .{ .prefilled = 0 });
-            job.prefill_sent = true;
-            fin.message = "rendered prompt is empty";
-            return;
-        }
-        if (r.prompt.len + r.max_tokens > h.capacity) {
-            emit(job, .{ .prefilled = 0 });
-            job.prefill_sent = true;
-            fin.message = "the prompt and max_tokens do not fit this server's --context";
-            return;
-        }
-        var choice = prefix.Choice{};
-        for (h.slots, 0..) |*candidate, i| choice.consider(i, candidate.resident.items, candidate.last_used, r.prompt, h.prefix_reuse);
-        const slot = &h.slots[choice.index];
-        selected = slot;
         h.sequence += 1;
         slot.last_used = h.sequence;
         slot.resident.ensureTotalCapacity(h.gpa, r.prompt.len) catch {
-            fin.message = @errorName(error.OutOfMemory);
+            h.retire(slot, .failed, @errorName(error.OutOfMemory));
             return;
         };
-        std.debug.assert(slot.cache.len == slot.resident.items.len);
-        reused = choice.reused;
-        if (reused == 0) {
+        job.reused = choice.reused;
+        if (job.reused == 0) {
             slot.cache.len = 0;
             slot.resident.clearRetainingCapacity();
         }
         std.debug.print("inkling session: slot {d}\n", .{choice.index});
         const prefill_start = h.now();
-        const vocab: usize = h.model.config.text.unpadded_vocab;
-        const chunk: usize = h.prefill.chunk;
-        var at: usize = reused;
+        var at = job.reused;
         while (at < r.prompt.len) {
             if (h.cancelled(job)) {
-                if (!job.prefill_sent) emit(job, .{ .prefilled = 0 });
-                fin.reason = .cancelled;
+                emit(job, .{ .prefilled = 0 });
+                h.retire(slot, .cancelled, "");
                 return;
             }
-            const take = @min(chunk, r.prompt.len - at);
-            const last = at + take >= r.prompt.len;
-            inkling.prefillWant(h.model, &h.prefill, &slot.cache, r.prompt[at..][0..take], if (last) .last else .none) catch |e| {
-                if (!job.prefill_sent) emit(job, .{ .prefilled = 0 });
-                fin.message = @errorName(e);
+            const take = @min(h.prefill.chunk, r.prompt.len - at);
+            inkling.prefillWant(h.model, &h.prefill, &slot.cache, r.prompt[at..][0..take], if (at + take == r.prompt.len) .last else .none) catch |e| {
+                emit(job, .{ .prefilled = 0 });
+                h.retire(slot, .failed, @errorName(e));
                 return;
             };
             slot.resident.appendSliceAssumeCapacity(r.prompt[at..][0..take]);
             at += take;
         }
-        if (h.rollback) |*rollback| {
-            const started = h.now();
-            rollback.copy(h.model.queue, &h.model.config, &slot.cache, true) catch |e| {
-                fin.message = @errorName(e);
+        if (slot.rollback) |*rollback| {
+            rollback.copyRows(h.model.queue, &h.model.config, &slot.cache, true, r.max_tokens -| 1) catch |e| {
+                h.retire(slot, .failed, @errorName(e));
                 return;
             };
-            saved = true;
-            std.debug.print("inkling rollback: save {d:.3} ms\n", .{@as(f64, @floatFromInt(h.now() - started)) / 1e6});
+            job.saved = true;
         }
-        @memcpy(h.scratch.logits.slice(f32, vocab), h.prefill.logits.slice(f32, vocab));
-        const done_prefill = h.now();
+        const end = h.now();
+        job.prefill_seconds = if (end > prefill_start) @as(f64, @floatFromInt(end - prefill_start)) / 1e9 else null;
         h.lock();
-        if (done_prefill > prefill_start) h.prefill_rate = @as(f64, @floatFromInt(r.prompt.len - reused)) / (@as(f64, @floatFromInt(done_prefill - prefill_start)) / 1e9);
-        h.prefill_at = done_prefill;
+        if (job.prefill_seconds) |seconds| h.prefill_rate = @as(f64, @floatFromInt(r.prompt.len - job.reused)) / seconds;
+        h.prefill_at = end;
         h.prefilling = false;
         h.unlock();
-        emit(job, .{ .prefilled = @intCast(reused) });
+        emit(job, .{ .prefilled = @intCast(job.reused) });
         job.prefill_sent = true;
-        const prefill_s: ?f64 = if (done_prefill > prefill_start) @as(f64, @floatFromInt(done_prefill - prefill_start)) / 1e9 else null;
-        if (prefill_s) |seconds| std.debug.print("inkling prefill: {d:.6} seconds\n", .{seconds});
-        const queued_s: f64 = @as(f64, @floatFromInt(@max(0, job.began - job.queued))) / 1e9;
+        if (job.prefill_seconds) |seconds| std.debug.print("inkling prefill: {d:.6} seconds\n", .{seconds});
         if (r.max_tokens == 0) {
-            fin.reason = .length;
-            fin.stats = .{ .rounds = 0, .drafted = 0, .accepted = 0, .min_rows = 1, .prefill_seconds = prefill_s, .queued_seconds = queued_s };
+            h.retire(slot, .length, "");
             return;
         }
-        var proposer = tf.lanes.SuffixLookup.init(h.gpa, .{}) catch {
-            fin.message = @errorName(error.OutOfMemory);
+        if (h.cancelled(job)) {
+            h.retire(slot, .cancelled, "");
             return;
-        };
-        defer proposer.deinit();
-        var history: std.ArrayList(u32) = .empty;
-        defer history.deinit(h.gpa);
-        if (h.copy_drafts and r.drafts) {
-            history.appendSlice(h.gpa, r.prompt) catch {
-                fin.message = @errorName(error.OutOfMemory);
-                return;
-            };
         }
-        var pending: [16]u32 = undefined;
-        var pending_at: usize = 0;
-        var pending_len: usize = 0;
-        var rounds: u64 = 0;
-        var drafted: u64 = 0;
-        var accepted_total: u64 = 0;
-        while (job.emitted.items.len < r.max_tokens) {
-            if (h.cancelled(job)) {
-                fin.reason = .cancelled;
-                fin.stats = .{ .rounds = rounds, .drafted = drafted, .accepted = accepted_total, .min_rows = 1, .prefill_seconds = prefill_s, .queued_seconds = queued_s };
-                return;
-            }
-            const logits = h.scratch.logits.slice(f32, vocab);
-            var best: u32 = 0;
-            var best_v = logits[0];
-            for (logits[1..], 1..) |v, i| {
-                if (v > best_v) {
-                    best_v = v;
-                    best = @intCast(i);
-                }
-            }
-            if (pending_at < pending_len) {
-                best = pending[pending_at];
-                pending_at += 1;
-            }
-            job.emitted.append(h.gpa, best) catch {
-                fin.message = @errorName(error.OutOfMemory);
-                return;
-            };
-            if (h.copy_drafts and r.drafts) {
-                history.append(h.gpa, best) catch {
-                    fin.message = @errorName(error.OutOfMemory);
-                    return;
-                };
-            }
-            var one: [1]u32 = .{best};
-            emit(job, .{ .tokens = &one });
-            h.lock();
-            h.live_generated = @intCast(job.emitted.items.len);
-            h.unlock();
-            h.noteDecoded(1);
-            var stop_hit = false;
-            if (r.stop) |s| {
-                if (s.check(s.ctx, job.emitted.items)) stop_hit = true;
-            }
-            const is_eos = r.eos.len > 0 and std.mem.indexOfScalar(u32, r.eos, best) != null;
-            const hit_gen_eos = r.eos.len > 0 and best == h.eos;
-            if (stop_hit or is_eos or hit_gen_eos) {
-                fin.reason = .stop;
-                fin.stats = .{ .rounds = rounds, .drafted = drafted, .accepted = accepted_total, .min_rows = 1, .prefill_seconds = prefill_s, .queued_seconds = queued_s };
-                return;
-            }
-            if (job.emitted.items.len >= r.max_tokens) {
-                fin.reason = .length;
-                fin.stats = .{ .rounds = rounds, .drafted = drafted, .accepted = accepted_total, .min_rows = 1, .prefill_seconds = prefill_s, .queued_seconds = queued_s };
-                return;
-            }
-            if (pending_at < pending_len) continue;
-            if (h.copy_drafts and r.drafts) {
-                const draft = proposer.propose(history.items, @intCast(inkling.hybrid_drafts)) catch |e| {
-                    fin.message = @errorName(e);
-                    return;
-                };
-                var rows: [16]u32 = undefined;
-                rows[0] = best;
-                const count: usize = @min(draft.len, @min(inkling.hybrid_drafts, r.max_tokens - job.emitted.items.len - 1));
-                const row_count = std.math.add(usize, count, 1) catch {
-                    fin.message = @errorName(error.Overflow);
-                    return;
-                };
-                if (count > 0) {
-                    @memcpy(rows[1..][0..count], draft[0..count]);
-                    var predictions: [16]u32 = undefined;
-                    var verification = inkling.Verification.begin(h.model, &h.prefill, &slot.cache, rows[0..row_count], predictions[0..row_count]) catch |e| {
-                        fin.message = @errorName(e);
-                        return;
-                    };
-                    var accepted: usize = 0;
-                    while (accepted < count and predictions[accepted] == rows[accepted + 1]) : (accepted += 1) {}
-                    const kept = std.math.add(usize, accepted, 1) catch {
-                        fin.message = @errorName(error.Overflow);
-                        return;
-                    };
-                    verification.finish(rows[0..row_count], kept) catch |e| {
-                        fin.message = @errorName(e);
-                        return;
-                    };
-                    proposer.observe(@intCast(count), @intCast(accepted)) catch |e| {
-                        fin.message = @errorName(e);
-                        return;
-                    };
-                    rounds += 1;
-                    drafted += count;
-                    accepted_total += accepted;
-                    pending_len = kept;
-                    pending_at = 0;
-                    @memcpy(pending[0..pending_len], predictions[0..pending_len]);
-                    continue;
-                }
-            }
-            inkling.position(h.model, &h.scratch, &slot.cache, best) catch |e| {
-                fin.message = @errorName(e);
-                return;
-            };
-            rounds += 1;
-        }
-        fin.reason = .length;
-        fin.stats = .{ .rounds = rounds, .drafted = drafted, .accepted = accepted_total, .min_rows = 1, .prefill_seconds = prefill_s, .queued_seconds = queued_s };
+        const vocab = h.model.config.text.unpadded_vocab;
+        h.token(slot, argmax(h.prefill.logits.slice(f32, vocab)));
     }
+
+    fn run(h: *Host) void {
+        while (true) {
+            h.lock();
+            var free = false;
+            var active = false;
+            for (h.slots) |*slot| {
+                if (slot.job == null) free = true else active = true;
+            }
+            if (h.closing and !active and h.queued.items.len == 0) {
+                h.unlock();
+                return;
+            }
+            if (!active and h.queued.items.len == 0) {
+                h.wake.waitTimeout(h.io, &h.mutex, .{ .duration = .{ .raw = .fromMilliseconds(100), .clock = .awake } }) catch {};
+                h.unlock();
+                continue;
+            }
+            if (free and h.queued.items.len > 0 and !h.closing) {
+                const job = h.queued.orderedRemove(0);
+                const choice = prefix.chooseFree(h.slots, job.request.prompt, h.prefix_reuse).?;
+                const slot = &h.slots[choice.index];
+                slot.job = job;
+                h.prefilling = true;
+                h.unlock();
+                h.admit(slot, choice);
+                h.lock();
+                h.prefilling = false;
+                h.unlock();
+                continue;
+            }
+            if (h.closing and h.queued.items.len > 0) {
+                const job = h.queued.orderedRemove(0);
+                h.unlock();
+                std.debug.print("inkling prefix: reused 0 of {d} prompt tokens\n", .{job.request.prompt.len});
+                h.finish(job, .cancelled, .{}, "");
+                continue;
+            }
+            h.unlock();
+            var caches: [8]*inkling.Cache = undefined;
+            var ids: [8]u32 = undefined;
+            var selected: [8]*Slot = undefined;
+            var count: usize = 0;
+            for (h.slots) |*slot| if (slot.job) |job| {
+                if (h.cancelled(job)) {
+                    h.retire(slot, .cancelled, "");
+                } else {
+                    caches[count] = &slot.cache;
+                    ids[count] = job.emitted.items[job.emitted.items.len - 1];
+                    selected[count] = slot;
+                    count += 1;
+                }
+            };
+            if (count == 0) continue;
+            const vocab = h.model.config.text.unpadded_vocab;
+            inkling.batchStep(h.model, &h.batch, caches[0..count], ids[0..count], h.batch_logits[0 .. count * vocab]) catch |e| {
+                for (selected[0..count]) |slot| h.retire(slot, .failed, @errorName(e));
+                continue;
+            };
+            for (selected[0..count], 0..) |slot, i| {
+                slot.job.?.rounds += 1;
+                if (h.cancelled(slot.job.?)) h.retire(slot, .cancelled, "") else h.token(slot, argmax(h.batch_logits[i * vocab ..][0..vocab]));
+            }
+        }
+    }
+
 };
 
-pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usize, count: usize, eos: u32, load_limit: u64, copy_drafts: bool, prefix_reuse: bool) !*Host {
+pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usize, count: usize, eos: u32, load_limit: u64, copy_drafts: bool, prefix_reuse: bool, rollback_rows: usize) !*Host {
+    _ = copy_drafts;
     const h = try gpa.create(Host);
     errdefer gpa.destroy(h);
     const slots = try gpa.alloc(Slot, count);
     errdefer gpa.free(slots);
     var made: usize = 0;
-    errdefer for (slots[0..made]) |*slot| slot.cache.deinit();
+    errdefer for (slots[0..made]) |*slot| {
+        slot.cache.deinit();
+        if (slot.rollback) |*rollback| rollback.deinit();
+    };
     for (slots) |*slot| {
         slot.* = .{ .cache = try inkling.Cache.init(model.device, &model.config, capacity) };
         made += 1;
+        if (prefix_reuse) slot.rollback = try inkling.Cache.Rollback.initRows(model.device, &model.config, rollback_rows);
     }
-    var rollback: ?inkling.Cache.Rollback = if (prefix_reuse) try inkling.Cache.Rollback.init(model.device, &model.config) else null;
-    errdefer if (rollback) |*r| r.deinit();
-    var scratch = try inkling.Scratch.init(model.device, &model.config);
-    errdefer scratch.deinit();
+    var batch = try inkling.BatchScratch.init(model.device, &model.config, count);
+    errdefer batch.deinit();
+    const batch_logits = try gpa.alloc(f32, count * model.config.text.unpadded_vocab);
+    errdefer gpa.free(batch_logits);
     var prefill = try inkling.PrefillScratch.init(model.device, &model.config, inkling.default_chunk);
     errdefer prefill.deinit();
     const image_token: u32 = model.config.image_token;
@@ -558,16 +480,15 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
         .io = io,
         .model = model,
         .slots = slots,
-        .rollback = rollback,
-        .scratch = scratch,
+        .batch = batch,
+        .batch_logits = batch_logits,
         .prefill = prefill,
         .capacity = capacity,
         .eos = eos,
-        .copy_drafts = copy_drafts,
         .prefix_reuse = prefix_reuse,
         .info_ = .{
             .name = "inkling2-loop",
-            .lanes = 1,
+            .lanes = @intCast(count),
             .context_window = @intCast(capacity),
             .context_fitted = true,
             .greedy_only = true,
@@ -593,7 +514,6 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
 pub fn closeHost(ctx: *anyopaque) void {
     const h: *Host = @ptrCast(@alignCast(ctx));
     h.stop();
-    h.scratch.deinit();
     h.prefill.deinit();
     h.model.deinit();
     h.gpa.destroy(h);

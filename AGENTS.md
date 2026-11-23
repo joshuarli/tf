@@ -5,7 +5,7 @@ Before editing, read [CONTRIBUTING.md](CONTRIBUTING.md) and follow the [ATC cont
 For native-engine work, also follow the [native contributor skill](docs/recipes/SKILL.md); read any additional AGENTS.md in the folders you change.
 For inference performance campaigns, also read the [vendored inference-optimisation skill](skills/inference-optimisation/SKILL.md).
 TensorFold's repository-specific correctness, measurement, GPU-lock and publication requirements take precedence.
-This fork's M5 Max inference campaign lives in [campaign/](campaign/README.md); resume it from **Status** in [campaign/plan.md](campaign/plan.md). [docs/zig-conformance.md](docs/zig-conformance.md) records how the repo meets the shared Zig standard.
+This fork's M5 Max inference campaign lives in [campaign/](campaign/README.md); resume it from **Status** in [campaign/plan.md](campaign/plan.md). Campaign work skips ATC, pull requests and publication; its **Execution boundary** overrides the ATC steps above. [docs/zig-conformance.md](docs/zig-conformance.md) records how the repo meets the shared Zig standard.
 
 Inspect `atc board --json` and check the issue before starting work.
 Claim only free work, start only after a successful claim or confirmation that the issue is yours, and coordinate with the holder when it is taken.

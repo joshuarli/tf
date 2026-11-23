@@ -27,15 +27,21 @@ struct i2_attn_parts { uint heads, kv, dim, rel, extent, window, pos, tau, split
     for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) PART[base + 2u + lane + 32u * u] = 0.0f;
     return;
   }
-  threadgroup float KB[128];
-  threadgroup float VB[128];
+  threadgroup float4 KB4[32];
+  threadgroup float4 VB4[32];
+  threadgroup float* KB = (threadgroup float*)KB4;
+  threadgroup float* VB = (threadgroup float*)VB4;
   float top = -INFINITY, mass = 0.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
   for (uint j = js; j < je; ++j) {
     const uint col = min(a.pos - j, a.extent);
     const uint rj = a.window ? (j % a.window) : j;
     const size_t at = ((size_t)rj * a.kv + kv) * D;
     const float bias = B[h * (a.extent + 1u) + col] - sk;
-    for (uint i = tid; i < D; i += nth) {
+    for (uint v = tid; v < D / 4u; v += nth) {
+      KB4[v] = float4(*reinterpret_cast<const device packed_half4*>(KEYS + at + v * 4u));
+      VB4[v] = float4(*reinterpret_cast<const device packed_half4*>(VALUES + at + v * 4u));
+    }
+    for (uint i = (D / 4u) * 4u + tid; i < D; i += nth) {
       KB[i] = KEYS[at + i];
       VB[i] = VALUES[at + i];
     }
@@ -113,15 +119,21 @@ struct i2_batch_row { device half* keys; device half* values; i2_attn_parts args
     for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) PART[base + 2u + lane + 32u * u] = 0.0f;
     return;
   }
-  threadgroup float KB[128];
-  threadgroup float VB[128];
+  threadgroup float4 KB4[32];
+  threadgroup float4 VB4[32];
+  threadgroup float* KB = (threadgroup float*)KB4;
+  threadgroup float* VB = (threadgroup float*)VB4;
   float top = -INFINITY, mass = 0.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
   for (uint j = js; j < je; ++j) {
     const uint col = min(a.pos - j, a.extent);
     const uint rj = a.window ? (j % a.window) : j;
     const size_t at = ((size_t)rj * a.kv + kv) * D;
     const float bias = B[h * (a.extent + 1u) + col] - sk;
-    for (uint i = tid; i < D; i += nth) {
+    for (uint v = tid; v < D / 4u; v += nth) {
+      KB4[v] = float4(*reinterpret_cast<const device packed_half4*>(KEYS + at + v * 4u));
+      VB4[v] = float4(*reinterpret_cast<const device packed_half4*>(VALUES + at + v * 4u));
+    }
+    for (uint i = (D / 4u) * 4u + tid; i < D; i += nth) {
       KB[i] = KEYS[at + i];
       VB[i] = VALUES[at + i];
     }

@@ -103,3 +103,16 @@ The first three K=1 pairs had stable serial controls around 21.3–21.5 ms; thei
 ## Rejected 32-token attention partitions
 
 A 32-token split chunk and 64-split cap were applied to both batch and single-stream decode, with the batch partial-buffer stride carried in the per-row arguments. The oQ4e family command `python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1 -j1 --summary all`, with both `TF_INKLING2_LOOP_DIR` and `TF_INKLING2_LOOP_OQ4E_DIR` selecting the oQ4e checkpoint and `INKLING_LOAD_LIMIT_GB=26`, exited 1. The unchanged `oQ4e prefill without half pipelines matches per-token decode` test reported a maximum logit difference of `4.7588348e-4` at scale `2.1919092e1`, exceeding its `scale * 1.5e-5` bound. Batch/decode cases reported zero differences and the attention FP64 reference checks passed, but those results do not cure the prefill/decode failure. The candidate was reverted without changing the tolerance or timing it.
+
+## Shared half4 attention loads
+
+The batch and single-stream split kernels now load each shared f16 key/value tile in packed half4 units into threadgroup memory. All queries in the GQA group still share that tile; the existing split boundaries, per-head reduction order and f16 KV contract are unchanged. The oQ4e family command in the controller section exited 0 with 82/82 tests. The unchanged batch/decode checks at widths 1, 2 and 4 reported zero logit and cache differences, and the existing attention FP64 and ring checks passed.
+
+Three interleaved 2,500-token `batchbench K 5` pairs compared controller-only `d2d7ddf40` to the half4 candidate in base/candidate, candidate/base, base/candidate order. Every retained invocation passed the GPU and CPU gates and compiler monitor; deferrals were retried.
+
+| Width | Controller-only samples, ms | Half4 samples, ms | Controller median | Half4 median |
+| --- | --- | --- | ---: | ---: |
+| 1 | 20.199, 20.207, 20.154 | 19.209, 19.140, 19.047 | 20.199 | 19.140 |
+| 4 | 39.169, 41.337, 43.703 | 39.588, 41.205, 43.213 | 41.337 | 41.205 |
+
+K=1 favored half4 in every pair, by approximately 1.06 ms at the outer medians. One candidate inner sample reached 20.522 ms, so the full inner ranges overlap. K=4 drifted across the matrix, and its median difference is within the observed variation. This is an isolated comparison against controller-only, not another `b9bdf4e55` comparison. Both runner binaries were 2,061,672 bytes. Neither original target is established; K=8, final saved-capture fidelity, final suite, native build and served sweep remain pending.

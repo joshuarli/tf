@@ -18,6 +18,8 @@ pub const PrefillScratch = @import("prefill.zig").PrefillScratch;
 pub const default_chunk = @import("prefill.zig").default_chunk;
 pub const Verification = @import("verify.zig").Verification;
 pub const verify = @import("verify.zig");
+pub const draft = @import("draft.zig");
+pub const Taps = @import("prefill.zig").Taps;
 pub const hybrid_drafts = @import("verify.zig").hybrid_drafts;
 pub const refuse = @import("refuse.zig");
 pub const kernels = @import("kernels.zig");
@@ -35,5 +37,6 @@ test {
     _ = @import("prefill.zig");
     _ = @import("prefill_test.zig");
     _ = @import("verify_test.zig");
+    _ = @import("draft.zig");
     _ = @import("batch_test.zig");
 }

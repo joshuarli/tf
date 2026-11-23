@@ -100,6 +100,44 @@ pub const Weights = struct {
     layers: []Layer,
 };
 
+/// One block-drafter layer of `mtp.safetensors`, every tensor bf16 as stored.
+pub const DraftLayer = struct {
+    input_norm: Tensor, // input_layernorm [hidden]
+    post_norm: Tensor, // post_attention_layernorm [hidden]
+    mix_norm: Tensor, // dflare_norm [hidden], the norm of this layer's tap mixture
+    q: Tensor, // q_proj [q_heads * dim, hidden]
+    k: Tensor, // k_proj [kv_heads * dim, hidden]
+    v: Tensor,
+    k_ctx: Tensor, // k_proj_ctx [kv_heads * dim, hidden], the context rows' own projections
+    v_ctx: Tensor,
+    o: Tensor, // o_proj [hidden, q_heads * dim]
+    q_norm: Tensor, // [dim]
+    k_norm: Tensor,
+    k_norm_ctx: Tensor,
+    gate: Tensor, // mlp.gate_proj [inter, hidden]
+    up: Tensor,
+    down: Tensor, // mlp.down_proj [hidden, inter]
+};
+
+/// The checkpoint's MTP head (`mtp.safetensors`): a block drafter whose context is the target's tapped hidden states,
+/// and its recurrent Markov head. `fold` and `fold_bias` are the target's unembedding times the head's latent
+/// projection, built once on the GPU by the drafter.
+pub const DraftWeights = struct {
+    buffer: mtl.Buffer,
+    layers: []DraftLayer,
+    norm: Tensor, // [hidden]
+    mask: Tensor, // mask_embed [hidden], the block's masked rows
+    fuse: Tensor, // fuse_weight [layers + 1, taps]: each layer's tap mixture, then the Markov head's
+    markov_w1: Tensor, // [vocab, rank]
+    rnn: Tensor, // rnn_proj.weight [3 * rank, 2 * rank + 2 * hidden]
+    rnn_bias: Tensor, // [3 * rank]
+    hidden_out: Tensor, // [hidden, rank]
+    hidden_out_bias: Tensor, // [hidden]
+    markov_norm: Tensor, // markov_head.dflare_norm [hidden]
+    fold: ?Tensor = null, // [unpadded vocab, rank] bf16
+    fold_bias: ?Tensor = null, // [unpadded vocab] bf16
+};
+
 pub const glue_names = [_][:0]const u8{
     "i2_mv",         "i2_mv_cap",  "i2_embed",    "i2_rms",       "i2_mix",  "i2_mix4", "i2_clip_scaled",
     "i2_clip",       "i2_conv",    "i2_conv_store", "i2_kv_store", "i2_attn", "i2_relbias", "i2_sig_mul",
@@ -159,6 +197,7 @@ pub const Model = struct {
     glue: [glue_names.len]mtl.Pipeline,
     experts: [2][2]mtl.Pipeline, // [nvfp4, mxfp8][gate/up, down]
     affine_pipes: ?kernels.AffinePipes = null,
+    draft: ?DraftWeights = null,
     t16: mtl.Buffer,
     t256: mtl.Buffer,
 
@@ -170,6 +209,7 @@ pub const Model = struct {
         m.gpa = gpa;
         m.owned = .empty;
         m.affine_pipes = null;
+        m.draft = null;
         var arena = std.heap.ArenaAllocator.init(gpa);
         errdefer arena.deinit();
         m.config = try readConfig(arena.allocator(), io, dir);
@@ -293,6 +333,99 @@ pub const Model = struct {
         errdefer buf.deinit();
         try m.owned.append(m.arena.allocator(), buf);
         return .{ .buffer = buf, .offset = 0, .bytes = rows * cols * 4, .dtype = .f32, .shape = .{ rows, cols, 1, 1, 1 }, .rank = 2 };
+    }
+
+    /// Read `<dir>/mtp.safetensors` into one GPU buffer and check every tensor against `mtp_config`. The text graph never
+    /// reads these weights, so a model that serves without drafts never loads them.
+    pub fn loadDraft(m: *Model, dir: []const u8) !void {
+        if (m.draft != null) return;
+        const head = m.config.mtp orelse return error.NoDraftHead;
+        const a = m.arena.allocator();
+        const path = try std.fs.path.joinZ(a, &.{ dir, "mtp.safetensors" });
+        const map = try mtl.MappedFile.open(path.ptr);
+        defer map.deinit();
+        if (map.size < 8) return error.BadSafetensors;
+        const n = try st.headerSize(std.mem.readInt(u64, map.bytes[0..8], .little), map.size);
+        const data = 8 + n;
+        const header = try st.parseHeader(a, try a.dupe(u8, map.bytes[8..data]), map.size - data);
+        for (header.values()) |entry| if (entry.begin % 16 != 0) return error.UnalignedTensor;
+        const buffer = try m.device.buffer(@max(map.size - data, 16), mtl.ResourceOptions.shared | mtl.ResourceOptions.untracked);
+        errdefer buffer.deinit();
+        @memcpy(buffer.contents()[0 .. map.size - data], map.bytes[data..map.size]);
+        const Find = struct {
+            header: *const st.Header,
+            buffer: mtl.Buffer,
+            fn want(f: @This(), name: []const u8, dims: []const usize) !Tensor {
+                const e = f.header.get(name) orelse {
+                    std.log.err("inkling2_loop: mtp.safetensors has no {s}", .{name});
+                    return error.MissingTensor;
+                };
+                var ok = e.dtype == .bf16 and e.rank == dims.len;
+                if (ok) for (dims, e.shape[0..e.rank]) |w, g| {
+                    if (w != g) ok = false;
+                };
+                if (!ok) {
+                    std.log.err("inkling2_loop: mtp.safetensors {s} is {s} {any}, expected bf16 {any}", .{ name, @tagName(e.dtype), e.shape[0..e.rank], dims });
+                    return error.BadTensor;
+                }
+                var t = Tensor{ .buffer = f.buffer, .offset = e.begin, .bytes = e.end - e.begin, .dtype = e.dtype, .rank = e.rank };
+                for (0..e.rank) |i| t.shape[i] = e.shape[i];
+                return t;
+            }
+        };
+        const f = Find{ .header = &header, .buffer = buffer };
+        const h: usize = head.hidden;
+        const qw: usize = head.q_heads * head.head_dim;
+        const kvw: usize = head.kv_heads * head.head_dim;
+        const inter: usize = head.inter;
+        const rank: usize = head.rank;
+        const taps: usize = head.taps_n;
+        if (h != m.config.text.hidden or head.layers == 0) return error.BadDraftGeometry;
+        const layers = try a.alloc(DraftLayer, head.layers);
+        for (layers, 0..) |*l, i| {
+            const p = try std.fmt.allocPrint(a, "layers.{d}.", .{i});
+            l.* = .{
+                .input_norm = try f.want(sub(a, p, "input_layernorm.weight"), &.{h}),
+                .post_norm = try f.want(sub(a, p, "post_attention_layernorm.weight"), &.{h}),
+                .mix_norm = try f.want(sub(a, p, "dflare_norm.weight"), &.{h}),
+                .q = try f.want(sub(a, p, "self_attn.q_proj.weight"), &.{ qw, h }),
+                .k = try f.want(sub(a, p, "self_attn.k_proj.weight"), &.{ kvw, h }),
+                .v = try f.want(sub(a, p, "self_attn.v_proj.weight"), &.{ kvw, h }),
+                .k_ctx = try f.want(sub(a, p, "self_attn.k_proj_ctx.weight"), &.{ kvw, h }),
+                .v_ctx = try f.want(sub(a, p, "self_attn.v_proj_ctx.weight"), &.{ kvw, h }),
+                .o = try f.want(sub(a, p, "self_attn.o_proj.weight"), &.{ h, qw }),
+                .q_norm = try f.want(sub(a, p, "self_attn.q_norm.weight"), &.{head.head_dim}),
+                .k_norm = try f.want(sub(a, p, "self_attn.k_norm.weight"), &.{head.head_dim}),
+                .k_norm_ctx = try f.want(sub(a, p, "self_attn.k_norm_ctx.weight"), &.{head.head_dim}),
+                .gate = try f.want(sub(a, p, "mlp.gate_proj.weight"), &.{ inter, h }),
+                .up = try f.want(sub(a, p, "mlp.up_proj.weight"), &.{ inter, h }),
+                .down = try f.want(sub(a, p, "mlp.down_proj.weight"), &.{ h, inter }),
+            };
+        }
+        const vocab: usize = m.config.text.vocab;
+        const weights = DraftWeights{
+            .buffer = buffer,
+            .layers = layers,
+            .norm = try f.want("norm.weight", &.{h}),
+            .mask = try f.want("mask_embed", &.{h}),
+            .fuse = try f.want("fuse_weight", &.{ head.layers + 1, taps }),
+            .markov_w1 = try f.want("markov_head.markov_w1.weight", &.{ vocab, rank }),
+            .rnn = try f.want("markov_head.rnn_proj.weight", &.{ 3 * rank, 2 * rank + 2 * h }),
+            .rnn_bias = try f.want("markov_head.rnn_proj.bias", &.{3 * rank}),
+            .hidden_out = try f.want("markov_head.hidden_out.weight", &.{ h, rank }),
+            .hidden_out_bias = try f.want("markov_head.hidden_out.bias", &.{h}),
+            .markov_norm = try f.want("markov_head.dflare_norm.weight", &.{h}),
+        };
+        try m.owned.append(a, buffer);
+        m.draft = weights;
+    }
+
+    /// A buffer the model frees with its weights, for tensors derived once from them.
+    pub fn ownBuffer(m: *Model, bytes: usize) !mtl.Buffer {
+        const buf = try m.device.buffer(@max(bytes, 16), mtl.ResourceOptions.private);
+        errdefer buf.deinit();
+        try m.owned.append(m.arena.allocator(), buf);
+        return buf;
     }
 
     fn affineWeight(m: *Model, base: []const u8, rows: usize, cols: usize, bits: u32) !Tensor {

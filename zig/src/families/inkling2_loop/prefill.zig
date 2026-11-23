@@ -214,6 +214,21 @@ pub const ConvCapture = struct {
     }
 };
 
+/// Where a forward copies the hidden states a drafter reads: the residual entering each listed visit (execution order,
+/// a core layer's every pass counting) and the final normalized state, tap-major `[taps][rows][hidden]` f32.
+pub const Taps = struct {
+    buffer: mtl.Buffer,
+    rows: usize,
+    visits: [16]u32 = @splat(0),
+    count: u32 = 0,
+    /// The listed visit the final normalized state fills, past every executed visit.
+    final: u32,
+
+    pub fn offset(taps: *const Taps, tap: usize, row: usize, hidden: usize) usize {
+        return (tap * taps.rows + row) * hidden * 4;
+    }
+};
+
 pub const PrefillScratch = struct {
     pipes: Pipes,
     chunk: usize,
@@ -277,6 +292,7 @@ pub const PrefillScratch = struct {
     capture_row: usize,
     routes: ?mtl.Buffer,
     verify_conv: ?*ConvCapture,
+    taps: ?*const Taps = null,
 
     pub fn init(device: mtl.Device, c: *const cfg.Config, chunk: usize) !PrefillScratch {
         const h: usize = c.text.hidden;
@@ -307,6 +323,7 @@ pub const PrefillScratch = struct {
         s.capture_row = 0;
         s.routes = null;
         s.verify_conv = null;
+        s.taps = null;
         s.chunk = chunk;
         s.h = @intCast(h);
         s.heads = c.text.local.q;
@@ -1141,6 +1158,13 @@ const Chunk = struct {
         c.record(slot, 8, .{ .buf = b(s.x), .xs = 1, .xb = 0 });
     }
 
+    fn tap(c: Chunk, visit: u32, src: B) void {
+        const taps = c.s.taps orelse return;
+        for (taps.visits[0..taps.count], 0..) |v, i| {
+            if (v == visit) c.copyN(src, bo(taps.buffer, taps.offset(i, 0, c.h)), @as(usize, c.n) * c.h);
+        }
+    }
+
     fn record(c: Chunk, slot: u32, which: usize, input: In) void {
         if (c.s.capture) |capture| {
             const src = bo(input.buf.buf, input.buf.off + (c.s.capture_row * input.xs + input.xb) * c.h * 4);
@@ -1204,6 +1228,7 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
     if (ids.len == 0 or ids.len > s.chunk) return error.BadChunk;
     if (batch == null and ids.len + cache.len > cache.capacity) return error.ContextFull;
     if (ids.len > m.config.text.window) return error.ChunkTooLarge;
+    if (s.taps) |taps| if (taps.rows < ids.len) return error.TapsTooSmall;
     if (s.half_overflow) |buf| buf.slice(u32, 1)[0] = 0;
     @memcpy(s.ids.slice(u32, ids.len), ids);
     const kvw: usize = m.config.text.local.kv * m.config.text.local.dim;
@@ -1242,6 +1267,7 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
     var profile_name: [64]u8 = undefined;
     for (0..config.loop.core_start) |i| {
         if (profiling) try rounds.next(&c, try std.fmt.bufPrint(&profile_name, "inkling2-slot-{d}", .{i}));
+        c.tap(@intCast(i), b(s.x));
         try c.layer(@intCast(i), @intCast(i), null);
         try profileOccupancy(&rounds, &c, @intCast(i), "inkling2-occupancy");
     }
@@ -1264,18 +1290,21 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
         for (config.loop.core_start..config.loop.core_end) |ip| {
             const slot: u32 = if (pass == 0) @intCast(ip) else @intCast(text.layers + (pass - 1) * span + (ip - config.loop.core_start));
             if (profiling) try rounds.next(&c, try std.fmt.bufPrint(&profile_name, "inkling2-slot-{d}", .{slot}));
+            c.tap(@intCast(config.loop.core_start + pass * span + (ip - config.loop.core_start)), b(s.x));
             try c.layer(slot, @intCast(ip), bk);
             try profileOccupancy(&rounds, &c, slot, "inkling2-occupancy");
         }
     }
     for (config.loop.core_end..text.layers) |i| {
         if (profiling) try rounds.next(&c, try std.fmt.bufPrint(&profile_name, "inkling2-slot-{d}", .{i}));
+        c.tap(@intCast(config.loop.core_start + config.loop.passes * span + (i - config.loop.core_end)), b(s.x));
         try c.layer(@intCast(i), @intCast(i), null);
         try profileOccupancy(&rounds, &c, @intCast(i), "inkling2-occupancy");
     }
     if (profiling) try rounds.next(&c, "inkling2-head");
     c.mixBlocks(b(s.x), m.weights.output_query, bo(s.mixout, 0));
     c.rmsW(.{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, t(m.weights.norm), b(s.n0), 1, 0, c.h, text.eps);
+    if (s.taps) |taps| c.tap(taps.final, b(s.n0));
     if (profiling) try rounds.next(&c, "inkling2-vocabulary");
     switch (want) {
         .none => {},

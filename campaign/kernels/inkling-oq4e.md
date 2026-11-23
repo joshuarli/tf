@@ -38,3 +38,6 @@ For `campaign/prompts/inkling/code-1024.json`, `greedy-decode 512` exited 0. Aga
 agree by position. At zero-based position 45, TensorFold returns 170289 and oMLX returns 68014. The first 32
 TensorFold IDs detokenize to a coherent response to the prompt. The run peaked at 23.4 GB charged, with host memory
 pressure level 2 and no increase in swap. This greedy comparison is not a gated throughput measurement.
+
+The first 1K native timing passed the load checks but overlapped another lane's compilation. It is discarded under
+the no-compilation rule. Gated paired timings remain in progress.

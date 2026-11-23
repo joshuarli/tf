@@ -17,21 +17,24 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(result['done'][0]['queued'], 0.5)
         self.assertEqual(result['done'][0]['tokens'], 8)
 
-    def test_followup_retains_the_previous_reply(self):
+    def test_followup_retains_the_previous_reply_and_its_reasoning(self):
         bodies = []
 
         def reply(request, timeout):
             bodies.append(json.loads(request.data))
-            return io.BytesIO(b'data: {"choices":[{"delta":{"content":"result"}}]}\n'
+            return io.BytesIO(b'data: {"choices":[{"delta":{"reasoning_content":"think "}}]}\n'
+                              b'data: {"choices":[{"delta":{"reasoning_content":"hard"}}]}\n'
+                              b'data: {"choices":[{"delta":{"content":"result"}}]}\n'
                               b'data: {"choices":[],"usage":{"completion_tokens":3}}\n'
                               b'data: [DONE]\n')
 
         with patch('bench_subagents.urllib.request.urlopen', side_effect=reply):
             result = agent('http://example/v1', 'model', 2, threading.Barrier(1), 3)
         self.assertEqual([turn['tokens'] for turn in result['turns']], [3, 3])
+        self.assertNotIn('chat_template_kwargs', bodies[0])
         self.assertEqual(bodies[1]['messages'][:2], bodies[0]['messages'])
         self.assertEqual(bodies[1]['messages'][2:], [
-            {'role': 'assistant', 'content': 'result'},
+            {'role': 'assistant', 'reasoning_content': 'think hard', 'content': 'result'},
             {'role': 'user', 'content': 'What does transform_1(42) return? Explain in one sentence.'},
         ])
 

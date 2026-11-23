@@ -2,7 +2,7 @@ import math
 import unittest
 
 try:
-    from shootout import clean_diagnostics, fidelity_row, prelaunch_cap
+    from shootout import clean_diagnostics, fidelity_row, prelaunch_memory_failure
 except ModuleNotFoundError:
     fidelity_row = None
 
@@ -11,9 +11,10 @@ except ModuleNotFoundError:
 class FidelityTests(unittest.TestCase):
     def test_prelaunch_wired_memory_is_distinct_from_a_model_cap_failure(self):
         receipt = 'footprint 0.0 GB; host wired growth 28.4 GB'
-        self.assertTrue(prelaunch_cap({'exit': 3, 'worker': {}, 'output': receipt}))
-        self.assertFalse(prelaunch_cap({'exit': 3, 'worker': {'child_exit': 3}, 'output': receipt}))
-        self.assertFalse(prelaunch_cap({'exit': 3, 'worker': {}, 'output': 'footprint 5.0 GB; host wired growth 28.4 GB'}))
+        self.assertTrue(prelaunch_memory_failure({'exit': 3, 'worker': {}, 'output': receipt}))
+        self.assertTrue(prelaunch_memory_failure({'exit': 4, 'worker': {}, 'output': receipt}))
+        self.assertFalse(prelaunch_memory_failure({'exit': 3, 'worker': {'child_exit': 3}, 'output': receipt}))
+        self.assertFalse(prelaunch_memory_failure({'exit': 3, 'worker': {}, 'output': 'footprint 5.0 GB; host wired growth 28.4 GB'}))
 
     def test_redaction_keeps_the_rest_of_the_gate_receipt(self):
         self.assertEqual(clean_diagnostics('busy\nprocess command=private\nquiet'),

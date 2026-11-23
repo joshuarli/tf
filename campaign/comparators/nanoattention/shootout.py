@@ -39,8 +39,8 @@ def clean_diagnostics(text):
                      for line in text.splitlines())
 
 
-def prelaunch_cap(item):
-    return (item.get('exit') == 3 and not item.get('worker')
+def prelaunch_memory_failure(item):
+    return (item.get('exit') in (3, 4) and not item.get('worker')
             and 'host wired growth' in item.get('output', '')
             and 'footprint 0.0 GB' in item.get('output', ''))
 
@@ -104,7 +104,7 @@ def gated(command, label):
     outer = ['python3', str(HEAVY), '--', sys.executable, str(Path(__file__).resolve()), 'worker', str(job)]
     busy_start = time.monotonic()
     cap_retry = RESULTS.exists() and any(
-        entry['label'] == label and prelaunch_cap(entry)
+        entry['label'] == label and prelaunch_memory_failure(entry)
         for entry in (json.loads(line) for line in RESULTS.read_text().splitlines())
     )
     while True:
@@ -121,7 +121,7 @@ def gated(command, label):
                 'exit': status, 'output': output, 'worker': worker_row}
         record(item)
         print(f'{label}: exit={status}', flush=True)
-        if prelaunch_cap(item) and not cap_retry:
+        if prelaunch_memory_failure(item) and not cap_retry:
             cap_retry = True
             time.sleep(10)
             continue
@@ -153,10 +153,10 @@ def timings():
     completed = {entry['label']: entry['result'] for entry in entries if entry['label'].endswith('/parsed')}
     comparisons = {entry['label'] for entry in entries if entry['label'].endswith('/comparison')}
     failed_cells = {entry['label'].split('/')[0] for entry in entries
-                    if 'exit' in entry and entry['exit'] not in (0, 75, 76) and not prelaunch_cap(entry)}
+                    if 'exit' in entry and entry['exit'] not in (0, 75, 76) and not prelaunch_memory_failure(entry)}
     cap_failures = {}
     for entry in entries:
-        if prelaunch_cap(entry):
+        if prelaunch_memory_failure(entry):
             cap_failures[entry['label']] = cap_failures.get(entry['label'], 0) + 1
     failed_cells.update(label.split('/')[0] for label, count in cap_failures.items() if count >= 2)
     for size in (1024, 4096, 16384):

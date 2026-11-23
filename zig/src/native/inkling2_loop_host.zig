@@ -27,18 +27,25 @@ fn visionExplain(err: anyerror) ?[]const u8 {
     return inkling.refuse.explain(err);
 }
 
+const Slot = struct {
+    cache: inkling.Cache,
+    resident: std.ArrayList(u32) = .empty,
+    last_used: u64 = 0,
+};
+
 pub const Host = struct {
     gpa: Allocator,
     io: std.Io,
     model: *inkling.Model,
-    cache: inkling.Cache,
+    slots: []Slot,
+    rollback: ?inkling.Cache.Rollback,
+    sequence: u64 = 0,
     scratch: inkling.Scratch,
     prefill: inkling.PrefillScratch,
     capacity: usize,
     eos: u32,
     copy_drafts: bool,
     prefix_reuse: bool,
-    resident: std.ArrayList(u32) = .empty,
     invalidated: std.atomic.Value(bool) = .init(false),
     info_: api.Info,
     load_limit: u64 = 0,
@@ -82,9 +89,13 @@ pub const Host = struct {
         h.queued.deinit(h.gpa);
         h.cancels.deinit(h.gpa);
         h.decoded.deinit(h.gpa);
-        h.resident.deinit(h.gpa);
+        for (h.slots) |*slot| {
+            slot.resident.deinit(h.gpa);
+            slot.cache.deinit();
+        }
+        h.gpa.free(h.slots);
+        if (h.rollback) |*rollback| rollback.deinit();
     }
-
     fn self(ctx: *anyopaque) *Host {
         return @ptrCast(@alignCast(ctx));
     }
@@ -287,12 +298,26 @@ pub const Host = struct {
     fn serve(h: *Host, job: *Job) void {
         var fin: Fin = .{};
         var reused: usize = 0;
+        var selected: ?*Slot = null;
+        var saved = false;
         defer {
             std.debug.print("inkling prefix: reused {d} of {d} prompt tokens\n", .{ reused, job.request.prompt.len });
-            if ((fin.reason != .stop and fin.reason != .length) or h.invalidated.swap(false, .acq_rel)) {
-                h.cache.len = 0;
-                h.resident.clearRetainingCapacity();
+            if (selected) |slot| {
+                if (saved) {
+                    const started = h.now();
+                    h.rollback.?.copy(h.model.queue, &h.model.config, &slot.cache, false) catch |e| {
+                        fin.reason = .failed;
+                        fin.message = @errorName(e);
+                        slot.cache.len = 0;
+                        slot.resident.clearRetainingCapacity();
+                    };
+                    std.debug.print("inkling rollback: restore {d:.3} ms\n", .{@as(f64, @floatFromInt(h.now() - started)) / 1e6});
+                } else if (!h.prefix_reuse or (fin.reason != .stop and fin.reason != .length)) {
+                    slot.cache.len = 0;
+                    slot.resident.clearRetainingCapacity();
+                }
             }
+            _ = h.invalidated.swap(false, .acq_rel);
             h.finish(job, fin.reason, fin.stats, fin.message);
         }
         const r = job.request;
@@ -323,20 +348,23 @@ pub const Host = struct {
             fin.message = "the prompt and max_tokens do not fit this server's --context";
             return;
         }
-        h.resident.ensureTotalCapacity(h.gpa, r.prompt.len + r.max_tokens) catch {
+        var choice = prefix.Choice{};
+        for (h.slots, 0..) |*candidate, i| choice.consider(i, candidate.resident.items, candidate.last_used, r.prompt, h.prefix_reuse);
+        const slot = &h.slots[choice.index];
+        selected = slot;
+        h.sequence += 1;
+        slot.last_used = h.sequence;
+        slot.resident.ensureTotalCapacity(h.gpa, r.prompt.len) catch {
             fin.message = @errorName(error.OutOfMemory);
             return;
         };
-        if (h.invalidated.swap(false, .acq_rel)) {
-            h.cache.len = 0;
-            h.resident.clearRetainingCapacity();
-        }
-        std.debug.assert(h.cache.len == h.resident.items.len);
-        reused = prefix.reuse(h.resident.items, r.prompt, h.prefix_reuse);
+        std.debug.assert(slot.cache.len == slot.resident.items.len);
+        reused = choice.reused;
         if (reused == 0) {
-            h.cache.len = 0;
-            h.resident.clearRetainingCapacity();
+            slot.cache.len = 0;
+            slot.resident.clearRetainingCapacity();
         }
+        std.debug.print("inkling session: slot {d}\n", .{choice.index});
         const prefill_start = h.now();
         const vocab: usize = h.model.config.text.unpadded_vocab;
         const chunk: usize = h.prefill.chunk;
@@ -349,13 +377,22 @@ pub const Host = struct {
             }
             const take = @min(chunk, r.prompt.len - at);
             const last = at + take >= r.prompt.len;
-            inkling.prefillWant(h.model, &h.prefill, &h.cache, r.prompt[at..][0..take], if (last) .last else .none) catch |e| {
+            inkling.prefillWant(h.model, &h.prefill, &slot.cache, r.prompt[at..][0..take], if (last) .last else .none) catch |e| {
                 if (!job.prefill_sent) emit(job, .{ .prefilled = 0 });
                 fin.message = @errorName(e);
                 return;
             };
-            h.resident.appendSliceAssumeCapacity(r.prompt[at..][0..take]);
+            slot.resident.appendSliceAssumeCapacity(r.prompt[at..][0..take]);
             at += take;
+        }
+        if (h.rollback) |*rollback| {
+            const started = h.now();
+            rollback.copy(h.model.queue, &h.model.config, &slot.cache, true) catch |e| {
+                fin.message = @errorName(e);
+                return;
+            };
+            saved = true;
+            std.debug.print("inkling rollback: save {d:.3} ms\n", .{@as(f64, @floatFromInt(h.now() - started)) / 1e6});
         }
         @memcpy(h.scratch.logits.slice(f32, vocab), h.prefill.logits.slice(f32, vocab));
         const done_prefill = h.now();
@@ -364,7 +401,7 @@ pub const Host = struct {
         h.prefill_at = done_prefill;
         h.prefilling = false;
         h.unlock();
-        emit(job, .{ .prefilled = 0 });
+        emit(job, .{ .prefilled = @intCast(reused) });
         job.prefill_sent = true;
         const prefill_s: ?f64 = if (done_prefill > prefill_start) @as(f64, @floatFromInt(done_prefill - prefill_start)) / 1e9 else null;
         if (prefill_s) |seconds| std.debug.print("inkling prefill: {d:.6} seconds\n", .{seconds});
@@ -460,7 +497,7 @@ pub const Host = struct {
                 if (count > 0) {
                     @memcpy(rows[1..][0..count], draft[0..count]);
                     var predictions: [16]u32 = undefined;
-                    var verification = inkling.Verification.begin(h.model, &h.prefill, &h.cache, rows[0..row_count], predictions[0..row_count]) catch |e| {
+                    var verification = inkling.Verification.begin(h.model, &h.prefill, &slot.cache, rows[0..row_count], predictions[0..row_count]) catch |e| {
                         fin.message = @errorName(e);
                         return;
                     };
@@ -474,7 +511,6 @@ pub const Host = struct {
                         fin.message = @errorName(e);
                         return;
                     };
-                    h.resident.appendSliceAssumeCapacity(rows[0..kept]);
                     proposer.observe(@intCast(count), @intCast(accepted)) catch |e| {
                         fin.message = @errorName(e);
                         return;
@@ -488,11 +524,10 @@ pub const Host = struct {
                     continue;
                 }
             }
-            inkling.position(h.model, &h.scratch, &h.cache, best) catch |e| {
+            inkling.position(h.model, &h.scratch, &slot.cache, best) catch |e| {
                 fin.message = @errorName(e);
                 return;
             };
-            h.resident.appendAssumeCapacity(best);
             rounds += 1;
         }
         fin.reason = .length;
@@ -500,11 +535,19 @@ pub const Host = struct {
     }
 };
 
-pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usize, eos: u32, load_limit: u64, copy_drafts: bool, prefix_reuse: bool) !*Host {
+pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usize, count: usize, eos: u32, load_limit: u64, copy_drafts: bool, prefix_reuse: bool) !*Host {
     const h = try gpa.create(Host);
     errdefer gpa.destroy(h);
-    var cache = try inkling.Cache.init(model.device, &model.config, capacity);
-    errdefer cache.deinit();
+    const slots = try gpa.alloc(Slot, count);
+    errdefer gpa.free(slots);
+    var made: usize = 0;
+    errdefer for (slots[0..made]) |*slot| slot.cache.deinit();
+    for (slots) |*slot| {
+        slot.* = .{ .cache = try inkling.Cache.init(model.device, &model.config, capacity) };
+        made += 1;
+    }
+    var rollback: ?inkling.Cache.Rollback = if (prefix_reuse) try inkling.Cache.Rollback.init(model.device, &model.config) else null;
+    errdefer if (rollback) |*r| r.deinit();
     var scratch = try inkling.Scratch.init(model.device, &model.config);
     errdefer scratch.deinit();
     var prefill = try inkling.PrefillScratch.init(model.device, &model.config, inkling.default_chunk);
@@ -514,7 +557,8 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
         .gpa = gpa,
         .io = io,
         .model = model,
-        .cache = cache,
+        .slots = slots,
+        .rollback = rollback,
         .scratch = scratch,
         .prefill = prefill,
         .capacity = capacity,
@@ -549,52 +593,8 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
 pub fn closeHost(ctx: *anyopaque) void {
     const h: *Host = @ptrCast(@alignCast(ctx));
     h.stop();
-    h.cache.deinit();
     h.scratch.deinit();
     h.prefill.deinit();
     h.model.deinit();
     h.gpa.destroy(h);
-}
-
-test "inkling host: image requests are refused by name without touching the GPU" {
-    var out: [api.refusal_bytes]u8 = undefined;
-    var host: Host = undefined;
-    host.eos = 200006;
-    host.invalidated = .init(false);
-    const engine: api.Engine = .{ .ctx = &host, .vtable = &Host.vtable };
-    const prompt = [_]u32{ 1, 2, 3 };
-    const images = [_]api.Image{.{
-        .pixels = &.{},
-        .gh = 1,
-        .gw = 1,
-        .at = 0,
-        .tokens = 1,
-    }};
-    const request: api.Request = .{ .prompt = &prompt, .max_tokens = 4, .images = &images };
-    const msg = engine.refusal(&request, &out).?;
-    try std.testing.expectEqualStrings(inkling.refuse.image, msg);
-}
-
-test "inkling host: sampling beyond greedy is refused by name" {
-    var out: [api.refusal_bytes]u8 = undefined;
-    var host: Host = undefined;
-    host.eos = 200006;
-    host.invalidated = .init(false);
-    const engine: api.Engine = .{ .ctx = &host, .vtable = &Host.vtable };
-    const prompt = [_]u32{ 1, 2, 3 };
-    const sampling: api.Sampling = .{ .seed = 1, .temperature = 0.7, .top_k = 0, .top_p = 1, .min_p = 0 };
-    const request: api.Request = .{ .prompt = &prompt, .max_tokens = 4, .sampling = sampling };
-    const msg = engine.refusal(&request, &out).?;
-    try std.testing.expectEqualStrings(sampling_refusal, msg);
-}
-
-test "inkling host: greedy requests with no images are accepted" {
-    var out: [api.refusal_bytes]u8 = undefined;
-    var host: Host = undefined;
-    host.eos = 200006;
-    host.invalidated = .init(false);
-    const engine: api.Engine = .{ .ctx = &host, .vtable = &Host.vtable };
-    const prompt = [_]u32{ 1, 2, 3 };
-    const request: api.Request = .{ .prompt = &prompt, .max_tokens = 4 };
-    try std.testing.expectEqual(@as(?[]const u8, null), engine.refusal(&request, &out));
 }

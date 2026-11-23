@@ -83,4 +83,26 @@ pub fn main(init: std.process.Init) !void {
         kl += @exp(log_r) * (log_r - log_f);
     }
     std.debug.print("full prefill: max_abs={d} kl={d} greedy_retained={d} greedy_fresh={d} agreement={}\n", .{ max_abs, kl, argmax(retained), argmax(fresh), argmax(retained) == argmax(fresh) });
+    c.deinit();
+    c = try inkling.Cache.init(m.device, &m.config, ids.items.len);
+    var rollback = try inkling.Cache.Rollback.init(m.device, &m.config);
+    defer rollback.deinit();
+    try prefill(m, &p, &c, ids.items[0..first]);
+    try rollback.copy(m.queue, &m.config, &c, true);
+    for (ids.items[first .. first + decoded]) |id| try inkling.position(m, &s, &c, id);
+    try rollback.copy(m.queue, &m.config, &c, false);
+    try prefill(m, &p, &c, ids.items[first + decoded ..]);
+    const restored = try a.dupe(f32, p.logits.slice(f32, vocab));
+    defer a.free(restored);
+    c.deinit();
+    c = try inkling.Cache.init(m.device, &m.config, ids.items.len);
+    const full = try a.alloc(u32, ids.items.len - decoded);
+    defer a.free(full);
+    @memcpy(full[0..first], ids.items[0..first]);
+    @memcpy(full[first..], ids.items[first + decoded ..]);
+    try prefill(m, &p, &c, full);
+    const fresh_rollback = p.logits.slice(f32, vocab);
+    var rollback_max: f32 = 0;
+    for (restored, fresh_rollback) |x, y| rollback_max = @max(rollback_max, @abs(x - y));
+    std.debug.print("rollback vs full prefill: max_abs={d} greedy_restored={d} greedy_fresh={d} agreement={}\n", .{ rollback_max, argmax(restored), argmax(fresh_rollback), argmax(restored) == argmax(fresh_rollback) });
 }

@@ -30,6 +30,48 @@ pub const Cache = struct {
     capacity: usize,
     len: usize = 0,
 
+    pub const Rollback = struct {
+        buffer: mtl.Buffer,
+        len: usize = 0,
+
+        pub fn init(device: mtl.Device, config: *const cfg.Config) !Rollback {
+            return .{ .buffer = try device.buffer(@max(fixedBytes(config), 16), mtl.ResourceOptions.private) };
+        }
+
+        pub fn deinit(r: *Rollback) void {
+            r.buffer.deinit();
+        }
+
+        pub fn copy(r: *Rollback, queue: mtl.Queue, config: *const cfg.Config, cache: *Cache, save: bool) !void {
+            const pool = mtl.objc.Pool.push();
+            defer pool.pop();
+            const cb = queue.commandBuffer();
+            const blit = cb.blit();
+            var at: usize = 0;
+            for ([_]mtl.Buffer{ cache.k_conv, cache.v_conv, cache.attn_conv, cache.mlp_conv }) |buf| {
+                if (save) blit.copy(buf, 0, r.buffer, at, buf.length()) else blit.copy(r.buffer, at, buf, 0, buf.length());
+                at += buf.length();
+            }
+            const bytes = config.text.window * config.text.local.kv * config.text.local.dim * 4;
+            for (0..config.slots()) |slot| {
+                if (!isLocalSlot(config, slot)) continue;
+                const off = cache.baseOffset(config, slot);
+                for ([_]mtl.Buffer{ cache.keys, cache.values }) |buf| {
+                    if (save) blit.copy(buf, off, r.buffer, at, bytes) else blit.copy(r.buffer, at, buf, off, bytes);
+                    at += bytes;
+                }
+            }
+            blit.end();
+            cb.commit();
+            cb.wait();
+            if (cb.failure()) |message| {
+                std.log.err("inkling rollback: {s}", .{message});
+                return error.GpuFailed;
+            }
+            if (save) r.len = cache.len else cache.len = r.len;
+        }
+    };
+
     pub fn isLocalSlot(c0: *const cfg.Config, s: usize) bool {
         const phys = c0.loop.physicalLayer(c0.text.layers, @intCast(s));
         return !c0.isFull(phys);
@@ -381,3 +423,64 @@ pub const Trace = struct {
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = out.items });
     }
 };
+
+fn readPromptState(device: mtl.Device, queue: mtl.Queue, config: *const cfg.Config, cache: *Cache) !mtl.Buffer {
+    const row_bytes: usize = config.text.local.kv * config.text.local.dim * 4;
+    const kv_bytes = (Cache.localSlots(config) * config.text.window + Cache.globalSlots(config) * cache.len) * row_bytes * 2;
+    const conv_bytes = cache.k_conv.length() + cache.v_conv.length() + cache.attn_conv.length() + cache.mlp_conv.length();
+    const output = try device.buffer(kv_bytes + conv_bytes, mtl.ResourceOptions.shared);
+    errdefer output.deinit();
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const cb = queue.commandBuffer();
+    const blit = cb.blit();
+    var at: usize = 0;
+    for ([_]mtl.Buffer{ cache.k_conv, cache.v_conv, cache.attn_conv, cache.mlp_conv }) |buf| {
+        blit.copy(buf, 0, output, at, buf.length());
+        at += buf.length();
+    }
+    for (0..config.slots()) |slot| {
+        const bytes = (if (Cache.isLocalSlot(config, slot)) config.text.window else cache.len) * row_bytes;
+        for ([_]mtl.Buffer{ cache.keys, cache.values }) |buf| {
+            blit.copy(buf, cache.baseOffset(config, slot), output, at, bytes);
+            at += bytes;
+        }
+    }
+    blit.end();
+    cb.commit();
+    cb.wait();
+    if (cb.failure()) |_| return error.GpuFailed;
+    return output;
+}
+
+test "prompt rollback restores the state after generated tokens overwrite rings" {
+    const path = std.c.getenv("TF_INKLING2_LOOP_DIR") orelse return error.SkipZigTest;
+    const model = try @import("model.zig").Model.load(std.testing.allocator, std.testing.io, std.mem.span(path));
+    defer model.deinit();
+    const config = &model.config;
+    var cache = try Cache.init(model.device, config, config.text.window + 8);
+    defer cache.deinit();
+    var prefill = try @import("prefill.zig").PrefillScratch.init(model.device, config, 512);
+    defer prefill.deinit();
+    var scratch = try Scratch.init(model.device, config);
+    defer scratch.deinit();
+    var ids: [512]u32 = undefined;
+    for (&ids, 0..) |*id, i| id.* = @intCast(100 + i % 71);
+    var at: usize = 0;
+    while (at < config.text.window) {
+        const n = @min(ids.len, config.text.window - at);
+        try @import("prefill.zig").prefillWant(model, &prefill, &cache, ids[0..n], .none);
+        at += n;
+    }
+    const before = try readPromptState(model.device, model.queue, config, &cache);
+    defer before.deinit();
+    var rollback = try Cache.Rollback.init(model.device, config);
+    defer rollback.deinit();
+    try rollback.copy(model.queue, config, &cache, true);
+    for ([_]u32{ 123, 124, 125, 126 }) |id| try @import("forward.zig").position(model, &scratch, &cache, id);
+    try rollback.copy(model.queue, config, &cache, false);
+    try std.testing.expectEqual(@as(usize, config.text.window), cache.len);
+    const after = try readPromptState(model.device, model.queue, config, &cache);
+    defer after.deinit();
+    try std.testing.expectEqualSlices(u8, before.slice(u8, before.length()), after.slice(u8, after.length()));
+}

@@ -161,7 +161,9 @@ pub const Host = struct {
             slot.stream = .{ .cache = &slot.cache, .ctx = &slot.ctx.? };
         }
         h.speculator = .{ .model = h.model, .drafter = &h.drafter.?, .verifier = &h.verifier.?, .batch = &h.batch };
-        std.log.info("inkling2_loop: greedy MTP drafts on: block {d}, {d} slots, {d:.3} GiB drafter contexts", .{ h.drafter.?.block, h.slots.len, @as(f64, @floatFromInt(h.slots.len * inkling.draft.Context.bytes(&h.model.config, capacity))) / (1 << 30) });
+        const paused = if (std.c.getenv("INKLING_MTP_PAUSE")) |v| std.mem.eql(u8, std.mem.span(v), "1") else false;
+        h.speculator.?.drafting = !paused;
+        std.log.info("inkling2_loop: greedy MTP drafts {s}: block {d}, {d} slots, {d:.3} GiB drafter contexts", .{ if (paused) "paused" else "on", h.drafter.?.block, h.slots.len, @as(f64, @floatFromInt(h.slots.len * inkling.draft.Context.bytes(&h.model.config, capacity))) / (1 << 30) });
     }
 
     fn common(a: []const u32, b: []const u32) usize {

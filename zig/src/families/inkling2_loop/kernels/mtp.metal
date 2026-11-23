@@ -437,3 +437,58 @@ inline float i2m_affine(const device uint* w, const device bfloat* s, const devi
     FB[v0 + tid] = bfloat(s);
   }
 }
+
+// The proposals' base logits through the target's 8-bit affine unembedding, for few rows: BASE[s * block + 1 + j][v]
+// for every slot s and step j < steps, from the final-normed block rows XN. Each simdgroup reads its 4 vocabulary rows
+// once, coalesced, for every input row; the input rows are staged 256 columns at a time.
+struct i2m_head_args { uint vocab, hidden, block, steps, rows; };
+
+[[kernel]] void i2m_head(const device float* XN [[buffer(0)]], const device uint* W [[buffer(1)]],
+    const device bfloat* S [[buffer(2)]], const device bfloat* B [[buffer(3)]], constant i2m_head_args& a [[buffer(4)]],
+    device float* BASE [[buffer(5)]], uint tg [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
+    uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+  threadgroup float X[16][256];
+  float acc[4][16];
+  for (uint q = 0; q < 4u; ++q) for (uint r = 0; r < 16u; ++r) acc[q][r] = 0.0f;
+  const uint words = a.hidden / 4u;
+  for (uint k0 = 0; k0 < a.hidden; k0 += 256u) {
+    for (uint e = tid; e < a.rows * 256u; e += 256u) {
+      const uint r = e / 256u, k = k0 + e % 256u;
+      const uint row = (r / a.steps) * a.block + 1u + r % a.steps;
+      X[r][e % 256u] = k < a.hidden ? XN[(size_t)row * a.hidden + k] : 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const uint k = k0 + lane * 8u;
+    if (k < a.hidden) {
+      for (uint q = 0; q < 4u; ++q) {
+        const uint v = tg * 32u + sg * 4u + q;
+        if (v >= a.vocab) break;
+        const uint2 packed = *reinterpret_cast<const device uint2*>(W + (size_t)v * words + k / 4u);
+        const size_t group = (size_t)v * (a.hidden / 64u) + k / 64u;
+        const float scale = float(S[group]), bias = float(B[group]);
+        float w[8];
+        for (uint u = 0; u < 4u; ++u) {
+          w[u] = float((packed.x >> (8u * u)) & 0xffu) * scale + bias;
+          w[4u + u] = float((packed.y >> (8u * u)) & 0xffu) * scale + bias;
+        }
+        for (uint r = 0; r < 16u; ++r) {
+          if (r >= a.rows) break;
+          float sum = acc[q][r];
+          for (uint u = 0; u < 8u; ++u) sum = fma(w[u], X[r][lane * 8u + u], sum);
+          acc[q][r] = sum;
+        }
+      }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  for (uint q = 0; q < 4u; ++q) {
+    const uint v = tg * 32u + sg * 4u + q;
+    if (v >= a.vocab) break;
+    for (uint r = 0; r < 16u; ++r) {
+      if (r >= a.rows) break;
+      const float total = simd_sum(acc[q][r]);
+      const uint row = (r / a.steps) * a.block + 1u + r % a.steps;
+      if (lane == 0u) BASE[(size_t)row * a.vocab + v] = total;
+    }
+  }
+}

@@ -98,13 +98,14 @@ const StepArgs = extern struct { rank: u32, width: u32, steps: u32, step: u32 };
 const FoldArgs = extern struct { vocab: u32, rank: u32, slots: u32, block: u32, steps: u32, step: u32, tiles: u32, dump: u32, cap: f32 };
 const PickArgs = extern struct { tiles: u32, steps: u32, step: u32 };
 const BuildArgs = extern struct { vocab: u32, hidden: u32, rank: u32, bits: u32 };
+const HeadArgs = extern struct { vocab: u32, hidden: u32, block: u32, steps: u32, rows: u32 };
 const Dense = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32, cap: f32 };
 const AffineDense = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32, bits: u32, cap: f32 };
 const EmbedArgs = extern struct { width: u32, rows: u32, eps: f32 };
 const RmsArgs = extern struct { width: u32, rows: u32, xs: u32, xb: u32, ys: u32, yb: u32, wb: u32, eps: f32 };
 
-const kernel_names = [_][:0]const u8{ "i2m_mix", "i2m_ctx_store", "i2m_block", "i2m_qk", "i2m_attn_split", "i2m_attn_combine", "i2m_silu_mul", "i2m_rnn_ctx", "i2m_rnn_step", "i2m_fold", "i2m_pick", "i2m_zero", "i2m_fold_build" };
-const K = enum { mix, ctx_store, block, qk, attn_split, attn_combine, silu_mul, rnn_ctx, rnn_step, fold, pick, zero, fold_build };
+const kernel_names = [_][:0]const u8{ "i2m_mix", "i2m_ctx_store", "i2m_block", "i2m_qk", "i2m_attn_split", "i2m_attn_combine", "i2m_silu_mul", "i2m_rnn_ctx", "i2m_rnn_step", "i2m_fold", "i2m_pick", "i2m_zero", "i2m_fold_build", "i2m_head" };
+const K = enum { mix, ctx_store, block, qk, attn_split, attn_combine, silu_mul, rnn_ctx, rnn_step, fold, pick, zero, fold_build, head };
 
 const Bind = struct { buf: mtl.Buffer, off: usize = 0 };
 
@@ -162,6 +163,8 @@ pub const Drafter = struct {
     drafts: mtl.Buffer,
     dump: ?mtl.Buffer = null,
     times: ?*Times = null,
+    /// Few proposal rows take the base logits from the few-row head kernel; off, the tiled matrix kernel.
+    head_rows: bool = true,
 
     /// The drafter for up to `slots` streams a proposal and `rows` tapped rows an extend. `pipes` lends the prefill
     /// path's projection, norm and embedding pipelines; the model must have loaded its draft head.
@@ -181,6 +184,7 @@ pub const Drafter = struct {
         d.rows = rows;
         d.dump = null;
         d.times = null;
+        d.head_rows = true;
         const lib = try mtl.Library.fromSource(m.device, source, mtl.CompileOptions.mlx());
         defer lib.deinit();
         var made: usize = 0;
@@ -469,7 +473,12 @@ pub const Drafter = struct {
         }
         d.rms(enc, bb(d.h), w.norm, rows, bb(d.xn));
         const unembed = m.weights.unembed;
-        if (unembed.affine) |aq| {
+        const needed = n * steps;
+        if (d.head_rows and unembed.affine != null and unembed.affine.?.bits() == 8 and needed <= 16 and h % 256 == 0) {
+            const aq = unembed.affine.?;
+            set(enc, d.pipe(.head), HeadArgs{ .vocab = @intCast(d.vocab), .hidden = @intCast(h), .block = @intCast(d.block), .steps = @intCast(steps), .rows = @intCast(needed) }, 4, &.{ bb(d.xn), bt(unembed), bo(aq.scales, aq.scale_offset), bo(aq.biases, aq.bias_offset), bb(d.base) });
+            enc.dispatchGroups(mtl.Size.of((d.vocab + 31) / 32, 1, 1), mtl.Size.of(256, 1, 1));
+        } else if (unembed.affine) |aq| {
             set(enc, m.affine_pipes.?.dense_rows, AffineDense{ .n = @intCast(d.vocab), .k = @intCast(h), .rows = @intCast(rows), .xs = 1, .xb = 0, .bits = aq.bits(), .cap = 0 }, 4, &.{ bb(d.xn), bt(unembed), bo(aq.scales, aq.scale_offset), bo(aq.biases, aq.bias_offset), bb(d.base) });
             enc.dispatchGroups(mtl.Size.of((d.vocab + 63) / 64, (rows + 31) / 32, 1), mtl.Size.of(256, 1, 1));
         } else {
@@ -578,6 +587,28 @@ test "the drafter's kernels compile" {
     }
 }
 
+/// The drafter's round as speculation pays it: one new context row, then a block's proposals, from a fixed context of
+/// 1,349 positions (as the earlier native drafter was timed). Three warm rounds, then the median and range of 21.
+fn timeRounds(d: *Drafter, ctx: *Context, anchor: u32) !void {
+    const base: usize = 1349;
+    for ([_]bool{ true, false }) |head| for ([_]usize{ 3, 7 }) |count| {
+        d.head_rows = head;
+        var ms: [21]f64 = undefined;
+        for (0..24) |round| {
+            ctx.len = base;
+            var drafts: [7]u32 = undefined;
+            const started = now();
+            try d.extend(&.{.{ .ctx = ctx }});
+            try d.propose(&.{ctx}, &.{anchor}, &.{count}, &.{drafts[0..count]});
+            const took = @as(f64, @floatFromInt(now() - started)) / 1e6;
+            if (round >= 3) ms[round - 3] = took;
+        }
+        std.mem.sort(f64, &ms, {}, std.sort.asc(f64));
+        std.debug.print("drafter round width={d} head={s} context={d}: median {d:.3} ms range {d:.3}-{d:.3} ms over 21\n", .{ count + 1, if (head) "few-row" else "tiled", base, ms[10], ms[0], ms[20] });
+    };
+    d.head_rows = true;
+}
+
 /// The campaign's rendered chat prompts: the agent workload's first turn, then three short requests.
 pub const prompts_json = @embedFile("fixtures/mtp_prompts.json");
 pub const Prompt = struct { name: []const u8, token_ids: []const u32 };
@@ -645,6 +676,12 @@ test "the drafter's proposals follow its own logits, repeat bit for bit and batc
     try std.testing.expectEqual(prompt.len, one.len);
     const anchor = argmaxOf(ps.logits.slice(f32, vocab));
     const steps = d.depth();
+    if (std.c.getenv("TF_INKLING2_MTP_TIMING") != null) {
+        var timed = try Context.init(m.device, &m.config, 4096);
+        defer timed.deinit();
+        try timed.copyFrom(m.queue, &m.config, &one, one.len);
+        try timeRounds(&d, &timed, anchor);
+    }
     d.dump = try m.device.buffer(2 * steps * vocab * 4, mtl.ResourceOptions.shared);
     var first: [7]u32 = undefined;
     try d.propose(&.{&one}, &.{anchor}, &.{steps}, &.{first[0..steps]});

@@ -22,9 +22,22 @@ inline float i2a_dot(const device float* x, const device uint* w, const device b
     const uint packed = w[row * (width / per) + word];
     const size_t group = row * (width / 64u) + (word * per) / 64u;
     const float scale = float(s[group]), bias = float(b[group]);
-    for (uint j = 0; j < per; ++j) {
-      const float value = float((packed >> (j * bits)) & mask) * scale + bias;
-      acc = fma(x[word * per + j], value, acc);
+    const uint4 shift = uint4(0u, bits, bits * 2u, bits * 3u);
+    const float4 code0 = float4((uint4(packed) >> shift) & mask);
+    const float4 input0 = float4(*reinterpret_cast<const device packed_float4*>(x + word * per));
+    const float4 value0 = fma(code0, float4(scale), float4(bias));
+    acc = fma(input0.x, value0.x, acc);
+    acc = fma(input0.y, value0.y, acc);
+    acc = fma(input0.z, value0.z, acc);
+    acc = fma(input0.w, value0.w, acc);
+    if (bits == 4u) {
+      const float4 code1 = float4((uint4(packed >> 16u) >> shift) & mask);
+      const float4 input1 = float4(*reinterpret_cast<const device packed_float4*>(x + word * per + 4u));
+      const float4 value1 = fma(code1, float4(scale), float4(bias));
+      acc = fma(input1.x, value1.x, acc);
+      acc = fma(input1.y, value1.y, acc);
+      acc = fma(input1.z, value1.z, acc);
+      acc = fma(input1.w, value1.w, acc);
     }
   }
   return simd_sum(acc);

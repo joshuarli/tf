@@ -15,6 +15,7 @@ pub const BatchScratch = struct {
     controls_apply: mtl.Pipeline,
     mix: mtl.Pipeline,
     mix4: mtl.Pipeline,
+    pick: mtl.Pipeline,
     controls_input: mtl.Buffer,
     controls_hidden: mtl.Buffer,
 
@@ -47,10 +48,13 @@ pub const BatchScratch = struct {
         const mix = try mtl.Pipeline.init(device, lib, "i2_batch_mix", false);
         errdefer mix.deinit();
         const mix4 = try mtl.Pipeline.init(device, lib, "i2_batch_mix4", false);
-        return .{ .rows = rows, .decode = decode, .parts = parts, .split = split, .combine = combine, .controls_norm = controls_norm, .controls_down = controls_down, .controls_apply = controls_apply, .mix = mix, .mix4 = mix4, .controls_input = controls_input, .controls_hidden = controls_hidden };
+        errdefer mix4.deinit();
+        const pick = try mtl.Pipeline.init(device, lib, "i2_batch_pick", false);
+        return .{ .rows = rows, .decode = decode, .parts = parts, .split = split, .combine = combine, .controls_norm = controls_norm, .controls_down = controls_down, .controls_apply = controls_apply, .mix = mix, .mix4 = mix4, .pick = pick, .controls_input = controls_input, .controls_hidden = controls_hidden };
     }
 
     pub fn deinit(s: *BatchScratch) void {
+        s.pick.deinit();
         s.mix4.deinit();
         s.mix.deinit();
         s.controls_apply.deinit();

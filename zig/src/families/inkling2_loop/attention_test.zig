@@ -748,3 +748,74 @@ test "batched depth mixes keep the prefill mixes' bytes" {
     };
     std.debug.print("batched depth mix test: {d} cases byte-equal to the prefill mixes\n", .{checked});
 }
+
+const PickArgs = extern struct { experts: u32, topk: u32, rows: u32, route_scale: f32 };
+
+test "batched route selection keeps the prefill selection's picks and weights" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = mtl.Device.init() catch return error.SkipZigTest;
+    defer device.deinit();
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, kernels.attention, mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const prefill_lib = try mtl.Library.fromSource(device, kernels.prefillSource(false), mtl.CompileOptions.mlx());
+    defer prefill_lib.deinit();
+    const pipes = [_]mtl.Pipeline{ try mtl.Pipeline.init(device, prefill_lib, "i2p_routepick", false), try mtl.Pipeline.init(device, lib, "i2_batch_pick", false) };
+    defer for (pipes) |p| p.deinit();
+    const rows = 8;
+    const experts = 128;
+    const topk = 8;
+    var prng = std.Random.DefaultPrng.init(0x7069636b);
+    const rng = prng.random();
+    const logits = try device.buffer(rows * experts * 4, mtl.ResourceOptions.shared);
+    defer logits.deinit();
+    const bias = try device.buffer(experts * 4, mtl.ResourceOptions.shared);
+    defer bias.deinit();
+    var picks: [2]mtl.Buffer = undefined;
+    var weights: [2]mtl.Buffer = undefined;
+    for (0..2) |i| {
+        picks[i] = try device.buffer(rows * topk * 4, mtl.ResourceOptions.shared);
+        weights[i] = try device.buffer(rows * topk * 4, mtl.ResourceOptions.shared);
+    }
+    defer for (0..2) |i| {
+        picks[i].deinit();
+        weights[i].deinit();
+    };
+    for (0..12) |case| {
+        const l = logits.slice(f32, rows * experts);
+        for (l, 0..) |*v, i| v.* = switch (case % 3) {
+            0 => rng.float(f32) * 8 - 4,
+            1 => @as(f32, @floatFromInt(@as(i32, @intCast(i % 7)) - 3)),
+            else => rng.float(f32) * 60 - 30,
+        };
+        for (bias.slice(f32, experts), 0..) |*v, i| v.* = if (case % 2 == 0) 0 else @as(f32, @floatFromInt(i % 5)) * 0.01;
+        const args = PickArgs{ .experts = experts, .topk = topk, .rows = rows, .route_scale = 2.5 };
+        const cb = queue.commandBuffer();
+        const enc = cb.compute(.serial);
+        for (pipes, 0..) |pipe, i| {
+            enc.setPipeline(pipe);
+            enc.setBuffer(logits, 0, 0);
+            enc.setBuffer(bias, 0, 1);
+            enc.setValue(args, 2);
+            enc.setBuffer(picks[i], 0, 3);
+            enc.setBuffer(weights[i], 0, 4);
+            enc.dispatchGroups(mtl.Size.of(rows, 1, 1), mtl.Size.of(32, 1, 1));
+        }
+        enc.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |msg| {
+            std.debug.print("pick test: {s}\n", .{msg});
+            return error.GpuFailed;
+        }
+        try std.testing.expectEqualSlices(i32, picks[0].slice(i32, rows * topk), picks[1].slice(i32, rows * topk));
+        if (!sameBits(weights[0].slice(f32, rows * topk), weights[1].slice(f32, rows * topk))) {
+            std.debug.print("pick test case {d}: weights differ\n", .{case});
+            return error.TestUnexpectedResult;
+        }
+    }
+    std.debug.print("batched route selection test: 12 cases equal to the prefill selection\n", .{});
+}

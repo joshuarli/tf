@@ -44,4 +44,6 @@ if [ "$INKLING_AGENTS" = 4 ]; then
     perf-gate-ready
     python3 tools/bench_concurrent.py "http://127.0.0.1:$port" "$model" --levels 1,2,4 --tokens 256 --reps 2 --temperatures 0 --alone --serial --output "$base/concurrent.json"
     perf-gate-ready -1
+    jaq -e '[.cells[] | .alone.unequal == 0 and .alone.failed == 0 and .serial.unequal == 0 and .serial.failed == 0 and (.streams == 1 or (.alone | has("vacuous") | not))] | all' "$base/concurrent.json" >/dev/null \
+        || { echo "sweep-subagents: a concurrent reply differs from its solo reply, failed, or never overlapped another stream; see $base/concurrent.json" >&2; exit 1; }
 fi

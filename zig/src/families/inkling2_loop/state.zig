@@ -33,9 +33,16 @@ pub const Cache = struct {
     pub const Rollback = struct {
         buffer: mtl.Buffer,
         len: usize = 0,
+        rows: usize,
+        saved_rows: usize = 0,
 
         pub fn init(device: mtl.Device, config: *const cfg.Config) !Rollback {
-            return .{ .buffer = try device.buffer(@max(fixedBytes(config), 16), mtl.ResourceOptions.private) };
+            return initRows(device, config, config.text.window);
+        }
+
+        pub fn initRows(device: mtl.Device, config: *const cfg.Config, rows: usize) !Rollback {
+            const count = @min(rows, config.text.window);
+            return .{ .buffer = try device.buffer(@max(rollbackBytes(config, count), 16), mtl.ResourceOptions.private), .rows = count };
         }
 
         pub fn deinit(r: *Rollback) void {
@@ -43,6 +50,11 @@ pub const Cache = struct {
         }
 
         pub fn copy(r: *Rollback, queue: mtl.Queue, config: *const cfg.Config, cache: *Cache, save: bool) !void {
+            return r.copyRows(queue, config, cache, save, r.rows);
+        }
+
+        pub fn copyRows(r: *Rollback, queue: mtl.Queue, config: *const cfg.Config, cache: *Cache, save: bool, rows: usize) !void {
+            const count = if (save) @min(r.rows, rows) else r.saved_rows;
             const pool = mtl.objc.Pool.push();
             defer pool.pop();
             const cb = queue.commandBuffer();
@@ -52,13 +64,24 @@ pub const Cache = struct {
                 if (save) blit.copy(buf, 0, r.buffer, at, buf.length()) else blit.copy(r.buffer, at, buf, 0, buf.length());
                 at += buf.length();
             }
-            const bytes = config.text.window * config.text.local.kv * config.text.local.dim * 4;
+            const row_bytes = config.text.local.kv * config.text.local.dim * 4;
+            const start = (if (save) cache.len else r.len) % config.text.window;
+            const first = @min(count, config.text.window - start);
+            const second = count - first;
             for (0..config.slots()) |slot| {
                 if (!isLocalSlot(config, slot)) continue;
-                const off = cache.baseOffset(config, slot);
+                const base = cache.baseOffset(config, slot);
                 for ([_]mtl.Buffer{ cache.keys, cache.values }) |buf| {
-                    if (save) blit.copy(buf, off, r.buffer, at, bytes) else blit.copy(r.buffer, at, buf, off, bytes);
-                    at += bytes;
+                    if (first > 0) {
+                        const bytes = first * row_bytes;
+                        if (save) blit.copy(buf, base + start * row_bytes, r.buffer, at, bytes) else blit.copy(r.buffer, at, buf, base + start * row_bytes, bytes);
+                        at += bytes;
+                    }
+                    if (second > 0) {
+                        const bytes = second * row_bytes;
+                        if (save) blit.copy(buf, base, r.buffer, at, bytes) else blit.copy(r.buffer, at, buf, base, bytes);
+                        at += bytes;
+                    }
                 }
             }
             blit.end();
@@ -68,7 +91,10 @@ pub const Cache = struct {
                 std.log.err("inkling rollback: {s}", .{message});
                 return error.GpuFailed;
             }
-            if (save) r.len = cache.len else cache.len = r.len;
+            if (save) {
+                r.len = cache.len;
+                r.saved_rows = count;
+            } else cache.len = r.len;
         }
     };
 
@@ -103,6 +129,13 @@ pub const Cache = struct {
     pub fn bytesPerToken(c0: *const cfg.Config) usize {
         const kv: usize = c0.text.local.kv * c0.text.local.dim;
         return globalSlots(c0) * kv * 4 * 2;
+    }
+
+    pub fn rollbackBytes(c0: *const cfg.Config, rows: usize) usize {
+        const kv: usize = c0.text.local.kv * c0.text.local.dim;
+        const h: usize = c0.text.hidden;
+        const slots: usize = c0.slots();
+        return localSlots(c0) * @min(rows, c0.text.window) * kv * 4 * 2 + slots * ring * (kv + h) * 4 * 2;
     }
 
     pub fn fixedBytes(c0: *const cfg.Config) usize {
@@ -467,19 +500,19 @@ test "prompt rollback restores the state after generated tokens overwrite rings"
     var ids: [512]u32 = undefined;
     for (&ids, 0..) |*id, i| id.* = @intCast(100 + i % 71);
     var at: usize = 0;
-    while (at < config.text.window) {
-        const n = @min(ids.len, config.text.window - at);
+    while (at < config.text.window - 2) {
+        const n = @min(ids.len, config.text.window - 2 - at);
         try @import("prefill.zig").prefillWant(model, &prefill, &cache, ids[0..n], .none);
         at += n;
     }
     const before = try readPromptState(model.device, model.queue, config, &cache);
     defer before.deinit();
-    var rollback = try Cache.Rollback.init(model.device, config);
+    var rollback = try Cache.Rollback.initRows(model.device, config, 4);
     defer rollback.deinit();
     try rollback.copy(model.queue, config, &cache, true);
     for ([_]u32{ 123, 124, 125, 126 }) |id| try @import("forward.zig").position(model, &scratch, &cache, id);
     try rollback.copy(model.queue, config, &cache, false);
-    try std.testing.expectEqual(@as(usize, config.text.window), cache.len);
+    try std.testing.expectEqual(@as(usize, config.text.window - 2), cache.len);
     const after = try readPromptState(model.device, model.queue, config, &cache);
     defer after.deinit();
     try std.testing.expectEqualSlices(u8, before.slice(u8, before.length()), after.slice(u8, after.length()));

@@ -26,3 +26,31 @@ TF_METAL4_TIMELINE=1 python3 campaign/heavy.py -- sh -c 'gpu-gate-ready -1 || ex
 python3 campaign/kernels/inkling_profile.py timeline --log .work/tmp/profile-candidate.log
 python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu
 ```
+
+## f16 KV attempt
+
+An uncommitted candidate changed global and local KV storage to f16, retained f32 accumulators and convolution
+rings, rounded current prefill KV to f16 before attention, and changed rollback, verification and copy offsets.
+It was removed after failing qualification. The committed implementation therefore still stores KV in f32.
+
+The saved-oracle capture verified all 16 histories. Its standard f32 cross-checkpoint parity command exited 2,
+as that contract differs from the oQ4e fidelity gate. The streamed comparison used the eight-row script in
+[Inkling oQ4e fast](inkling-oq4e-fast.md) with `outdir` set to `.work/tmp/half-parity`. It exited 0 and reported
+2,756/3,015 top-1 matches (91.4096%), mean KL 0.0389854086 and zero non-finite logits. The top-1 floor is 91.5%.
+Sixteen guarded model processes completed, with a maximum `heavy.py` charge of 20.2 GB.
+
+The f16 suite command below exited 1: the GPU build reported 69/73 tests passed and four failures across two
+test executables. The prefill-versus-decode fixture reported maximum logit difference `3.077276e-5`, key and value
+differences `0.00390625`, against the existing `1.5e-5` bound; the batch-versus-decode fixture also failed its
+existing logit bound. Rollback and verification checks passed. These measurements establish a failed candidate,
+not that an f16 implementation cannot meet the gate. No tolerance was relaxed. The f16 candidate was not retained,
+so the commands below document the experiment and do not reproduce its binary from the final tree.
+
+```sh
+PATH="/opt/homebrew/bin:$PATH" TMPDIR="$PWD/.work/tmp" ZIG_GLOBAL_CACHE_DIR="$HOME/repos/tf/.work/zig-global-cache" INKLING_LOAD_LIMIT_GB=26 python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu > .work/tmp/suite-half.log 2>&1
+PATH="/Users/josh/repos/tf/.work/venv-ref/bin:/opt/homebrew/bin:$PATH" TMPDIR="$PWD/.work/tmp" ZIG_GLOBAL_CACHE_DIR="$HOME/repos/tf/.work/zig-global-cache" INKLING_LOAD_LIMIT_GB=26 make -C campaign -f parity/inkling2-mini/parity.mk parity-inkling2-mini RUNNER_MODE=prefill PREFILL_CHUNK=512 LANE=b1g-half REPORT="$PWD/.work/tmp/half-parity.md" METAL_LOGITS="$PWD/.work/tmp/half-parity" WORK="$PWD/.work" REF_LOGITS="/Users/josh/repos/tf/.work/parity/inkling2-mini/ref" REF_UV=env "REF_VENV=''" RUNNER="$PWD/.work/tmp/half-build/bin/tf-inkling2-loop-run" INKLING_DIR="$HOME/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd" > .work/tmp/half-parity.log 2>&1
+/Users/josh/repos/tf/.work/venv-ref/bin/python .work/tmp/half-compare.py > .work/tmp/half-compare.log 2>&1
+```
+
+The alternating timing matrix, final f16 profile and four-agent sweep were not run. The f32 batch candidate's
+profile and tests do not establish the requested end-to-end performance target.

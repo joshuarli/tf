@@ -172,7 +172,9 @@ def mlx_weight_floor(c: dict, header: dict, expert_read: str) -> dict:
         size = tensor_bytes(header, name)
         rows = header[name]["shape"][0]
         buckets["embedding row + norms"] += size // rows
-        buckets["unembedding"] += tensor_bytes(header, "lm_head." + suffix)
+        head = "lm_head." + suffix
+        head_rows = header[head]["shape"][0]
+        buckets["unembedding"] += tensor_bytes(header, head) // head_rows * c["unpadded_vocab_size"]
     buckets["embedding row + norms"] += sum(tensor_bytes(header, name) for name in ("model.embed_norm.weight", "model.norm.weight"))
     loop = c["loop_config"]
     buckets["cross-pass"] = 2 * sum(tensor_bytes(header, f"model.layers.{layer}.loop_message.query")

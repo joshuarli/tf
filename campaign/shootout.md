@@ -52,8 +52,7 @@ These raw engine rates on oQ4e come from the gated `tf-inkling2-loop-run` and `b
 | Batched step, 4 rows | 69.0 tok/s | — |
 | Batched step, 8 rows | 76.6 tok/s | — |
 
-At 4 agents, TensorFold's served rate (47.6) is well below its own 4-row batch rate (69.0). Each new prompt's
-prefill stalls every decoding session, and B1f removes that stall.
+At 4 agents, TensorFold's served rate (47.6) is well below its own 4-row batch rate (69.0). It is not admission: interleaving prefill with decode (B1f) changed nothing, because the agents run in lockstep. The cause is attention over context in the batched step. At about 2.6K context, each row costs about 1.9 ms per 1K tokens, three times single-stream decode, so a 4-row step takes 74 ms against 55 ms on short prompts.
 
 ## nanoattention
 

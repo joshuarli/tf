@@ -58,9 +58,20 @@ inline float i2a_dot(const device float* x, const device uint* w, const device b
   const uint col = group.x * 8u + tid / 32u;
   const uint row = group.y, lane = tid % 32u;
   if (col >= a.n || row >= a.rows) return;
+  const device float* input = x + (size_t)(row * a.xs + a.xb) * a.k;
+  const device float* weight = w + (size_t)col * a.k;
   float acc = 0.0f;
-  for (uint k = lane; k < a.k; k += 32u)
-    acc = fma(x[(size_t)(row * a.xs + a.xb) * a.k + k], w[(size_t)col * a.k + k], acc);
+  uint base = 0u;
+  for (; base + 128u <= a.k; base += 128u) {
+    const uint k = base + lane * 4u;
+    const float4 xv = float4(*reinterpret_cast<const device packed_float4*>(input + k));
+    const float4 wv = float4(*reinterpret_cast<const device packed_float4*>(weight + k));
+    acc = fma(xv.x, wv.x, acc);
+    acc = fma(xv.y, wv.y, acc);
+    acc = fma(xv.z, wv.z, acc);
+    acc = fma(xv.w, wv.w, acc);
+  }
+  for (uint k = base + lane; k < a.k; k += 32u) acc = fma(input[k], weight[k], acc);
   acc = simd_sum(acc);
   if (lane == 0u) y[(size_t)row * a.n + col] = acc;
 }

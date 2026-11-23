@@ -140,7 +140,7 @@ test "affine embedding and router match float64 references" {
     defer device.deinit();
     const queue = try device.queue();
     defer queue.deinit();
-    const k = 64;
+    const k = 256;
     const n = 4;
     const x = try device.buffer(256 * k * 4, mtl.ResourceOptions.shared);
     defer x.deinit();
@@ -148,9 +148,9 @@ test "affine embedding and router match float64 references" {
     defer fw.deinit();
     const words = try device.buffer(n * k, mtl.ResourceOptions.shared);
     defer words.deinit();
-    const scales = try device.buffer(n * 2, mtl.ResourceOptions.shared);
+    const scales = try device.buffer(n * k / 64 * 2, mtl.ResourceOptions.shared);
     defer scales.deinit();
-    const biases = try device.buffer(n * 2, mtl.ResourceOptions.shared);
+    const biases = try device.buffer(n * k / 64 * 2, mtl.ResourceOptions.shared);
     defer biases.deinit();
     const ids = try device.buffer(256 * 4, mtl.ResourceOptions.shared);
     defer ids.deinit();
@@ -162,8 +162,8 @@ test "affine embedding and router match float64 references" {
     for (fw.slice(f32, n * k), 0..) |*v, i| v.* = @as(f32, @floatFromInt(@as(i32, @intCast(i % 17)) - 8)) / 16;
     for (ids.slice(u32, 256), 0..) |*v, i| v.* = @intCast(i % n);
     @memset(norm.slice(u16, k), 0x3f80);
-    @memset(scales.slice(u16, n), 0x3d80);
-    @memset(biases.slice(u16, n), 0xbf00);
+    @memset(scales.slice(u16, n * k / 64), 0x3d80);
+    @memset(biases.slice(u16, n * k / 64), 0xbf00);
     fill(words.slice(u32, n * k / 4), n, k, 8);
     const lib = try mtl.Library.fromSource(device, @embedFile("kernels/affine.metal"), mtl.CompileOptions.mlx());
     defer lib.deinit();

@@ -94,9 +94,10 @@ The first 4K prose and structured TensorFold attempts exited 3 before their
 workers emitted receipts. `heavy.py` reported a 0.0 GB footprint and 28.4 GB
 and 29.1 GB of host wired growth, respectively. The driver advanced to a
 queued 16K attempt, which was stopped so the two environmental failures
-could each be retried once before the long cells. The prose retry then exited
-4 at critical host memory pressure with a 0.0 GB footprint and no worker
-receipt. That cell remains unmeasured.
+could each be retried once before the long cells. Both retries then exited 4
+at critical host memory pressure with a 0.0 GB footprint and no worker
+receipt. Those cells remain unmeasured. The structured retry reported a
+5,047 MB host swap increase while waiting.
 
 Both engines allocate **65,536 bytes per additional context token** for global
 key and value state. The checkpoint has eight global attention visits after

@@ -2,6 +2,9 @@
 
 Status: checkpoint loading, the family-local affine tests, and the fidelity comparisons pass. Gated throughput is pending.
 
+The candidate is `mlx-community/Inkling-2-Mini-oQ4e-mtp` at `3eea042751cd`, compared with the native
+`Inkling-2-Mini` checkpoint at `ed40e7da625f`. Both revisions are pinned in `campaign/sources.lock.json`.
+
 The new affine kernels join the family-wide kernel-contract registration item required before promotion out of the
 campaign. This lane uses family-local FP64 tests and parity under the campaign's explicit ruling.
 

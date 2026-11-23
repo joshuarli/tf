@@ -10,6 +10,11 @@ pub const BatchScratch = struct {
     parts: mtl.Buffer,
     split: mtl.Pipeline,
     combine: mtl.Pipeline,
+    controls_norm: mtl.Pipeline,
+    controls_down: mtl.Pipeline,
+    controls_apply: mtl.Pipeline,
+    controls_input: mtl.Buffer,
+    controls_hidden: mtl.Buffer,
 
     pub fn init(device: mtl.Device, config: *const @import("config.zig").Config, capacity: usize) !BatchScratch {
         if (capacity == 0 or capacity > 8) return error.BadBatch;
@@ -21,15 +26,30 @@ pub const BatchScratch = struct {
         const dim = @max(config.text.local.dim, config.text.global.dim);
         const parts = try device.buffer(capacity * heads * state.attn_splits * (dim + 2) * 4, mtl.ResourceOptions.private);
         errdefer parts.deinit();
+        const controls_input = try device.buffer(capacity * 3 * 2 * config.text.hidden * 4, mtl.ResourceOptions.private);
+        errdefer controls_input.deinit();
+        const controls_hidden = try device.buffer(capacity * 3 * config.loop.gate_rank * 4, mtl.ResourceOptions.private);
+        errdefer controls_hidden.deinit();
         const lib = try mtl.Library.fromSource(device, @import("kernels.zig").attention, mtl.CompileOptions.mlx());
         defer lib.deinit();
         const split = try mtl.Pipeline.init(device, lib, "i2_batch_split", false);
         errdefer split.deinit();
         const combine = try mtl.Pipeline.init(device, lib, "i2_batch_combine", false);
-        return .{ .rows = rows, .decode = decode, .parts = parts, .split = split, .combine = combine };
+        errdefer combine.deinit();
+        const controls_norm = try mtl.Pipeline.init(device, lib, "i2_controls_norm", false);
+        errdefer controls_norm.deinit();
+        const controls_down = try mtl.Pipeline.init(device, lib, "i2_controls_down", false);
+        errdefer controls_down.deinit();
+        const controls_apply = try mtl.Pipeline.init(device, lib, "i2_controls_apply", false);
+        return .{ .rows = rows, .decode = decode, .parts = parts, .split = split, .combine = combine, .controls_norm = controls_norm, .controls_down = controls_down, .controls_apply = controls_apply, .controls_input = controls_input, .controls_hidden = controls_hidden };
     }
 
     pub fn deinit(s: *BatchScratch) void {
+        s.controls_apply.deinit();
+        s.controls_down.deinit();
+        s.controls_norm.deinit();
+        s.controls_hidden.deinit();
+        s.controls_input.deinit();
         s.combine.deinit();
         s.split.deinit();
         s.parts.deinit();

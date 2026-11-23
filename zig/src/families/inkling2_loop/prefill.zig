@@ -42,6 +42,7 @@ const PassCopy = extern struct { width: u32, stride: u32, start: u32, count: u32
 const Scatter = extern struct { width: u32, stride: u32, slot: u32 };
 const Gather = extern struct { width: u32, depth: u32, stride: u32 };
 const MixB = extern struct { width: u32, depth: u32, k: u32, rows: u32, scale: f32 };
+const ControlsArgs = extern struct { h: u32, rank: u32, rows: u32, xs: [3]u32, xb: [3]u32 };
 const CtlB = extern struct { h: u32, rows: u32, cxs: u32, cxb: u32, mxs: u32, mxb: u32, ys: u32, yb: u32 };
 const Clip3B = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, q_threshold: f32, rel_threshold: f32 };
 const ClipB = extern struct { heads: u32, width: u32, rows: u32, threshold: f32 };
@@ -878,6 +879,18 @@ const Chunk = struct {
         c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
     }
 
+    fn controls(c: Chunk, controllers: [3]Controller, ins: [3]In, msg: B, batch: *BatchContext) void {
+        const scratch = batch.scratch;
+        const rank: u32 = @intCast(nrows(controllers[0].down));
+        const args = ControlsArgs{ .h = c.h, .rank = rank, .rows = c.n, .xs = .{ ins[0].xs, ins[1].xs, ins[2].xs }, .xb = .{ ins[0].xb, ins[1].xb, ins[2].xb } };
+        c.setP(scratch.controls_norm, args, &.{ ins[0].buf, ins[1].buf, ins[2].buf, msg, A, b(scratch.controls_input) });
+        c.enc.dispatchGroups(mtl.Size.of(6 * c.n, 1, 1), mtl.Size.of(256, 1, 1));
+        c.setP(scratch.controls_down, args, &.{ b(scratch.controls_input), t(controllers[0].down), t(controllers[1].down), t(controllers[2].down), A, b(scratch.controls_hidden) });
+        c.enc.dispatchGroups(mtl.Size.of((rank + 7) / 8, c.n, 3), mtl.Size.of(256, 1, 1));
+        c.setP(scratch.controls_apply, args, &.{ b(scratch.controls_hidden), t(controllers[0].gain), t(controllers[1].gain), t(controllers[2].gain), t(controllers[0].forget), t(controllers[1].forget), t(controllers[2].forget), ins[0].buf, ins[1].buf, ins[2].buf, msg, b(c.s.n0), b(c.s.n1), b(c.s.n2), A });
+        c.enc.dispatchGroups(mtl.Size.of((c.h + 7) / 8, c.n, 3), mtl.Size.of(256, 1, 1));
+    }
+
     fn messages(c: Chunk, bk: Bank, ip: u32) B {
         const m = c.m;
         const s = c.s;
@@ -1080,11 +1093,20 @@ const Chunk = struct {
 
         if (bank) |bk| {
             const msg = c.messages(bk, ip);
-            for (0..3) |j| {
-                const ctl = lay.controllers[j] orelse return error.MissingController;
-                const nbuf = [_]B{ b(s.n0), b(s.n1), b(s.n2) };
-                c.control(ctl, ins[j], .{ .buf = msg, .xs = 4, .xb = @intCast(j) }, nbuf[j], 1, 0);
-                ins[j] = .{ .buf = nbuf[j], .xs = 1, .xb = 0 };
+            const ctl: [3]Controller = .{ lay.controllers[0] orelse return error.MissingController, lay.controllers[1] orelse return error.MissingController, lay.controllers[2] orelse return error.MissingController };
+            const use_batch = if (c.batch != null and c.m.affine_pipes != null) blk: {
+                for (ctl) |item| if (item.down.dtype != .f32 or item.gain.dtype != .f32 or item.forget.dtype != .f32) break :blk false;
+                break :blk true;
+            } else false;
+            if (use_batch) {
+                c.controls(ctl, ins, msg, c.batch.?);
+                ins = .{ .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, .{ .buf = b(s.n1), .xs = 1, .xb = 0 }, .{ .buf = b(s.n2), .xs = 1, .xb = 0 } };
+            } else {
+                for (0..3) |j| {
+                    const nbuf = [_]B{ b(s.n0), b(s.n1), b(s.n2) };
+                    c.control(ctl[j], ins[j], .{ .buf = msg, .xs = 4, .xb = @intCast(j) }, nbuf[j], 1, 0);
+                    ins[j] = .{ .buf = nbuf[j], .xs = 1, .xb = 0 };
+                }
             }
         }
 

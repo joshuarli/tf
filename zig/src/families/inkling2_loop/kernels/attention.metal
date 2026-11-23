@@ -167,3 +167,83 @@ struct i2_batch_row { device half* keys; device half* values; i2_attn_parts args
   }
   for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) O[h * D + lane + 32u * u] = acc[u] / mass;
 }
+
+struct i2_controls_args { uint h, rank, rows; uint xs[3], xb[3]; };
+
+[[kernel]] void i2_controls_norm(const device float* X0 [[buffer(0)]], const device float* X1 [[buffer(1)]],
+    const device float* X2 [[buffer(2)]], const device float* MSG [[buffer(3)]],
+    constant i2_controls_args& a [[buffer(4)]], device float* OUT [[buffer(5)]],
+    uint group [[threadgroup_position_in_grid]], uint tid [[thread_position_in_threadgroup]],
+    uint nth [[threads_per_threadgroup]]) {
+  threadgroup float part[32];
+  const uint controller = group / (2u * a.rows), rem = group % (2u * a.rows);
+  const uint row = rem / 2u, which = rem % 2u;
+  const device float* cur = controller == 0u ? X0 : controller == 1u ? X1 : X2;
+  const device float* src = which == 0u ? cur + size_t(a.xb[controller] + row * a.xs[controller]) * a.h
+    : MSG + size_t(controller + row * 4u) * a.h;
+  device float* dst = OUT + (size_t(controller) * a.rows + row) * 2u * a.h + which * a.h;
+  float sum = 0.0f;
+  for (uint i = tid; i < a.h; i += nth) sum = fma(src[i], src[i], sum);
+  sum = simd_sum(sum);
+  if (tid % 32u == 0u) part[tid / 32u] = sum;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float total = 0.0f;
+  for (uint i = 0; i < nth / 32u; ++i) total += part[i];
+  const float inv = 1.0f / sqrt(total / float(a.h) + 1e-6f);
+  for (uint i = tid; i < a.h; i += nth) dst[i] = src[i] * inv;
+}
+
+[[kernel]] void i2_controls_down(const device float* X [[buffer(0)]], const device float* W0 [[buffer(1)]],
+    const device float* W1 [[buffer(2)]], const device float* W2 [[buffer(3)]],
+    constant i2_controls_args& a [[buffer(4)]], device float* OUT [[buffer(5)]],
+    uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
+  const uint col = group.x * 8u + tid / 32u, lane = tid % 32u;
+  if (col >= a.rank || group.y >= a.rows) return;
+  const uint width = 2u * a.h;
+  const device float* x = X + (size_t(group.z) * a.rows + group.y) * width;
+  const device float* w = (group.z == 0u ? W0 : group.z == 1u ? W1 : W2) + size_t(col) * width;
+  float acc = 0.0f;
+  uint base = 0u;
+  for (; base + 128u <= width; base += 128u) {
+    const uint k = base + lane * 4u;
+    const float4 xv = float4(*reinterpret_cast<const device packed_float4*>(x + k));
+    const float4 wv = float4(*reinterpret_cast<const device packed_float4*>(w + k));
+    acc = fma(xv.x, wv.x, acc); acc = fma(xv.y, wv.y, acc);
+    acc = fma(xv.z, wv.z, acc); acc = fma(xv.w, wv.w, acc);
+  }
+  for (uint k = base + lane; k < width; k += 32u) acc = fma(x[k], w[k], acc);
+  acc = simd_sum(acc);
+  if (lane == 0u) OUT[(size_t(group.z) * a.rows + group.y) * a.rank + col] = acc;
+}
+
+[[kernel]] void i2_controls_apply(const device float* X [[buffer(0)]],
+    const device float* G0 [[buffer(1)]], const device float* G1 [[buffer(2)]], const device float* G2 [[buffer(3)]],
+    const device float* F0 [[buffer(4)]], const device float* F1 [[buffer(5)]], const device float* F2 [[buffer(6)]],
+    const device float* C0 [[buffer(7)]], const device float* C1 [[buffer(8)]], const device float* C2 [[buffer(9)]],
+    const device float* MSG [[buffer(10)]], device float* O0 [[buffer(11)]], device float* O1 [[buffer(12)]],
+    device float* O2 [[buffer(13)]], constant i2_controls_args& a [[buffer(14)]],
+    uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
+  const uint col = group.x * 8u + tid / 32u, lane = tid % 32u, j = group.z;
+  if (col >= a.h || group.y >= a.rows) return;
+  const device float* x = X + (size_t(j) * a.rows + group.y) * a.rank;
+  const device float* wg = (j == 0u ? G0 : j == 1u ? G1 : G2) + size_t(col) * a.rank;
+  const device float* wf = (j == 0u ? F0 : j == 1u ? F1 : F2) + size_t(col) * a.rank;
+  const device float* cur = (j == 0u ? C0 : j == 1u ? C1 : C2) + size_t(a.xb[j] + group.y * a.xs[j]) * a.h;
+  const device float* msg = MSG + size_t(j + group.y * 4u) * a.h;
+  device float* out = (j == 0u ? O0 : j == 1u ? O1 : O2) + size_t(group.y) * a.h;
+  float g = 0.0f, f = 0.0f;
+  uint base = 0u;
+  for (; base + 128u <= a.rank; base += 128u) {
+    const uint k = base + lane * 4u;
+    const float4 xv = float4(*reinterpret_cast<const device packed_float4*>(x + k));
+    const float4 gv = float4(*reinterpret_cast<const device packed_float4*>(wg + k));
+    const float4 fv = float4(*reinterpret_cast<const device packed_float4*>(wf + k));
+    g = fma(xv.x, gv.x, g); g = fma(xv.y, gv.y, g); g = fma(xv.z, gv.z, g); g = fma(xv.w, gv.w, g);
+    f = fma(xv.x, fv.x, f); f = fma(xv.y, fv.y, f); f = fma(xv.z, fv.z, f); f = fma(xv.w, fv.w, f);
+  }
+  for (uint k = base + lane; k < a.rank; k += 32u) {
+    g = fma(x[k], wg[k], g); f = fma(x[k], wf[k], f);
+  }
+  g = simd_sum(g); f = simd_sum(f);
+  if (lane == 0u) out[col] = cur[col] - precise::tanh(f) * cur[col] + precise::tanh(g) * msg[col];
+}

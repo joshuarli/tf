@@ -78,3 +78,24 @@ Three interleaved K=1 pairs at 2,500 cached IDs gave base 21.590, 21.450 and 21.
 ## Rejected depth-mix fusion
 
 A candidate fused depth-state normalization and mixing into one batch kernel, avoiding 96 staging dispatches while preserving the reduction order. The oQ4e family suite exited 0 with 82/82 tests and zero batch/decode logit and cache differences at widths 1, 2 and 4. Three gated 2,500-token `batchbench K 5` pairs in base/candidate, candidate/base, base/candidate order gave K=1 base medians 21.538, 21.520 and 21.637 ms, candidate 21.812, 21.926 and 21.850 ms. K=4 base medians were 44.320, 47.921 and 48.095 ms, candidate 44.113, 47.011 and 48.736 ms; serial controls rose from about 90 to 103 ms across those pairs. The fusion was reverted: K=1 favored the base in every pair, and K=4 was inconclusive amid substantial drift. All retained attempts passed the GPU/CPU gates and compiler monitor.
+
+## Grouped attention controllers
+
+The candidate groups the three independent attention controllers in each repeated core slot into three dispatches: normalization, down projection, and gain/forget application. Previously each controller issued those three operations separately. On the oQ4e checkpoint the instrumented K=1 step used 1,302 dispatches versus 1,446 at base, a reduction of 144; its timestamped span was 25.756 ms versus 28.127 ms. These instrumented spans are attribution, not throughput.
+
+The oQ4e family command below exited 0 with 82/82 tests, including unchanged batch/decode consistency at widths 1, 2 and 4 with zero reported maximum logit and cache differences. Its peak charge was 20.7 GB under the 28 GB cap.
+
+```sh
+TF_INKLING2_LOOP_DIR="$HOME/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd" \
+TF_INKLING2_LOOP_OQ4E_DIR="$HOME/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd" INKLING_LOAD_LIMIT_GB=26 \
+python3 campaign/heavy.py -- zig build test-inkling2-loop -Dcpu=apple_m1 -j1 --summary all
+```
+
+Five gated interleaved 2,500-token `batchbench K 5` pairs used base/candidate, candidate/base, base/candidate, candidate/base, base/candidate order. All listed samples passed GPU and CPU gates and the compiler monitor; deferred attempts were discarded. Values are the internal median milliseconds per step.
+
+| Width | Base samples | Candidate samples | Base median | Candidate median |
+| --- | --- | --- | ---: | ---: |
+| 1 | 21.448, 21.469, 21.396, 24.437, 24.252 | 20.760, 20.667, 20.670, 26.281, 22.954 | 21.469 | 20.760 |
+| 4 | 44.288, 49.447, 49.359, 39.948, 39.887 | 43.556, 43.028, 49.549, 39.252, 42.768 | 44.288 | 43.028 |
+
+The first three K=1 pairs had stable serial controls around 21.3–21.5 ms; their base inner samples ranged 21.335–21.669 ms, and candidate samples 20.581–20.882 ms. The latter two pairs and K=4 exhibited substantial serial-control drift. The first three pairs support a roughly 0.78 ms K=1 improvement under those conditions; the five-pair K=4 median difference is inconclusive in the observed spread. Neither 18 ms nor 36 ms target is established. The base and candidate runner binaries were 2,044,872 and 2,061,672 bytes respectively. K=8, final saved-capture fidelity, final suite, native build and served sweep remain pending.

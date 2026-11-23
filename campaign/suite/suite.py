@@ -23,7 +23,9 @@ GPU_LOCK = WORK / "gpu.lock"
 HEAVY = CAMPAIGN / "heavy.py"
 BASELINE_BIN = WORK / "wt/baseline/zig-out/native/bin/tensorfold-native"
 INKLING_BIN = Path(os.environ.get("INKLING_BIN", str(REPO / "zig-out/native/bin/tensorfold-native")))
-INKLING_SOURCES = [REPO / "zig/src/native/inkling2_loop.zig", REPO / "zig/src/native/inkling2_loop_host.zig", REPO / "zig/src/families/inkling2_loop"]
+INKLING_SOURCES = [REPO / "zig/src/native/inkling2_loop.zig", REPO / "zig/src/native/inkling2_loop_host.zig",
+                   REPO / "zig/src/native/inkling2_loop_prefix.zig", REPO / "zig/src/families/inkling2_loop",
+                   REPO / "zig/src/core", REPO / "zig/src/metal"]
 BASELINE_SHA = "8c2c8e6f4fd9f2c111d6fba7d89251a32a5afb309cc950ee3ff2d6a50816ac87"
 FLINT = Path.home() / "models/flint-int4@3b93f9053b53"
 INKLING = Path.home() / "models/Inkling-2-Mini@ed40e7da625f"
@@ -41,6 +43,8 @@ class Workload:
     cost: str
     needs: tuple[str, ...]
     command: tuple[str, ...]
+    env: tuple[tuple[str, str], ...] = ()
+    no_skips: bool = False
 
 
 def make(*args: str) -> tuple[str, ...]:
@@ -66,8 +70,9 @@ WORKLOADS = [
              ("target:prompts-check", "flint-weights"), make("prompts-check")),
     Workload("flint-host", "edit", "flint", "Flint draft config and the no-drafts switch", "observed 22 s warm",
              ("zig",), zig("test-flint-draft-host")),
-    Workload("inkling-host", "edit", "inkling", "Inkling 2 Mini config, tensor map, template, refusals",
-             "observed 4 s warm", ("zig",), zig("test-inkling2-loop-host")),
+    Workload("inkling-host", "edit", "inkling", "Inkling 2 Mini config, tensor map, template, refusals, prefix slots",
+             "observed 4 s warm", ("zig", "inkling-weights"), zig("test-inkling2-loop-host", "--summary", "all"),
+             no_skips=True),
     Workload("flint-steps", "change", "flint", "decode step time without a server: wall, encode and GPU ms",
              "observed 1 min + lock wait", ("zig", "flint-weights", "flint-run-fresh", "flint-fixture"),
              flint_run("bench", "128")),
@@ -85,8 +90,17 @@ WORKLOADS = [
     Workload("inkling-bench-1k", "change", "inkling", "served 1,024-token cells, one process", "unmeasured",
              ("target:bench", "inkling-binary", "inkling-weights"),
              make("bench", "MODEL=inkling2-mini", "MODE=ar", "CELLS=1024", "PAIRS=1", f"BIN={INKLING_BIN}")),
+    Workload("inkling-gpu", "change", "inkling",
+             "Metal forward, prefill, batched step, rollback, fork and verify against the checkpoint", "estimated 5 min",
+             ("zig", "inkling-weights"),
+             ("python3", str(HEAVY), "--", "zig", "build", "test-inkling2-loop", "-Dcpu=apple_m1", "-j1", "--summary", "all"),
+             env=(("TF_INKLING2_LOOP_DIR", str(INKLING)), ("INKLING_LOAD_LIMIT_GB", "26")), no_skips=True),
     Workload("inkling-ref", "change", "inkling", "reference against llama.cpp from verified receipts",
              "observed 1 s cached", ("target:ref-check",), make("ref-check", "MODEL=inkling2-mini")),
+    Workload("inkling-agents-4", "scenario", "inkling",
+             "four multi-turn agents on one server: prefix reuse, forks, and concurrent replies equal to solo",
+             "estimated 15 min", ("inkling-binary", "inkling-weights"),
+             ("sh", str(CAMPAIGN / "fx/sweep-subagents.sh"), "4", "4096")),
     Workload("flint-matrix-ar", "scenario", "flint", "1K/4K matrix, ar, six pairs; 32K total context cap", "unmeasured",
              ("target:bench", "baseline", "flint-weights"),
              make("bench", "MODEL=flint", "MODE=ar", "CELLS=1024,4096", "PAIRS=6")),
@@ -187,6 +201,15 @@ def requirement(need: str, targets: set[str], fix_fixture: bool) -> str | None:
     return f"unknown requirement {need}"
 
 
+def skipped_tests(log: str) -> str | None:
+    """None when the Zig build summary ran tests and skipped none, else why the run cannot pass."""
+    lines = [line for line in log.splitlines() if line.startswith("Build Summary:")]
+    if not lines or "tests passed" not in lines[-1]:
+        return "no Zig build summary with a test count; the run proved nothing"
+    skipped = re.search(r"(\d+) skipped", lines[-1])
+    return f"{skipped.group(1)} tests skipped" if skipped and int(skipped.group(1)) else None
+
+
 def host() -> list[str]:
     notes = []
     free = shutil.disk_usage(MAIN).free / 2**30
@@ -264,7 +287,7 @@ def main() -> int:
         return 0
     if args.dry_run:
         for w in chosen:
-            print(" ".join(w.command))
+            print(" ".join([f"{k}={v}" for k, v in w.env] + list(w.command)))
         return 0
 
     run_dir = WORK / "suite" / time.strftime("%Y%m%dT%H%M%S")
@@ -275,10 +298,12 @@ def main() -> int:
         with (run_dir / f"{w.name}.log").open("w") as log:
             code = subprocess.run(w.command, cwd=REPO, stdout=log, stderr=subprocess.STDOUT,
                                   env=dict(os.environ, TMPDIR=str(WORK / "tmp"),
-                                           ZIG_GLOBAL_CACHE_DIR=str(WORK / "zig-global-cache"))).returncode
+                                           ZIG_GLOBAL_CACHE_DIR=str(WORK / "zig-global-cache"), **dict(w.env))).returncode
         seconds = time.monotonic() - start
-        summary.append({"name": w.name, "tier": w.tier, "exit": code, "seconds": round(seconds, 1)})
-        print(f"{'ok  ' if code == 0 else 'FAIL'} {w.name} {seconds:.1f} s  ({run_dir / (w.name + '.log')})")
+        reason = skipped_tests((run_dir / f"{w.name}.log").read_text()) if w.no_skips and code == 0 else None
+        code = 1 if reason else code
+        summary.append({"name": w.name, "tier": w.tier, "exit": code, "seconds": round(seconds, 1)} | ({"reason": reason} if reason else {}))
+        print(f"{'ok  ' if code == 0 else 'FAIL'} {w.name} {seconds:.1f} s  ({run_dir / (w.name + '.log')})" + (f": {reason}" if reason else ""))
     (run_dir / "summary.json").write_text(json.dumps({"host": host(), "workloads": summary}, indent=2) + "\n")
     print(f"summary {run_dir / 'summary.json'}; completion is not a performance verdict: read each workload's records")
     return 1 if any(s["exit"] for s in summary) else 0

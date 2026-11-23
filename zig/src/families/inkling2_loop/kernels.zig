@@ -2,7 +2,7 @@
 //!
 //! `glue` is the dense graph: one token at a time, f32 activations, the checkpoint's bf16 weights widened per read.
 //! `experts` runs the routed projections in the two stored formats, decoding the checkpoint's own bytes. Both mirror
-//! `campaign/ref/inkling2_loop_ref.py`, a transcription of llama.cpp `40b7a546`.
+//! the graph of llama.cpp `40b7a546`.
 //! `dense` re-runs the bf16 matvecs (`i2_mv`, `i2_mv_cap`) with the activation staged once a threadgroup and
 //! vectorized weight loads, plus a fused form for projections sharing one input. `forward.zig` compiles it beside
 //! the model library and falls back to `glue` when that compile fails.

@@ -62,8 +62,6 @@ def flint_run(mode: str, *extra: str) -> tuple[str, ...]:
 
 
 WORKLOADS = [
-    Workload("gate-controls", "edit", "gate", "logit gate negative controls", "observed 1 s", ("target:ref-gate-test",),
-             make("ref-gate-test")),
     Workload("evidence-controls", "edit", "harness", "pairing, uncertainty, selection and qualification fixtures",
              "estimated <60 s", ("target:evidence-tests",), make("evidence-tests")),
     Workload("quality-cases", "edit", "quality", "quality case set matches its manifest", "observed 2 s",
@@ -98,8 +96,6 @@ WORKLOADS = [
              ("python3", str(HEAVY), "--", "zig", "build", "test-inkling2-loop", "-Dcpu=apple_m1", "-j1", "--summary", "all"),
              env=(("TF_INKLING2_LOOP_DIR", str(INKLING)), ("TF_INKLING2_LOOP_OQ4E_DIR", str(INKLING_OQ4E)),
                   ("INKLING_LOAD_LIMIT_GB", "26")), no_skips=True),
-    Workload("inkling-ref", "change", "inkling", "reference against llama.cpp from verified receipts",
-             "observed 1 s cached", ("target:ref-check",), make("ref-check", "MODEL=inkling2-mini")),
     Workload("inkling-agents-4", "scenario", "inkling",
              "four multi-turn agents on one server: prefix reuse, forks, and concurrent replies equal to solo",
              "estimated 15 min", ("inkling-binary", "inkling-weights"),
@@ -125,9 +121,6 @@ WORKLOADS = [
              ("target:parity-flint", "flint-weights"), make("parity", "MODEL=flint")),
     Workload("flint-quality-full", "full", "flint", "48-case quality set", "estimated 45 min",
              ("target:quality-flint", "baseline", "flint-weights"), make("quality", "MODEL=flint", "SET=full")),
-    Workload("inkling-oracles", "full", "inkling", "rerun the 104 GB f32 oracles (pages heavily on 48 GiB)",
-             "observed 60+ min", ("target:ref-oracles", "inkling-weights"), make("ref-check", "MODEL=inkling2-mini",
-                                                                                   "REF_RERUN=1")),
     Workload("golden-suite", "full", "repo", "zig build test test-golden, milestone suite", "observed 9 min",
              ("zig",), ("python3", str(HEAVY), "--", "zig", "build", "test", "test-golden", "-Dcpu=apple_m1")),
 ]

@@ -5,7 +5,7 @@ records the runner binary sha256, the model identity digest (checkpoint
 directory listing plus full hashes of its small config/quant descriptor files),
 the token-history sha256, the arithmetic policy string, and the output's own
 shape and digest. ``check`` fails when any input changed, so the caller
-regenerates instead of reusing a stale file; ``compare.py`` refuses outputs
+regenerates instead of reusing a stale file; ``omlx_gate.py`` refuses outputs
 whose receipt is missing or names different inputs.
 """
 

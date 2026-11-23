@@ -1,5 +1,5 @@
 // Inkling 2 Mini's dense glue on Metal: one token at a time, f32 activations, the checkpoint's bf16 weights widened
-// per read. The arithmetic mirrors campaign/ref/inkling2_loop_ref.py, itself a transcription of llama.cpp 40b7a546.
+// per read. The arithmetic mirrors the graph of llama.cpp 40b7a546.
 #include <metal_stdlib>
 using namespace metal;
 

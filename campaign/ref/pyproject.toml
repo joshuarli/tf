@@ -1,7 +1,7 @@
 [project]
 name = "inkling2-loop-ref"
 version = "1.0.0"
-description = "CPU float32 teacher-forced reference for Inkling 2 Mini"
+description = "NumPy environment for the Inkling 2 Mini oMLX oracle gate and its tests"
 requires-python = ">=3.12"
 dependencies = ["numpy>=2.0"]
 

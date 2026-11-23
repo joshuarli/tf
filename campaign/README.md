@@ -8,7 +8,7 @@ Development-only tooling for the native inference campaign in [plan.md](plan.md)
 - `uv`, `jaq`, Xcode with the Metal toolchain, and `swift` for the Metal device probe.
 - Python dependencies come from [pyproject.toml](pyproject.toml) and [uv.lock](uv.lock) (`laputa-buildlib`, pinned by wheel hash).
 
-Every command runs from the repository root as `make -C campaign <target>`. Each workstream defines its targets in its own `campaign/<dir>/<name>.mk` or `campaign/<dir>/<subdir>/<name>.mk`, which the Makefile includes, so parallel lanes never edit the Makefile itself. `parity`, `quality` and `pi-harness` dispatch on `MODEL` to `<target>-<model>`, which each model's fragment defines. Scratch goes to the main checkout's `.work/`: `TMPDIR` is `.work/tmp` and the Zig global cache is `.work/zig-global-cache`.
+Every command runs from the repository root as `make -C campaign <target>`. Each workstream defines its targets in its own `campaign/<dir>/<name>.mk` or `campaign/<dir>/<subdir>/<name>.mk`, which the Makefile includes, so parallel lanes never edit the Makefile itself. `quality` and `pi-harness` dispatch on `MODEL` to `<target>-<model>`, which each model's fragment defines, and `parity` does the same for Flint. Inkling 2 Mini's logits are checked by [the oMLX oracle gate](#omlx-correctness-oracle). Scratch goes to the main checkout's `.work/`: `TMPDIR` is `.work/tmp` and the Zig global cache is `.work/zig-global-cache`.
 
 ## Fetch weights
 
@@ -72,10 +72,10 @@ The setup and host tests are prepared; actual Mac build and M5 timings still nee
 
 ### oMLX correctness oracle
 
-The correctness reference for Inkling 2 Mini is oMLX on the same oQ4e weights. It replaces the f32 GGUF oracle,
-whose native-checkpoint weights differ from oQ4e. `omlx-oracle-capture` teacher-forces the 16 parity histories
-through oMLX 0.8.3's served model with MTP off. It saves full-vocabulary logits in the layout of the f32 captures,
-with receipts and a provenance manifest, to `.work/parity/inkling2-mini/omlx-ref/`. `omlx-oracle-gate` builds
+The correctness reference for Inkling 2 Mini is oMLX on the same oQ4e weights. `omlx-oracle-capture` teacher-forces
+the 16 parity histories through oMLX 0.8.3's served model with MTP off. It saves each history's full-vocabulary
+logits as float32 [tokens, vocab], with receipts and a provenance manifest, to
+`.work/parity/inkling2-mini/omlx-ref/`. `omlx-oracle-gate` builds
 `tf-inkling2-loop-run`, captures its chunked-prefill logits for the same histories under `heavy.py`, and streams
 them against the oracle. It passes when pooled top-1 agreement is at most 0.5 points below the baseline in
 [omlx_gate.json](parity/inkling2-mini/omlx_gate.json), both KL means are at most 1.5 times the baseline's, and no
@@ -98,10 +98,10 @@ noise floor, the comparison with the f32 captures, and how to re-baseline after 
 
 | Tier | What it runs | Cost |
 | --- | --- | --- |
-| `edit` | CPU fixtures and host tests: the logit gate's controls, the evidence fixtures, quality cases, the prompt corpus, Flint and Inkling 2 Mini host tests | about 30 s warm |
-| `change` | one short round on the GPU: `tf-flint-run` decode steps and one-row against 16-row self-consistency (no server, the fastest Flint loop), the served smoke, one 1,024-token bench process, the cached Inkling reference check, and `inkling-gpu`: the Inkling 2 Mini Metal tests against the checkpoint (forward, prefill, batched step, rollback, fork, verify) | minutes |
+| `edit` | CPU fixtures and host tests: the evidence fixtures, quality cases, the prompt corpus, Flint and Inkling 2 Mini host tests | about 30 s warm |
+| `change` | one short round on the GPU: `tf-flint-run` decode steps and one-row against 16-row self-consistency (no server, the fastest Flint loop), the served smoke, one 1,024-token bench process, and `inkling-gpu`: the Inkling 2 Mini Metal tests against the checkpoint (forward, prefill, batched step, rollback, fork, verify) | minutes |
 | `scenario` | the six-pair primary matrix, the quality dev set, the Pi tasks, Flint parity, `inkling-agents-4`: four multi-turn agents on one server, which fails when prefix reuse is missing or a concurrent reply differs from the same request alone, and `inkling-omlx-oracle`: oQ4e prefill logits against the saved oMLX oracle | minutes to tens of minutes each |
-| `full` | the 48-case quality set, the 104 GB Inkling oracle rerun, `zig build test test-golden` | manual only |
+| `full` | the 48-case quality set and `zig build test test-golden` | manual only |
 
 ```sh
 make -C campaign bench-check TIER=change            # preflight only: names each unmet requirement and its fix

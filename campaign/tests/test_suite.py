@@ -52,10 +52,9 @@ class Selection(unittest.TestCase):
         names = {w.name for w in suite.select(args(tier="change", areas="inkling"))}
         self.assertIn("inkling-gpu", names)
         self.assertNotIn("inkling-agents-4", names)
-        self.assertNotIn("inkling-oracles", names)
 
     def test_full_tier_and_unknown_or_empty_selections_are_refused(self):
-        for bad in (args(tier="full"), args(names="inkling-oracles"), args(names="nope"),
+        for bad in (args(tier="full"), args(names="golden-suite"), args(names="nope"),
                     args(names="inkling-gpu", skip="inkling-gpu")):
             with self.assertRaises(SystemExit):
                 suite.select(bad)

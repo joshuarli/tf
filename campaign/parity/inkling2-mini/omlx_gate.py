@@ -1,7 +1,7 @@
 """Streamed teacher-forced logit comparison, and the gate that holds TensorFold to the oMLX oracle.
 
 Both subcommands map one history at a time and read `--block` rows at a time, so no capture is ever held in
-memory whole. A capture is `<dir>/<name>.npy`, float32 [tokens, vocab] like the saved f32 and oMLX captures, or
+memory whole. A capture is `<dir>/<name>.npy`, float32 [tokens, vocab] like the oMLX captures, or
 `<dir>/<name>.bin`, raw float32 rows like the runner's. For every row the comparison takes both rows' maximal
 tokens, the reference's top-2 margin, and KL(reference || candidate) in nats from float64 log-softmax. Two rows
 agree on top-1 when their sets of maximal tokens intersect: the oMLX logits are bfloat16 before the softcap, so

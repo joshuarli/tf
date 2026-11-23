@@ -20,5 +20,5 @@ bench-suite:
 	@$(SUITE) run $(SUITE_SEL)
 
 bench-full:
-	@test "$(FULL)" = requested || { echo "bench-full needs FULL=requested: it runs every tier, including the 104 GB oracle rerun" >&2; exit 2; }
+	@test "$(FULL)" = requested || { echo "bench-full needs FULL=requested: it runs every tier, including the 48-case quality set" >&2; exit 2; }
 	@$(SUITE) run --tier full --full-requested --names '$(NAMES)' --areas '$(AREAS)' --skip '$(SKIP)'

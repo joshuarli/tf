@@ -125,19 +125,18 @@ One real T4 smoke ran on 2026-11-22: `make -C campaign colab-smoke GPU=T4 MAX_CU
 
 ## Which experiments suit Colab
 
-- **CPU-portable** (cheaper locally, and often fine on a Colab CPU runtime): the logit gate's controls, the
-  evidence fixtures, quality and prompt-corpus tests, and operand-rounding analysis. With exact weights, the
-  operand-rounding error is a property of the formats, not the device.
+- **CPU-portable** (cheaper locally, and often fine on a Colab CPU runtime): the evidence fixtures, quality
+  and prompt-corpus tests, and operand-rounding analysis. With exact weights, the operand-rounding error is a
+  property of the formats, not the device.
 - **CUDA-portable** (insight transfers, timings do not):
   - fp16, bf16 and fp8 operand error at expert shapes, which bears on the F1 and F2 fast-precision lanes;
   - E4M3 activation-quantization error with per-tensor, per-row and per-block scales;
   - accumulation-order sensitivity.
 - **Metal-only**: every performance question (prefill, verify, DSpark timing, TensorOps), the native parity
   runs, served benches, quality and Pi. These stay on the M5 Max.
-- **Full checkpoint**: the parity oracle (the 104 GB f32 run, which is out of reach), the quality and Pi
-  suites, and per-layer sensitivity on real activations. Running the 20.2 GB checkpoint on CUDA would be a
-  separate campaign. It needs a CUDA Inkling path or a torch reference sized to an L4's 24 GB, and an explicit
-  download opt-in. It is not attempted here.
+- **Full checkpoint**: the quality and Pi suites, and per-layer sensitivity on real activations. Running the
+  20.2 GB checkpoint on CUDA would be a separate campaign. It needs a CUDA Inkling path or a torch reference
+  sized to an L4's 24 GB, and an explicit download opt-in. It is not attempted here.
 
 ## T4 or L4
 

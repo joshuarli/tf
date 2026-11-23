@@ -5,9 +5,8 @@ Copy verification uses prefill arithmetic, which can choose a different token fr
 See the [copy verification receipt](../../campaign/kernels/inkling-verify.md) for the measured workloads.
 
 This page records the graph of `thinkingmachines/Inkling-2-Mini` as read from the pinned llama.cpp reference
-(commit `40b7a546defe1f60edd1338c719552ffc58c89a0`), the checkpoint's own config, index, quantization config and
-chat template, together with the CPU float32 reference in `campaign/ref/inkling2_loop_ref.py` and its measured
-agreement with llama.cpp. It is the prior-art map for the native `inkling2_loop` family (I1–I3).
+(commit `40b7a546defe1f60edd1338c719552ffc58c89a0`) and the checkpoint's own config, index, quantization config and
+chat template. It is the prior-art map for the native `inkling2_loop` family (I1–I3).
 
 Citations are `file:line` in the llama.cpp tree at that commit unless the file is named explicitly. Checkpoint
 paths are relative to `~/models/Inkling-2-Mini@ed40e7da625f` (revision `ed40e7da625f594fc9c4990f5f66be24873c22d7`,
@@ -45,7 +44,7 @@ byte; 2304 logical rows = 2 × FFN 1152) and `[128, 2304, 2304]` for MXFP8 (one 
 `[128, 2304, 576]` and `[128, 2304, 1152]`. The scale tensors are `[128, 2304, cols/16]` (NVFP4) and
 `[128, 2304, cols/32]` (MXFP8); `w13_weight_amax` is `[128]`, `w13_weight_outer_scale_denominator` is `[1]`.
 
-Decoding is the converter's (`conversion/inkling2.py:33-65`) and is reproduced exactly by the reference:
+Decoding is the converter's (`conversion/inkling2.py:33-65`):
 
 - NVFP4: `v = E2M1[nibble] × E4M3[block_scale] × (amax[expert] / denominator)`, block 16 along the input dimension;
   the low nibble is the even column.
@@ -204,7 +203,7 @@ tap before the conv (`src/models/inkling2.cpp:218-234`).
 
 The checkpoint stores `w13` interleaved: even rows are gate, odd rows are up. The converter reshapes
 `(E, 2·FFN, H) → (E, FFN, 2, H) → transpose(1,2)` so the GGUF tensor holds gate rows first
-(`conversion/inkling2.py:255-258`); the reference applies the same permutation.
+(`conversion/inkling2.py:255-258`).
 
 ### Output
 
@@ -236,77 +235,21 @@ and the next round uses the last accepted target features
 [campaign/ref/dspark_taps.md](../../campaign/ref/dspark_taps.md) for the later drafter's contract. llama.cpp does
 not load or execute the head.
 
-## Conversion and the pinned llama.cpp oracle
-
-llama.cpp's converter dequantizes the experts to **float32 without requantizing**: the NVFP4/MXFP8 bytes are decoded
-with the converter's own tables and the result is written as `F32` (`conversion/inkling2.py:33-65`,
-`conversion/inkling2.py:168-179`). The pinned commit therefore satisfies Decision 9's first branch: it can serve as
-a second teacher-forced oracle and a matched comparator, not merely a "best useful" table entry. The price is size:
-`--outtype f32` produces a 104.3 GB GGUF (704 tensors) for ~24.4 B expert parameters, against the 19.5 GB
-checkpoint.
-
-- conversion command: `python convert_hf_to_gguf.py <checkpoint> --outfile <gguf> --outtype f32`
-- checked numerically: expert rows of `blk.0.ffn_gate_up_exps.weight` (NVFP4) and
-  `blk.20.ffn_gate_up_exps.weight` (MXFP8), and their `down_exps` partners, are **bit-identical**
-  (max difference 0.0) to `inkling2_loop_ref.py`'s decode of the checkpoint bytes
-- attention bias order, sink algebra and GQA broadcast (`head h → KV head h // (n_head/n_kv)`) were checked against
-  the pinned source; the reference reproduces the graph to f32 rounding.
-- llama.cpp runs the text graph only; the vision tower and the MTP head are skipped by the converter
-  (`conversion/inkling2.py:188`).
-- **Oracle configuration.** The 104 GB f32 GGUF is mmapped with lazy tensor reads and computed on the CPU
-  (`n_gpu_layers = 0`, CPU device only, `op_offload = false`); it cannot be resident on the GPU. The KV cache is
-  forced to **F32** (`type_k = type_v = GGML_TYPE_F32`). That last setting matters: llama.cpp's default is F16, and
-  with F16 K/V one top-1 flipped at a 0.33-logit margin. No receipt of the F16 run was kept, so its drift figure is
-  unverified (the run report gave up to 13 logits, an earlier draft of this page ~1e-2). With F32 K/V the retained
-  receipts in `campaign/ref/oracle_receipts.json` show `max |Δlogit| = 1.35e-4` (history `greet`, position 5) and at
-  most 1.4e-4 at every position.
-
-`make -C campaign ref-gguf` builds the converter venv and the GGUF under `.work`; the GGUF is never written to
-`~/models`.
-
-## CPU reference
-
-`campaign/ref/inkling2_loop_ref.py` is a NumPy float32 teacher-forced forward pass:
-
-- it mmaps the safetensors file and streams experts one at a time, decoding NVFP4/MXFP8 with the converter's exact
-  tables; the full model is never materialized in float32,
-- non-expert weights are cached; the expert cache is bounded (`--expert-cache-gib`, default 10),
-- given token ids it returns every position's 200,058 logits,
-- `--trace` writes per-tensor `mean/std/min/max` in the same names llama.cpp dumps, for debugging.
-
-The tiny fixture `trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration@5e761216759d` (8 layers, hidden 32,
-core [2,6), 3 passes, rank 8, 8 experts, NVFP4 layers 0–5 and MXFP8 6–7) is pinned and fetched with the same lock.
-On that fixture the reference and llama.cpp (F32 KV cache) agree to `max |Δlogit| = 1.8e-7`,
-`mean |Δlogit| = 2.5e-8`, correlation `0.99999999999`, and identical top-1 at every position even at margins of
-5e-4. The tiny fixture's random weights make its margins too small to say anything about the 0.1-logit rule; it is
-a graph check, not a model check.
-
 ## Checks
 
 ```bash
-make -C campaign fetch NAMES="inkling-2-mini llama.cpp inkling-2-mini-tiny"
-make -C campaign ref-check MODEL=inkling2-mini
+make -C campaign fetch NAMES="inkling-2-mini inkling-2-mini-tiny"
+zig build test-inkling2-loop-host
 ```
 
-`ref-check` runs the reference and llama.cpp (`llama_logits` against the converted GGUF) on the four teacher-forced
-histories in `campaign/ref/histories.json`, each rendered with the pinned chat template and tokenised by the pinned
-tokenizer, under the campaign GPU lock, one full model at a time. It prints, per history, the per-position top-1
-agreement, top-2 margin, absolute logit error and KL. It exits non-zero unless every history has the expected shape
-and finite values, stays within the `f32-vs-f32` bounds in `campaign/ref/gate_policy.json` (derived from float32
-rounding, not from these results), and agrees on top-1 wherever the teacher's margin is at least 0.1 logit. The
-oracle outputs are reused while `campaign/ref/oracle_receipts.json` matches their inputs; `REF_RERUN=1` or a changed
-input reruns them, and `make -C campaign ref-gate-test` runs the gate's negative controls.
-
-| history | tokens | max abs logit error | mean abs logit error | mean KL | top-1, all positions | top-1, confident |
-| --- | --- | --- | --- | --- | --- | --- |
-| greet | 16 | 1.35e-4 | 1.30e-5 | 2.9e-11 | 100% | 100% (16/16) |
-| code | 27 | 9.5e-5 | 9.7e-6 | 3.6e-11 | 100% | 100% (26/26) |
-| prose | 36 | 9.8e-5 | 9.9e-6 | 3.1e-11 | 100% | 100% (35/35) |
-| math | 30 | 1.2e-4 | 1.1e-5 | 2.9e-11 | 100% | 100% (29/29) |
-
-"Confident" means llama.cpp's top-2 margin is at least 0.1 logit. The residual error is f32 accumulation-order
-noise: one f32 ULP at a logit of order 20 is 2e-6, and the two implementations sum the same products in a different
-order.
+The host tests cover the config, the tensor map, the image and `--vision` refusals and the chat template. They also
+check that the checkpoint's tokenizer reproduces the token ids of the four histories in `campaign/ref/histories.json`,
+which the pinned llama.cpp tokenizer produced. The tiny fixture
+`trl-internal-testing/tiny-Inkling2LoopForConditionalGeneration@5e761216759d` (8 layers, hidden 32, core [2,6),
+3 passes, rank 8, 8 experts, NVFP4 layers 0–5 and MXFP8 6–7) is pinned in the same lock for the family's prefill
+tests in `zig build test-inkling2-loop`. `make -C campaign omlx-oracle-gate` holds the native teacher-forced logits
+on the oQ4e checkpoint to the oMLX oracle; the [campaign README](../../campaign/README.md#omlx-correctness-oracle)
+gives its setup and bounds.
 
 ## Unverified
 

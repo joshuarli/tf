@@ -8,7 +8,7 @@ the scheduler's prefill step). The forwards run on oMLX's MLX executor thread. N
 and nothing is sampled.
 
 Each history's logits over the unpadded vocabulary stream to `<out>/<name>.npy` as float32 [tokens, 200058], the
-layout of the saved float32 captures, so the same comparators read both. A file takes its final name only when
+layout `omlx_gate.py` reads. A file takes its final name only when
 complete, beside `<name>.npy.receipt.json` (token-history sha256, rows, chunk, engine, output sha256). A history
 whose receipt already names the current engine, checkpoint, chunk and tokens, and whose file still has the
 recorded digest, is kept. `manifest.json` is rebuilt from those receipts on every run. It records the oMLX, MLX

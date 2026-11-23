@@ -27,16 +27,21 @@ pub const affine = @embedFile("kernels/affine.metal");
 
 pub const AffinePipes = struct {
     dense: mtl.Pipeline,
+    dense_rows: mtl.Pipeline,
     float: mtl.Pipeline,
     embed: mtl.Pipeline,
     up: mtl.Pipeline,
     down: mtl.Pipeline,
+    group_up: mtl.Pipeline,
+    group_down: mtl.Pipeline,
 
     pub fn init(device: mtl.Device) !AffinePipes {
         const lib = try mtl.Library.fromSource(device, affine, mtl.CompileOptions.mlx());
         defer lib.deinit();
         const dense_pipe = try mtl.Pipeline.init(device, lib, "i2a_dense", false);
         errdefer dense_pipe.deinit();
+        const dense_rows_pipe = try mtl.Pipeline.init(device, lib, "i2a_dense_rows", false);
+        errdefer dense_rows_pipe.deinit();
         const float_pipe = try mtl.Pipeline.init(device, lib, "i2a_float", false);
         errdefer float_pipe.deinit();
         const embed_pipe = try mtl.Pipeline.init(device, lib, "i2a_embed", false);
@@ -44,15 +49,22 @@ pub const AffinePipes = struct {
         const up_pipe = try mtl.Pipeline.init(device, lib, "i2a_expert_up", false);
         errdefer up_pipe.deinit();
         const down_pipe = try mtl.Pipeline.init(device, lib, "i2a_expert_down", false);
-        return .{ .dense = dense_pipe, .float = float_pipe, .embed = embed_pipe, .up = up_pipe, .down = down_pipe };
+        errdefer down_pipe.deinit();
+        const group_up_pipe = try mtl.Pipeline.init(device, lib, "i2a_group_up", false);
+        errdefer group_up_pipe.deinit();
+        const group_down_pipe = try mtl.Pipeline.init(device, lib, "i2a_group_down", false);
+        return .{ .group_up = group_up_pipe, .group_down = group_down_pipe, .dense = dense_pipe, .dense_rows = dense_rows_pipe, .float = float_pipe, .embed = embed_pipe, .up = up_pipe, .down = down_pipe };
     }
 
     pub fn deinit(p: AffinePipes) void {
         p.dense.deinit();
+        p.dense_rows.deinit();
         p.float.deinit();
         p.embed.deinit();
         p.up.deinit();
         p.down.deinit();
+        p.group_up.deinit();
+        p.group_down.deinit();
     }
 };
 

@@ -13,6 +13,23 @@ inline float i2a_weight(const device uint* w, const device bfloat* s, const devi
   return float(code) * float(s[group]) + float(b[group]);
 }
 
+inline float i2a_dot(const device float* x, const device uint* w, const device bfloat* s,
+                     const device bfloat* b, size_t row, uint width, uint bits, uint lane) {
+  const uint per = 32u / bits;
+  const uint mask = (1u << bits) - 1u;
+  float acc = 0.0f;
+  for (uint word = lane; word < width / per; word += 32u) {
+    const uint packed = w[row * (width / per) + word];
+    const size_t group = row * (width / 64u) + (word * per) / 64u;
+    const float scale = float(s[group]), bias = float(b[group]);
+    for (uint j = 0; j < per; ++j) {
+      const float value = float((packed >> (j * bits)) & mask) * scale + bias;
+      acc = fma(x[word * per + j], value, acc);
+    }
+  }
+  return simd_sum(acc);
+}
+
 [[kernel]] void i2a_embed(const device uint* ids [[buffer(0)]], const device uint* w [[buffer(1)]],
     const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
     const device bfloat* norm [[buffer(4)]], constant i2a_embed_args& a [[buffer(5)]],
@@ -56,11 +73,36 @@ inline float i2a_weight(const device uint* w, const device bfloat* s, const devi
   const uint row = group.y;
   const uint lane = tid % 32u;
   if (col >= a.n || row >= a.rows) return;
-  float acc = 0.0f;
-  for (uint k = lane; k < a.k; k += 32u)
-    acc = fma(x[(size_t)(row * a.xs + a.xb) * a.k + k], i2a_weight(w, s, b, col, k, a.k, a.bits), acc);
-  acc = simd_sum(acc);
+  const device float* input = x + (size_t)(row * a.xs + a.xb) * a.k;
+  const float acc = i2a_dot(input, w, s, b, col, a.k, a.bits, lane);
   if (lane == 0u) y[(size_t)row * a.n + col] = a.cap > 0.0f ? a.cap * precise::tanh(acc / a.cap) : acc;
+}
+
+[[kernel]] void i2a_dense_rows(const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]],
+    const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
+    constant i2a_dense_args& a [[buffer(4)]], device float* y [[buffer(5)]],
+    uint2 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
+  const uint col = group.x * 8u + tid / 32u, lane = tid % 32u;
+  const uint first = group.y * 4u;
+  if (col >= a.n || first >= a.rows) return;
+  const uint per = 32u / a.bits, mask = (1u << a.bits) - 1u;
+  float acc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  for (uint word = lane; word < a.k / per; word += 32u) {
+    const uint packed = w[(size_t)col * (a.k / per) + word];
+    const size_t g = (size_t)col * (a.k / 64u) + word * per / 64u;
+    const float scale = float(s[g]), bias = float(b[g]);
+    for (uint j = 0; j < per; ++j) {
+      const float v = float((packed >> (j * a.bits)) & mask) * scale + bias;
+      for (uint r = 0; r < 4u; ++r)
+        if (first + r < a.rows)
+          acc[r] = fma(x[(size_t)((first + r) * a.xs + a.xb) * a.k + word * per + j], v, acc[r]);
+    }
+  }
+  for (uint r = 0; r < 4u; ++r) {
+    const float value = simd_sum(acc[r]);
+    if (lane == 0u && first + r < a.rows)
+      y[(size_t)(first + r) * a.n + col] = a.cap > 0.0f ? a.cap * precise::tanh(value / a.cap) : value;
+  }
 }
 
 [[kernel]] void i2a_expert_up(const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]],
@@ -73,13 +115,9 @@ inline float i2a_weight(const device uint* w, const device bfloat* s, const devi
   if (col >= a.n || slot >= a.slots) return;
   const size_t expert = uint(picks[slot]);
   const size_t base = expert * 2u * a.n + 2u * col;
-  float gate = 0.0f, up = 0.0f;
-  for (uint k = lane; k < a.k; k += 32u) {
-    const float v = x[(size_t)(slot / a.topk) * a.k + k];
-    gate = fma(v, i2a_weight(w, s, b, base, k, a.k, 4u), gate);
-    up = fma(v, i2a_weight(w, s, b, base + 1u, k, a.k, 4u), up);
-  }
-  gate = simd_sum(gate); up = simd_sum(up);
+  const device float* input = x + (size_t)(slot / a.topk) * a.k;
+  const float gate = i2a_dot(input, w, s, b, base, a.k, 4u, lane);
+  const float up = i2a_dot(input, w, s, b, base + 1u, a.k, 4u, lane);
   if (lane == 0u) {
     const float g = a.gate_cap * precise::tanh(gate / a.gate_cap) / (1.0f + precise::exp(-gate));
     const float u = a.up_cap > 0.0f ? a.up_cap * precise::tanh(up / a.up_cap) : up;
@@ -96,9 +134,72 @@ inline float i2a_weight(const device uint* w, const device bfloat* s, const devi
   const uint slot = group.y, lane = tid % 32u;
   if (col >= a.n || slot >= a.slots) return;
   const size_t row = (size_t)uint(picks[slot]) * a.n + col;
-  float acc = 0.0f;
-  for (uint k = lane; k < a.k; k += 32u)
-    acc = fma(x[(size_t)slot * a.k + k], i2a_weight(w, s, b, row, k, a.k, 4u), acc);
-  acc = simd_sum(acc);
+  const float acc = i2a_dot(x + (size_t)slot * a.k, w, s, b, row, a.k, 4u, lane);
   if (lane == 0u) y[(size_t)slot * a.n + col] = acc;
+}
+
+struct i2a_group_args { uint k, n, slots, topk, experts; float gate_cap, up_cap; };
+
+[[kernel]] void i2a_group_up(const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]],
+    const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
+    const device uint* offsets [[buffer(4)]], const device uint* sorted [[buffer(5)]],
+    constant i2a_group_args& a [[buffer(6)]], device float* y [[buffer(7)]],
+    uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
+  const uint col = group.x * 8u + tid / 32u, lane = tid % 32u, expert = group.y;
+  const uint begin = offsets[expert] + group.z * 4u, end = offsets[expert + 1u];
+  if (col >= a.n || begin >= end) return;
+  uint slot[4];
+  for (uint r = 0; r < 4u; ++r) slot[r] = begin + r < end ? sorted[begin + r] : 0;
+  float gate[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  float up[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  const size_t base = (size_t)expert * 2u * a.n + 2u * col;
+  for (uint word = lane; word < a.k / 8u; word += 32u) {
+    const uint gw = w[base * (a.k / 8u) + word], uw = w[(base + 1u) * (a.k / 8u) + word];
+    const size_t g = base * (a.k / 64u) + word / 8u, u = g + a.k / 64u;
+    const float gs = float(s[g]), gb = float(b[g]), us = float(s[u]), ub = float(b[u]);
+    for (uint j = 0; j < 8u; ++j) {
+      const float gv = float((gw >> (j * 4u)) & 15u) * gs + gb;
+      const float uv = float((uw >> (j * 4u)) & 15u) * us + ub;
+      for (uint r = 0; r < 4u; ++r) if (begin + r < end) {
+        const float v = x[(size_t)(slot[r] / a.topk) * a.k + word * 8u + j];
+        gate[r] = fma(v, gv, gate[r]); up[r] = fma(v, uv, up[r]);
+      }
+    }
+  }
+  for (uint r = 0; r < 4u; ++r) {
+    const float g = simd_sum(gate[r]), u = simd_sum(up[r]);
+    if (lane == 0u && begin + r < end) {
+      const float gg = a.gate_cap * precise::tanh(g / a.gate_cap) / (1.0f + precise::exp(-g));
+      const float uu = a.up_cap > 0.0f ? a.up_cap * precise::tanh(u / a.up_cap) : u;
+      y[(size_t)slot[r] * a.n + col] = gg * uu;
+    }
+  }
+}
+
+[[kernel]] void i2a_group_down(const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]],
+    const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
+    const device uint* offsets [[buffer(4)]], const device uint* sorted [[buffer(5)]],
+    constant i2a_group_args& a [[buffer(6)]], device float* y [[buffer(7)]],
+    uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
+  const uint col = group.x * 8u + tid / 32u, lane = tid % 32u, expert = group.y;
+  const uint begin = offsets[expert] + group.z * 4u, end = offsets[expert + 1u];
+  if (col >= a.n || begin >= end) return;
+  uint slot[4];
+  for (uint r = 0; r < 4u; ++r) slot[r] = begin + r < end ? sorted[begin + r] : 0;
+  float acc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  const size_t base = (size_t)expert * a.n + col;
+  for (uint word = lane; word < a.k / 8u; word += 32u) {
+    const uint packed = w[base * (a.k / 8u) + word];
+    const size_t g = base * (a.k / 64u) + word / 8u;
+    const float scale = float(s[g]), bias = float(b[g]);
+    for (uint j = 0; j < 8u; ++j) {
+      const float v = float((packed >> (j * 4u)) & 15u) * scale + bias;
+      for (uint r = 0; r < 4u; ++r) if (begin + r < end)
+        acc[r] = fma(x[(size_t)slot[r] * a.k + word * 8u + j], v, acc[r]);
+    }
+  }
+  for (uint r = 0; r < 4u; ++r) {
+    const float value = simd_sum(acc[r]);
+    if (lane == 0u && begin + r < end) y[(size_t)slot[r] * a.n + col] = value;
+  }
 }

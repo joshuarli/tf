@@ -561,9 +561,9 @@ const Chunk = struct {
         const p = c.m.affine_pipes.?;
         const args = AffineDense{ .n = n, .k = @intCast(width(w)), .rows = rows, .xs = x.xs, .xb = x.xb, .bits = if (w.affine) |q| q.bits() else 0, .cap = cap };
         if (w.affine) |q| {
-            c.setP(p.dense, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out });
+            c.setP(if (rows > 8) p.dense_rows else p.dense, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out });
         } else c.setP(p.float, args, &.{ x.buf, t(w), A, out });
-        c.enc.dispatchGroups(mtl.Size.of((n + 7) / 8, rows, 1), mtl.Size.of(256, 1, 1));
+        c.enc.dispatchGroups(mtl.Size.of((n + 7) / 8, if (w.affine != null and rows > 8) (rows + 3) / 4 else rows, 1), mtl.Size.of(256, 1, 1));
     }
 
     fn rmsW(c: Chunk, x: In, weight: B, out: B, ys: u32, yb: u32, w: u32, eps: f32) void {
@@ -809,6 +809,23 @@ const Chunk = struct {
         const slots: u32 = c.n * K;
         if (lay.precision == .affine4) {
             const p = m.affine_pipes.?;
+            if (c.n > 8) {
+                c.setP(s.pipes.moe_zero, E, &.{ b(s.moe_cnt), A });
+                c.enc.dispatchThreads(mtl.Size.of(E, 1, 1), mtl.Size.of(32, 1, 1));
+                c.setP(s.pipes.moe_count, slots, &.{ b(s.picks), b(s.moe_cnt), A });
+                c.enc.dispatchThreads(mtl.Size.of(slots, 1, 1), mtl.Size.of(32, 1, 1));
+                c.setP(s.pipes.moe_offsets, E, &.{ b(s.moe_cnt), b(s.moe_off), b(s.moe_cur), A });
+                c.enc.dispatchThreads(mtl.Size.of(128, 1, 1), mtl.Size.of(128, 1, 1));
+                c.setP(s.pipes.moe_sort, slots, &.{ b(s.picks), b(s.moe_cur), b(s.moe_sorted), A });
+                c.enc.dispatchThreads(mtl.Size.of(slots, 1, 1), mtl.Size.of(32, 1, 1));
+                c.setP(p.group_up, Moeg{ .k = c.h, .n = inter, .slots = slots, .topk = K, .experts = E, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), b(s.moe_off), b(s.moe_sorted), A, b(s.act) });
+                c.enc.dispatchGroups(mtl.Size.of((inter + 7) / 8, E, (c.n + 3) / 4), mtl.Size.of(256, 1, 1));
+                c.setP(p.group_down, Moeg{ .k = inter, .n = c.h, .slots = slots, .topk = K, .experts = E, .gate_cap = 0, .up_cap = 0 }, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), t(lay.w2_bias.?), b(s.moe_off), b(s.moe_sorted), A, b(s.down) });
+                c.enc.dispatchGroups(mtl.Size.of((c.h + 7) / 8, E, (c.n + 3) / 4), mtl.Size.of(256, 1, 1));
+                c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = K, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
+                c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
+                return;
+            }
             c.setP(p.up, MoeB{ .k = c.h, .n = inter, .slots = slots, .topk = K, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), b(s.picks), A, b(s.act) });
             c.enc.dispatchGroups(mtl.Size.of((inter + 7) / 8, slots, 1), mtl.Size.of(256, 1, 1));
             c.setP(p.down, MoeB{ .k = inter, .n = c.h, .slots = slots, .topk = K, .gate_cap = 0, .up_cap = 0 }, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), t(lay.w2_bias.?), b(s.picks), A, b(s.down) });

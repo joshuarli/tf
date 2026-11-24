@@ -138,9 +138,12 @@ def mlx_weight_floor(c: dict, header: dict, expert_read: str) -> dict:
     buckets = {name: 0 for name in ("attention projections", "convolutions", "norms and router", key,
                                       "controllers", "depth-mix queries", "embedding row + norms", "unembedding", "cross-pass")}
     per_layer = []
+    seen: set[int] = set()
     for layer in order:
         prefix = f"model.layers.{layer}."
         before = sum(buckets.values())
+        later_pass = layer in seen
+        seen.add(layer)
         full = is_full(c, layer)
         projections = ("q_proj", "k_proj", "v_proj", "o_proj") if full else ("in_proj", "o_proj")
         for proj in projections:
@@ -160,7 +163,7 @@ def mlx_weight_floor(c: dict, header: dict, expert_read: str) -> dict:
                 if size % experts:
                     raise SystemExit(f"expert tensor is not evenly divided: {base + suffix}")
                 buckets[key] += size // experts * selected
-        if c["loop_config"]["core_start"] <= layer < c["loop_config"]["core_end"]:
+        if later_pass:
             for suffix in ("loop_down", "loop_gain_forget"):
                 buckets["controllers"] += tensor_bytes(header, prefix + suffix)
         buckets["depth-mix queries"] += tensor_bytes(header, prefix + "mlp_input.query")
@@ -197,12 +200,15 @@ def weight_floor(model: Path, expert_read: str = "topk") -> dict:
     buckets = {"attention projections": 0, "convolutions": 0, "norms and router": 0, "routed experts (top-k)": 0,
                "controllers": 0, "depth-mix queries": 0, "embedding row + norms": 0, "unembedding": 0, "cross-pass": 0}
     per_layer: list[tuple[int, int]] = []
+    seen: set[int] = set()
     for layer in order:
         total = 0
+        later_pass = layer in seen
+        seen.add(layer)
         for name in layer_names(c, layer):
             suffix = name.split(f"layers.{layer}.", 1)[1]
             size = tensor_bytes(header, name)
-            if suffix.startswith("mlp.experts."):
+            if suffix.startswith("mlp.experts.") or (bucket_of(suffix) == "controllers" and not later_pass):
                 continue
             total += size
             buckets[bucket_of(suffix)] += size

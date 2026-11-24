@@ -3,7 +3,7 @@
 ## Status
 
 **Active 2026-11-23.**
-- Resume prompt: "Resume the Inkling frontier campaign (Decision 16) from `campaign/plan.md` **Status**."
+- Resume prompt: "Resume the Inkling 2K/200 campaign (Decision 17) from `campaign/plan.md` **Status**."
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
 - **Last accepted code: D2, `038f24cce`, green.** Passing there: `evidence-controls`, `inkling-host`, `inkling-gpu` (107 tests), `zig build native` and the `inkling-omlx-oracle` report (mean KL 0.0195 at chunk 512). Receipts: `campaign/kernels/inkling-cold-prefill.md` and `campaign/kernels/inkling-decode-step.md`.
 - **Open from P3c:** `code-c02` now falls into a repeatable reasoning loop, and oQ4e quality dev is 7/11 (base 6/11), below the fast profile's 8-case bar. Mean TTFT at four agents rose on the warm repetition; the cause is not traced.
@@ -15,12 +15,21 @@
   - Rejected and kept for reference: `b1f-interleave` (retry only with staggered arrivals), `s1-skip-logits` (token-buffer race), `e2-prefill-experts2`, `e3-expert-tensorops`, `m1-bf16-prefill` and `p6-prefill-gemm2`. Their receipts are in `campaign/kernels/`.
   - Old wip records: `c0-ground`, `k2-inkling-experts`.
 - **B2, first pass done** (`campaign/kernels/inkling-b2-baselines.md`): TensorFold leads oMLX at one and two agents, trails it at four (0.84× and 0.90×) and matches at eight. Its warm aggregate is flat from two to eight agents, and its four-agent TTFT is 998 ms against 623 ms for oMLX.
-- **Next slice:**
-  1. J1: TensorFold multi-agent scheduling. Find why aggregate throughput stops rising after two agents and why four-agent TTFT is high (the open P3c TTFT item may share the cause). Profile a served four-agent sweep, then fix the dominant cause.
-  2. B2 remainder: the best llama.cpp Inkling stack (#32808, #32752 or #32883, #32855), mlx-serve and MTPLX, and oMLX on one server per agent count.
-  3. R1: the source map and ledger, per `frontier-brief.md`.
+- **Next slice (Decision 17, owner 2026-11-23): 2,000 tok/s prefill and 200 tok/s single stream.**
+  1. S1: Splash 1.7.2 as the same-model reference on this Mac. Controlled on oQ4e, best practical on
+     `unsloth/Inkling-2-Mini-GGUF:UD-Q4_K_M` with `incoai/Inkling-2-Mini-DFlash2`. Bounded: one measurement pass.
+  2. DF1: the Inkling DFlash2 drafter on the shared `qwen27/dflash` Metal runtime, bound to the Inkling target as
+     `families/flint/draft.zig` binds Flint (4 taps at 5, 23, 41 and the final norm; softcap 30 after correction).
+     Its first deliverable is the round table: committed tokens and full round time per width and context.
+  3. V1: verifier cost at widths 1/2/4/8 from identical states, against the Decision 17 round budgets.
+  4. SV1: the draft path in the served `inkling2_loop_host` (today `copy_drafts` is discarded and every lane runs
+     `batchStep`).
+  5. P4: prefill to 2K across the curve: qualify `lane/p3c-prefill`, fuse compatible projections and split the
+     shared input once (P3c profile), then 1K/4K/8K/16K and near-cap results plus first-request numbers.
+  6. Q3: the `code-c02` reasoning loop from P3c.
+  7. Deferred off the critical path: J1 (multi-agent scheduling), B2 remainder, R1.
 
-  Run one GPU-timing lane at a time: the shared lock and outside load (OrbStack at 4–10 cores) left parallel lanes unmeasurable.
+  Run one GPU-timing lane at a time: the shared lock and outside load (OrbStack at 4–10 cores) left parallel lanes unmeasurable. Code-only lanes may run beside a timing lane.
 - History: the "Status log" section of `campaign/ledger.md`.
 
 ## Charter
@@ -150,6 +159,31 @@ The owner made the first two decisions on 2026-11-21:
         integrated workload and quality checks.
     - **Unchanged.** The 32 GB budget, the 28 GB `heavy.py` cap, the 26 GB load limit, and the 32,768-token context
       cap. 128K, 256K and 1M remain analytic projections only.
+
+17. **Owner: 2K prefill and 200 tok/s single stream (2026-11-23).** These replace Decision 16's stretch (2,000 cold
+    prefill, 80 decode). T3's cells stay as reported targets but leave the critical path.
+    - **Prefill target.** 2,000 tok/s at 1K, 4K, 8K and 16K, and near the cap with output headroom reserved, in a
+      resident process on prompts it has not seen. First request after readiness is reported beside it, never
+      folded in. A single 1K cell does not stand for the curve.
+    - **Decode target.** 200 committed output tok/s, one stream, sustained over 512-token greedy replies on the
+      quick prompt classes (code, reasoning, prose, tool continuation). Speculation is allowed and labelled.
+      Ordinary decode, speculative decode and concurrent aggregate are reported separately.
+    - **Why speculation.** oQ4e reads about 3.87 GB of weights per ordinary token (`inkling_profile.py`, with
+      controllers charged only on passes 2 and 3). At the measured ~500 GB/s streaming rate that bounds ordinary
+      decode near 129 tok/s before KV and activations. 200 needs several committed tokens per target round.
+    - **Round budgets.** Mean round time, including draft, verify, selection, state commit, rejection and host
+      work, must stay under 20, 25, 30 and 40 ms at 4, 5, 6 and 8 mean committed tokens. Acceptance alone is not a
+      result.
+    - **Reference.** Splash 1.7.2 (`incoai/splash`, Apache-2.0) is the same-model reference. Its 213 tok/s on a
+      32-core M5 Max is an unqualified external prerelease peak until reproduced here. Its 16-core M5 Pro notes
+      give 25.6 ms one-row and 48.3 ms eight-row cycles after 2,048 tokens, 6.30 tokens a cycle.
+    - **Drafter.** `incoai/Inkling-2-Mini-DFlash2@4f9088ea66c2` (Apache-2.0, 0.99 GB BF16): 5 layers of hidden 2304,
+      block 8, window 2048, taps 5/23/41/48, a rank-256 top-16 candidate selector and the target's head with
+      softcap 30 after correction. It has the shape of `incoai/Flint-DFlash2`, which TensorFold already serves on
+      the shared Metal DFlash2 runtime. Its draft residency fits Decision 8's 4 GiB.
+    - **Correctness.** Greedy speculative output equals the qualified target's greedy output (Decision 13); KV,
+      convolution and per-pass state roll back exactly. Task quality, looping, truncation and tool behaviour stay
+      reported. Fidelity stays reporting-only (Decision 16).
 
 ## Baseline
 

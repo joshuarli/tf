@@ -420,6 +420,8 @@ pub const PrefillScratch = struct {
         s.ids = try device.buffer(@max(chunk * 4, 16), mtl.ResourceOptions.shared);
         errdefer s.ids.deinit();
         s.logits = try device.buffer(@max(s.logit_rows * vocab * 4, 16), mtl.ResourceOptions.shared);
+        errdefer s.logits.deinit();
+        try s.commit(device);
         const opts = mtl.CompileOptions.mlx();
         const lib = try mtl.Library.fromSource(device, kernels.prefill, opts);
         defer lib.deinit();
@@ -642,6 +644,25 @@ pub const PrefillScratch = struct {
         return s;
     }
 
+    fn commit(s: *PrefillScratch, device: mtl.Device) !void {
+        const queue = try device.queue();
+        defer queue.deinit();
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
+        const cb = queue.commandBuffer();
+        const blit = cb.blit();
+        inline for (buffer_names) |f| blit.fill(@field(s, f), 0, @field(s, f).length(), 0);
+        for ([_]?mtl.Buffer{ s.bf16_input, s.xh, s.act_h, s.affine_stage_w, s.affine_stage_x }) |optional| {
+            if (optional) |buf| blit.fill(buf, 0, buf.length(), 0);
+        }
+        blit.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |_| return error.GpuFailed;
+    }
+
+    const buffer_names = [_][]const u8{ "ids", "x", "prelude", "passout", "bank", "n0", "n1", "n2", "m0", "q", "k", "v", "r", "kc", "vc", "kh", "vh", "kdyn", "vdyn", "sink", "relbias", "attn", "gate", "projout", "o", "aconv", "moe", "blocks", "staged", "mixout", "msg", "h2in", "normed", "tanhg", "tanhf", "router", "picks", "wts", "act", "down", "moe_cnt", "moe_off", "moe_cur", "moe_sorted", "logits" };
+
     pub fn deinit(s: *PrefillScratch) void {
         if (s.bf16_input) |buf| buf.deinit();
         if (s.half_overflow) |buf| buf.deinit();
@@ -650,7 +671,7 @@ pub const PrefillScratch = struct {
         if (s.affine_stage_w) |buf| buf.deinit();
         if (s.affine_stage_x) |buf| buf.deinit();
         s.pipes.deinit();
-        inline for ([_][]const u8{ "ids", "x", "prelude", "passout", "bank", "n0", "n1", "n2", "m0", "q", "k", "v", "r", "kc", "vc", "kh", "vh", "kdyn", "vdyn", "sink", "relbias", "attn", "gate", "projout", "o", "aconv", "moe", "blocks", "staged", "mixout", "msg", "h2in", "normed", "tanhg", "tanhf", "router", "picks", "wts", "act", "down", "moe_cnt", "moe_off", "moe_cur", "moe_sorted", "logits" }) |f| @field(s, f).deinit();
+        inline for (buffer_names) |f| @field(s, f).deinit();
     }
 };
 

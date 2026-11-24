@@ -577,10 +577,11 @@ def picks(args: argparse.Namespace) -> None:
 
 
 def split_rounds(name: str) -> dict[str, list[dict]]:
-    """NAME.log's `inkling2 split` lines by prompt: each prompt's lines precede its `dflash PROMPT:` summary."""
+    """NAME.log's (or its tracked copy NAME.txt's) `inkling2 split` lines by prompt, each before its `dflash PROMPT:`."""
     out: dict[str, list[dict]] = {}
     held: list[dict] = []
-    for line in (HERE / f"{name}.log").read_text().splitlines():
+    log = HERE / f"{name}.log"
+    for line in (log if log.exists() else HERE / f"{name}.txt").read_text().splitlines():
         if line.startswith("inkling2 split "):
             held.append(json.loads(line[len("inkling2 split "):]))
         elif line.startswith("dflash ") and ":" in line and held:

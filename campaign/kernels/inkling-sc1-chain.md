@@ -183,7 +183,8 @@ INKLING_ROUND_SPLIT=1 INKLING_DRAFT_CHAIN=0 python3 campaign/heavy.py -- $R $T $
 python3 -I $D/run.py split attr-plain-a
 ```
 
-`INKLING_DRAFT_CHAIN` exists only in the chain's builds (`2c49d4489`; chaining is on unless it is `0`). The builds at
+The `.log` files are not tracked. Their `inkling2 split` and `dflash` lines are, as `NAME.txt`, which `split` reads
+when the log is absent. `INKLING_DRAFT_CHAIN` exists only in the chain's builds (`2c49d4489`; chaining is on unless it is `0`). The builds at
 `c66de7b4a` and `0a9fc969e` read the split switch as `TF_INKLING_ROUND_SPLIT`. `run.py bench … --split` runs the same
 processes behind the admission gates.
 

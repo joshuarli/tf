@@ -1,6 +1,7 @@
 //! DFlash2 native graph, operation schedule and proposal contracts over shared checkpoint contracts.
 pub const generation = @import("generation.zig");
 pub const runtime_backend = @import("runtime_backend.zig");
+pub const runtime_frame = @import("runtime_frame.zig");
 pub const runtime_model = @import("runtime_model.zig");
 pub const config = @import("config.zig");
 pub const weights = @import("weights.zig");

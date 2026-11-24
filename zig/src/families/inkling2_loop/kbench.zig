@@ -40,23 +40,29 @@ const variants = [_]Variant{
     .{ .kind = .head, .name = "i2t_dense_8_2", .sg = 8, .t = 2, .least = 2, .most = 8 },
     .{ .kind = .head, .name = "i2t_dense_16_2", .sg = 16, .t = 2, .least = 2, .most = 8 },
     .{ .kind = .head, .name = "i2t_dense_8_4", .sg = 8, .t = 4, .least = 2, .most = 8 },
+    .{ .kind = .head, .name = "i2t_dense_16_4", .sg = 16, .t = 4, .least = 2, .most = 8 },
     .{ .kind = .head, .name = "i2t_dense16_8_2", .sg = 8, .t = 2, .least = 9, .most = 16 },
     .{ .kind = .head, .name = "i2t_dense16_16_2", .sg = 16, .t = 2, .least = 9, .most = 16 },
+    .{ .kind = .head, .name = "i2t_dense16_16_4", .sg = 16, .t = 4, .least = 9, .most = 16 },
     .{ .kind = .head, .name = "i2t_dense16_8_1", .sg = 8, .t = 1, .least = 9, .most = 16 },
     .{ .kind = .head, .name = "i2t_dense16_h8_2", .sg = 8, .t = 2, .h = 2, .least = 9, .most = 16 },
     .{ .kind = .head, .name = "i2t_dense16_h16_2", .sg = 16, .t = 2, .h = 2, .least = 9, .most = 16 },
     .{ .kind = .oproj, .name = "i2t_dense_8_2", .sg = 8, .t = 2, .least = 2, .most = 8 },
     .{ .kind = .oproj, .name = "i2t_dense_16_2", .sg = 16, .t = 2, .least = 2, .most = 8 },
     .{ .kind = .oproj, .name = "i2t_dense_8_4", .sg = 8, .t = 4, .least = 2, .most = 8 },
+    .{ .kind = .oproj, .name = "i2t_dense_16_4", .sg = 16, .t = 4, .least = 2, .most = 8 },
     .{ .kind = .oproj, .name = "i2t_dense16_8_2", .sg = 8, .t = 2, .least = 9, .most = 16 },
     .{ .kind = .oproj, .name = "i2t_dense16_16_2", .sg = 16, .t = 2, .least = 9, .most = 16 },
+    .{ .kind = .oproj, .name = "i2t_dense16_16_4", .sg = 16, .t = 4, .least = 9, .most = 16 },
     .{ .kind = .oproj, .name = "i2t_dense16_8_1", .sg = 8, .t = 1, .least = 9, .most = 16 },
     .{ .kind = .oproj, .name = "i2t_dense16_h8_2", .sg = 8, .t = 2, .h = 2, .least = 9, .most = 16 },
     .{ .kind = .oproj, .name = "i2t_dense16_h16_2", .sg = 16, .t = 2, .h = 2, .least = 9, .most = 16 },
     .{ .kind = .proj, .name = "i2t_projections_8_2", .sg = 8, .t = 2, .least = 3, .most = 8 },
     .{ .kind = .proj, .name = "i2t_projections_16_2", .sg = 16, .t = 2, .least = 3, .most = 8 },
+    .{ .kind = .proj, .name = "i2t_projections_16_4", .sg = 16, .t = 4, .least = 3, .most = 8 },
     .{ .kind = .proj, .name = "i2t_projections16_8_2", .sg = 8, .t = 2, .least = 9, .most = 16 },
     .{ .kind = .proj, .name = "i2t_projections16_16_2", .sg = 16, .t = 2, .least = 9, .most = 16 },
+    .{ .kind = .proj, .name = "i2t_projections16_16_4", .sg = 16, .t = 4, .least = 9, .most = 16 },
     .{ .kind = .proj, .name = "i2t_projections16_h8_2", .sg = 8, .t = 2, .h = 2, .least = 9, .most = 16 },
     .{ .kind = .proj, .name = "i2t_projections16_h16_2", .sg = 16, .t = 2, .h = 2, .least = 9, .most = 16 },
 };
@@ -102,7 +108,10 @@ pub fn run(gpa: std.mem.Allocator, m: *inkling.Model, reps: usize, picks_path: ?
     var pipes: [variants.len]?mtl.Pipeline = @splat(null);
     defer for (pipes) |p| if (p) |pipe| pipe.deinit();
     for (variants, 0..) |v, i| if (picked(chosen, v.name)) {
-        pipes[i] = try mtl.Pipeline.init(m.device, lib, v.name, false);
+        pipes[i] = mtl.Pipeline.init(m.device, lib, v.name, false) catch |e| blk: {
+            std.debug.print("kernel bench: {s} skipped: {t}\n", .{ v.name, e });
+            break :blk null;
+        };
     };
     const io = Io{ .x = x, .act = act, .y = y, .outs = outs, .picks = picks, .visits = visits };
     const affine = m.affine_pipes.?;

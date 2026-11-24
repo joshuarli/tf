@@ -43,7 +43,9 @@ const Candidate = struct { name: [:0]const u8, sg: u32, t: u32, h: u32 = 1, leas
 const dense_candidates = [_]Candidate{
     .{ .name = "i2t_dense_16_2", .sg = 16, .t = 2, .least = 2, .most = 8 },
     .{ .name = "i2t_dense_8_4", .sg = 8, .t = 4, .least = 2, .most = 8 },
+    .{ .name = "i2t_dense_16_4", .sg = 16, .t = 4, .least = 2, .most = 8 },
     .{ .name = "i2t_dense16_16_2", .sg = 16, .t = 2, .least = 2, .most = 16 },
+    .{ .name = "i2t_dense16_16_4", .sg = 16, .t = 4, .least = 2, .most = 16 },
     .{ .name = "i2t_dense16_8_1", .sg = 8, .t = 1, .least = 2, .most = 16 },
     .{ .name = "i2t_dense16_h8_2", .sg = 8, .t = 2, .h = 2, .least = 2, .most = 16 },
     .{ .name = "i2t_dense16_h16_2", .sg = 16, .t = 2, .h = 2, .least = 2, .most = 16 },
@@ -51,7 +53,9 @@ const dense_candidates = [_]Candidate{
 
 const projection_candidates = [_]Candidate{
     .{ .name = "i2t_projections_16_2", .sg = 16, .t = 2, .least = 2, .most = 8 },
+    .{ .name = "i2t_projections_16_4", .sg = 16, .t = 4, .least = 2, .most = 8 },
     .{ .name = "i2t_projections16_16_2", .sg = 16, .t = 2, .least = 2, .most = 16 },
+    .{ .name = "i2t_projections16_16_4", .sg = 16, .t = 4, .least = 2, .most = 16 },
     .{ .name = "i2t_projections16_h8_2", .sg = 8, .t = 2, .h = 2, .least = 2, .most = 16 },
     .{ .name = "i2t_projections16_h16_2", .sg = 16, .t = 2, .h = 2, .least = 2, .most = 16 },
 };

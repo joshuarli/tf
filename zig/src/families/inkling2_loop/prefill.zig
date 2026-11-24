@@ -322,6 +322,7 @@ pub const PrefillScratch = struct {
     fuse: bool,
     half_rows_all: bool,
     half_inputs: bool,
+    tall: bool,
     capture: ?mtl.Buffer,
     capture_row: usize,
     routes: ?mtl.Buffer,
@@ -357,6 +358,7 @@ pub const PrefillScratch = struct {
         const rounding: []const u8 = if (std.c.getenv("INKLING_PREFILL_HALF")) |v| std.mem.span(v) else "";
         s.half_rows_all = std.mem.eql(u8, rounding, "experts") or std.mem.eql(u8, rounding, "both");
         s.half_inputs = std.mem.eql(u8, rounding, "inputs") or std.mem.eql(u8, rounding, "both");
+        s.tall = if (std.c.getenv("INKLING_PREFILL_TILE")) |v| std.mem.eql(u8, std.mem.span(v), "tall") else false;
         s.bf16_input = if (fast and device.tensorUnits()) try device.buffer(@max(chunk * @max(2 * h, @max(qw, @max(kvw, rank))) * 2, 16), mtl.ResourceOptions.private) else null;
         errdefer if (s.bf16_input) |buf| buf.deinit();
         s.half_overflow = if (fast or device.tensorUnits()) try device.buffer(16, mtl.ResourceOptions.shared) else null;
@@ -1170,6 +1172,7 @@ const Chunk = struct {
             .overflow = s.half_overflow orelse return null,
             .rows = c.n,
             .half_inputs = s.half_inputs,
+            .tall = s.tall,
         };
     }
 

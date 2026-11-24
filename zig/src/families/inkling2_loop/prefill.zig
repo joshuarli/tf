@@ -911,12 +911,18 @@ const Chunk = struct {
     }
 
     fn mixNorm(c: Chunk, cur: B, query: Tensor, out: B, norms: []const Tensor, outs: [3]B) bool {
+        var queries: [4]B = @splat(t(query));
         const k = nrows(query);
-        if (c.batch != null or !c.s.fuse or !rows_mod.mixFits(c.h, c.count + 1, k, norms.len)) return false;
-        const args = rows_mod.MixArgs{ .width = c.h, .depth = @intCast(c.count + 1), .stride = st.mix_states, .k = @intCast(k), .norm = @intFromBool(norms.len > 0), .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.h))), .eps = c.m.config.text.eps };
-        var weights: [3]B = @splat(t(query));
+        for (0..@min(k, 4)) |i| queries[i] = bo(query.buffer, query.offset + i * c.h * 4);
+        return c.mixStates(b(c.s.blocks), cur, c.count + 1, queries, k, out, norms, outs);
+    }
+
+    fn mixStates(c: Chunk, states: B, cur: B, depth: usize, queries: [4]B, k: usize, out: B, norms: []const Tensor, outs: [3]B) bool {
+        if (c.batch != null or !c.s.fuse or !rows_mod.mixFits(c.h, depth, k, norms.len)) return false;
+        const args = rows_mod.MixArgs{ .width = c.h, .depth = @intCast(depth), .stride = st.mix_states, .k = @intCast(k), .norm = @intFromBool(norms.len > 0), .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.h))), .eps = c.m.config.text.eps };
+        var weights: [3]B = @splat(queries[0]);
         for (norms, 0..) |w, i| weights[i] = t(w);
-        c.setP(c.s.pipes.rows.mix, args, &.{ b(c.s.blocks), cur, t(query), A, out, weights[0], weights[1], weights[2], outs[0], outs[1], outs[2] });
+        c.setP(c.s.pipes.rows.mix, args, &.{ states, cur, queries[0], queries[1], queries[2], queries[3], A, out, weights[0], weights[1], weights[2], outs[0], outs[1], outs[2] });
         c.enc.dispatchGroups(mtl.Size.of(c.n, 1, 1), mtl.Size.of(rows_mod.threads, 1, 1));
         return true;
     }
@@ -1073,6 +1079,8 @@ const Chunk = struct {
         const m = c.m;
         const s = c.s;
         const at: usize = ip - m.config.loop.core_start;
+        const queries = [4]B{ t(srows(m.weights.cross_pass_q, at * 2, 1)), t(srows(m.weights.cross_pass_kv, at * 2, 1)), t(srows(m.weights.cross_pass_kv, at * 2 + 1, 1)), t(srows(m.weights.cross_pass_q, at * 2 + 1, 1)) };
+        if (c.mixStates(bk.states, bk.out, bk.n + 1, queries, 4, b(s.msg), &.{}, @splat(b(s.msg)))) return b(s.msg);
         c.gatherM(bk.states, bk.out, @intCast(bk.n + 1));
         const pipe = if (c.batch != null and bk.n + 1 <= st.mix_states) c.batch.?.scratch.mix4 else s.pipes.mix4;
         c.setP(pipe, MixB{ .width = c.h, .depth = @intCast(bk.n + 1), .k = 4, .rows = c.n, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.h))) }, &.{

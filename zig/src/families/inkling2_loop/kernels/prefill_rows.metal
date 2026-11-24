@@ -18,12 +18,13 @@ inline float i2pr_total(float sum, threadgroup float* part, uint t) {
 }
 
 [[kernel]] void i2pr_mix_norm(const device float* BLK [[buffer(0)]], const device float* CUR [[buffer(1)]],
-    const device float* Q [[buffer(2)]], constant i2pr_mix_args& a [[buffer(3)]], device float* MIX [[buffer(4)]],
-    const device bfloat* W0 [[buffer(5)]], const device bfloat* W1 [[buffer(6)]], const device bfloat* W2 [[buffer(7)]],
-    device float* O0 [[buffer(8)]], device float* O1 [[buffer(9)]], device float* O2 [[buffer(10)]],
+    const device float* Q0 [[buffer(2)]], const device float* Q1 [[buffer(3)]], const device float* Q2 [[buffer(4)]],
+    const device float* Q3 [[buffer(5)]], constant i2pr_mix_args& a [[buffer(6)]], device float* MIX [[buffer(7)]],
+    const device bfloat* W0 [[buffer(8)]], const device bfloat* W1 [[buffer(9)]], const device bfloat* W2 [[buffer(10)]],
+    device float* O0 [[buffer(11)]], device float* O1 [[buffer(12)]], device float* O2 [[buffer(13)]],
     uint row [[threadgroup_position_in_grid]], uint t [[thread_position_in_threadgroup]]) {
   threadgroup float part[I2PR_THREADS / 32u];
-  threadgroup float w[3][I2PR_DEPTH];
+  threadgroup float w[4][I2PR_DEPTH];
   float src[I2PR_DEPTH][I2PR_PER];
   float inv[I2PR_DEPTH];
   for (uint j = 0; j < a.depth; ++j) {
@@ -39,7 +40,7 @@ inline float i2pr_total(float sum, threadgroup float* part, uint t) {
     inv[j] = 1.0f / sqrt(total / float(a.width) + 1e-6f);
   }
   for (uint k = 0; k < a.k; ++k) {
-    const device float* q = Q + (size_t)k * a.width;
+    const device float* q = k == 0u ? Q0 : k == 1u ? Q1 : k == 2u ? Q2 : Q3;
     for (uint j = 0; j < a.depth; ++j) {
       float sum = 0.0f;
       for (uint i = 0; i < I2PR_PER; ++i) sum = fma(src[j][i] * inv[j], q[t + i * I2PR_THREADS], sum);

@@ -6,7 +6,8 @@ pub const source = @embedFile("kernels/prefill_rows.metal");
 pub const threads = 256;
 const per = 9;
 const max_depth = 5;
-const max_queries = 3;
+const max_queries = 4;
+const max_norms = 3;
 
 pub const Pipes = struct {
     mix: mtl.Pipeline,
@@ -26,7 +27,7 @@ pub const MixArgs = extern struct { width: u32, depth: u32, stride: u32, k: u32,
 
 pub fn mixFits(width: usize, depth: usize, queries: usize, norms: usize) bool {
     if (width != threads * per or depth == 0 or depth > max_depth) return false;
-    return queries >= 1 and queries <= max_queries and (norms == 0 or norms == queries);
+    return queries >= 1 and queries <= max_queries and (norms == 0 or (norms == queries and norms <= max_norms));
 }
 
 test "the fused mix takes the served width and refuses what its registers cannot hold" {
@@ -34,6 +35,8 @@ test "the fused mix takes the served width and refuses what its registers cannot
     try std.testing.expect(mixFits(2304, 1, 1, 0));
     try std.testing.expect(!mixFits(2304, 6, 1, 1));
     try std.testing.expect(!mixFits(2048, 2, 1, 1));
-    try std.testing.expect(!mixFits(2304, 2, 4, 0));
+    try std.testing.expect(mixFits(2304, 2, 4, 0));
+    try std.testing.expect(!mixFits(2304, 2, 4, 4));
+    try std.testing.expect(!mixFits(2304, 2, 5, 0));
     try std.testing.expect(!mixFits(2304, 2, 3, 1));
 }

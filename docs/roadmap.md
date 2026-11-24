@@ -7,7 +7,7 @@ This is the single plan for this repository: all current and future work, and th
 **Active 2026-11-24.**
 - Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**.
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
-- **Last accepted code: V2 merge `3881b3d8c`** (green: `inkling-host` 25/25, `inkling-gpu` 155/155 on main `50b4a681a`). Before it, DF2a merge `6c5a5fe0f` (green: `inkling-host`, `inkling-gpu` 149/149 on main `1e441ef6c`). Before it, V1 + SV1 merge `33ec5cf1c`. Before it, DF1, `93de31eca`, green (`inkling-host`, `inkling-gpu` 123/123, `zig build native`; receipt `campaign/kernels/inkling-dflash2.md`). Before it, D2 `038f24cce`: Passing there: `evidence-controls`, `inkling-host`, `inkling-gpu` (107 tests), `zig build native` and the `inkling-omlx-oracle` report (mean KL 0.0195 at chunk 512). Receipts: `campaign/kernels/inkling-cold-prefill.md` and `campaign/kernels/inkling-decode-step.md`.
+- **Last accepted code: P4 merge `3f0054737`** (suite on main pending). Before it, V2 merge `3881b3d8c` (green: `inkling-host` 25/25, `inkling-gpu` 155/155 on main `50b4a681a`). Before it, DF2a merge `6c5a5fe0f` (green: `inkling-host`, `inkling-gpu` 149/149 on main `1e441ef6c`). Before it, V1 + SV1 merge `33ec5cf1c`. Before it, DF1, `93de31eca`, green (`inkling-host`, `inkling-gpu` 123/123, `zig build native`; receipt `campaign/kernels/inkling-dflash2.md`). Before it, D2 `038f24cce`: Passing there: `evidence-controls`, `inkling-host`, `inkling-gpu` (107 tests), `zig build native` and the `inkling-omlx-oracle` report (mean KL 0.0195 at chunk 512). Receipts: `campaign/kernels/inkling-cold-prefill.md` and `campaign/kernels/inkling-decode-step.md`.
 - **Open from P3c:** `code-c02` now falls into a repeatable reasoning loop, and oQ4e quality dev is 7/11 (base 6/11), below the fast profile's 8-case bar. Mean TTFT at four agents rose on the warm repetition; the cause is not traced.
 - **Parked branches** (all on `origin`), with item, cause and retry:
   - `lane/p3c-prefill` at `f0ff849e6`: commits the prefill scratch at setup. Two 1K pairs are inconclusive and it has not run the suite. Retry: the suite, then three first-pass pairs at 1K.
@@ -73,7 +73,7 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    3.12/2.95/3.57 (from 2.76/2.69/3.43) and leave 1K unchanged. Served lookup still needs the host to pass the
    request's tokens in. First-rows retention (3.43/3.01/4.15) is parked: it departs from the checkpoint's window,
    only works as a full rebuild every round, and every test prompt puts its instruction first.
-3b. DF2b, running (code and correctness now; timing waits for P4 via `.work/tmp/df2b-timing-go`):
+3b. DF2b, running (timing released by `.work/tmp/df2b-timing-go` after the main suite):
    `lane/df2b-tree` in `.work/wt/df2b-tree` (scope `usrn_5365e82f-0fed-4516-9e86-c517d413dc60`), receipt
    `inkling-df2b-tree.md`. A tree-masked verify of up to 16 rows that merges the drafter's candidates with lookup
    chains as deep as 15, as Splash does (where Splash's 9.1 tokens a cycle on code comes from), and lookup in the
@@ -82,9 +82,22 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    speculation, byte-identical to plain greedy across prompt-cache hits, forks and EOS (133/133 in `inkling-gpu`).
    It is faster only on code-1024 (1.47×) and prose-1024 (1.16×), so it stays opt-in until V1 and DF2 land. It
    speculates only while one lane decodes. `bench.py MODE=drafter` still passes Flint's `--drafter`.
-5. P4, running and holding the timing lane (released after V2): `lane/p4-prefill` in `.work/wt/p4-prefill`
-   (scope `usrn_f4aecfdf-1818-4a23-a8ed-94305532f730`), receipt `inkling-p4-prefill.md`. Prefill to 2K across the curve: qualify `lane/p3c-prefill`, fuse compatible projections and split the
-   shared input once (P3c profile), then 1K/4K/8K/16K and near-cap results plus first-request numbers.
+5. P4, done and merged `3f0054737` (`inkling-p4-prefill.md`). Default prefill output stays byte-identical to main
+   and the oracle gate gives D2's numbers exactly. GPU time per 512 rows is 0.81–0.94× main; served prefill is 1–12%
+   faster from 4K to 31.7K (lane 1,454–1,591 at 4K, 1,540–1,625 at 8K, 1,395–1,503 near the cap); 1K is
+   inconclusive (0.89× and 1.02×). `f0ff849e6` (P3c scratch at setup) is kept: first request 2.89 → 2.45 s median.
+   Opt-in `INKLING_PREFILL_HALF=both` serves 2,048/2,059 tok/s at 4K/8K (1.18–1.36× default) but agrees with the
+   exact path's top-1 on 97.49% of rows at margin ≥ 0.1, under the 99.5% bar, so it is not promoted; `inputs`
+   97.32%, `experts` 97.25%. Unresolved: `experts` alone measured slower in its one trial.
+5a. PH, next on the GPU after DF2b's timing: qualify `INKLING_PREFILL_HALF=both` under Decision 19. Already
+   measured (P4): oracle top-1 94.73% against exact 94.96% (−0.23 points), mean KL 0.0199 against 0.0195 (1.02×);
+   quality dev 7/11 on both, losing `retrieval-t01` (ran to the 8,192 cap) and gaining `code-c02`. Still needed:
+   `quality SET=full` on exact and `both`, `retrieval-t01` examined for repeatability, and Pi tasks. If it passes,
+   flip the default and keep `INKLING_PREFILL_HALF=off` for the exact path.
+5b. P5c, after DF2b (shares `zig/src/native/inkling2_loop_host.zig`): the host's fork-point chunking. Prompts are cut
+   on a 128-row grid and end with a 128-row chunk, a 0–127-row tail and a one-row chunk; those small chunks run near
+   600 tok/s. With prefix reuse off, 1K serves 1,693 tok/s and held-out prompts match dev. Target: keep prefix reuse
+   and fork snapshots while prefilling the tail in one chunk; then the first request's unexplained 2.5–3.7 s.
 6. Q3: the `code-c02` reasoning loop from P3c.
 7. Deferred off the critical path: see **Later**.
 
@@ -251,6 +264,19 @@ The owner made the first two decisions on 2026-11-21:
       - the one-row step does not get slower.
     - **What it does not allow.** Output that depends on batch composition, as Splash's `--verify-rows auto`
       allows.
+
+19. **Owner: oracle-relative rule for activation precision (2026-11-24).** A change that only lowers activation
+    precision (for example `INKLING_PREFILL_HALF`) is not held to Decision 10's 99.5% top-1 agreement with the exact
+    path, which measures distance from our own float path rather than from the reference. Instead, against the
+    independent oMLX oracle (`inkling-omlx-oracle`, 3,015 rows):
+    - mean KL within 1.10× the exact path's;
+    - top-1 no more than 0.5 points below the exact path's;
+    - the full quality set (`SET=full`) loses at most one case against the exact path, every lost case examined, and
+      no new runaway reasoning (a reply reaching the 8,192-token cap where exact answers);
+    - Pi coding tasks no worse than exact.
+
+    A variant that passes becomes the default; the exact path stays selectable. Weight requantization and KV
+    compression are still separate experimental configurations under Decision 10.
 
 ### Baseline
 

@@ -42,7 +42,8 @@
      speculation, byte-identical to plain greedy across prompt-cache hits, forks and EOS (133/133 in `inkling-gpu`).
      It is faster only on code-1024 (1.47×) and prose-1024 (1.16×), so it stays opt-in until V1 and DF2 land. It
      speculates only while one lane decodes. `bench.py MODE=drafter` still passes Flint's `--drafter`.
-  5. P4: prefill to 2K across the curve: qualify `lane/p3c-prefill`, fuse compatible projections and split the
+  5. P4, coding (timing waits for V2 via `.work/tmp/p4-timing-go`): `lane/p4-prefill` in `.work/wt/p4-prefill`
+     (scope `usrn_f4aecfdf-1818-4a23-a8ed-94305532f730`), receipt `inkling-p4-prefill.md`. Prefill to 2K across the curve: qualify `lane/p3c-prefill`, fuse compatible projections and split the
      shared input once (P3c profile), then 1K/4K/8K/16K and near-cap results plus first-request numbers.
   6. Q3: the `code-c02` reasoning loop from P3c.
   7. Deferred off the critical path: J1 (multi-agent scheduling), B2 remainder, R1.

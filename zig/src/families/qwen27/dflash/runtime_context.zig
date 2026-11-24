@@ -3,8 +3,6 @@ const std = @import("std");
 const op = @import("operators.zig");
 const Backend = @import("runtime_backend.zig").Backend;
 const Ref = @import("runtime_backend.zig").Ref;
-/// Blocks with more keys than this attend over 256-key chunks merged in order.
-pub const split_keys = 1024;
 fn cast(ptr: *anyopaque) *Backend {
     return @ptrCast(@alignCast(ptr));
 }
@@ -95,7 +93,6 @@ fn gather(b: *Backend, e: @import("metal").ComputeEncoder, context: op.Context, 
 pub fn attention(ptr: *anyopaque, epoch: u64, p: op.Attention) !op.View {
     const b = cast(ptr);
     const e = try b.encoder(epoch);
-    if (b.follow) |f| return @import("chain.zig").attend(b, e, p, f);
     if (b.transaction != null or p.layer >= b.config.layers or p.mask != .all_slots) return error.BadDraftContext;
     const result = try b.frame.alloc(p.query.rows, b.config.qWidth(), .bf16);
     if (p.streams.len == 0) {
@@ -143,7 +140,7 @@ fn attendRows(b: *Backend, e: @import("metal").ComputeEncoder, p: op.Attention, 
     const R = @import("core").shared_attention.Ref;
     const views = [_]R{ .{ .buf = q.buf, .off = q.off + @as(usize, first) * p.query.stride * 2 }, .{ .buf = k.buf, .off = k.off }, .{ .buf = v.buf, .off = v.off }, .{ .buf = mask_ref.buf, .off = mask_ref.off }, .{ .buf = y.buf, .off = y.off + @as(usize, first) * result.stride * 2 } };
     // Long contexts share each 256-key chunk across the query heads of one KV head.
-    if (keys > split_keys) try b.attention.encodeSplit(e, rows, keys, keys, scale, views[0], views[1], views[2], views[3], views[4]) else try b.attention.encode(e, rows, keys, keys, scale, views[0], views[1], views[2], views[3], views[4]);
+    if (keys > 1024) try b.attention.encodeSplit(e, rows, keys, keys, scale, views[0], views[1], views[2], views[3], views[4]) else try b.attention.encode(e, rows, keys, keys, scale, views[0], views[1], views[2], views[3], views[4]);
 }
 
 /// Slots before `trained` cannot see later slots, retaining their trained-block mask.

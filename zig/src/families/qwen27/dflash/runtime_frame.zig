@@ -51,10 +51,6 @@ pub const Frame = struct {
     profiler: ?*@import("core").gpu_profile.Trace = null, // TF_Q27_PROFILE: each pass's buffers time its `drafter` class
     hold: @import("core").gpu_profile.Hold = .{}, // while open, the trace's spans keep this frame's encoder
     borrowed: bool = false, // open on another's buffer: its owner commits and waits for it
-    /// A whole frame commits no part while it is encoded: its owner fills its inputs, then `submit` commits it once.
-    whole: bool = false,
-    sealed: bool = false,
-    submitted: bool = false,
     pub fn setResident(f: *Frame, hook: ?mtl.ResidencySet.Follow) void {
         for (f.pool.items) |buffer| {
             if (f.residency) |h| h.leave(h.ctx, buffer);
@@ -77,12 +73,9 @@ pub const Frame = struct {
         f.cursor = 0;
         f.entries.clearRetainingCapacity();
         f.cb = f.queue.commandBuffer();
-        if (f.whole) f.cb = f.cb.retain(); // it is committed after the pool that made it is gone
         f.encoder = f.cb.compute(.serial);
         f.active = true;
         f.completed = false;
-        f.sealed = false;
-        f.submitted = false;
         f.part_count = 0;
         f.ops = 0;
         f.hold.take(f.profiler); // a span's own buffer would overtake this frame's pending ops
@@ -111,7 +104,7 @@ pub const Frame = struct {
     }
     /// Commits the work so far and opens the next buffer behind a fence, so the GPU starts early; between ops only.
     pub fn part(f: *Frame) !void {
-        if (!f.active or f.completed or f.borrowed or f.whole or f.part_count == f.parts.len) return;
+        if (!f.active or f.completed or f.borrowed or f.part_count == f.parts.len) return;
         if (f.fence == null) f.fence = mtl.objc.msg(?mtl.objc.Id, f.device.id, "newFence", .{}) orelse return error.NoFence;
         mtl.objc.msg(void, f.encoder.id, "updateFence:", .{f.fence.?});
         f.encoder.end();
@@ -124,7 +117,7 @@ pub const Frame = struct {
         mtl.objc.msg(void, f.encoder.id, "waitForFence:", .{f.fence.?});
     }
     pub fn finish(f: *Frame) !void {
-        if (!f.active or f.completed or f.borrowed or f.whole) return error.DraftFrameNotActive;
+        if (!f.active or f.completed or f.borrowed) return error.DraftFrameNotActive;
         f.encoder.end();
         if (f.times != null and f.part_count == 0) f.committed = mtl.clock.seconds();
         f.cb.commit();
@@ -141,27 +134,6 @@ pub const Frame = struct {
             for (f.parts[0..f.part_count]) |cb| seconds += cb.gpuSeconds();
             t.record(.drafter, seconds);
         }
-    }
-    /// Ends a whole frame's encoding; nothing of it runs until `submit`.
-    pub fn seal(f: *Frame) !void {
-        if (!f.active or f.completed or !f.whole or f.sealed) return error.DraftFrameNotActive;
-        f.encoder.end();
-        f.sealed = true;
-    }
-    /// Commits a sealed frame once its inputs are filled.
-    pub fn submit(f: *Frame) !void {
-        if (!f.active or !f.sealed or f.submitted) return error.DraftFrameNotActive;
-        if (f.times != null) f.committed = mtl.clock.seconds();
-        f.cb.commit();
-        f.submitted = true;
-    }
-    /// Waits for a submitted frame: its outputs are readable until release.
-    pub fn land(f: *Frame) !void {
-        if (!f.active or !f.submitted or f.completed) return error.DraftFrameNotActive;
-        f.cb.wait();
-        f.completed = true;
-        if (failed(f.cb)) return error.DraftGpuFailure;
-        if (f.times) |t| f.time(t);
     }
     fn time(f: *const Frame, t: *Times) void {
         const returned = mtl.clock.seconds();
@@ -184,13 +156,7 @@ pub const Frame = struct {
         t.frames += 1;
     }
     pub fn release(f: *Frame) void {
-        if (f.active and f.whole) {
-            if (!f.sealed) f.encoder.end();
-            if (f.submitted and !f.completed) f.cb.wait(); // committed work still uses the pool
-            f.cb.release();
-            f.sealed = false;
-            f.submitted = false;
-        } else if (f.active and !f.completed and !f.borrowed) {
+        if (f.active and !f.completed and !f.borrowed) {
             f.encoder.end();
             for (f.parts[0..f.part_count]) |cb| cb.wait(); // committed parts still use the pool
         }
@@ -200,7 +166,7 @@ pub const Frame = struct {
         f.external = null;
     }
     pub fn require(f: *const Frame, epoch: u64) !void {
-        if (!f.active or f.completed or f.sealed or f.epoch != epoch) return error.DraftFrameNotActive;
+        if (!f.active or f.completed or f.epoch != epoch) return error.DraftFrameNotActive;
     }
     pub fn add(f: *Frame, r: Ref, rows: u32, width: u32, stride: u32, dtype: @import("../checkpoint.zig").DType) !op.View {
         const view = op.View{ .handle = (f.epoch << 32) | (f.entries.items.len + 1), .rows = rows, .width = width, .stride = stride, .dtype = dtype };

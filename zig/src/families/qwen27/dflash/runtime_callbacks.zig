@@ -53,11 +53,9 @@ fn norm(ptr: *anyopaque, epoch: u64, x: op.View, p: op.Norm) !op.View {
 fn embed(ptr: *anyopaque, epoch: u64, _: ck.Linear, ids: []const u32) !op.View {
     const b = backend(ptr);
     const e = try b.encoder(epoch);
-    const r = if (b.follow) |f| f.ids else blk: {
-        const tokens = try b.frame.ref(try b.frame.alloc(@intCast(ids.len), 1, .u32));
-        @memcpy(tokens.buf.slice(u32, ids.len), ids);
-        break :blk tokens;
-    };
+    const tokens = try b.frame.alloc(@intCast(ids.len), 1, .u32);
+    const r = try b.frame.ref(tokens);
+    @memcpy(r.buf.slice(u32, ids.len), ids);
     const y = try b.frame.alloc(@intCast(ids.len), b.config.hidden, .bf16);
     const out = try b.frame.ref(y);
     try b.target.glue.embeddingShape(e, b.target.config.hidden, b.target.config.vocab, b.target.weights.embed, .{ .buffer = r.buf, .offset = r.off }, .{ .buffer = out.buf, .offset = out.off }, @intCast(ids.len));
@@ -79,11 +77,9 @@ fn conv(ptr: *anyopaque, epoch: u64, x: op.View, p: op.Conv) !op.View {
 fn rope(ptr: *anyopaque, epoch: u64, x: op.View, p: op.Rotary) !op.View {
     const b = backend(ptr);
     const e = try b.encoder(epoch);
-    const r = if (b.follow) |f| f.positions else blk: {
-        const positions = try b.frame.ref(try b.frame.alloc(x.rows, 1, .u64));
-        @memcpy(positions.buf.slice(u64, p.positions.len), p.positions);
-        break :blk positions;
-    };
+    const positions = try b.frame.alloc(x.rows, 1, .u64);
+    const r = try b.frame.ref(positions);
+    @memcpy(r.buf.slice(u64, p.positions.len), p.positions);
     const y = try b.frame.alloc(x.rows, x.width, .bf16);
     try b.primitives.rope(e, try b.frame.ref(x), r, try b.frame.ref(y), .{ .rows = x.rows, .heads = p.heads, .dim = p.dim, .x_stride = x.stride, .y_stride = y.stride, .theta = @floatCast(p.theta) });
     e.barrier();

@@ -9,7 +9,6 @@ pub const operators = @import("operators.zig");
 pub const execution = @import("execution.zig");
 pub const session = @import("session.zig");
 pub const selector = @import("selector.zig");
-pub const chain = @import("chain.zig");
 test {
     _ = @import("runtime_target.zig");
     _ = config;
@@ -18,7 +17,6 @@ test {
     _ = execution;
     _ = session;
     _ = selector;
-    _ = chain;
     _ = @import("runtime_head.zig");
     _ = @import("runtime_context.zig");
     _ = @import("fixtures.zig");

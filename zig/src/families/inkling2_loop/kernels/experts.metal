@@ -319,6 +319,12 @@ inline void i2_plain_row(const device uchar* w, const device float* x, uint k0, 
 }
 
 #ifdef I2T_ROUTED
+#define I2T_EXPERT_ARGS const device float* X [[buffer(0)]], const device uchar* W [[buffer(1)]], \
+    const device uchar* S [[buffer(2)]], const device float* amax [[buffer(3)]], const device float* den [[buffer(4)]], \
+    const device int* PICKS [[buffer(5)]], constant i2t_moe& a [[buffer(6)]], device float* Y [[buffer(7)]], \
+    const device float* CODES [[buffer(8)]], uint2 tg [[threadgroup_position_in_grid]], \
+    uint tid [[thread_index_in_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]], \
+    uint lane [[thread_index_in_simdgroup]]
 
 inline float i2e_e4m3(uchar c) {
   if ((c & 127u) == 127u) return NAN;
@@ -333,7 +339,7 @@ inline float i2e_situ(float g, float u, float gate_cap, float up_cap) {
   return gate * up;
 }
 
-template <uint Q>
+template <uint Q, uint RUN>
 inline uint i2e_run(const device int* PICKS, uint slots, uint slot, uint lane, thread uint (&member)[8]) {
   const int e = PICKS[slot];
   uint mask[Q];
@@ -346,14 +352,14 @@ inline uint i2e_run(const device int* PICKS, uint slots, uint slot, uint lane, t
     rank += popcount(mask[q] & below);
     mask[q] &= ~below;
   }
-  if (rank % 8u != 0u) return 0u;
+  if (rank % RUN != 0u) return 0u;
   uint count = 0u;
 #pragma unroll
   for (uint i = 0; i < 8u; ++i) {
     uint s = 32u * Q;
 #pragma unroll
     for (uint q = 0; q < Q; ++q) {
-      if (s == 32u * Q && mask[q] != 0u) {
+      if (i < RUN && s == 32u * Q && mask[q] != 0u) {
         s = 32u * q + ctz(mask[q]);
         mask[q] &= mask[q] - 1u;
       }
@@ -364,60 +370,46 @@ inline uint i2e_run(const device int* PICKS, uint slots, uint slot, uint lane, t
   return count;
 }
 
-template <uint R>
-inline void i2e_inputs(const device float* const (&x)[R], uint k0, thread float4 (&v)[R][4]) {
-#pragma unroll
-  for (uint r = 0; r < R; ++r) {
-#pragma unroll
-    for (uint i = 0; i < 4u; ++i) v[r][i] = *reinterpret_cast<const device float4*>(x[r] + k0 + 4u * i);
-  }
-}
-
-template <uint R>
-inline void i2e_group(ulong word, const thread float4 (&v)[R][4], threadgroup const float* lut, thread float (&p)[R]) {
-#pragma unroll
-  for (uint r = 0; r < R; ++r) p[r] = 0.0f;
-#pragma unroll
-  for (uint b = 0; b < 8u; ++b) {
-    const uint byte = uint(word >> (8u * b)) & 255u;
-    const float lo = lut[byte & 15u], hi = lut[byte >> 4u];
-#pragma unroll
-    for (uint r = 0; r < R; ++r) {
-      p[r] = fma(lo, v[r][b / 2u][2u * (b % 2u)], p[r]);
-      p[r] = fma(hi, v[r][b / 2u][2u * (b % 2u) + 1u], p[r]);
-    }
-  }
-}
-
 template <bool GU, uint R, uint PER>
 inline void i2e_scalar(const device uchar* We, const device uchar* Se, uint first, uint stride, uint groups,
     const device float* const (&x)[R], const thread uint (&slot)[R], threadgroup const float* lut,
     threadgroup const float* scales, uint lane, float global, constant i2t_moe& a, device float* Y) {
   constexpr uint U = GU ? 2u : 1u;
-  float d[PER][U][R];
+  float d[PER][U][R] = {};
   size_t ra[PER];
 #pragma unroll
-  for (uint j = 0; j < PER; ++j) {
-    ra[j] = U * min(first + j, a.n - 1u);
-#pragma unroll
-    for (uint u = 0; u < U; ++u) {
-#pragma unroll
-      for (uint r = 0; r < R; ++r) d[j][u][r] = 0.0f;
-    }
-  }
+  for (uint j = 0; j < PER; ++j) ra[j] = U * min(first + j, a.n - 1u);
   for (uint g = lane; g < groups; g += 32u) {
-    float4 v[R][4];
-    i2e_inputs<R>(x, g * 16u, v);
+    ulong word[PER][U];
+    float p[PER][U][R] = {};
+#pragma unroll
+    for (uint j = 0; j < PER; ++j) {
+#pragma unroll
+      for (uint u = 0; u < U; ++u) word[j][u] = *(const device ulong*)(We + (ra[j] + u) * stride + g * 8u);
+    }
+#pragma unroll
+    for (uint q = 0; q < 4u; ++q) {
+      float4 v[R];
+#pragma unroll
+      for (uint r = 0; r < R; ++r) v[r] = *reinterpret_cast<const device float4*>(x[r] + g * 16u + 4u * q);
+#pragma unroll
+      for (uint j = 0; j < PER; ++j) {
+#pragma unroll
+        for (uint u = 0; u < U; ++u) {
+          const uint b = uint(word[j][u] >> (16u * q)) & 0xffffu;
+          const float c0 = lut[b & 15u], c1 = lut[(b >> 4u) & 15u], c2 = lut[(b >> 8u) & 15u], c3 = lut[b >> 12u];
+#pragma unroll
+          for (uint r = 0; r < R; ++r) p[j][u][r] = fma(c3, v[r].w, fma(c2, v[r].z, fma(c1, v[r].y, fma(c0, v[r].x, p[j][u][r]))));
+        }
+      }
+    }
 #pragma unroll
     for (uint j = 0; j < PER; ++j) {
 #pragma unroll
       for (uint u = 0; u < U; ++u) {
-        const size_t row = ra[j] + u;
-        float p[R];
-        i2e_group<R>(*(const device ulong*)(We + row * stride + g * 8u), v, lut, p);
-        const float scale = scales[Se[row * groups + g]];
+        const float scale = scales[Se[(ra[j] + u) * groups + g]];
 #pragma unroll
-        for (uint r = 0; r < R; ++r) d[j][u][r] = fma(scale, p[r], d[j][u][r]);
+        for (uint r = 0; r < R; ++r) d[j][u][r] = fma(scale, p[j][u][r], d[j][u][r]);
       }
     }
   }
@@ -504,43 +496,64 @@ inline void i2e_tiles(const device float* X, const device uchar* We, const devic
   }
 }
 
-template <bool GU, uint SG, uint T, uint Q, uint FEW>
-[[kernel]] void i2e_routed(I2T_EXPERT_ARGS) {
-  threadgroup float lut[16];
-  threadgroup float scales[256];
-  threadgroup float2 part[SG * T * 32];
-  const uint slot = tg.y;
-  if (slot >= a.slots) return;
-  uint member[8];
-  const uint count = i2e_run<Q>(PICKS, a.slots, slot, lane, member);
-  if (count == 0u) return;
-  if (tid < 16u) lut[tid] = CODES[tid];
-  for (uint i = tid; i < 256u; i += 32u * SG) scales[i] = i2e_e4m3(uchar(i));
-  threadgroup_barrier(mem_flags::mem_threadgroup);
-  const int e = PICKS[slot];
+template <bool GU, uint SG, uint T, uint FEW, uint RUN>
+inline void i2e_run_one(const device float* X, const device uchar* W, const device uchar* S, const device float* amax,
+    const device float* den, int e, const thread uint (&member)[8], uint count, constant i2t_moe& a, device float* Y,
+    uint bx, uint sg, uint lane, threadgroup const float* lut, threadgroup const float* scales, threadgroup float2* part) {
   const uint wrows = GU ? 2u * a.n : a.n;
-  const uint r0 = tg.x * 8u * T;
+  const uint r0 = bx * 8u * T;
   const float global = amax[e] / den[0];
   const device uchar* We = W + (size_t)uint(e) * wrows * (a.k / 2u);
   const device uchar* Se = S + (size_t)uint(e) * wrows * (a.k / 16u);
-  if (count == 1u) return i2e_few<GU, SG, T, 1>(X, We, Se, member, r0, sg, lut, scales, lane, global, a, Y);
-  if (FEW >= 2u && count == 2u) return i2e_few<GU, SG, T, 2>(X, We, Se, member, r0, sg, lut, scales, lane, global, a, Y);
-  if (FEW >= 3u && count == 3u) return i2e_few<GU, SG, T, 3>(X, We, Se, member, r0, sg, lut, scales, lane, global, a, Y);
-  if (FEW >= 4u && count == 4u) return i2e_few<GU, SG, T, 4>(X, We, Se, member, r0, sg, lut, scales, lane, global, a, Y);
-  i2e_tiles<GU, SG, T>(X, We, Se, lut, scales, part, member, count, r0, wrows, a.k / 16u, a.k / 2u, global, a, Y, sg, lane);
+  if (count == 1u) i2e_few<GU, SG, T, 1>(X, We, Se, member, r0, sg, lut, scales, lane, global, a, Y);
+  else if (FEW >= 2u && count == 2u) i2e_few<GU, SG, T, 2>(X, We, Se, member, r0, sg, lut, scales, lane, global, a, Y);
+  else if (FEW >= 3u && count == 3u) i2e_few<GU, SG, T, 3>(X, We, Se, member, r0, sg, lut, scales, lane, global, a, Y);
+  else if (FEW >= 4u && count == 4u) i2e_few<GU, SG, T, 4>(X, We, Se, member, r0, sg, lut, scales, lane, global, a, Y);
+  else if (RUN > FEW) i2e_tiles<GU, SG, T>(X, We, Se, lut, scales, part, member, count, r0, wrows, a.k / 16u, a.k / 2u, global, a, Y, sg, lane);
 }
 
-#define I2E_ROUTED(name, gu, sgs, t, q, few) \
-  template [[host_name(#name)]] [[kernel]] void i2e_routed<gu, sgs, t, q, few>(I2T_EXPERT_ARGS);
+template <bool GU, uint SG, uint T, uint Q, uint FEW, uint J, uint RUN>
+[[kernel]] void i2e_routed(I2T_EXPERT_ARGS) {
+  threadgroup float lut[16];
+  threadgroup float scales[256];
+  threadgroup float2 part[RUN > FEW ? SG * T * 32 : 1];
+  bool ready = false;
+  for (uint j = 0; j < J; ++j) {
+    const uint slot = tg.y * J + j;
+    if (slot >= a.slots) break;
+    uint member[8];
+    const uint count = i2e_run<Q, RUN>(PICKS, a.slots, slot, lane, member);
+    if (count == 0u) continue;
+    if (!ready) {
+      if (tid < 16u) lut[tid] = CODES[tid];
+      for (uint i = tid; i < 256u; i += 32u * SG) scales[i] = i2e_e4m3(uchar(i));
+      ready = true;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    i2e_run_one<GU, SG, T, FEW, RUN>(X, W, S, amax, den, PICKS[slot], member, count, a, Y, tg.x, sg, lane, lut, scales, part);
+  }
+}
 
-I2E_ROUTED(i2e_gate_up_f3, true, 4, 2, 2, 3)
-I2E_ROUTED(i2e_gate_up_f4, true, 4, 2, 2, 4)
-I2E_ROUTED(i2e_gate_up16_f3, true, 4, 2, 4, 3)
-I2E_ROUTED(i2e_gate_up16_f4, true, 4, 2, 4, 4)
-I2E_ROUTED(i2e_down_f1, false, 8, 4, 2, 1)
-I2E_ROUTED(i2e_down_f2, false, 8, 4, 2, 2)
-I2E_ROUTED(i2e_down_f3, false, 8, 4, 2, 3)
-I2E_ROUTED(i2e_down16_f1, false, 8, 4, 4, 1)
-I2E_ROUTED(i2e_down16_f2, false, 8, 4, 4, 2)
-I2E_ROUTED(i2e_down16_f3, false, 8, 4, 4, 3)
+#define I2E_ROUTED(name, gu, sgs, t, q, few, j, run) \
+  template [[host_name(#name)]] [[kernel]] void i2e_routed<gu, sgs, t, q, few, j, run>(I2T_EXPERT_ARGS);
+
+I2E_ROUTED(i2e_gate_up_f3, true, 4, 2, 2, 3, 1, 8)
+I2E_ROUTED(i2e_gate_up_f4, true, 4, 2, 2, 4, 1, 8)
+I2E_ROUTED(i2e_gate_up_r4, true, 4, 1, 2, 4, 1, 4)
+I2E_ROUTED(i2e_gate_up_r4_t2, true, 4, 2, 2, 4, 1, 4)
+I2E_ROUTED(i2e_gate_up_r4_s8, true, 8, 2, 2, 4, 1, 4)
+I2E_ROUTED(i2e_gate_up16_f3, true, 4, 2, 4, 3, 1, 8)
+I2E_ROUTED(i2e_gate_up16_f4, true, 4, 2, 4, 4, 1, 8)
+I2E_ROUTED(i2e_gate_up16_r4, true, 4, 1, 4, 4, 1, 4)
+I2E_ROUTED(i2e_gate_up16_r4_t2, true, 4, 2, 4, 4, 1, 4)
+I2E_ROUTED(i2e_gate_up16_r4_s8, true, 8, 2, 4, 4, 1, 4)
+I2E_ROUTED(i2e_gate_up16_f3_j2, true, 4, 2, 4, 3, 2, 8)
+I2E_ROUTED(i2e_down_f1, false, 8, 4, 2, 1, 1, 8)
+I2E_ROUTED(i2e_down_f3, false, 8, 4, 2, 3, 1, 8)
+I2E_ROUTED(i2e_down_r4, false, 8, 2, 2, 4, 1, 4)
+I2E_ROUTED(i2e_down_r4_t4, false, 8, 4, 2, 4, 1, 4)
+I2E_ROUTED(i2e_down16_f3, false, 8, 4, 4, 3, 1, 8)
+I2E_ROUTED(i2e_down16_r4, false, 8, 2, 4, 4, 1, 4)
+I2E_ROUTED(i2e_down16_r4_t4, false, 8, 4, 4, 4, 1, 4)
+I2E_ROUTED(i2e_down16_f3_j2, false, 8, 4, 4, 3, 2, 8)
 #endif

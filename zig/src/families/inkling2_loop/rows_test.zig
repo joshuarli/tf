@@ -38,6 +38,31 @@ fn finish(cb: mtl.CommandBuffer) !void {
     }
 }
 
+const Candidate = struct { name: [:0]const u8, sg: u32, t: u32, h: u32 = 1, least: usize, most: usize };
+
+const dense_candidates = [_]Candidate{
+    .{ .name = "i2t_dense_16_2", .sg = 16, .t = 2, .least = 2, .most = 8 },
+    .{ .name = "i2t_dense_8_4", .sg = 8, .t = 4, .least = 2, .most = 8 },
+    .{ .name = "i2t_dense16_16_2", .sg = 16, .t = 2, .least = 2, .most = 16 },
+    .{ .name = "i2t_dense16_8_1", .sg = 8, .t = 1, .least = 2, .most = 16 },
+    .{ .name = "i2t_dense16_h8_2", .sg = 8, .t = 2, .h = 2, .least = 2, .most = 16 },
+    .{ .name = "i2t_dense16_h16_2", .sg = 16, .t = 2, .h = 2, .least = 2, .most = 16 },
+};
+
+const projection_candidates = [_]Candidate{
+    .{ .name = "i2t_projections_16_2", .sg = 16, .t = 2, .least = 2, .most = 8 },
+    .{ .name = "i2t_projections16_16_2", .sg = 16, .t = 2, .least = 2, .most = 16 },
+    .{ .name = "i2t_projections16_h8_2", .sg = 8, .t = 2, .h = 2, .least = 2, .most = 16 },
+    .{ .name = "i2t_projections16_h16_2", .sg = 16, .t = 2, .h = 2, .least = 2, .most = 16 },
+};
+
+/// A candidate's dispatch over output parts of `rows` rows each.
+fn candidate(v: Candidate, pipe: mtl.Pipeline, parts: []const u32) rows_mod.Dispatch {
+    var blocks: usize = 0;
+    for (parts) |rows| blocks += (rows + 8 * v.t - 1) / (8 * v.t);
+    return .{ .pipe = pipe, .groups = mtl.Size.of(blocks * v.h, 1, 1), .threads = mtl.Size.of(32 * v.sg, 1, 1) };
+}
+
 fn sameBits(a: []const f32, b: []const f32) bool {
     for (a, b) |x, y| if (@as(u32, @bitCast(x)) != @as(u32, @bitCast(y))) return false;
     return true;
@@ -54,6 +79,11 @@ test "few-row affine projections give each row the one-row kernel's bytes" {
     defer one.deinit();
     var shared = try rows_mod.Pipes.init(device);
     defer shared.deinit();
+    const lib = try mtl.Library.fromSource(device, rows_mod.source, mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    var dense_pipes: [dense_candidates.len]mtl.Pipeline = undefined;
+    for (&dense_pipes, dense_candidates) |*p, v| p.* = try mtl.Pipeline.init(device, lib, v.name, false);
+    defer for (dense_pipes) |p| p.deinit();
     var prng = std.Random.DefaultPrng.init(0x726f_7773);
     const rng = prng.random();
     var checked: usize = 0;
@@ -68,9 +98,10 @@ test "few-row affine projections give each row the one-row kernel's bytes" {
         var outs: [2]mtl.Buffer = undefined;
         for (&outs) |*o| o.* = try device.buffer(rows_mod.max_rows * n * 4, mtl.ResourceOptions.shared);
         defer for (outs) |o| o.deinit();
-        for (2..rows_mod.max_rows + 1) |rows| for ([_]u32{ 0, 1 }) |xb| {
+        for (2..rows_mod.max_rows + 1) |rows| for ([_]u32{ 0, 1 }) |xb| for (0..dense_candidates.len + 1) |which| {
             const args = Dense{ .n = n, .k = k, .rows = @intCast(rows), .xs = 1, .xb = xb, .bits = 8, .cap = cap };
-            const d = shared.dense(rows, n, k, 8) orelse return error.TestUnexpectedResult;
+            if (which > 0 and (rows < dense_candidates[which - 1].least or rows > dense_candidates[which - 1].most)) continue;
+            const d = if (which == 0) shared.dense(rows, n, k, 8) orelse return error.TestUnexpectedResult else candidate(dense_candidates[which - 1], dense_pipes[which - 1], &.{n});
             const cb = queue.commandBuffer();
             const enc = cb.compute(.serial);
             for (0..2) |side| {
@@ -84,7 +115,7 @@ test "few-row affine projections give each row the one-row kernel's bytes" {
             enc.end();
             try finish(cb);
             if (!sameBits(outs[0].slice(f32, rows * n), outs[1].slice(f32, rows * n))) {
-                std.debug.print("few-row dense n={d} k={d} rows={d} xb={d}: bytes differ\n", .{ n, k, rows, xb });
+                std.debug.print("few-row dense n={d} k={d} rows={d} xb={d} kernel={s}: bytes differ\n", .{ n, k, rows, xb, if (which == 0) "served" else dense_candidates[which - 1].name });
                 return error.TestUnexpectedResult;
             }
             checked += 1;
@@ -104,6 +135,11 @@ test "few-row fused attention projections give each row the one-row kernel's byt
     defer one.deinit();
     var shared = try rows_mod.Pipes.init(device);
     defer shared.deinit();
+    const lib = try mtl.Library.fromSource(device, rows_mod.source, mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    var projection_pipes: [projection_candidates.len]mtl.Pipeline = undefined;
+    for (&projection_pipes, projection_candidates) |*p, v| p.* = try mtl.Pipeline.init(device, lib, v.name, false);
+    defer for (projection_pipes) |p| p.deinit();
     var prng = std.Random.DefaultPrng.init(0x7072_6f6a);
     const rng = prng.random();
     const k = 2304;
@@ -127,8 +163,9 @@ test "few-row fused attention projections give each row the one-row kernel's byt
         defer for (outs) |side| for (side) |o| o.deinit();
         var total: usize = 0;
         for (m) |v| total += v;
-        for (2..rows_mod.max_rows + 1) |rows| {
-            const d = shared.fused(rows, m, k) orelse continue;
+        for (2..rows_mod.max_rows + 1) |rows| for (0..projection_candidates.len + 1) |which| {
+            if (which > 0 and (rows < projection_candidates[which - 1].least or rows > projection_candidates[which - 1].most)) continue;
+            const d = if (which == 0) shared.fused(rows, m, k) orelse continue else candidate(projection_candidates[which - 1], projection_pipes[which - 1], &m);
             const cb = queue.commandBuffer();
             const enc = cb.compute(.serial);
             for (0..2) |side| {
@@ -149,12 +186,12 @@ test "few-row fused attention projections give each row the one-row kernel's byt
             for (m, 0..) |rows_m, i| {
                 const count = rows * rows_m;
                 if (!sameBits(outs[0][i].slice(f32, count), outs[1][i].slice(f32, count))) {
-                    std.debug.print("few-row projections full={} rows={d} part={d}: bytes differ\n", .{ full, rows, i });
+                    std.debug.print("few-row projections full={} rows={d} part={d} kernel={s}: bytes differ\n", .{ full, rows, i, if (which == 0) "served" else projection_candidates[which - 1].name });
                     return error.TestUnexpectedResult;
                 }
             }
             checked += 1;
-        }
+        };
     }
     std.debug.print("few-row projections test: {d} cases byte-equal to the one-row kernel\n", .{checked});
 }

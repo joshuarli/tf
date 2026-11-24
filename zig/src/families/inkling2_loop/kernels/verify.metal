@@ -236,24 +236,154 @@ inline void i2v_split_blocks(const device float* Q, const device half* KEYS, con
 
 struct i2v_row { device half* keys; device half* values; i2_attn_parts args; uint gpos; uchar path[16]; };
 
-[[kernel]] void i2v_split(const device float* Q [[buffer(0)]], const device float* B [[buffer(1)]],
-    const device float* sink [[buffer(2)]], constant i2v_row* rows [[buffer(3)]], device float* PART [[buffer(4)]],
-    const device half* KH [[buffer(5)]], const device half* VH [[buffer(6)]],
-    uint2 tg [[threadgroup_position_in_grid]], uint2 tid2 [[thread_position_in_threadgroup]],
-    uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]],
-    uint2 nth2 [[threads_per_threadgroup]]) {
+#define I2V_SPLIT_ARGS const device float* Q [[buffer(0)]], const device float* B [[buffer(1)]], \
+    const device float* sink [[buffer(2)]], constant i2v_row* rows [[buffer(3)]], device float* PART [[buffer(4)]], \
+    const device half* KH [[buffer(5)]], const device half* VH [[buffer(6)]], \
+    uint2 tg [[threadgroup_position_in_grid]], uint2 tid2 [[thread_position_in_threadgroup]], \
+    uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]], \
+    uint2 nth2 [[threads_per_threadgroup]]
+
+template <bool ROWS_FIRST>
+[[kernel]] void i2v_split(I2V_SPLIT_ARGS) {
   threadgroup half4 KS4[32 * 32];
   threadgroup half4 VS4[32 * 32];
-  constant i2_attn_parts& a = rows[tg.y].args;
-  if (tg.x >= a.kv * a.splits) return;
-  Q += size_t(tg.y) * a.heads * a.dim;
-  B += size_t(tg.y) * a.heads * (a.extent + 1u);
-  sink += size_t(tg.y) * a.heads;
-  PART += size_t(tg.y) * a.heads * 16u * (a.dim + 2u);
-  const uint gpos = rows[tg.y].gpos;
-  constant uchar* path = rows[tg.y].path;
-  if (i2_blocked(a, nth2.x)) i2v_split_blocks(Q, rows[tg.y].keys, rows[tg.y].values, KH, VH, path, gpos, B, sink, a, PART, tg.x, tid2.x, sg, lane, KS4, VS4);
-  else i2v_split_serial(Q, rows[tg.y].keys, rows[tg.y].values, KH, VH, path, gpos, B, sink, a, PART, tg.x, tid2.x, sg, lane, nth2.x, (threadgroup float4*)KS4, (threadgroup float4*)VS4);
+  const uint row = ROWS_FIRST ? tg.x : tg.y, part = ROWS_FIRST ? tg.y : tg.x;
+  constant i2_attn_parts& a = rows[row].args;
+  if (part >= a.kv * a.splits) return;
+  Q += size_t(row) * a.heads * a.dim;
+  B += size_t(row) * a.heads * (a.extent + 1u);
+  sink += size_t(row) * a.heads;
+  PART += size_t(row) * a.heads * 16u * (a.dim + 2u);
+  const uint gpos = rows[row].gpos;
+  constant uchar* path = rows[row].path;
+  if (i2_blocked(a, nth2.x)) i2v_split_blocks(Q, rows[row].keys, rows[row].values, KH, VH, path, gpos, B, sink, a, PART, part, tid2.x, sg, lane, KS4, VS4);
+  else i2v_split_serial(Q, rows[row].keys, rows[row].values, KH, VH, path, gpos, B, sink, a, PART, part, tid2.x, sg, lane, nth2.x, (threadgroup float4*)KS4, (threadgroup float4*)VS4);
+}
+
+template [[host_name("i2v_split")]] [[kernel]] void i2v_split<false>(I2V_SPLIT_ARGS);
+template [[host_name("i2v_split_rows")]] [[kernel]] void i2v_split<true>(I2V_SPLIT_ARGS);
+
+struct i2v_span { uint js, je; };
+
+inline i2v_span i2v_span_of(constant i2_attn_parts& a, uint s) {
+  const uint lo = a.window ? (a.pos + 1u > a.window ? a.pos + 1u - a.window : 0u) : 0u;
+  const uint js = lo + s * a.chunk;
+  return { js, min(js + a.chunk, a.pos + 1u) };
+}
+
+template <uint RS>
+inline void i2v_split_shared(const device float* Q0, const device float* B0, const device float* sink0,
+    constant i2v_row* rows, device float* PART0, const thread uint (&member)[RS], uint count, uint kvh, uint s, uint jlo,
+    uint jhi, uint tid, uint sg, uint lane, threadgroup half4* KS4, threadgroup half4* VS4) {
+  constexpr uint D = 128u, G = 3u, N = 96u, R = 32u, W = 48u, CELLS = W * 32u / N;
+  constant i2_attn_parts& a0 = rows[member[0]].args;
+  const uint h = kvh * G + sg;
+  float qv[RS][4], sk[RS], top[RS], mass[RS], acc[RS][4];
+  uint js[RS], je[RS], blocks = 0u;
+#pragma unroll
+  for (uint q = 0; q < RS; ++q) {
+    if (q >= count) break;
+    constant i2_attn_parts& a = rows[member[q]].args;
+    const float tau = a.tau ? 1.0f + a.alpha * precise::log(max(1.0f, (float(a.pos) + 1.0f) / a.floor)) : 1.0f;
+    const device float* Q = Q0 + size_t(member[q]) * a.heads * a.dim;
+    for (uint j = 0; j < 4u; ++j) qv[q][j] = Q[h * D + lane + 32u * j] * a.scale * tau;
+    sk[q] = (sink0 + size_t(member[q]) * a.heads)[h];
+    const i2v_span span = i2v_span_of(a, s);
+    js[q] = span.js, je[q] = span.je, blocks = max(blocks, (je[q] - js[q] + R - 1u) / R);
+    top[q] = -INFINITY, mass[q] = 0.0f, acc[q][0] = acc[q][1] = acc[q][2] = acc[q][3] = 0.0f;
+  }
+  const device half* KEYS = rows[member[0]].keys;
+  const device half* VALUES = rows[member[0]].values;
+  for (uint b = 0; b < blocks; ++b) {
+    const uint base = jlo + b * R;
+#pragma unroll
+    for (uint i = 0; i < CELLS; ++i) {
+      const uint e = tid + i * N, j = min(base + e / 32u, jhi);
+      const size_t at = ((size_t)(a0.window ? j % a0.window : j) * a0.kv + kvh) * D + e % 32u;
+      KS4[e] = half4(KEYS[at], KEYS[at + 32u], KEYS[at + 64u], KEYS[at + 96u]);
+      VS4[e] = half4(VALUES[at], VALUES[at + 32u], VALUES[at + 64u], VALUES[at + 96u]);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+#pragma unroll
+    for (uint q = 0; q < RS; ++q) {
+      if (q >= count) break;
+      const uint j0 = js[q] + b * R;
+      if (j0 >= je[q]) continue;
+      constant i2_attn_parts& a = rows[member[q]].args;
+      const uint n = min(R, je[q] - j0), off = (j0 - base) * 32u;
+      const device float* B = B0 + size_t(member[q]) * a.heads * (a.extent + 1u);
+      float own = 0.0f;
+      if (lane < n) own = B[h * (a.extent + 1u) + min(a.pos - (j0 + lane), a.extent)] - sk[q];
+      float p[32];
+#pragma unroll
+      for (uint r = 0; r < R; ++r) {
+        const float4 kk = float4(KS4[off + r * 32u + lane]);
+        p[r] = fma(qv[q][3], kk.w, fma(qv[q][2], kk.z, fma(qv[q][1], kk.y, fma(qv[q][0], kk.x, 0.0f))));
+      }
+      const float score = i2_rows_sum(p, lane) + own;
+      float run = lane < n ? score : -INFINITY;
+      for (ushort o = 1; o < 32; o <<= 1) {
+        const float other = simd_shuffle_up(run, o);
+        if (lane >= o) run = max(other, run);
+      }
+      const float peak = max(top[q], run);
+      const float before = lane == 0u ? top[q] : simd_shuffle_up(peak, ushort(1));
+      const float rescales = precise::exp(before - peak);
+      const float weights = precise::exp(score - peak);
+      for (uint r = 0; r < n; ++r) {
+        const float rescale = simd_shuffle(rescales, ushort(r));
+        const float w = simd_shuffle(weights, ushort(r));
+        mass[q] = mass[q] * rescale + w;
+        const float4 vv = float4(VS4[off + r * 32u + lane]);
+        for (uint u = 0; u < 4u; ++u) acc[q][u] = acc[q][u] * rescale + w * vv[u];
+      }
+      top[q] = simd_shuffle(peak, ushort(n - 1u));
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+#pragma unroll
+  for (uint q = 0; q < RS; ++q) {
+    if (q >= count) break;
+    constant i2_attn_parts& a = rows[member[q]].args;
+    device float* PART = PART0 + size_t(member[q]) * a.heads * 16u * (a.dim + 2u) + ((size_t)h * a.splits + s) * (D + 2u);
+    if (lane == 0u) PART[0] = top[q], PART[1] = mass[q];
+    for (uint u = 0; u < 4u; ++u) PART[2u + lane + 32u * u] = acc[q][u];
+  }
+}
+
+[[kernel]] void i2v_split_runs(I2V_SPLIT_ARGS, uint2 grid [[threadgroups_per_grid]]) {
+  constexpr uint RS = 4u;
+  threadgroup half4 KS4[48 * 32];
+  threadgroup half4 VS4[48 * 32];
+  const uint row = tg.y, part = tg.x;
+  constant i2_attn_parts& a = rows[row].args;
+  if (part >= a.kv * a.splits) return;
+  const uint s = part % a.splits, gpos = rows[row].gpos;
+  uint first = row;
+  while (first > 0u && rows[first - 1u].keys == rows[row].keys) --first;
+  const uint lead = first + ((row - first) / RS) * RS;
+  uint member[RS], count = 0u, jlo = 0xffffffffu, jhi = 0u, top = 0u;
+  bool mine = false, same = i2_blocked(a, nth2.x);
+  for (uint q = lead; q < min(lead + RS, grid.y); ++q) {
+    if (rows[q].keys != rows[row].keys) break;
+    constant i2_attn_parts& b = rows[q].args;
+    same = same && b.splits == a.splits;
+    const i2v_span span = i2v_span_of(b, s);
+    if (span.je > gpos || span.js >= span.je) continue;
+    mine = mine || q == row, member[count++] = q, jlo = min(jlo, span.js), top = max(top, span.js);
+    jhi = max(jhi, span.je - 1u);
+  }
+  if (same && mine && count > 1u && top - jlo <= 16u) {
+    if (member[0] != row) return;
+    return i2v_split_shared<RS>(Q, B, sink, rows, PART, member, count, part / a.splits, s, jlo, jhi, tid2.x, sg, lane, KS4, VS4);
+  }
+  Q += size_t(row) * a.heads * a.dim;
+  B += size_t(row) * a.heads * (a.extent + 1u);
+  sink += size_t(row) * a.heads;
+  PART += size_t(row) * a.heads * 16u * (a.dim + 2u);
+  constant uchar* path = rows[row].path;
+  if (i2_blocked(a, nth2.x)) i2v_split_blocks(Q, rows[row].keys, rows[row].values, KH, VH, path, gpos, B, sink, a, PART, part, tid2.x, sg, lane, KS4, VS4);
+  else i2v_split_serial(Q, rows[row].keys, rows[row].values, KH, VH, path, gpos, B, sink, a, PART, part, tid2.x, sg, lane, nth2.x, (threadgroup float4*)KS4, (threadgroup float4*)VS4);
 }
 
 // Captures hold `stride` rows a slot: KV [slots][2][stride][kvw], CAP laid out as prefill.ConvCapture.
@@ -388,19 +518,17 @@ struct i2v_round_row { device half* keys; device half* values; device float* con
   r.conv[site][((size_t)slot * a.ring + r.pos % a.ring) * width + c] = CAP[src];
 }
 
-template <uint RB>
 [[kernel]] void i2v_controls_down(const device float* X [[buffer(0)]], const device float* W0 [[buffer(1)]],
     const device float* W1 [[buffer(2)]], const device float* W2 [[buffer(3)]],
     constant i2_controls_args& a [[buffer(4)]], device float* OUT [[buffer(5)]],
     uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
+  constexpr uint RB = 8u;
   const uint col = group.x * 8u + tid / 32u, lane = tid % 32u, r0 = group.y * RB;
   if (col >= a.rank || r0 >= a.rows) return;
   const uint n = min(RB, a.rows - r0), width = 2u * a.h;
   const device float* x = X + (size_t(group.z) * a.rows + r0) * width;
   const device float* w = (group.z == 0u ? W0 : group.z == 1u ? W1 : W2) + size_t(col) * width;
-  float acc[RB];
-#pragma unroll
-  for (uint r = 0; r < RB; ++r) acc[r] = 0.0f;
+  float acc[RB] = {};
   uint base = 0u;
   for (; base + 128u <= width; base += 128u) {
     const uint k = base + lane * 4u;
@@ -409,8 +537,7 @@ template <uint RB>
     for (uint r = 0; r < RB; ++r) {
       if (r >= n) break;
       const float4 xv = float4(*reinterpret_cast<const device packed_float4*>(x + r * width + k));
-      acc[r] = fma(xv.x, wv.x, acc[r]); acc[r] = fma(xv.y, wv.y, acc[r]);
-      acc[r] = fma(xv.z, wv.z, acc[r]); acc[r] = fma(xv.w, wv.w, acc[r]);
+      acc[r] = fma(xv.w, wv.w, fma(xv.z, wv.z, fma(xv.y, wv.y, fma(xv.x, wv.x, acc[r]))));
     }
   }
   for (uint k = base + lane; k < width; k += 32u) {
@@ -420,12 +547,10 @@ template <uint RB>
 #pragma unroll
   for (uint r = 0; r < RB; ++r) {
     if (r >= n) break;
-    const float v = simd_sum(acc[r]);
-    if (lane == 0u) OUT[(size_t(group.z) * a.rows + r0 + r) * a.rank + col] = v;
+    if (const float v = simd_sum(acc[r]); lane == 0u) OUT[(size_t(group.z) * a.rows + r0 + r) * a.rank + col] = v;
   }
 }
 
-template <uint RB>
 [[kernel]] void i2v_controls_apply(const device float* X [[buffer(0)]],
     const device float* G0 [[buffer(1)]], const device float* G1 [[buffer(2)]], const device float* G2 [[buffer(3)]],
     const device float* F0 [[buffer(4)]], const device float* F1 [[buffer(5)]], const device float* F2 [[buffer(6)]],
@@ -433,6 +558,7 @@ template <uint RB>
     const device float* MSG [[buffer(10)]], device float* O0 [[buffer(11)]], device float* O1 [[buffer(12)]],
     device float* O2 [[buffer(13)]], constant i2_controls_args& a [[buffer(14)]],
     uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
+  constexpr uint RB = 8u;
   const uint col = group.x * 8u + tid / 32u, lane = tid % 32u, j = group.z, r0 = group.y * RB;
   if (col >= a.h || r0 >= a.rows) return;
   const uint n = min(RB, a.rows - r0);
@@ -441,12 +567,7 @@ template <uint RB>
   const device float* wf = (j == 0u ? F0 : j == 1u ? F1 : F2) + size_t(col) * a.rank;
   const device float* cur = j == 0u ? C0 : j == 1u ? C1 : C2;
   device float* out = j == 0u ? O0 : j == 1u ? O1 : O2;
-  float g[RB], f[RB];
-#pragma unroll
-  for (uint r = 0; r < RB; ++r) {
-    g[r] = 0.0f;
-    f[r] = 0.0f;
-  }
+  float g[RB] = {}, f[RB] = {};
   uint base = 0u;
   for (; base + 128u <= a.rank; base += 128u) {
     const uint k = base + lane * 4u;
@@ -456,8 +577,8 @@ template <uint RB>
     for (uint r = 0; r < RB; ++r) {
       if (r >= n) break;
       const float4 xv = float4(*reinterpret_cast<const device packed_float4*>(x + r * a.rank + k));
-      g[r] = fma(xv.x, gv.x, g[r]); g[r] = fma(xv.y, gv.y, g[r]); g[r] = fma(xv.z, gv.z, g[r]); g[r] = fma(xv.w, gv.w, g[r]);
-      f[r] = fma(xv.x, fv.x, f[r]); f[r] = fma(xv.y, fv.y, f[r]); f[r] = fma(xv.z, fv.z, f[r]); f[r] = fma(xv.w, fv.w, f[r]);
+      g[r] = fma(xv.w, gv.w, fma(xv.z, gv.z, fma(xv.y, gv.y, fma(xv.x, gv.x, g[r]))));
+      f[r] = fma(xv.w, fv.w, fma(xv.z, fv.z, fma(xv.y, fv.y, fma(xv.x, fv.x, f[r]))));
     }
   }
   for (uint k = base + lane; k < a.rank; k += 32u) {
@@ -465,8 +586,7 @@ template <uint RB>
 #pragma unroll
     for (uint r = 0; r < RB; ++r) {
       if (r >= n) break;
-      g[r] = fma(x[r * a.rank + k], gk, g[r]);
-      f[r] = fma(x[r * a.rank + k], fk, f[r]);
+      g[r] = fma(x[r * a.rank + k], gk, g[r]), f[r] = fma(x[r * a.rank + k], fk, f[r]);
     }
   }
 #pragma unroll
@@ -474,20 +594,7 @@ template <uint RB>
     if (r >= n) break;
     const float gs = simd_sum(g[r]), fs = simd_sum(f[r]);
     const uint row = r0 + r;
-    const device float* c = cur + size_t(a.xb[j] + row * a.xs[j]) * a.h;
-    const device float* msg = MSG + size_t(j + row * 4u) * a.h;
+    const device float *c = cur + size_t(a.xb[j] + row * a.xs[j]) * a.h, *msg = MSG + size_t(j + row * 4u) * a.h;
     if (lane == 0u) out[size_t(row) * a.h + col] = c[col] - precise::tanh(fs) * c[col] + precise::tanh(gs) * msg[col];
   }
 }
-
-template [[host_name("i2v_controls_down")]] [[kernel]] void i2v_controls_down<8>(const device float* X [[buffer(0)]],
-    const device float* W0 [[buffer(1)]], const device float* W1 [[buffer(2)]], const device float* W2 [[buffer(3)]],
-    constant i2_controls_args& a [[buffer(4)]], device float* OUT [[buffer(5)]],
-    uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]);
-template [[host_name("i2v_controls_apply")]] [[kernel]] void i2v_controls_apply<8>(const device float* X [[buffer(0)]],
-    const device float* G0 [[buffer(1)]], const device float* G1 [[buffer(2)]], const device float* G2 [[buffer(3)]],
-    const device float* F0 [[buffer(4)]], const device float* F1 [[buffer(5)]], const device float* F2 [[buffer(6)]],
-    const device float* C0 [[buffer(7)]], const device float* C1 [[buffer(8)]], const device float* C2 [[buffer(9)]],
-    const device float* MSG [[buffer(10)]], device float* O0 [[buffer(11)]], device float* O1 [[buffer(12)]],
-    device float* O2 [[buffer(13)]], constant i2_controls_args& a [[buffer(14)]],
-    uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]);

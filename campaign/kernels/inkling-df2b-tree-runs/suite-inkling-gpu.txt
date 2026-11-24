@@ -398,17 +398,31 @@ ring test: worst pair 1.7881393e-6, worst vs-ref 1.6093254e-6, bound 2.3642753e-
 staged split test: 58 cases byte-equal to the serial kernel and across batch rows
 batched depth mix test: 25 cases byte-equal to the prefill mixes
 gathered expert test: 63 cases byte-equal to the per-slot kernels
-failed command: ./.zig-cache/o/c0ed3adbf21029954204e2dd4fc22382/test --cache-dir=./.zig-cache --seed=0x57eecfe7 --listen=-
+failed command: ./.zig-cache/o/87fd6bdc4f6b80e9969d82cf9d93598f/test --cache-dir=./.zig-cache --seed=0x5028356a --listen=-
+
+test-inkling2-loop
++- run test stderr
+oq4e prefill half=false logits_max_diff=0e0 scale=2.191902e1
+oq4e prefill half=true logits_max_diff=2.3427582e-1 scale=2.191902e1
+oq4e chunk 1100 vs 512 half=false logits_max_diff=0e0
+oq4e chunk 1100 vs 512 half=true logits_max_diff=2.368927e-1
+prefetched affine projections: 15 cases byte-equal to the serial kernels
+attention test: worst old-vs-ref 1.3113022e-6, new-vs-ref 7.301569e-7, old-vs-new 1.4901161e-6, bound 5.52444e-3
+ring test: worst pair 1.7881393e-6, worst vs-ref 1.6093254e-6, bound 2.3642753e-3
+staged split test: 58 cases byte-equal to the serial kernel and across batch rows
+batched depth mix test: 25 cases byte-equal to the prefill mixes
+gathered expert test: 63 cases byte-equal to the per-slot kernels
+failed command: ./.zig-cache/o/0c2aba52f471e4b6380972e97945c250/test --cache-dir=./.zig-cache --seed=0x5028356a --listen=-
 
 test-inkling2-loop
 +- run test stderr
 dflash2 speculation: 4 prompts, 1024 tokens equal plain greedy; 273 rounds, 72 zero, 140 partial, 58 full
 dflash2 forced drafts: full, zero and partial acceptance, a limit at token 76 and an EOS at 13 inside a block, equal plain greedy and its caches
 dflash2 lookup: 8 of 21 rounds drafted from before the drafter's window and accepted 34 drafts; 96 tokens equal plain greedy and its caches
-dflash2 tree speculation: 4 prompts, 1024 tokens and their caches equal plain greedy; 264 rounds, 39 past 8 rows, 8 accepted past depth 7, 7 took a later branch, 41 zero; 200 lookup rows, 160 accepted
+dflash2 tree speculation: 4 prompts, 1024 tokens and their caches equal plain greedy; 260 rounds, 4 past 8 rows, 4 accepted past depth 7, 10 took a later branch, 39 zero; 178 lookup rows, 156 accepted
 dflash2 forced trees: a 15-row path, none, a later branch, a limit inside a tree and an EOS at 20 inside one, equal plain greedy and its caches
-dflash2 tree lookup: 128 tokens and caches equal plain greedy in 25 rounds; 108 lookup rows, 62 accepted, 1 rounds accepted past depth 7
-failed command: ./.zig-cache/o/94873c71cea337756a8e45351f5ae2e7/test --cache-dir=./.zig-cache --seed=0x57eecfe7 --listen=-
+dflash2 tree lookup: 128 tokens and caches equal plain greedy in 27 rounds; 105 lookup rows, 62 accepted, 0 rounds accepted past depth 7
+failed command: ./.zig-cache/o/f94aec86311bfab67642b6969a4705a7/test --cache-dir=./.zig-cache --seed=0x5028356a --listen=-
 
 test-inkling2-loop
 +- run test stderr
@@ -827,167 +841,153 @@ ring test: worst pair 1.7881393e-6, worst vs-ref 1.6093254e-6, bound 2.3642753e-
 staged split test: 58 cases byte-equal to the serial kernel and across batch rows
 batched depth mix test: 25 cases byte-equal to the prefill mixes
 gathered expert test: 63 cases byte-equal to the per-slot kernels
-failed command: ./.zig-cache/o/d5e02ff40839a194a4724dba4007c2f7/test --cache-dir=./.zig-cache --seed=0x57eecfe7 --listen=-
+failed command: ./.zig-cache/o/21c94e3d695bc4fab069613de5510eac/test --cache-dir=./.zig-cache --seed=0x5028356a --listen=-
 
 test-inkling2-loop
 +- run test stderr
 inkling prefix: reused 0 of 3 prompt tokens
 inkling session: slot 0
 inkling store: insert 36 tokens 174727312 bytes total 174727312
-inkling prefill: 1.064504 seconds
+inkling prefill: 1.113273 seconds
 inkling prefix: reused 0 of 37 prompt tokens
 inkling store: hit 36 of 37 prompt tokens
 inkling session: slot 1
-inkling prefill: 0.020160 seconds
+inkling prefill: 0.020463 seconds
 inkling prefix: reused 36 of 37 prompt tokens
-inkling served speculation: code: 128 tokens in 29 rounds, 167 drafted, 98 accepted, 0 cached, 21 lookup rows, 17 kept
+inkling served speculation: code: 128 tokens in 28 rounds, 154 drafted, 99 accepted, 0 cached, 14 lookup rows, 14 kept
 inkling store: hit 36 of 37 prompt tokens
 inkling session: slot 0
-inkling prefill: 0.024079 seconds
+inkling prefill: 0.024114 seconds
 inkling prefix: reused 36 of 37 prompt tokens
 inkling store: hit 36 of 37 prompt tokens
 inkling session: slot 1
-inkling prefill: 0.017585 seconds
+inkling prefill: 0.017505 seconds
 inkling prefix: reused 36 of 37 prompt tokens
-inkling served speculation: eos: 10 tokens in 2 rounds, 24 drafted, 14 accepted, 36 cached, 7 lookup rows, 7 kept
+inkling served speculation: eos: 10 tokens in 2 rounds, 14 drafted, 8 accepted, 36 cached, 0 lookup rows, 0 kept
 inkling session: slot 0
 inkling store: insert 2432 tokens 290315776 bytes total 465043088
 inkling store: insert 2571 tokens 294871084 bytes total 759914172
-inkling prefill: 1.667863 seconds
+inkling prefill: 1.670853 seconds
 inkling prefix: reused 0 of 2572 prompt tokens
 inkling store: hit 2571 of 2572 prompt tokens
 inkling session: slot 1
-inkling prefill: 0.046209 seconds
+inkling prefill: 0.045860 seconds
 inkling prefix: reused 2571 of 2572 prompt tokens
-inkling served speculation: agent: 192 tokens in 52 rounds, 271 drafted, 139 accepted, 0 cached, 24 lookup rows, 16 kept
+inkling served speculation: agent: 192 tokens in 51 rounds, 247 drafted, 140 accepted, 0 cached, 29 lookup rows, 16 kept
 inkling session: slot 0
 inkling store: insert 2587 tokens 295395436 bytes total 1055309608
-inkling prefill: 0.186720 seconds
+inkling prefill: 0.178489 seconds
 inkling prefix: reused 2572 of 2588 prompt tokens
 inkling store: hit 2587 of 2588 prompt tokens
 inkling session: slot 1
-inkling prefill: 0.042590 seconds
+inkling prefill: 0.044703 seconds
 inkling prefix: reused 2587 of 2588 prompt tokens
-inkling served speculation: grown: 160 tokens in 38 rounds, 185 drafted, 121 accepted, 2572 cached, 38 lookup rows, 25 kept
+inkling served speculation: grown: 160 tokens in 39 rounds, 178 drafted, 120 accepted, 2572 cached, 35 lookup rows, 25 kept
 inkling session: slot 0
 inkling store: insert 2432 tokens 290315776 bytes total 1345625384
 inkling store: insert 2571 tokens 294871084 bytes total 1640496468
-inkling prefill: 2.065234 seconds
+inkling prefill: 2.044479 seconds
 inkling store: insert 2560 tokens 294289408 bytes total 1934785876
 inkling fork: from slot 0 at 2560 of 2560 prompt tokens
 inkling session: slot 1
 inkling store: evict 36 tokens 174727312 bytes
 inkling store: insert 2578 tokens 295100488 bytes total 2055159052
-inkling prefill: 0.178499 seconds
+inkling prefill: 0.182720 seconds
 inkling prefix: reused 0 of 2572 prompt tokens
 inkling prefix: reused 2560 of 2579 prompt tokens
 inkling store: hit 2571 of 2572 prompt tokens
 inkling session: slot 0
-inkling prefill: 0.044631 seconds
+inkling prefill: 0.043657 seconds
 inkling prefix: reused 2571 of 2572 prompt tokens
 inkling store: hit 2578 of 2579 prompt tokens
 inkling session: slot 0
-inkling prefill: 0.033240 seconds
+inkling prefill: 0.032227 seconds
 inkling prefix: reused 2578 of 2579 prompt tokens
-inkling served speculation: fork: 160 tokens in 75 rounds, 143 drafted, 84 accepted, 2560 cached, 40 lookup rows, 22 kept
+inkling served speculation: fork: 160 tokens in 73 rounds, 144 drafted, 86 accepted, 2560 cached, 35 lookup rows, 19 kept
 inkling session: slot 1
 inkling store: evict 2571 tokens 294871084 bytes
 inkling store: insert 31 tokens 174471292 bytes total 1934759260
-inkling prefill: 0.191536 seconds
+inkling prefill: 0.186117 seconds
 inkling session: slot 0
 inkling store: insert 29 tokens 174368884 bytes total 2109128144
-inkling prefill: 0.171392 seconds
+inkling prefill: 0.172575 seconds
 inkling prefix: reused 0 of 30 prompt tokens
 inkling prefix: reused 0 of 32 prompt tokens
 inkling store: hit 31 of 32 prompt tokens
 inkling session: slot 1
-inkling prefill: 0.025555 seconds
+inkling prefill: 0.025302 seconds
 inkling prefix: reused 31 of 32 prompt tokens
 inkling store: hit 29 of 30 prompt tokens
 inkling session: slot 0
-inkling prefill: 0.024872 seconds
+inkling prefill: 0.026029 seconds
 inkling prefix: reused 29 of 30 prompt tokens
-inkling served speculation: two lanes: 192 tokens in 90 rounds, 148 drafted, 101 accepted, 0 cached, 39 lookup rows, 39 kept
+inkling served speculation: two lanes: 192 tokens in 91 rounds, 145 drafted, 100 accepted, 0 cached, 38 lookup rows, 38 kept
 inkling store: hit 2432 of 2612 prompt tokens
 inkling session: slot 1
 inkling store: evict 2587 tokens 295395436 bytes
 inkling store: insert 2611 tokens 296181964 bytes total 2109914672
-inkling prefill: 0.506176 seconds
+inkling prefill: 0.498616 seconds
 inkling prefix: reused 2432 of 2612 prompt tokens
 inkling store: hit 2611 of 2612 prompt tokens
 inkling session: slot 0
-inkling prefill: 0.049199 seconds
+inkling prefill: 0.043240 seconds
 inkling prefix: reused 2611 of 2612 prompt tokens
-inkling served speculation: lookup: 96 tokens in 19 rounds, 171 drafted, 76 accepted, 2432 cached, 90 lookup rows, 46 kept
+inkling served speculation: lookup: 96 tokens in 21 rounds, 141 drafted, 74 accepted, 2432 cached, 82 lookup rows, 49 kept
 inkling store: hit 2611 of 2612 prompt tokens
 inkling session: slot 0
-inkling prefill: 0.039548 seconds
+inkling prefill: 0.041113 seconds
 inkling prefix: reused 2611 of 2612 prompt tokens
 inkling store: hit 2611 of 2612 prompt tokens
 inkling session: slot 0
-inkling prefill: 0.034710 seconds
+inkling prefill: 0.034594 seconds
 inkling prefix: reused 2611 of 2612 prompt tokens
-inkling served speculation: lookup eos: 11 tokens in 3 rounds, 31 drafted, 9 accepted, 2611 cached, 31 lookup rows, 9 kept
+inkling served speculation: lookup eos: 11 tokens in 3 rounds, 27 drafted, 9 accepted, 2611 cached, 27 lookup rows, 9 kept
 inkling session: slot 0
 inkling store: insert 36 tokens 174063760 bytes total 174063760
-inkling prefill: 0.542481 seconds
+inkling prefill: 0.631333 seconds
 inkling prefix: reused 0 of 37 prompt tokens
 inkling session: slot 1
 inkling store: insert 2432 tokens 252585472 bytes total 426649232
 inkling store: insert 2571 tokens 257140780 bytes total 683790012
-inkling prefill: 1.947082 seconds
+inkling prefill: 1.966155 seconds
 inkling prefix: reused 0 of 2572 prompt tokens
 inkling session: slot 0
 inkling store: insert 31 tokens 173899900 bytes total 857689912
-inkling prefill: 0.190950 seconds
+inkling prefill: 0.208304 seconds
 inkling session: slot 1
 inkling store: insert 29 tokens 173834356 bytes total 1031524268
-inkling prefill: 0.176769 seconds
+inkling prefill: 0.174505 seconds
 inkling prefix: reused 0 of 30 prompt tokens
 inkling prefix: reused 0 of 32 prompt tokens
 inkling served speculation: 10 drafted replies equal their draft-off replies, and 4 equal a host without the drafter
 inkling prefix: reused 0 of 3 prompt tokens
 inkling prefix: reused 0 of 3 prompt tokens
-failed command: ./.zig-cache/o/0832ee524a004db81574fa599ca73c15/test --cache-dir=./.zig-cache --seed=0x57eecfe7 --listen=-
-
-test-inkling2-loop
-+- run test stderr
-oq4e prefill half=false logits_max_diff=0e0 scale=2.191902e1
-oq4e prefill half=true logits_max_diff=2.3427582e-1 scale=2.191902e1
-oq4e chunk 1100 vs 512 half=false logits_max_diff=0e0
-oq4e chunk 1100 vs 512 half=true logits_max_diff=2.368927e-1
-prefetched affine projections: 15 cases byte-equal to the serial kernels
-attention test: worst old-vs-ref 1.3113022e-6, new-vs-ref 7.301569e-7, old-vs-new 1.4901161e-6, bound 5.52444e-3
-ring test: worst pair 1.7881393e-6, worst vs-ref 1.6093254e-6, bound 2.3642753e-3
-staged split test: 58 cases byte-equal to the serial kernel and across batch rows
-batched depth mix test: 25 cases byte-equal to the prefill mixes
-gathered expert test: 63 cases byte-equal to the per-slot kernels
-failed command: ./.zig-cache/o/a9519c8cb8753b6076b214e2fc02a8f4/test --cache-dir=./.zig-cache --seed=0x57eecfe7 --listen=-
+failed command: ./.zig-cache/o/045f6f395f4f4e20c94c812014501277/test --cache-dir=./.zig-cache --seed=0x5028356a --listen=-
 
 Build Summary: 17/17 steps succeeded; 169/169 tests passed
 test-inkling2-loop success
 +- run test 58 pass (58 total) 6m MaxRSS:20G
-|  +- compile test fast native-native success 17s MaxRSS:967M
+|  +- compile test fast native-native success 17s MaxRSS:972M
 |     +- run exe test-allocator-runner-source (test_runner.zig) cached
-|        +- compile exe test-allocator-runner-source safe native cached 92ms MaxRSS:33M
+|        +- compile exe test-allocator-runner-source safe native cached 93ms MaxRSS:33M
 +- run test 59 pass (59 total) 8m MaxRSS:20G
-|  +- compile test debug native-native success 3s MaxRSS:537M
+|  +- compile test debug native-native success 3s MaxRSS:534M
 |     +- run exe test-allocator-runner-source (test_runner.zig) (+1 more reused dependencies)
 +- run test 32 pass (32 total) 1m MaxRSS:20G
-|  +- compile test debug native-native success 3s MaxRSS:482M
+|  +- compile test debug native-native success 2s MaxRSS:487M
 |     +- run exe test-allocator-runner-source (test_runner.zig) (+1 more reused dependencies)
-+- run test 10 pass (10 total) 2m MaxRSS:20G
-|  +- compile test fast native-native success 16s MaxRSS:939M
++- run test 10 pass (10 total) 3m MaxRSS:20G
+|  +- compile test fast native-native success 18s MaxRSS:933M
 |     +- run exe test-allocator-runner-source (test_runner.zig) (+1 more reused dependencies)
 |     +- WriteFile draft_ids.txt cached
 |     +- WriteFile xsum.metal cached
 |     +- WriteFile inkling-dflash2-unused.zig cached
-+- run test 10 pass (10 total) 1m MaxRSS:20G
-   +- compile test fast native-native success 17s MaxRSS:997M
++- run test 10 pass (10 total) 59s MaxRSS:20G
+   +- compile test fast native-native success 17s MaxRSS:990M
       +- run exe test-allocator-runner-source (test_runner.zig) (+1 more reused dependencies)
       +- WriteFile prompts.json cached
       +- WriteFile draft_ids.txt (reused)
       +- WriteFile xsum.metal (reused)
       +- WriteFile inkling-dflash2-unused.zig (reused)
 
-heavy: done: peak charged 21.5 GB of the 28 GB cap (footprint 21.5 GB, resident 20.7 GB, host wired growth 5.5 GB); host pressure worst 1, host swap -96 MB, host pageins 38027497
+heavy: done: peak charged 24.0 GB of the 28 GB cap (footprint 21.5 GB, resident 20.7 GB, host wired growth 24.0 GB); host pressure worst 2, host swap -8 MB, host pageins 40963593

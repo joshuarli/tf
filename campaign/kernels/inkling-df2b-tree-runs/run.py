@@ -11,6 +11,7 @@ usage:
   run.py costs NAME[,NAME...]
   run.py pairs BEFORE[,BEFORE...] AFTER[,AFTER...]
   run.py budgets NAME[,NAME...]
+  run.py modeled NAME[,NAME...] [--table NAME]
   run.py same NAME,NAME[,NAME...]
   run.py kerneltable NAME
   run.py roundtable NAME[,NAME...]
@@ -267,23 +268,27 @@ def calibrate(args: argparse.Namespace) -> None:
 
 
 def costs(args: argparse.Namespace) -> None:
-    """Measured verify ms (forward, picks, accept and commit) by verified rows over timed tree rounds, the drafter's
-    ms a round, and the widths runs' p50 by width."""
+    """Timed tree rounds by verified rows: how many ran the drafter, the measured verify ms (forward, picks, accept and
+    commit), the tokens committed and the whole round's ms; then the drafter's ms over the rounds it ran."""
     by: dict = {}
-    draft: list = []
     for name in args.names.split(","):
         for r in timed(name):
             if r["kind"] == "round" and r.get("source") == "tree":
-                by.setdefault(r["offered"] + 1, []).append(r["verify_ms"])
-                if r["offered"] > 0:
-                    draft.append(r["draft_ms"])
-    print("| Rows | Rounds | Verify ms mean | p50 |")
-    print("| ---: | ---: | ---: | ---: |")
+                by.setdefault(r["offered"] + 1, []).append(r)
+    print("| Rows | Rounds | Drafter ran | Verify ms mean | Verify p50 | Committed | Round ms | Committed a round-ms |")
+    print("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for rows in sorted(by):
-        v = sorted(by[rows])
-        print(f"| {rows} | {len(v)} | {sum(v) / len(v):.2f} | {v[len(v) // 2]:.2f} |")
+        rs = by[rows]
+        n = len(rs)
+        v = sorted(r["verify_ms"] for r in rs)
+        committed = sum(r["emitted"] for r in rs) / n
+        total = sum(r["total_ms"] for r in rs) / n
+        print(f"| {rows} | {n} | {sum(r['drafted'] for r in rs)} | {sum(v) / n:.2f} | {v[n // 2]:.2f} | "
+              f"{committed:.2f} | {total:.1f} | {committed / total:.3f} |")
+    draft = sorted(r["draft_ms"] for rs in by.values() for r in rs if r["drafted"])
     if draft:
-        print(f"\ndraft ms a round: mean {sum(draft) / len(draft):.2f}, p50 {sorted(draft)[len(draft) // 2]:.2f}")
+        print(f"\ndraft ms over the {len(draft)} rounds that ran the drafter: mean {sum(draft) / len(draft):.2f}, "
+              f"p50 {draft[len(draft) // 2]:.2f}")
 
 
 def spec_rows(names: str) -> dict:
@@ -370,6 +375,36 @@ def print_interval(label: str, logs: list) -> None:
     half = t[df] * sd / math.sqrt(n) if n > 1 else 0.0
     print(f"{label}: geometric mean {math.exp(mean):.3f}, 95% interval {math.exp(mean - half):.3f}–"
           f"{math.exp(mean + half):.3f} (n = {n})")
+
+
+def modeled(args: argparse.Namespace) -> None:
+    """Committed tokens a round and the plan's modeled ms a committed token per prompt and run: every round priced
+    from the cost table that `--table` (or else the first named run that records one) records, the verify by rows and
+    the draft when the drafter ran. A model of the plan's own objective, not a measurement; untimed runs are allowed."""
+    names = args.names.split(",")
+    sources = [args.table] if args.table else names
+    plan = next((r["plan"] for n in sources for r in records(n) if r["kind"] == "meta" and "plan" in r), None)
+    if plan is None:
+        raise SystemExit(f"{', '.join(sources)}: no plan cost table recorded")
+    verify, draft = [0.0] + plan["verify_ms"], plan["draft_ms"]
+    by: dict = {}
+    for name in names:
+        for r in records(name):
+            if r["kind"] == "spec":
+                by.setdefault(r["prompt"], {}).setdefault(name, {})["spec"] = r
+            if r["kind"] == "round":
+                cell = by.setdefault(r["prompt"], {}).setdefault(name, {})
+                cost = verify[r["offered"] + 1] + (draft if r.get("drafted", True) else 0.0)
+                cell["ms"] = cell.get("ms", 0.0) + cost
+    print("| Prompt | " + " | ".join(f"{n} committed/round" for n in names) + " | "
+          + " | ".join(f"{n} modeled ms/token" for n in names) + " |")
+    print("| --- |" + " ---: |" * (2 * len(names)))
+    for prompt, runs in by.items():
+        committed = [f"{runs[n]['spec']['mean_committed']:.2f}" for n in names]
+        ms = [f"{runs[n]['ms'] / runs[n]['spec']['emitted']:.2f}" for n in names]
+        if not all(runs[n]["spec"]["equal_plain"] for n in names):
+            raise SystemExit(f"{prompt}: a reply differs from plain greedy")
+        print(f"| {prompt} | " + " | ".join(committed) + " | " + " | ".join(ms) + " |")
 
 
 def kerneltable(args: argparse.Namespace) -> None:
@@ -473,7 +508,7 @@ def shapes(args: argparse.Namespace) -> None:
             if r["kind"] == "round" and r.get("source") == "tree":
                 by.setdefault(r["prompt"], []).append(r)
         print(f"\n{name}")
-        print("| Prompt | Rounds | Rows mean | Lookup rows mean | Accepted mean | From lookup | Rounds past 8 accepted | "
+        print("| Prompt | Rounds | Rows mean | Lookup rows mean | Accepted mean | From lookup | Rounds accepting 8 or more | "
               "Widths chosen (rows: rounds) |")
         print("| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |")
         for prompt, rs in by.items():
@@ -573,6 +608,9 @@ def main() -> None:
     for name in ("calibrate", "costs", "roundtable", "widthtable", "shapes", "budgets", "same", "kerneltable"):
         a = sub.add_parser(name)
         a.add_argument("names")
+    a = sub.add_parser("modeled")
+    a.add_argument("names")
+    a.add_argument("--table", default="")
     a = sub.add_parser("kernels")
     a.add_argument("runner")
     a.add_argument("prompts")
@@ -593,7 +631,7 @@ def main() -> None:
     {"prompts": prompts, "bench": bench, "widths": widths, "calibrate": calibrate, "costs": costs,
      "roundtable": roundtable, "pairs": pairs, "widthtable": widthtable, "shapes": shapes,
      "picks": picks, "kernels": kernels, "attribution": attribution, "budgets": budgets,
-     "widthcompare": widthcompare, "same": same, "kerneltable": kerneltable}[args.action](args)
+     "widthcompare": widthcompare, "same": same, "kerneltable": kerneltable, "modeled": modeled}[args.action](args)
 
 
 if __name__ == "__main__":

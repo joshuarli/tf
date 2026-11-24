@@ -26,6 +26,21 @@ inline void i2t_mma(thread float2& c, float2 a, float2 b) {
   c = i2t_elements(D);
 }
 
+[[kernel]] void i2t_probe(const device float* A [[buffer(0)]], const device float* B [[buffer(1)]],
+    device float* D [[buffer(2)]], uint tile [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
+  uint fm, fn;
+  i2t_lane(lane, fm, fn);
+  const uint at = fm * 8u + fn;
+  float2 d = float2(0.0f);
+  for (uint s = 0; s < 2u; ++s) {
+    const device float* a = A + (tile * 2u + s) * 64u;
+    const device float* b = B + (tile * 2u + s) * 64u;
+    i2t_mma(d, float2(a[at], a[at + 1u]), float2(b[at], b[at + 1u]));
+  }
+  D[tile * 64u + at] = d.x;
+  D[tile * 64u + at + 1u] = d.y;
+}
+
 template <uint N>
 inline float2 i2t_tree(thread float2 (&v)[N]) {
 #pragma unroll

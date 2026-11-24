@@ -8,6 +8,8 @@ pub const tap_ids = [max_taps]u32{ 5, 19, 33, 47, 61, 0, 0, 0 };
 /// incoai/Ornith-1.5-122B-DFlash2: six layers over Ornith-1.5-122B's 48, a block of 16.
 pub const flint_tap_ids = [max_taps]u32{ 5, 15, 26, 36, 46, 0, 0, 0 };
 pub const ornith_tap_ids = [max_taps]u32{ 1, 7, 14, 20, 26, 32, 39, 45 };
+/// incoai/Inkling-2-Mini-DFlash2: the rows entering visits 5, 23 and 41 of the target's 48, then its final norm (48).
+pub const inkling_tap_ids = [max_taps]u32{ 5, 23, 41, 48, 0, 0, 0, 0 };
 pub const Config = struct {
     hidden: u32 = 5120,
     intermediate: u32 = 17408,
@@ -28,6 +30,16 @@ pub const Config = struct {
     theta: f64 = 10000000,
     taps: [max_taps]u32 = tap_ids,
     tap_count: u32 = 5,
+    /// The last tap names the id past the target's layers: its final norm's rows, which its head reads.
+    final_norm: bool = false,
+    /// `final_logit_softcapping` with `selector_softcap_mode` "after_correction": each candidate's score after its
+    /// edge, cap * tanh(score / cap). 0: none.
+    softcap: f32 = 0,
+    /// The head's real tokens, which its target names (rows past them are padding storage). 0: the whole vocabulary.
+    candidates: u32 = 0,
+    pub fn candidateVocab(c: Config) u32 {
+        return if (c.candidates == 0) c.vocab else c.candidates;
+    }
     pub fn qWidth(c: Config) u32 {
         return c.heads * c.head_dim;
     }
@@ -57,10 +69,12 @@ pub const Config = struct {
         for (dimensions) |n| if (n == 0) return error.BadDraftConfig;
         if (c.hidden % 64 != 0 or c.intermediate % 64 != 0 or c.hidden % c.group != 0 or c.heads % c.kv_heads != 0 or c.head_dim % 2 != 0 or (c.block != 8 and c.block != 16) or c.conv != 2 or c.layers > 8 or c.mask >= c.vocab or c.topk > c.vocab or c.window < c.block) return error.BadDraftConfig;
         if (!std.math.isFinite(c.eps) or c.eps <= 0 or !std.math.isFinite(c.theta) or c.theta <= 0) return error.BadDraftConfig;
+        if (!std.math.isFinite(c.softcap) or c.softcap < 0 or c.candidates > c.vocab or (c.candidates != 0 and c.candidates < c.topk)) return error.BadDraftConfig;
         if (c.tap_count == 0 or c.tap_count > max_taps) return error.BadDraftConfig;
+        if (c.final_norm and c.taps[c.tap_count - 1] != c.target_layers) return error.BadDraftConfig;
         if (c.target_layers == 64 and !std.mem.eql(u32, c.tapIds(), tap_ids[0..5])) return error.UnsupportedDraftTaps;
         for (c.tapIds(), 0..) |tap, i| for (c.taps[0..i]) |previous| if (tap == previous) return error.UnsupportedDraftTaps;
-        for (c.tapIds()) |i| if (i >= c.target_layers) return error.BadDraftConfig;
+        for (c.tapIds(), 0..) |i, k| if (i > c.target_layers or (i == c.target_layers and !(c.final_norm and k + 1 == c.tap_count))) return error.BadDraftConfig;
         const q = try std.math.mul(u32, c.heads, c.head_dim);
         _ = try std.math.mul(u32, c.kv_heads, c.head_dim);
         _ = try std.math.mul(u32, c.hidden, c.tap_count);
@@ -71,9 +85,12 @@ pub const Config = struct {
     pub fn bind(c: Config, hidden: usize, vocab: usize, layers: usize) !void {
         if (hidden != c.hidden or vocab != c.vocab or layers != c.target_layers) return error.DraftForAnotherTarget;
     }
-    /// Published Qwen, Ornith and Flint shapes admitted by the shared Metal draft runtime.
+    /// Published Qwen, Ornith, Flint and Inkling shapes admitted by the shared Metal draft runtime.
     pub fn requireStock(c: Config) !void {
         try c.check();
+        const inkling = c.hidden == 2304 and c.intermediate == 6912 and c.layers == 5 and c.heads == 32 and c.kv_heads == 8 and c.head_dim == 128 and c.target_layers == 48 and c.vocab == 201024 and c.mask == 200056 and c.block == 8 and c.tap_count == 4 and std.mem.eql(u32, c.tapIds(), inkling_tap_ids[0..4]) and c.final_norm and c.softcap == 30 and c.theta == 10000;
+        if (inkling and c.window == 2048 and c.group == 16 and c.conv == 2 and c.rank == 256 and c.topk == 16 and c.eps == 1e-6 and (c.candidates == 0 or c.candidates == 200058)) return;
+        if (c.final_norm or c.softcap != 0 or c.candidates != 0) return error.NotStockDFlash2;
         const stock = c.hidden == 5120 and c.intermediate == 17408 and c.layers == 5 and c.heads == 32 and c.kv_heads == 8 and c.target_layers == 64 and c.mask == 248070 and c.block == 8 and c.tap_count == 5;
         const ornith = c.hidden == 3072 and c.intermediate == 9216 and c.layers == 6 and c.heads == 32 and c.kv_heads == 8 and c.target_layers == 48 and c.mask == 248077 and c.block == 16 and c.tap_count == 8 and std.mem.eql(u32, c.tapIds(), ornith_tap_ids[0..8]);
         const flint = c.hidden == 2048 and c.intermediate == 6144 and c.layers == 5 and c.heads == 32 and c.kv_heads == 8 and c.target_layers == 49 and c.vocab == 150144 and c.mask == 150019 and c.block == 8 and c.tap_count == 5 and c.theta == 10000 and std.mem.eql(u32, c.tapIds(), flint_tap_ids[0..5]);
@@ -130,6 +147,14 @@ pub fn parse(gpa: std.mem.Allocator, raw: []const u8) !Config {
         if (v != .integer or v.integer < 0 or v.integer > std.math.maxInt(u32)) return error.BadDraftConfig;
         c.taps[i] = @intCast(v.integer);
     }
+    c.final_norm = c.taps[c.tap_count - 1] == c.target_layers;
+    if (d.get("final_logit_softcapping")) |_| {
+        const cap = try number(d, "final_logit_softcapping");
+        if (cap <= 0) return error.BadDraftConfig;
+        const mode = d.get("selector_softcap_mode") orelse return error.UnsupportedSelectorSoftcap;
+        if (mode != .string or !std.mem.eql(u8, mode.string, "after_correction")) return error.UnsupportedSelectorSoftcap;
+        c.softcap = @floatCast(cap);
+    } else if (d.get("selector_softcap_mode") != null) return error.UnsupportedSelectorSoftcap;
     const types = o.get("layer_types") orelse return error.BadDraftConfig;
     if (types != .array or types.array.items.len != c.layers) return error.BadDraftConfig;
     for (types.array.items) |v| if (v != .string or !std.mem.eql(u8, v.string, "sliding_attention")) return error.BadDraftConfig;
@@ -279,4 +304,63 @@ test "Flint DFlash2 binds only its published target shape and post-block taps" {
     bad = c;
     bad.theta = 10000000;
     try std.testing.expectError(error.NotStockDFlash2, bad.requireStock());
+}
+
+test "Inkling DFlash2 reads visit inputs then its target's final norm, softcapped after the selector's edge" {
+    const a = std.testing.allocator;
+    const c = try parse(a, @embedFile("inkling_fixture.json"));
+    try c.bind(2304, 201024, 48);
+    try std.testing.expectEqualSlices(u32, inkling_tap_ids[0..4], c.tapIds());
+    try std.testing.expect(c.final_norm);
+    try std.testing.expectEqual(@as(f32, 30), c.softcap);
+    try std.testing.expectEqual(@as(u32, 9216), c.tapWidth());
+    try std.testing.expectEqual(@as(u32, 576), c.dynamicWidth());
+    try std.testing.expectEqual(@as(usize, 81), c.tensorCount());
+    try std.testing.expectEqual(@as(u32, 201024), c.candidateVocab());
+    var real = c;
+    real.candidates = 200058;
+    try real.requireStock();
+    try std.testing.expectEqual(@as(u32, 200058), real.candidateVocab());
+    const edits = [_]struct { from: []const u8, to: []const u8, err: anyerror }{
+        .{ .from = "\"after_correction\"", .to = "\"before_correction\"", .err = error.UnsupportedSelectorSoftcap },
+        .{ .from = "\"selector_softcap_mode\": \"after_correction\",", .to = "", .err = error.UnsupportedSelectorSoftcap },
+        .{ .from = "\"final_logit_softcapping\": 30.0,", .to = "\"final_logit_softcapping\": 50.0,", .err = error.NotStockDFlash2 },
+        .{ .from = "\"final_logit_softcapping\": 30.0,", .to = "", .err = error.UnsupportedSelectorSoftcap },
+        .{ .from = "\"mask_token_id\": 200056", .to = "\"mask_token_id\": 200055", .err = error.NotStockDFlash2 },
+        .{ .from = "\"rope_theta\": 10000.0", .to = "\"rope_theta\": 1000000.0", .err = error.NotStockDFlash2 },
+    };
+    for (edits) |e| {
+        const text_json = try std.mem.replaceOwned(u8, a, @embedFile("inkling_fixture.json"), e.from, e.to);
+        defer a.free(text_json);
+        try std.testing.expect(!std.mem.eql(u8, text_json, @embedFile("inkling_fixture.json")));
+        try std.testing.expectError(e.err, parse(a, text_json));
+    }
+    var shifted = c;
+    shifted.taps[0..4].* = .{ 4, 22, 40, 48 };
+    try std.testing.expectError(error.NotStockDFlash2, shifted.requireStock());
+    var early = c;
+    early.taps[0..4].* = .{ 5, 23, 48, 41 };
+    try std.testing.expectError(error.BadDraftConfig, early.check());
+    var past = c;
+    past.taps[3] = 49;
+    try std.testing.expectError(error.BadDraftConfig, past.check());
+    try std.testing.expectError(error.DraftForAnotherTarget, c.bind(2048, 150144, 49));
+}
+
+test "Flint and the Qwen drafts refuse a final-norm tap, a softcap or a narrowed vocabulary" {
+    const flint = try parse(std.testing.allocator, @embedFile("flint_fixture.json"));
+    try std.testing.expect(!flint.final_norm);
+    try std.testing.expectEqual(@as(f32, 0), flint.softcap);
+    try std.testing.expectEqual(flint.vocab, flint.candidateVocab());
+    for ([_]Config{ flint, .{} }, [_]anyerror{ error.BadDraftConfig, error.UnsupportedDraftTaps }) |base, past| {
+        var c = base;
+        c.softcap = 30;
+        try std.testing.expectError(error.NotStockDFlash2, c.requireStock());
+        c = base;
+        c.candidates = c.vocab - 64;
+        try std.testing.expectError(error.NotStockDFlash2, c.requireStock());
+        c = base;
+        c.taps[c.tap_count - 1] = c.target_layers;
+        try std.testing.expectError(past, c.check());
+    }
 }

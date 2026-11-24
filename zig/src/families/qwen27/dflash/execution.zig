@@ -154,7 +154,7 @@ pub fn encodeStreams(ops: op.Ops, g: *const w.Graph, preparation: op.Preparation
     const final = try norm(ops, frame, masks, g.norm, c.eps, 1, c.hidden);
     const head = try ops.vtable.head(ops.ptr, frame, final);
     if (head.logits.handle == 0 or head.logits.rows != headed or head.logits.dtype != .bf16 or head.logits.width == 0 or head.logits.width > c.vocab or head.logits.stride < head.logits.width) return error.DraftOperatorShape;
-    if (head.token_ids) |mapping| try mapping.check(1, head.logits.width, .u32) else if (head.logits.width != c.vocab) return error.DraftCandidateId;
+    if (head.token_ids) |mapping| try mapping.check(1, head.logits.width, .u32) else if (head.logits.width != c.candidateVocab()) return error.DraftCandidateId;
     const projected = try project(ops, frame, final, g.hidden_projection, preparation.mode);
     return .{ .head = head, .projected = projected };
 }

@@ -11,6 +11,12 @@ pub const Target = struct {
     kernels: *@import("../quant_gpu.zig").Kernels,
     glue: *@import("../glue_gpu.zig").Kernels,
     dims: projection.Ref,
+    /// The embedding's checked tensors when `checkpoint` does not name them as `model.embed_tokens`.
+    embed_binding: ?@import("../checkpoint.zig").Linear = null,
+    /// A family whose first layer reads its token rows through a norm: the draft's own rows take it too.
+    embed_norm: ?EmbedNorm = null,
+
+    pub const EmbedNorm = struct { weight: projection.Ref, eps: f32 };
 
     pub fn qwen(m: *@import("../model.zig").Model) Target {
         return .{ .device = m.device, .queue = m.queue, .checkpoint = &m.checkpoint, .config = .{ .hidden = m.config.hidden, .vocab = m.config.vocab, .layers = m.config.layers }, .weights = .{ .embed = m.weights.embed, .head = m.weights.head }, .kernels = &m.kernels, .glue = &m.glue, .dims = m.frame.get(.dims) };

@@ -46,6 +46,11 @@ fn edges(g: *const weights.Graph, lattice: op.Lattice, parent: u32, token: u32, 
     for (0..g.config.rank) |r| sum += (try native(g.predecessor, parent, @intCast(r))) * @as(f64, lattice.projected[@as(usize, depth) * lattice.rank + r]) * (try native(g.successor, token, @intCast(r)));
     return sum;
 }
+fn capped(score: f64, cap: f32) f64 {
+    @setFloatMode(.strict);
+    const c: f64 = cap;
+    return c * std.math.tanh(score / c);
+}
 fn expand(g: *const weights.Graph, lattice: op.Lattice, options: Options, first: u64, parent_token: u32, parent: i32, depth: u32, cumulative: f64, frontier: *std.ArrayList(Node)) !void {
     @setFloatMode(.strict);
     var scores: [16]f64 = undefined;
@@ -55,7 +60,7 @@ fn expand(g: *const weights.Graph, lattice: op.Lattice, options: Options, first:
     var maximum: f64 = -std.math.inf(f64);
     for (0..lattice.topk) |i| {
         const token = lattice.candidates[row + i];
-        var score = @as(f64, lattice.unary[row + i]) / temperature + options.edge * try edges(g, lattice, parent_token, token, depth) / temperature;
+        var score = if (g.config.softcap > 0) capped(@as(f64, lattice.unary[row + i]) + options.edge * try edges(g, lattice, parent_token, token, depth), g.config.softcap) / temperature else @as(f64, lattice.unary[row + i]) / temperature + options.edge * try edges(g, lattice, parent_token, token, depth) / temperature;
         if (options.noise) |n| score += options.noise_weight * try n.draw(n.ptr, try std.math.add(u64, first, depth), token);
         score /= options.tau;
         if (!std.math.isFinite(score)) return error.DraftScoreFinite;
@@ -141,4 +146,25 @@ test "draft roots shift to pending row while descendants retain topology" {
     const parents = try t.verifyParents(a);
     defer a.free(parents);
     try std.testing.expectEqualSlices(i32, &.{ -1, 0, 0, 1, 3 }, parents);
+}
+test "a softcapped draft caps each candidate's score after its edge and keeps a greedy chain's picks" {
+    const a = std.testing.allocator;
+    var store = try @import("fixtures.zig").Store.init(a);
+    defer store.deinit();
+    var g = try store.graph(a);
+    defer g.deinit();
+    var candidates = [_]u32{ 3, 7, 3, 7 };
+    var unary = [_]f32{ 100, 90, 60, 61 };
+    var projected: [32]f32 = @splat(0);
+    const lattice = op.Lattice{ .gpa = a, .depth = 2, .topk = 2, .rank = 16, .candidates = &candidates, .unary = &unary, .projected = &projected };
+    var plain = try propose(a, &g, lattice, 1, 10, .{ .nodes = 2, .children = 1 });
+    defer plain.deinit();
+    g.config.softcap = 30;
+    var capped_tree = try propose(a, &g, lattice, 1, 10, .{ .nodes = 2, .children = 1 });
+    defer capped_tree.deinit();
+    try std.testing.expectEqualSlices(u32, &.{ 3, 7 }, plain.tokens);
+    try std.testing.expectEqualSlices(u32, plain.tokens, capped_tree.tokens);
+    const gap: f64 = (30 * std.math.tanh(@as(f64, 100) / 30) - 30 * std.math.tanh(@as(f64, 90) / 30)) / 1.5;
+    try std.testing.expectApproxEqAbs(-@log(1 + @exp(-gap)), capped_tree.scores[0], 1e-12);
+    try std.testing.expectApproxEqAbs(-@log(1 + @exp(@as(f64, -10) / 1.5)), plain.scores[0], 1e-12);
 }

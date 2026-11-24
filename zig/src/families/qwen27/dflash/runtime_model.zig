@@ -308,11 +308,10 @@ pub const Context = struct {
 
 pub fn loadGraph(a: std.mem.Allocator, b: *Backend) !weights.Graph {
     const target = b.target;
-    const prefix: []const u8 = if (target.checkpoint.has("language_model.model.embed_tokens.weight")) "language_model." else "";
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
     const local = arena.allocator();
-    const embed = try binding(local, target, prefix, "model.embed_tokens", .{ .bits = target.weights.embed.bits, .group_size = target.weights.embed.group });
+    const embed = if (target.embed_binding) |bound| bound else try binding(local, target, if (target.checkpoint.has("language_model.model.embed_tokens.weight")) "language_model." else "", "model.embed_tokens", .{ .bits = target.weights.embed.bits, .group_size = target.weights.embed.group });
     var names: std.ArrayList([]const u8) = .empty;
     var iterator = b.checkpoint.tensors.keyIterator();
     while (iterator.next()) |name| try names.append(local, name.*);

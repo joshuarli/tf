@@ -60,7 +60,11 @@ fn embed(ptr: *anyopaque, epoch: u64, _: ck.Linear, ids: []const u32) !op.View {
     const out = try b.frame.ref(y);
     try b.target.glue.embeddingShape(e, b.target.config.hidden, b.target.config.vocab, b.target.weights.embed, .{ .buffer = r.buf, .offset = r.off }, .{ .buffer = out.buf, .offset = out.off }, @intCast(ids.len));
     e.barrier();
-    return y;
+    const n = b.target.embed_norm orelse return y;
+    const normed = try b.frame.alloc(@intCast(ids.len), b.config.hidden, .bf16);
+    try b.primitives.norm(e, out, .{ .buf = n.weight.buffer, .off = n.weight.offset }, try b.frame.ref(normed), .{ .rows = @intCast(ids.len), .heads = 1, .dim = b.config.hidden, .x_stride = b.config.hidden, .y_stride = b.config.hidden, .eps = n.eps });
+    e.barrier();
+    return normed;
 }
 fn conv(ptr: *anyopaque, epoch: u64, x: op.View, p: op.Conv) !op.View {
     const b = backend(ptr);
@@ -104,6 +108,7 @@ fn head(ptr: *anyopaque, epoch: u64, x: op.View) !op.Head {
     const output = try b.frame.ref(y);
     try b.target.kernels.quant(e, b.head.linear, .{ .buffer = input.buf, .offset = input.off }, null, b.target.dims, .{ .buffer = output.buf, .offset = output.off }, x.rows);
     e.barrier();
+    if (b.config.candidates != 0 and b.head.ids == null and b.config.candidates < b.head.linear.n) return .{ .logits = try b.frame.add(output, x.rows, b.config.candidates, b.head.linear.n, .bf16) };
     return .{ .logits = y, .token_ids = if (b.head.ids) |ids| try b.frame.add(.{ .buf = ids }, 1, b.head.linear.n, b.head.linear.n, .u32) else null };
 }
 fn lattice(ptr: *anyopaque, epoch: u64, h: op.Head, projected: op.View, c: Config) !op.Lattice {

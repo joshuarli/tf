@@ -12,7 +12,6 @@ pub const max_listed = 8;
 pub const Pipes = struct {
     gemm: mtl.Pipeline,
     hi: mtl.Pipeline,
-    tall: mtl.Pipeline,
     gated: mtl.Pipeline,
 
     pub fn init(device: mtl.Device) !Pipes {
@@ -22,15 +21,12 @@ pub const Pipes = struct {
         errdefer gemm.deinit();
         const hi = try mtl.Pipeline.init(device, lib, "i2ps_gemm_hi", false);
         errdefer hi.deinit();
-        const tall = try mtl.Pipeline.init(device, lib, "i2ps_tall_split", false);
-        errdefer tall.deinit();
-        return .{ .gemm = gemm, .hi = hi, .tall = tall, .gated = try mtl.Pipeline.init(device, lib, "i2ps_split_gated", false) };
+        return .{ .gemm = gemm, .hi = hi, .gated = try mtl.Pipeline.init(device, lib, "i2ps_split_gated", false) };
     }
 
     pub fn deinit(p: Pipes) void {
         p.gemm.deinit();
         p.hi.deinit();
-        p.tall.deinit();
         p.gated.deinit();
     }
 };
@@ -64,7 +60,6 @@ pub const Stage = struct {
     overflow: mtl.Buffer,
     rows: u32,
     half_inputs: bool = false,
-    tall: bool = false,
 };
 
 fn rowBytes(view: Tensor) usize {
@@ -178,13 +173,12 @@ pub fn encode(s: Stage, sources: []const Tensor, parts: []const Part, inputs: [3
             args.part[i] = .{ .tile = tiles, .row = 0, .n = 0 };
             outs[i] = outs[0];
         }
-        const tall = s.tall and !s.half_inputs and s.rows >= 256;
-        s.enc.setPipeline(if (s.half_inputs) s.pipes.hi else if (tall) s.pipes.tall else s.pipes.gemm);
+        s.enc.setPipeline(if (s.half_inputs) s.pipes.hi else s.pipes.gemm);
         s.enc.setBuffer(s.inputs, 0, 0);
         s.enc.setBuffer(s.weights, 0, 1);
         s.enc.setValue(args, 2);
         for (outs, 0..) |out, i| s.enc.setBuffer(out, 0, 3 + i);
-        if (tall) s.enc.dispatchGroups(mtl.Size.of(tiles, (s.rows + 127) / 128, 1), mtl.Size.of(256, 1, 1)) else s.enc.dispatchGroups(mtl.Size.of(tiles, (s.rows + 63) / 64, 1), mtl.Size.of(128, 1, 1));
+        s.enc.dispatchGroups(mtl.Size.of(tiles, (s.rows + 63) / 64, 1), mtl.Size.of(128, 1, 1));
     }
     return true;
 }

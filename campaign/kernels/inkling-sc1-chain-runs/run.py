@@ -629,35 +629,51 @@ def split_parts(rounds: list[dict]) -> list[dict]:
 
 
 def split_table(args: argparse.Namespace) -> None:
-    """Mean ms a round over each prompt's rounds, pooled over the named processes: wall, drafter GPU busy and idle span,
-    verify GPU, the host between drafter and verify (selector, plan, verify encode and submit) and between verify and
-    the next draft, and what a draft started on the GPU behind the verify would recover at most (the second gap and
-    the drafter's idle span)."""
+    """Two tables over each prompt's rounds, pooled over the named processes. First, mean ms a round: wall, the
+    drafter's GPU busy time and its idle span inside its frame, the verify's GPU time, the host between the drafter's
+    GPU end and the verify's GPU start (gap A; of it the selector and the verify's encode and submit), the host
+    between the verify's GPU end and the next draft's GPU start (gap B), the rest of the round on the host, and all
+    host time with its share of the round. Second, gap B's parts in rounds the next draft follows: the wake from the
+    verify's wait, the host's work, and the next draft's commit to its GPU start."""
     names = args.names.split(",")
     table: dict[str, list[dict]] = {}
+    raw: dict[str, list[dict]] = {}
     for name in names:
         for prompt, rounds in split_rounds(name).items():
             table.setdefault(prompt, []).extend(split_parts(rounds))
-    cols = ["wall", "d_busy", "d_idle", "v_gpu", "gap_a", "select", "plan", "encode", "gap_b", "pre_draft", "to_draft",
-            "recoverable"]
+            raw.setdefault(prompt, []).append(rounds)
+    cols = ["wall", "d_busy", "d_idle", "v_gpu", "gap_a", "select", "encode", "gap_b", "other", "host", "host_pct"]
     print("| Prompt | Rounds | Drafted | Chained | " + " | ".join(cols) + " |")
     print("| --- | ---: | ---: | ---: | " + " | ".join("---:" for _ in cols) + " |")
     for prompt, parts in table.items():
+        n = len(parts)
         drafted = [p for p in parts if p["drafted"]]
-        def mean(key: str, rows: list[dict]) -> float:
-            vals = [p[key] for p in rows if p.get(key) is not None]
-            return sum(vals) / len(vals) if vals else float("nan")
-        wall = mean("wall", parts)
-        gap_b = [p["gap_b"] for p in parts if p.get("gap_b") is not None]
-        rec = (sum(gap_b) + sum(p["d_idle"] for p in drafted)) / len(parts)
-        values = {"wall": wall, "d_busy": sum(p["d_busy"] for p in parts) / len(parts),
-                  "d_idle": sum(p["d_idle"] for p in parts) / len(parts), "v_gpu": mean("v_gpu", parts),
-                  "gap_a": sum(p["gap_a"] for p in parts) / len(parts), "select": mean("select", drafted),
-                  "plan": mean("plan", drafted), "encode": mean("encode", drafted),
-                  "gap_b": sum(gap_b) / len(parts), "pre_draft": mean("pre_draft", drafted),
-                  "to_draft": mean("to_draft", drafted), "recoverable": rec}
-        print(f"| {prompt} | {len(parts)} | {len(drafted)} | {sum(p['chained'] for p in parts)} | "
-              + " | ".join(f"{values[c]:.3f}" for c in cols) + " |")
+        per = lambda key: sum(p.get(key) or 0.0 for p in parts) / n  # noqa: E731
+        sel = lambda key: sum(p[key] for p in drafted) / len(drafted) if drafted else float("nan")  # noqa: E731
+        v = {"wall": per("wall"), "d_busy": per("d_busy"), "d_idle": per("d_idle"), "v_gpu": per("v_gpu"),
+             "gap_a": per("gap_a"), "select": sel("select"), "encode": sel("encode"), "gap_b": per("gap_b")}
+        v["other"] = v["wall"] - v["d_busy"] - v["d_idle"] - v["v_gpu"] - v["gap_a"] - v["gap_b"]
+        v["host"] = v["wall"] - v["d_busy"] - v["v_gpu"]
+        v["host_pct"] = 100 * v["host"] / v["wall"]
+        print(f"| {prompt} | {n} | {len(drafted)} | {sum(p['chained'] for p in parts)} | "
+              + " | ".join(f"{v[c]:.{1 if c == 'host_pct' else 3}f}" for c in cols) + " |")
+    print()
+    print("| Prompt | Wake | Host work | Commit to GPU start | Gap B |")
+    print("| --- | ---: | ---: | ---: | ---: |")
+    for prompt, processes in raw.items():
+        wake, work, start, gap = [], [], [], []
+        for rounds in processes:
+            for r, n in zip(rounds, rounds[1:]):
+                if r["d_frames"] == 0 or n["d_frames"] == 0:
+                    continue
+                w = r["d_returned"] - r["d_end"]
+                v_end = r["verified"] - w
+                wake.append(w)
+                start.append(n["d_start"] - n["d_committed"])
+                gap.append(n["d_start"] - v_end)
+                work.append(gap[-1] - w - start[-1])
+        ms = lambda xs: f"{1000 * sum(xs) / len(xs):.3f}" if xs else "-"  # noqa: E731
+        print(f"| {prompt} | {ms(wake)} | {ms(work)} | {ms(start)} | {ms(gap)} |")
 
 
 def main() -> None:

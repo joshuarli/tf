@@ -142,11 +142,11 @@ The largest single cost in the base kernel was not memory: its per-lane loops ra
 Every change in this section keeps the bytes of the kernels it replaces, so batch and single-stream decode, prefill and the saved captures see unchanged arithmetic. Each has a test that runs the earlier kernel, embedded as source where it was replaced, on random inputs at served shapes and requires equal words.
 
 - **Staged decode attention.** For 128-wide heads with three query heads to a key/value head (the served geometry), `i2_attn_split` and `i2_batch_split` stage 32-row blocks of keys and values with every thread, lane `l` holding dimensions `l`, `l + 32`, `l + 64` and `l + 96` of a row as one `half4`. Each lane forms its four partial products for all 32 rows; the reduce-scatter above turns them into the rows' scores. The running maximum is a lane prefix maximum (maximum is exact), both exponentials are computed one row a lane, and only the mass and value recurrences run serially, with the serial kernel's expressions. Other geometries, such as the tiny fixture's 8-wide heads, keep the previous one-row-a-step kernel. The merge loads every split's partial before it starts. Test: `staged split attention keeps the serial kernel's bytes, single and batched`: the base split and merge, embedded as source, against the new pair at 40 single-stream cases from position 0 to 4,100 in sliding and full windows, and 18 batch rows at mixed positions against single streams.
-- **Shared affine rows.** For 2 to 8 batch rows, `i2a_dense_shared` and `i2a_shared_projections` read each packed weight word and its scale and bias once and feed every row, each row accumulated in `i2a_dot`'s order; previously each row's threadgroup read the weights again. One row keeps the original kernels. Test: `shared-row affine kernels give each row the per-row kernel's bytes`, 42 cases over 4- and 8-bit weights, the logit cap, and 2 to 8 rows of the fused projections in both layouts.
+- **Shared affine rows (removed; see [Integrated result](#integrated-result)).** For 2 to 8 batch rows, `i2a_dense_shared` and `i2a_shared_projections` read each packed weight word and its scale and bias once and feed every row, each row accumulated in `i2a_dot`'s order; previously each row's threadgroup read the weights again. One row keeps the original kernels. Test: `shared-row affine kernels give each row the per-row kernel's bytes`, 42 cases over 4- and 8-bit weights, the logit cap, and 2 to 8 rows of the fused projections in both layouts.
 - **Fused depth mix.** The batch path's `i2_batch_mix` and `i2_batch_mix4` accumulate every query and state dot of a token's depth mix in one pass, keeping each dot's per-thread order, SIMD reduction and part order, where `i2p_mix4` ran 20 reductions with two barriers each in one threadgroup. Test: `batched depth mixes keep the prefill mixes' bytes`, depths 1 to 5 and 1 to 4 queries.
 - **Loads ahead of sums.** `i2a_dot` and `i2a_float` issue the loads of four (affine) or six (float) lane iterations before their fused multiply-adds, in the same order. The 48 f32 router projections and 24 f32 controller projections ran with 16 and 8 threadgroups, one load round trip an iteration. Test: `prefetched affine and float projections keep the serial kernels' bytes`, 15 cases including tails.
-- **Batch route selection.** `i2_batch_pick` is `i2p_routepick` with its per-lane arrays indexed at compile time and its weights held in registers until the normalization. Test: `batched route selection keeps the prefill selection's picks and weights`, 12 cases including exact ties.
-- **Shared NVFP4 experts.** For 2 to 8 batch rows, the lowest slot routed to an expert computes every slot routed to it (`i2_gu_rows`, `i2_down_rows`), decoding each weight group once, each slot's sums in `i2p_gu`'s and `i2p_down`'s order; the expert's other slots return at once. MXFP8 layers keep their kernels. Test: `batched expert projections keep the per-slot kernels' bytes`, 2 to 8 rows of random distinct picks over 12 experts.
+- **Batch route selection (removed; see [Integrated result](#integrated-result)).** `i2_batch_pick` is `i2p_routepick` with its per-lane arrays indexed at compile time and its weights held in registers until the normalization. Test: `batched route selection keeps the prefill selection's picks and weights`, 12 cases including exact ties.
+- **Shared NVFP4 experts.** The kernels accept 2 to 8 batch rows and are selected only at eight. The lowest slot routed to an expert computes every slot routed to it (`i2_gu_rows`, `i2_down_rows`), decoding each weight group once, each slot's sums in `i2p_gu`'s and `i2p_down`'s order; the expert's other slots return at once. MXFP8 layers keep their kernels. Test: `batched expert projections keep the per-slot kernels' bytes`, 2 to 8 rows of random distinct picks over 12 experts.
 
 The reduce-scatter's byte identity depends on `simd_sum`'s partner order measured on this M5 Max. On a GPU whose `simd_sum` adds in another order the staged kernel is still an fp32 sum, but its bytes would differ from prefill's attention; the staged-split test would then fail and name it. The new kernels are not registered in the Metal kernel-contract runner; no Inkling 2 Mini Metal kernel is registered there today.
 
@@ -159,21 +159,66 @@ python3 campaign/heavy.py -- sh -c 'zig build tf-inkling2-loop-run -Dcpu=apple_m
   --test-filter "staged split" --test-filter "depth mix" --test-filter "prefetched" --test-filter "shared-row"'
 ```
 
-It exited 0 and reported 58 staged-split, 42 shared-row, 25 depth-mix, 15 prefetched-projection, 12 route-selection and 14 expert cases equal, with the attention FP64 test's worst new-versus-reference error 7.30e-7 against a 5.52e-3 bound and the ring test's worst pair difference 1.79e-6, both unchanged from base. An earlier full oQ4e family run on the source before the expert sharing (`TF_INKLING2_LOOP_DIR` and `TF_INKLING2_LOOP_OQ4E_DIR` both oQ4e, `zig build test-inkling2-loop --summary all` under `heavy.py`) passed all 67 tests of the family module, with zero logit and cache differences in batch/decode at widths 1, 2 and 4 and zero chunk 1, 4 and 5 differences, but exited 1 because the affine test module did not compile (a syntax error in the new prefetch test, since fixed). The oQ4e prefill-versus-decode test in that module has therefore not run on the final source.
+It exited 0 and reported 58 staged-split, 42 shared-row, 25 depth-mix, 15 prefetched-projection, 12 route-selection and 14 expert cases equal, with the attention FP64 test's worst new-versus-reference error 7.30e-7 against a 5.52e-3 bound and the ring test's worst pair difference 1.79e-6, both unchanged from base. An earlier full oQ4e family run on the source before the expert sharing (`TF_INKLING2_LOOP_DIR` and `TF_INKLING2_LOOP_OQ4E_DIR` both oQ4e, `zig build test-inkling2-loop --summary all` under `heavy.py`) passed all 67 tests of the family module, with zero logit and cache differences in batch/decode at widths 1, 2 and 4 and zero chunk 1, 4 and 5 differences, but exited 1 because the affine test module did not compile (a syntax error in the new prefetch test, since fixed). That test passes on the integrated source below.
 
-## Step timing status
+## Integrated result
 
-The six kernel changes are committed as `wip:` because none has a gated step timing: `a363b7a3e` staged attention, `e11143f3a` shared affine rows, `d7c9be11c` fused depth mix, `4db85fb4d` loads ahead of sums, `2f4d126a8` batch route selection and `dc6323e59` shared NVFP4 experts, on `4697abcb8`, which adds `--round` to `inkling_profile.py timeline`. Each commit's tests are its byte-equality tests above.
+D2 is integrated through `038f24cce`. It keeps staged attention, the fused depth mix and the prefetched loads, uses shared NVFP4 experts only in eight-row batches, and drops shared affine rows and batch route selection. Decode steps run 1.22× faster at one row, 1.14× at two and 1.16× at four. Eight rows also gained, but the host slowed during that part of the matrix, so its size is not settled. Served throughput rose 6–32% in all eight sweep cells with identical token counts.
 
-No gated step timing of the final kernels completed. The one gated pair of an early staged kernel (32-row blocks with the run-time head width, before the changes above) gave K=1 19.331 ms against base 19.617 ms and K=4 38.893 ms against 38.831 ms, and its timeline cut `i2_batch_split` from 3,552 to 3,164 us at K=1; that kernel is not the committed one. A later screen of base against the committed attention collected one base K=1 sample, 19.750 ms (19.468–19.881 ms), before the host blocked it.
+### Which commits helped
 
-From about 14:10 the host's CPU gate deferred most timed runs: OrbStack Helper, outside the campaign, used 4 to 10 cores in bursts and `fseventsd` about one core with 5 GB resident, and the memory compressor ran at up to 100,000 pages a second. The GPU lock queue held 6 to 13 jobs across lanes. Gates were not relaxed; deferred samples were discarded.
+Each commit was merged onto main `7c7714357` and timed with `batchbench K 5` on the 2,500-ID fixture, in forward then reverse commit order. Values are the mean of the two runs, in ms a step.
 
-Expected effect, not measured end to end: the microbenchmark puts the K=1 attention pairs at about 1.3 ms against 4.0 ms at base. The depth-mix, route-selection and f32 projection changes remove serial latency from 96, 24, 48 and 72 small dispatches a step; their size is unmeasured. At K>1 the shared affine and expert reads remove repeated weight reads that the base K=4 timeline showed as `i2a_batch_projections` 5.25 ms, `i2a_dense` 4.14 ms and `i2p_gu` plus `i2p_down` 13.56 ms against 2.63, 2.03 and 4.29 ms at K=1.
+| Through commit | K=1 | K=4 |
+| --- | ---: | ---: |
+| Base | 19.594 | 39.802 |
+| `a363b7a3e` staged attention | 17.084 | 35.876 |
+| `e11143f3a` shared affine rows | 17.076 | 38.065 |
+| `d7c9be11c` fused depth mix | 16.725 | 38.017 |
+| `4db85fb4d` loads ahead of sums | 15.986 | 40.154 |
+| `2f4d126a8` batch route selection | 16.134 | 40.316 |
+| `dc6323e59` shared NVFP4 experts | 16.045 | 40.025 |
 
-## Next step
+- **Shared affine rows are removed.** Without them a four-row step averaged 36.4 ms, against 40.6 ms for the full branch and 40.2 ms for the base, and one-row decode did not change.
+- **Batch route selection is removed.** Disabling it changed no width among 1, 2, 4 and 8 by more than the spread.
+- **Shared NVFP4 experts run only at eight rows.** At two rows they cost about 5.8% (22.7 ms against 21.5 ms), and at four they were not measurably different. At eight, six interleaved pairs favored them every time, with a geometric-mean speedup of 1.038 (95% CI 1.011–1.066). Widths 3 and 5–7 use the per-slot kernels and were not timed with sharing.
 
-1. Build the base runner at `4c2af5d2a` and the final commit's runner into separate prefixes, then run one gated `batchbench K 5` pair at K=1 and K=4 for base against the attention commit and for the attention commit against the final commit, with `.work/tmp/timed-run.sh` as in `inkling-f16-kv.md` and `PERF_GATE_MAX_BUSY_CORES=4`. Profile the final runner with `TF_METAL4_TIMELINE=1` and reduce the batch round with `inkling_profile.py timeline --round inkling2-batch` to attribute each change.
-2. If they win, run the matrix: an identical-build control pair, then three interleaved pairs at K=1, K=4 and K=8.
-3. On the final commit run `python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`, the oQ4e family run above, `zig build native -Dcpu=apple_m1 -j1`, and `INKLING_MODEL=$HOME/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd sh campaign/fx/sweep-subagents.sh 4 4096` with the GPU-gate wrapper of `inkling-f16-kv.md`.
-4. Remaining levers, prepared in lane scratch but unmeasured: one SIMD group computing four expert columns so each input group is loaded once for four columns (the per-slot expert kernels read the whole 9 KB input row for 2.3 KB of weights); staging attention rows as natural `half4` loads transposed with SIMD shuffles; and registering the new kernels in the Metal contract runner.
+### Timing
+
+Every run used the gated wrapper from [the f16 KV timing procedure](inkling-f16-kv.md#timing-procedure) with `PERF_GATE_MAX_BUSY_CORES=4`. Each width ran an identical-build control pair, three pairs in base/D2, D2/base, base/D2 order, and a closing control pair. Values are `batchbench K 5` medians in ms.
+
+| Rows | Base | D2 | Speedup per pair | Control spread, start and end |
+| ---: | --- | --- | --- | --- |
+| 1 | 19.728, 19.651, 19.717 | 16.170, 16.160, 16.206 | 1.220, 1.216, 1.217 | 0.8%, 0.0% |
+| 2 | 24.513, 24.575, 24.530 | 21.444, 21.584, 21.549 | 1.143, 1.139, 1.138 | 0.5%, 0.5% |
+| 4 | 41.169, 39.862, 40.008 | 34.693, 34.548, 35.068 | 1.187, 1.154, 1.141 | 1.4%, 0.4% |
+| 8 | 90.175, 84.381, 81.537 | 74.745, 73.604, 70.093 | 1.206, 1.146, 1.163 | 1.1%, 4.2% |
+
+The host slowed from the closing control at four rows onward: the same base build took 50.7 ms there against about 40 ms before. The eight-row pairs all favor D2, but their size carries that load.
+
+### Served sweeps
+
+`campaign/fx/sweep-subagents.sh` ran at 4,096 context on oQ4e, one gated run a cell, in the order base 1, D2 1, D2 2, base 2, base 4, D2 4, D2 8, base 8. The base is main `7c7714357`. Both builds generated the same number of tokens in every cell, and at four agents concurrent replies equalled their solo and serial replies.
+
+| Agents | Repetition | Base tok/s | D2 tok/s | Gain | Base peak GB | D2 peak GB |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1 | 28.49 | 37.69 | 1.32 | 19.31 | 19.33 |
+| 1 | 2 | 47.73 | 57.24 | 1.20 | 19.30 | 19.33 |
+| 2 | 1 | 49.96 | 55.17 | 1.10 | 20.59 | 20.61 |
+| 2 | 2 | 67.90 | 76.56 | 1.13 | 20.59 | 20.61 |
+| 4 | 1 | 60.85 | 64.49 | 1.06 | 21.59 | 21.60 |
+| 4 | 2 | 66.70 | 72.00 | 1.08 | 21.59 | 21.61 |
+| 8 | 1 | 62.96 | 69.05 | 1.10 | 23.58 | 23.60 |
+| 8 | 2 | 67.19 | 76.56 | 1.14 | 23.58 | 23.60 |
+
+The native binary grew from 22,011,616 to 22,028,224 bytes.
+
+### Correctness and quality
+
+On `038f24cce`, `evidence-controls`, `inkling-host` and `inkling-gpu` (107 tests, none skipped) pass, including the oQ4e prefill-versus-decode test that had not run on the branch's final source. The batch consistency test now covers eight rows, the only width that runs the shared expert kernels, with zero logit and cache difference on every row. The oMLX oracle report at chunk 512 is identical to the previous build (2,863 of 3,015 top-1, mean KL 0.0194994).
+
+All 11 scored quality replies are byte-identical to the build before D2, so the score stays 7/11 and the `code-c02` loop remains. Pi stays at 7/8 with no parse errors.
+
+### Remaining levers
+
+These are unmeasured: one SIMD group computing four expert columns so each input group is loaded once for four columns (the per-slot expert kernels read the whole 9 KB input row for 2.3 KB of weights), staging attention rows as natural `half4` loads transposed with SIMD shuffles, and registering the new kernels in the Metal contract runner.

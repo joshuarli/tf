@@ -14,6 +14,7 @@ Every experiment and finding, including failures. Ranked optimization hypotheses
 | 2026-11-21 | I0 | Gap: `campaign/ref/ref.mk` builds the converter venv with unpinned `uv pip install torch numpy pyyaml sentencepiece tqdm transformers`; the GGUF it produced is verified against the reference, but a rebuild may resolve other versions | `campaign/ref/ref.mk` |
 | 2026-11-23 | P3c | Integrated. Prefill with resident weights runs 2.9–3.3× the base at 1K–8K, first-pass 4K runs 2.0×, and first-pass 1K is unresolved. Served 2- and 4-agent throughput rose 5–41% at equal memory. Quality dev is 7/11 against 6/11 with one new repeatable reasoning loop on `code-c02`; Pi is 7/8 on both | `campaign/kernels/inkling-cold-prefill.md` |
 | 2026-11-23 | P3c | Open: mean TTFT at four agents rose from 1,099 to 1,209 ms on the warm repetition although per-request service time fell; the overlap cause is not traced | `campaign/kernels/inkling-cold-prefill.md`, "Served sweeps" |
+| 2026-11-23 | D2 | Integrated without shared affine rows or batch route selection, with shared NVFP4 experts only at eight rows. Decode steps run 1.22× at one row, 1.14× at two and 1.16× at four; eight rows gained under host load. Served throughput rose 6–32% in all eight cells with identical token counts, and quality replies are byte-identical | `campaign/kernels/inkling-decode-step.md`, "Integrated result" |
 
 ## Status log through 2026-11-23
 

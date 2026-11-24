@@ -220,7 +220,7 @@ test "a plan verifies few rows for unlikely drafts and all of a long likely chai
     try std.testing.expectEqual(@as(usize, 8), plan.build(9, null, &chain, 40, 16).rows);
 }
 
-test "a plan learns from every row's pick and leaves the drafter out only behind a long likely chain" {
+test "a plan learns from each draft under an accepted parent and leaves the drafter out only behind a long likely chain" {
     var plan = vfy.Plan.init();
     try std.testing.expect(plan.lookupSuffices(15, 40));
     try std.testing.expect(!plan.lookupSuffices(7, 40));

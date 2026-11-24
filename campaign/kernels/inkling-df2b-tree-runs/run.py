@@ -192,9 +192,9 @@ def depths(parents: list[int]) -> list[int]:
 
 
 def calibrate(args: argparse.Namespace) -> None:
-    """Each tree draft's outcome (the target's pick at its parent is it): the drafter's alone by depth and probability
-    bin, the lookup chain's alone in drafted rounds and in all rounds by place and match length bin, and both agreeing
-    by probability bin, the priors `verify.Plan` starts from."""
+    """Each tree draft under an accepted parent, accepted or not: the drafter's alone by depth and probability bin, the
+    lookup chain's alone in drafted rounds and in all rounds by place and match length bin, and both agreeing by
+    probability bin, the priors `verify.Plan` starts from."""
     drafter = [[[0, 0] for _ in range(len(Q_EDGES) + 1)] for _ in range(DEPTHS)]
     lookup = [[[0, 0] for _ in range(len(LENGTH_EDGES) + 1)] for _ in range(15)]
     pooled = [[[0, 0] for _ in range(len(LENGTH_EDGES) + 1)] for _ in range(15)]
@@ -204,8 +204,14 @@ def calibrate(args: argparse.Namespace) -> None:
             if r["kind"] != "round" or r.get("source") != "tree":
                 continue
             d = depths(r["parents"])
+            on, taken = [True] + [False] * r["offered"], [False] * (r["offered"] + 1)
             for j in range(r["offered"]):
                 hit = (r["hits"] >> j) & 1
+                parent = r["parents"][j]
+                if not on[parent]:
+                    continue
+                if hit and not taken[parent]:
+                    on[j + 1] = taken[parent] = True
                 q, place = r["q"][j], r["chain"][j]
                 if place >= 0:
                     pooled[place][lbin(r["match"])][0] += hit

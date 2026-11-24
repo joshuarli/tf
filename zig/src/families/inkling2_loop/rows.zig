@@ -1,7 +1,7 @@
 const std = @import("std");
 const mtl = @import("metal");
 
-pub const source = @embedFile("kernels/rows.metal");
+pub const source = @embedFile("kernels/rows.metal") ++ "\n#define I2T_ROUTED 1\n" ++ @embedFile("kernels/experts.metal");
 
 pub const max_rows: usize = 16;
 /// The most rows one 8-row tile of batch rows holds; wider steps take two.
@@ -10,7 +10,7 @@ pub const wide_output: u32 = 65536;
 
 pub const Dispatch = struct { pipe: mtl.Pipeline, groups: mtl.Size, threads: mtl.Size = mtl.Size.of(256, 1, 1) };
 
-const names = [_][:0]const u8{ "i2t_dense_8_2", "i2t_projections_8_2", "i2t_gate_up", "i2t_down", "i2r_dense_ahead_2", "i2t_dense16_8_2", "i2t_projections16_8_2", "i2t_gate_up16", "i2t_down16" };
+const names = [_][:0]const u8{ "i2t_dense_8_2", "i2t_projections_8_2", "i2e_gate_up_f3", "i2e_down_f3", "i2r_dense_ahead_2", "i2t_dense16_8_2", "i2t_projections16_8_2", "i2e_gate_up16_f3", "i2e_down16_f3" };
 
 /// The batch step's few-row kernels: every row's output has its one-row kernel's bits at every width.
 pub const Pipes = struct {

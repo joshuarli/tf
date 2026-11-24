@@ -749,6 +749,77 @@ test "batched depth mixes keep the prefill mixes' bytes" {
     std.debug.print("batched depth mix test: {d} cases byte-equal to the prefill mixes\n", .{checked});
 }
 
+const ControlsArgs = extern struct { h: u32, rank: u32, rows: u32, xs: [3]u32, xb: [3]u32 };
+
+test "multi-row controllers keep the per-row controller kernels' bytes" {
+    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
+    const device = mtl.Device.init() catch return error.SkipZigTest;
+    defer device.deinit();
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, @import("group.zig").source, mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    var pipes: [4]mtl.Pipeline = undefined;
+    for (&pipes, [_][:0]const u8{ "i2_controls_down", "i2v_controls_down", "i2_controls_apply", "i2v_controls_apply" }) |*p, name| p.* = try mtl.Pipeline.init(device, lib, name, false);
+    defer for (pipes) |p| p.deinit();
+    const h = 2304;
+    const rank = 64;
+    const widest = @import("rows.zig").max_rows;
+    var prng = std.Random.DefaultPrng.init(0x6374_6c73);
+    const rng = prng.random();
+    var bufs: [12]mtl.Buffer = undefined;
+    const sizes = [12]usize{ 3 * widest * 2 * h, 3 * rank * 2 * h, 3 * widest * rank, 3 * h * rank, 3 * h * rank, 3 * widest * h, widest * 4 * h, 3 * widest * rank, 3 * widest * rank, 3 * widest * h, 3 * widest * h, 0 };
+    for (bufs[0..11], sizes[0..11]) |*b, n| {
+        b.* = try device.buffer(n * 4, mtl.ResourceOptions.shared);
+        fill(rng, b.slice(f32, n));
+    }
+    defer for (bufs[0..11]) |b| b.deinit();
+    const x_down, const w, const x_up, const gains, const forgets, const cur, const msg, const hid0, const hid1, const out0, const out1 = bufs[0..11].*;
+    var checked: usize = 0;
+    for (1..widest + 1) |rows| for ([_]bool{ false, true }) |strided| {
+        const args = ControlsArgs{ .h = h, .rank = rank, .rows = @intCast(rows), .xs = if (strided) .{ 3, 3, 3 } else .{ 1, 1, 1 }, .xb = if (strided) .{ 0, 1, 2 } else .{ 0, 0, 0 } };
+        const cb = queue.commandBuffer();
+        const enc = cb.compute(.serial);
+        for (0..2) |side| {
+            enc.setPipeline(pipes[side]);
+            enc.setBuffer(x_down, 0, 0);
+            for (0..3) |j| enc.setBuffer(w, j * rank * 2 * h * 4, 1 + j);
+            enc.setValue(args, 4);
+            enc.setBuffer(if (side == 0) hid0 else hid1, 0, 5);
+            enc.dispatchGroups(mtl.Size.of((rank + 7) / 8, rows, 3), mtl.Size.of(256, 1, 1));
+            enc.setPipeline(pipes[2 + side]);
+            enc.setBuffer(x_up, 0, 0);
+            for (0..3) |j| {
+                enc.setBuffer(gains, j * h * rank * 4, 1 + j);
+                enc.setBuffer(forgets, j * h * rank * 4, 4 + j);
+                enc.setBuffer(cur, if (strided) 0 else j * widest * h * 4, 7 + j);
+                enc.setBuffer(if (side == 0) out0 else out1, j * widest * h * 4, 11 + j);
+            }
+            enc.setBuffer(msg, 0, 10);
+            enc.setValue(args, 14);
+            enc.dispatchGroups(mtl.Size.of((h + 7) / 8, rows, 3), mtl.Size.of(256, 1, 1));
+        }
+        enc.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |m| {
+            std.debug.print("controller test: {s}\n", .{m});
+            return error.GpuFailed;
+        }
+        const same_down = sameBits(hid0.slice(f32, 3 * rows * rank), hid1.slice(f32, 3 * rows * rank));
+        var same_up = true;
+        for (0..3) |j| same_up = same_up and sameBits(out0.slice(f32, 3 * widest * h)[j * widest * h ..][0 .. rows * h], out1.slice(f32, 3 * widest * h)[j * widest * h ..][0 .. rows * h]);
+        if (!same_down or !same_up) {
+            std.debug.print("controller test rows={d} strided={}: down equal {} apply equal {}\n", .{ rows, strided, same_down, same_up });
+            return error.TestUnexpectedResult;
+        }
+        checked += 1;
+    };
+    std.debug.print("multi-row controller test: {d} cases byte-equal to the per-row kernels\n", .{checked});
+}
+
 const MoeArgs = extern struct { k: u32, n: u32, slots: u32, topk: u32, gate_cap: f32, up_cap: f32 };
 
 test "gathered expert projections keep the per-slot kernels' bytes" {
@@ -767,9 +838,9 @@ test "gathered expert projections keep the per-slot kernels' bytes" {
     defer gu.deinit();
     const down = try mtl.Pipeline.init(device, prefill_lib, "i2p_down", false);
     defer down.deinit();
-    const experts = 12;
+    const experts = 24;
     const h = 2304;
-    const inter = 48;
+    const inter = 1152;
     const topk = 8;
     const widest = @import("rows.zig").max_rows;
     const most = widest * topk;
@@ -783,8 +854,8 @@ test "gathered expert projections keep the per-slot kernels' bytes" {
     defer w2.deinit();
     const s2 = try device.buffer(experts * h * inter / 16, mtl.ResourceOptions.shared);
     defer s2.deinit();
-    for (w13.slice(u8, experts * 2 * inter * h / 2)) |*v| v.* = rng.int(u8);
-    for (w2.slice(u8, experts * h * inter / 2)) |*v| v.* = rng.int(u8);
+    rng.bytes(w13.slice(u8, experts * 2 * inter * h / 2));
+    rng.bytes(w2.slice(u8, experts * h * inter / 2));
     for (s13.slice(u8, experts * 2 * inter * h / 16)) |*v| v.* = 0x20 + rng.uintLessThan(u8, 0x30);
     for (s2.slice(u8, experts * h * inter / 16)) |*v| v.* = 0x20 + rng.uintLessThan(u8, 0x30);
     const amax = try device.buffer(experts * 4, mtl.ResourceOptions.shared);
@@ -808,16 +879,23 @@ test "gathered expert projections keep the per-slot kernels' bytes" {
     for (&outs) |*o| o.* = try device.buffer(most * h * 4, mtl.ResourceOptions.shared);
     defer for (outs) |o| o.deinit();
     var checked: usize = 0;
-    for (0..2 * widest + 1) |case| {
+    var seen: std.StaticBitSet(widest + 1) = .empty;
+    for (0..4 * widest) |case| {
         const rows = case % widest + 1;
+        const family = case / widest;
         const slots = rows * topk;
         const ps = picks.slice(i32, most);
-        for (0..rows) |r| {
+        if (family >= 2) {
+            countedPicks(rng, rows, family == 3, experts, ps[0..slots]);
+        } else for (0..rows) |r| {
             var order: [experts]i32 = undefined;
             for (&order, 0..) |*o, i| o.* = @intCast(i);
-            if (case < widest) rng.shuffle(i32, &order);
+            if (family == 0) rng.shuffle(i32, order[0..12]);
             for (0..topk) |k| ps[r * topk + k] = order[k];
         }
+        var members: [experts]usize = @splat(0);
+        for (ps[0..slots]) |e| members[@intCast(e)] += 1;
+        for (members) |n| if (n > 0) seen.set(n);
         for ([_]bool{ true, false }) |up| {
             const args = if (up) MoeArgs{ .k = h, .n = inter, .slots = @intCast(slots), .topk = topk, .gate_cap = 30, .up_cap = 20 } else MoeArgs{ .k = inter, .n = h, .slots = @intCast(slots), .topk = topk, .gate_cap = 0, .up_cap = 0 };
             const gathered = (if (up) shared.gateUp(rows, inter, h, @intCast(slots)) else shared.downs(rows, h, inter, @intCast(slots))) orelse {
@@ -854,5 +932,42 @@ test "gathered expert projections keep the per-slot kernels' bytes" {
             checked += 1;
         }
     }
-    std.debug.print("gathered expert test: {d} cases byte-equal to the per-slot kernels\n", .{checked});
+    for (1..widest + 1) |n| try std.testing.expect(seen.isSet(n));
+    std.debug.print("gathered expert test: {d} cases byte-equal to the per-slot kernels, experts of 1 to {d} members\n", .{ checked, widest });
+}
+
+/// Picks where the experts' member counts run from `rows` down to 1 (or up from 1) and repeat, each row 8 distinct.
+fn countedPicks(rng: std.Random, rows: usize, ascending: bool, comptime experts: usize, out: []i32) void {
+    var counts: [experts]usize = undefined;
+    var n: usize = 0;
+    var total: usize = 0;
+    var c: usize = if (ascending) 1 else rows;
+    while (total < rows * 8) : (n += 1) {
+        counts[n] = @min(c, rows * 8 - total);
+        total += counts[n];
+        c = if (ascending) (if (c == rows) 1 else c + 1) else (if (c == 1) rows else c - 1);
+    }
+    std.mem.sort(usize, counts[0..n], {}, std.sort.desc(usize));
+    var ids: [experts]i32 = undefined;
+    for (&ids, 0..) |*v, i| v.* = @intCast(i);
+    rng.shuffle(i32, &ids);
+    var used: [16]usize = @splat(0);
+    for (counts[0..n], ids[0..n]) |count, id| {
+        var order: [16]usize = undefined;
+        for (order[0..rows], 0..) |*o, r| o.* = r;
+        rng.shuffle(usize, order[0..rows]);
+        std.mem.sort(usize, order[0..rows], &used, struct {
+            fn less(f: *const [16]usize, a: usize, b: usize) bool {
+                return f[a] < f[b];
+            }
+        }.less);
+        for (order[0..count]) |r| {
+            out[r * 8 + used[r]] = id;
+            used[r] += 1;
+        }
+    }
+    for (0..rows) |r| {
+        std.debug.assert(used[r] == 8);
+        rng.shuffle(i32, out[r * 8 ..][0..8]);
+    }
 }

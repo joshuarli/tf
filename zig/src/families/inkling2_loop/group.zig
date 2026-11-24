@@ -307,7 +307,7 @@ pub fn scratch(device: mtl.Device, config: *const Config) !batch_mod.BatchScratc
     errdefer controls_input.deinit();
     const controls_hidden = try device.buffer(capacity * 3 * config.loop.gate_rank * 4, mtl.ResourceOptions.private);
     errdefer controls_hidden.deinit();
-    const lib = try mtl.Library.fromSource(device, @import("kernels.zig").attention, mtl.CompileOptions.mlx());
+    const lib = try mtl.Library.fromSource(device, source, mtl.CompileOptions.mlx());
     defer lib.deinit();
     const split = try mtl.Pipeline.init(device, lib, "i2_batch_split", false);
     errdefer split.deinit();
@@ -315,9 +315,9 @@ pub fn scratch(device: mtl.Device, config: *const Config) !batch_mod.BatchScratc
     errdefer combine.deinit();
     const controls_norm = try mtl.Pipeline.init(device, lib, "i2_controls_norm", false);
     errdefer controls_norm.deinit();
-    const controls_down = try mtl.Pipeline.init(device, lib, "i2_controls_down", false);
+    const controls_down = try mtl.Pipeline.init(device, lib, "i2v_controls_down", false);
     errdefer controls_down.deinit();
-    const controls_apply = try mtl.Pipeline.init(device, lib, "i2_controls_apply", false);
+    const controls_apply = try mtl.Pipeline.init(device, lib, "i2v_controls_apply", false);
     errdefer controls_apply.deinit();
     const mix = try mtl.Pipeline.init(device, lib, "i2_batch_mix", false);
     errdefer mix.deinit();

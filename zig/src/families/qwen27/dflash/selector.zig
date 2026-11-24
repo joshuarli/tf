@@ -32,18 +32,31 @@ const Node = struct { score: f64, parent: i32, token: u32, depth: u32 };
 fn before(a: Node, b: Node) bool {
     return a.score > b.score or (a.score == b.score and (a.parent < b.parent or (a.parent == b.parent and a.token < b.token)));
 }
-fn native(t: weights.Tensor, row: u32, column: u32) !f64 {
-    const at = (try std.math.add(usize, try std.math.mul(usize, row, t.shape[1]), column)) * 2;
-    if (at + 2 > t.bytes.len) return error.DraftCodebookShape;
-    const bits = std.mem.readInt(u16, t.bytes[at..][0..2], .little);
-    const value: f32 = @bitCast(@as(u32, bits) << 16);
-    if (!std.math.isFinite(value)) return error.DraftCodebookFinite;
-    return value;
+/// The most selector rank `expand` holds a weighted row for.
+const max_rank = 1024;
+/// A codebook row's bf16 values, every one finite.
+fn codebookRow(t: weights.Tensor, row: u32, rank: usize) ![]const u8 {
+    const at = (try std.math.mul(usize, row, t.shape[1])) * 2;
+    if (rank > t.shape[1] or at + rank * 2 > t.bytes.len) return error.DraftCodebookShape;
+    const bytes = t.bytes[at..][0 .. rank * 2];
+    for (0..rank) |r| if (!std.math.isFinite(bf16(bytes, r))) return error.DraftCodebookFinite;
+    return bytes;
 }
-fn edges(g: *const weights.Graph, lattice: op.Lattice, parent: u32, token: u32, depth: u32) !f64 {
+fn bf16(bytes: []const u8, r: usize) f32 {
+    return @bitCast(@as(u32, std.mem.readInt(u16, bytes[r * 2 ..][0..2], .little)) << 16);
+}
+/// The parent's predecessor row times the depth's projection: `edge` multiplies each by a successor value, in rank order.
+fn weighted(g: *const weights.Graph, lattice: op.Lattice, parent: u32, depth: u32, out: []f64) !void {
     @setFloatMode(.strict);
+    const row = try codebookRow(g.predecessor, parent, out.len);
+    for (out, 0..) |*w, r| w.* = @as(f64, bf16(row, r)) * @as(f64, lattice.projected[@as(usize, depth) * lattice.rank + r]);
+}
+/// The edge score from the parent's weighted row: (p * x) * s summed in rank order.
+fn edge(g: *const weights.Graph, parent: []const f64, token: u32) !f64 {
+    @setFloatMode(.strict);
+    const row = try codebookRow(g.successor, token, parent.len);
     var sum: f64 = 0;
-    for (0..g.config.rank) |r| sum += (try native(g.predecessor, parent, @intCast(r))) * @as(f64, lattice.projected[@as(usize, depth) * lattice.rank + r]) * (try native(g.successor, token, @intCast(r)));
+    for (parent, 0..) |w, r| sum += w * @as(f64, bf16(row, r));
     return sum;
 }
 fn capped(score: f64, cap: f32) f64 {
@@ -58,9 +71,14 @@ fn expand(g: *const weights.Graph, lattice: op.Lattice, options: Options, first:
     const temperature = if (options.noise != null) @max(options.temperature, 1e-6) else 1;
     const row = @as(usize, depth) * lattice.topk;
     var maximum: f64 = -std.math.inf(f64);
+    if (g.config.rank > max_rank) return error.DraftCodebookShape;
+    var parent_row: [max_rank]f64 = undefined;
+    const parent_weights = parent_row[0..g.config.rank];
+    try weighted(g, lattice, parent_token, depth, parent_weights);
     for (0..lattice.topk) |i| {
         const token = lattice.candidates[row + i];
-        var score = if (g.config.softcap > 0) capped(@as(f64, lattice.unary[row + i]) + options.edge * try edges(g, lattice, parent_token, token, depth), g.config.softcap) / temperature else @as(f64, lattice.unary[row + i]) / temperature + options.edge * try edges(g, lattice, parent_token, token, depth) / temperature;
+        const e = try edge(g, parent_weights, token);
+        var score = if (g.config.softcap > 0) capped(@as(f64, lattice.unary[row + i]) + options.edge * e, g.config.softcap) / temperature else @as(f64, lattice.unary[row + i]) / temperature + options.edge * e / temperature;
         if (options.noise) |n| score += options.noise_weight * try n.draw(n.ptr, try std.math.add(u64, first, depth), token);
         score /= options.tau;
         if (!std.math.isFinite(score)) return error.DraftScoreFinite;
@@ -167,4 +185,39 @@ test "a softcapped draft caps each candidate's score after its edge and keeps a 
     const gap: f64 = (30 * std.math.tanh(@as(f64, 100) / 30) - 30 * std.math.tanh(@as(f64, 90) / 30)) / 1.5;
     try std.testing.expectApproxEqAbs(-@log(1 + @exp(-gap)), capped_tree.scores[0], 1e-12);
     try std.testing.expectApproxEqAbs(-@log(1 + @exp(@as(f64, -10) / 1.5)), plain.scores[0], 1e-12);
+}
+test "an edge from the parent's weighted row has the bits of the predecessor, projection and successor product summed by rank" {
+    @setFloatMode(.strict);
+    const a = std.testing.allocator;
+    var store = try @import("fixtures.zig").Store.init(a);
+    defer store.deinit();
+    var g = try store.graph(a);
+    defer g.deinit();
+    var prng = std.Random.DefaultPrng.init(0x5c1);
+    const random = prng.random();
+    for ([_]weights.Tensor{ g.predecessor, g.successor }) |t| {
+        const bytes: []u8 = @constCast(t.bytes);
+        for (0..bytes.len / 2) |i| {
+            const value: f32 = (random.float(f32) - 0.5) * @as(f32, @floatFromInt(1 + i % 7));
+            std.mem.writeInt(u16, bytes[i * 2 ..][0..2], @intCast(@as(u32, @bitCast(value)) >> 16), .little);
+        }
+    }
+    const rank = g.config.rank;
+    var projected: [3 * 16]f32 = undefined;
+    for (&projected) |*x| x.* = random.float(f32) * 3 - 1.5;
+    var candidates = [_]u32{ 0, 1, 2, 3, 4, 5 };
+    var unary = [_]f32{ 0, 0, 0, 0, 0, 0 };
+    const lattice = op.Lattice{ .gpa = a, .depth = 3, .topk = 2, .rank = @intCast(rank), .candidates = &candidates, .unary = &unary, .projected = &projected };
+    var row: [16]f64 = undefined;
+    for (0..g.config.vocab) |parent| for (0..3) |depth| {
+        try weighted(&g, lattice, @intCast(parent), @intCast(depth), row[0..rank]);
+        for (0..g.config.vocab) |token| {
+            var want: f64 = 0;
+            for (0..rank) |r| want += @as(f64, bf16(g.predecessor.bytes[parent * rank * 2 ..], r)) * @as(f64, projected[depth * rank + r]) * @as(f64, bf16(g.successor.bytes[token * rank * 2 ..], r));
+            try std.testing.expectEqual(@as(u64, @bitCast(want)), @as(u64, @bitCast(try edge(&g, row[0..rank], @intCast(token)))));
+        }
+    };
+    const bytes: []u8 = @constCast(g.successor.bytes);
+    std.mem.writeInt(u16, bytes[5 * rank * 2 + 6 ..][0..2], 0x7fc0, .little);
+    try std.testing.expectError(error.DraftCodebookFinite, edge(&g, row[0..rank], 5));
 }

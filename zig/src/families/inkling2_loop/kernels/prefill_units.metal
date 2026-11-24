@@ -35,14 +35,13 @@ inline void i2pu_decode(thread const i2pu_weights& wt, threadgroup half* mine, b
   }
 }
 
-template <bool GU, bool AFFINE, bool WIDE>
+template <bool GU, bool AFFINE>
 inline void i2pu_expert_units(const device half* X, const device uchar* W, const device uchar* S,
     const device uchar* G, const device float* den, const device int* OFF, const device int* ROW_OF,
     constant i2p_moeg_args& a, device half* ACT, device float* OUT, device atomic_uint* overflow,
     threadgroup half* w, uint3 tg, ushort sg, ushort lane) {
   constexpr int BK = 64, PAD = 72, TILE = 64 * PAD;
-  const int threshold = AFFINE ? 1 : (GU ? I2P_MATRIX_THRESHOLD : I2P_DOWN_MATRIX_THRESHOLD);
-  const int least = WIDE ? max(threshold, 17) : threshold;
+  const int least = AFFINE ? 1 : (GU ? I2P_MATRIX_THRESHOLD : I2P_DOWN_MATRIX_THRESHOLD);
   int expert = 0, row0 = 0, rows = 0;
   if (!i2p_expert_tile(OFF, int(a.experts), least, int(tg.y), lane, expert, row0, rows)) return;
   const int cols = GU ? 2 * int(a.n) : int(a.n), K = int(a.k), n0 = int(tg.x) * 64;
@@ -123,7 +122,7 @@ inline void i2pu_expert_units(const device half* X, const device uchar* W, const
   if (over) atomic_fetch_add_explicit(overflow, over, memory_order_relaxed);
 }
 
-#define I2PU_EXPERT_UNITS(NAME, GU, AFFINE, WIDE) \
+#define I2PU_EXPERT_UNITS(NAME, GU, AFFINE) \
 [[kernel]] void NAME(const device half* X [[buffer(0)]], const device uchar* W [[buffer(1)]], \
     const device uchar* S [[buffer(2)]], const device uchar* G [[buffer(3)]], const device float* den [[buffer(4)]], \
     const device int* OFF [[buffer(5)]], const device int* ROW_OF [[buffer(6)]], constant i2p_moeg_args& a [[buffer(7)]], \
@@ -131,14 +130,10 @@ inline void i2pu_expert_units(const device half* X, const device uchar* W, const
     uint3 tg [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]], \
     ushort lane [[thread_index_in_simdgroup]]) { \
   threadgroup half w[2 * 64 * 72]; \
-  i2pu_expert_units<GU, AFFINE, WIDE>(X, W, S, G, den, OFF, ROW_OF, a, (device half*)Y, (device float*)Y, overflow, w, tg, sg, lane); \
+  i2pu_expert_units<GU, AFFINE>(X, W, S, G, den, OFF, ROW_OF, a, (device half*)Y, (device float*)Y, overflow, w, tg, sg, lane); \
 }
-I2PU_EXPERT_UNITS(i2pu_units_up, true, false, false)
-I2PU_EXPERT_UNITS(i2pu_units_down, false, false, false)
-I2PU_EXPERT_UNITS(i2pu_affine_up, true, true, false)
-I2PU_EXPERT_UNITS(i2pu_affine_down, false, true, false)
-I2PU_EXPERT_UNITS(i2pu_wide_up, true, false, true)
-I2PU_EXPERT_UNITS(i2pu_wide_down, false, false, true)
-I2PU_EXPERT_UNITS(i2pu_wide_affine_up, true, true, true)
-I2PU_EXPERT_UNITS(i2pu_wide_affine_down, false, true, true)
+I2PU_EXPERT_UNITS(i2pu_units_up, true, false)
+I2PU_EXPERT_UNITS(i2pu_units_down, false, false)
+I2PU_EXPERT_UNITS(i2pu_affine_up, true, true)
+I2PU_EXPERT_UNITS(i2pu_affine_down, false, true)
 #endif

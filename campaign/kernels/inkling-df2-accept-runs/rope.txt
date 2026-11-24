@@ -1,0 +1,14 @@
+fast    positions [    0, 1024): pairs   9408, angle err max 0.00265 mean 0.000498 rad, bf16 mismatches  0.45%, max |diff| 0.00391
+fast    positions [ 1024, 2048): pairs   9344, angle err max 0.00271 mean 0.000576 rad, bf16 mismatches  1.21%, max |diff| 0.00391
+fast    positions [ 2048, 4096): pairs  18752, angle err max 0.00275 mean 0.000587 rad, bf16 mismatches  2.45%, max |diff| 0.00391
+fast    positions [ 4096, 8192): pairs  37440, angle err max 0.00294 mean 0.000587 rad, bf16 mismatches  3.94%, max |diff| 0.00391
+fast    positions [ 8192,16384): pairs  74880, angle err max 0.00343 mean 0.000577 rad, bf16 mismatches  6.94%, max |diff| 0.00391
+fast    positions [16384,33000): pairs 151936, angle err max 0.00519 mean 0.000619 rad, bf16 mismatches 11.40%, max |diff| 0.00391
+heavy: done: peak charged 18.3 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 18.3 GB); host pressure worst 1, host swap +0 MB, host pageins 74125
+precise positions [    0, 1024): pairs   9408, angle err max 0.00265 mean 0.000498 rad, bf16 mismatches  0.31%, max |diff| 0.00391
+precise positions [ 1024, 2048): pairs   9344, angle err max 0.00271 mean 0.000577 rad, bf16 mismatches  0.86%, max |diff| 0.00391
+precise positions [ 2048, 4096): pairs  18752, angle err max 0.00275 mean 0.000588 rad, bf16 mismatches  1.87%, max |diff| 0.00391
+precise positions [ 4096, 8192): pairs  37440, angle err max 0.00294 mean 0.000586 rad, bf16 mismatches  2.94%, max |diff| 0.00391
+precise positions [ 8192,16384): pairs  74880, angle err max 0.00343 mean 0.000575 rad, bf16 mismatches  5.19%, max |diff| 0.00391
+precise positions [16384,33000): pairs 151936, angle err max 0.00519 mean 0.000609 rad, bf16 mismatches  8.57%, max |diff| 0.00391
+heavy: done: peak charged 18.7 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 18.7 GB); host pressure worst 1, host swap +0 MB, host pageins 580302

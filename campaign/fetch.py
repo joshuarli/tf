@@ -12,6 +12,7 @@ REPO_NAMES = {
     "inkling-2-mini": "Inkling-2-Mini",
     "inkling-2-mini-tiny": "tiny-Inkling2LoopForConditionalGeneration",
     "inkling-2-mini-oq4e-mtp": "Inkling-2-Mini-oQ4e-mtp",
+    "inkling-2-mini-nvfp4-xl-gguf": "Inkling-2-Mini-NVFP4-XL-GGUF",
 }
 
 

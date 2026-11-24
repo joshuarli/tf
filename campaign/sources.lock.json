@@ -692,6 +692,29 @@
       "purpose": "oMLX 0.8.3 comparator",
       "model": "omlx",
       "store": "src"
+    },
+    {
+      "name": "llama.cpp-upstream/llama.cpp-af5c58347fdbc2cd19e65b278e81c8f528f8a175.tar.gz",
+      "version": "af5c58347fdbc2cd19e65b278e81c8f528f8a175",
+      "sha256": "b17f07c9bef5b3a1b5368f445c99d2bde6265164d2a30866a616cf9f6ebe02f3",
+      "url": "https://codeload.github.com/ggml-org/llama.cpp/tar.gz/af5c58347fdbc2cd19e65b278e81c8f528f8a175",
+      "size": 39433909,
+      "role": "comparator",
+      "license": "MIT",
+      "purpose": "Current llama.cpp upstream for the B2 Inkling baselines, including native Metal NVFP4 (#32825), compact bias (#32740) and batched concat (#32824)",
+      "model": "llama.cpp-upstream",
+      "store": "src"
+    },
+    {
+      "name": "inkling-2-mini-nvfp4-xl-gguf/Inkling-2-Mini-NVFP4-XL.gguf",
+      "version": "109af3770438c67790fa2a3b0333cd5a58f11cce",
+      "sha256": "4debd715558327bf914966dfc97d6c6ec43357efd7cf676109601e37909338aa",
+      "url": "https://huggingface.co/Xylolabs/Inkling-2-Mini-GGUF/resolve/109af3770438c67790fa2a3b0333cd5a58f11cce/Inkling-2-Mini-NVFP4-XL.gguf",
+      "size": 17605762400,
+      "role": "weights",
+      "license": "Apache-2.0",
+      "purpose": "Pinned Inkling-2-Mini-NVFP4-XL.gguf from Xylolabs/Inkling-2-Mini-GGUF, the llama.cpp weights closest in size to oQ4e, for the best-practical table",
+      "model": "inkling-2-mini-nvfp4-xl-gguf"
     }
   ]
 }

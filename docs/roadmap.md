@@ -108,8 +108,20 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    chunk, a 0–127-row tail and a one-row chunk, which run near 600 tok/s; with prefix reuse off 1K serves 1,693
    tok/s. Keep reuse, forks and the len-1 store while prefilling in full chunks; then the first request's
    unexplained 2.5–3.7 s.
-5c. SV2, after V3: speculation on by default if it beats plain decode on every quick prompt class at 1K and 4K and
-   stays within Decision 8's 4 GiB draft residency, re-paired across separate sessions.
+3e. SC1, running (code and tests; timing via `.work/tmp/sc1-timing-go`, after P5c and V3): `lane/sc1-chain` in
+   `.work/wt/sc1-chain` (scope `usrn_b04216f1-6b6e-4693-800f-e69daff38d8f`), receipt `inkling-sc1-chain.md`. Encode the
+   accepted-tap gather, the drafter-context update and the next draft behind the verify, as megakernel-zoo's Mac
+   engine `_cyc_pure()` does (reference pinned at `95e315c`, Apache-2.0), so a round has one host sync. It measures
+   the round split first and reports the most the change can recover.
+5c. SV2, after V3 and SC1: the integrated served path. Rebuild the planner's fixed cost table from sustained
+   in-round measurements; freeze the tree policy and qualify it on a small untouched prompt set (the "holdout"
+   prompts fitted acceptance priors and are now calibration data). Run the HTTP server with plain decoding, a loaded
+   but disabled drafter, and active speculation over the 1K/4K classes, unseen prefill to the cap, prefix hits and
+   forks, fixed-length replies and natural EOS, re-paired across separate sessions. Speculation becomes the default
+   only if it beats plain decode on every class and stays within Decision 8's 4 GiB draft residency.
+5d. SC2, after SV2: one pinned scorecard for the integrated configuration (served prefill curve, committed decode
+   by class, round time and accepted work, quality, peak footprint). Every target miss names its dominant measured
+   cost; external reported results, local comparisons and projections stay separate.
 6. Q3: the `code-c02` reasoning loop from P3c.
 7. Deferred off the critical path: see **Later**.
 
@@ -732,6 +744,18 @@ These references were verified on 2026-11-21:
 
 ## Later
 
+- B1: price Metal ordering in one bounded dependency region (the serial path's barrier after every dispatch): its
+  dispatch sequence against fusion or dependency-aware barriers, by uninstrumented wall time, separating GPU
+  barriers, CPU encoding, submission and completion waits. Only a measured, recoverable remainder justifies a
+  persistent-kernel experiment.
+- A1: 4K acceptance as its own problem, scored in committed tokens per millisecond. Any retained-context or
+  alternative-drafter experiment uses unfamiliar prompts with instructions in varied positions and counts the full
+  cost of maintaining the context.
+- M2: native MTP (parked `lane/m1-mtp`) against DFlash2 trees on the cheaper verifier, with the same target, prompts,
+  output accounting and memory budget, counting drafter startup, steady drafting, lookup, verification, rejected
+  work and state maintenance.
+- megakernel-zoo's Mac engine as a comparator: its reported 32K configuration (27.7 GB active plus about 6 GB of
+  MLX buffer cache) must be reconciled with the 28 GB process-tree cap before it runs here.
 - J1: multi-agent scheduling (four-agent TTFT 998 ms against oMLX's 623 ms, `campaign/kernels/inkling-b2-baselines.md`).
 - B2 remainder: comparator rows not yet run on the corrected workload.
 - R1: the campaign report's reproduction pass.

@@ -816,6 +816,18 @@
       "purpose": "Splash 1.7.2 source: the Inkling 2 Mini DFlash2 target, draft and selector reference",
       "model": "splash-src",
       "store": "src"
+    },
+    {
+      "name": "megakernel-zoo-src/megakernel-zoo-95e315c808a7d935c10ef924a8fc0d901bfc3b89.tar.gz",
+      "version": "95e315c808a7d935c10ef924a8fc0d901bfc3b89",
+      "sha256": "c72e99348f3ba301df71ae6bce755be959f1a3e8db8fafc8c4275d6db4f9f5f3",
+      "url": "https://codeload.github.com/dangxingyu/megakernel-zoo/tar.gz/95e315c808a7d935c10ef924a8fc0d901bfc3b89",
+      "size": 61997400,
+      "role": "reference",
+      "license": "Apache-2.0",
+      "purpose": "megakernel-zoo Mac engine (mac/, engines/inkling-2-mini_m5max/): Inkling 2 Mini on a 40-core M5 Max, the expert-layout and chained-draft reference for V3 and SC1",
+      "model": "megakernel-zoo-src",
+      "store": "src"
     }
   ]
 }

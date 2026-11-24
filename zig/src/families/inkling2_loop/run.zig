@@ -25,8 +25,8 @@ const usage =
     \\tf-inkling2-loop-run <model> <tokens.json> profile-prefill <chunk>  warm and profile fresh-cache prompt chunks
     \\tf-inkling2-loop-run <tokenizer.json> <text> tokenize <out>   the text's token ids, for the modes above
     \\tf-inkling2-loop-run <tokenizer.json> <ids.json> detokenize <out>  the ids' text
-    \\tf-inkling2-loop-run <model> <prompts.json> dflash <drafter> <tokens> <out.jsonl> [bits]  DFlash2 against plain greedy
-    \\tf-inkling2-loop-run <model> <prompts.json> dflash-widths <reps> <out.jsonl>  grouped verify cost at widths 1/2/4/8
+    \\tf-inkling2-loop-run <model> <prompts.json> dflash <drafter> <tokens> <out.jsonl> [bits] [reading]  DFlash2 vs plain greedy
+    \\tf-inkling2-loop-run <model> <prompts.json> dflash-widths <reps> <out.jsonl> [load_s]  grouped verify at widths 1/2/4/8
     \\
 ;
 

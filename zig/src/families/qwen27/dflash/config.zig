@@ -32,8 +32,7 @@ pub const Config = struct {
     tap_count: u32 = 5,
     /// The last tap names the id past the target's layers: its final norm's rows, which its head reads.
     final_norm: bool = false,
-    /// `final_logit_softcapping` with `selector_softcap_mode` "after_correction": each candidate's score after its
-    /// edge, cap * tanh(score / cap). 0: none.
+    /// `final_logit_softcapping` in `selector_softcap_mode` "after_correction": cap * tanh(score / cap) after the edge.
     softcap: f32 = 0,
     /// The head's real tokens, which its target names (rows past them are padding storage). 0: the whole vocabulary.
     candidates: u32 = 0,

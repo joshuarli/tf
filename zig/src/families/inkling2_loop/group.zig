@@ -1,6 +1,4 @@
-//! Grouped verification: one batch step whose rows are streams' consecutive positions, each stream's newest token then
-//! its drafts. Every row computes what an ordinary batch step at its position computes and the forward leaves the
-//! caches as they were; `commit` then writes the accepted rows, so the caches equal ordinary decoding of those tokens.
+//! Grouped verification: streams' newest tokens and drafts in one batch step, each row's bits a batch step's.
 const std = @import("std");
 const mtl = @import("metal");
 const Model = @import("model.zig").Model;
@@ -12,8 +10,7 @@ const batch_mod = @import("batch.zig");
 
 pub const source = @import("kernels.zig").attention ++ "\n" ++ @embedFile("kernels/verify.metal");
 
-/// Rows one grouped verification carries at most: the batch step's few-row kernels, whose per-row arithmetic does not
-/// depend on how many rows share the step.
+/// The batch step's few-row kernels keep each row's arithmetic independent of the step's rows up to eight.
 pub const max_rows: usize = 8;
 
 const DecodeParts = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, splits: u32, chunk: u32, scale: f32, floor: f32, alpha: f32 };
@@ -76,7 +73,6 @@ pub const Verifier = struct {
         return v.kernels[@intFromEnum(k)];
     }
 
-    /// The round's streams: `sizes[i]` consecutive rows for `caches[i]`, from its next position.
     pub fn group(v: *const Verifier, caches: []const *Cache, sizes: []const usize) !Group {
         if (caches.len == 0 or caches.len != sizes.len) return error.BadGroup;
         var g = Group{ .verifier = v, .caches = caches, .sizes = sizes, .rows = 0 };
@@ -95,13 +91,11 @@ pub const Verifier = struct {
         return g;
     }
 
-    /// The forward over `ids` (every group's rows in order): each row's logits in `batch.rows.logits`, the caches unchanged.
     pub fn forward(_: *const Verifier, m: *const Model, batch: *batch_mod.BatchScratch, g: *const Group, ids: []const u32) !void {
         if (ids.len != g.rows or ids.len > batch.rows.chunk) return error.BadGroup;
         try prefill.groupStep(m, batch, g, ids);
     }
 
-    /// Each row's greedy pick, chosen on the GPU as the host's scan of its logits would choose it.
     pub fn picks(v: *const Verifier, m: *const Model, logits: mtl.Buffer, rows: usize) ![]const u32 {
         if (rows == 0 or rows > max_rows) return error.BadGroup;
         const pool = mtl.objc.Pool.push();
@@ -123,7 +117,6 @@ pub const Verifier = struct {
         return v.targets.slice(u32, rows);
     }
 
-    /// Commits `accepted[i] + 1` rows of each group (its newest token and the drafts accepted after it).
     pub fn commit(v: *const Verifier, m: *const Model, g: *const Group, accepted: []const usize) !void {
         const pool = mtl.objc.Pool.push();
         defer pool.pop();
@@ -140,7 +133,6 @@ pub const Verifier = struct {
         committed(g, accepted);
     }
 
-    /// The commit's dispatches, for an encoder the caller ends; once they complete, `committed` advances the caches.
     pub fn encodeCommit(v: *const Verifier, enc: mtl.ComputeEncoder, m: *const Model, g: *const Group, accepted: []const usize) !void {
         if (accepted.len != g.caches.len) return error.BadAcceptedPrefix;
         for (accepted, g.sizes) |a, size| if (a >= size) return error.BadAcceptedPrefix;
@@ -178,12 +170,10 @@ pub const Verifier = struct {
     }
 };
 
-/// The caches after a commit's dispatches completed: each group's accepted rows are its newest positions.
 pub fn committed(g: *const Group, accepted: []const usize) void {
     for (g.caches, accepted) |cache, a| cache.len += a + 1;
 }
 
-/// One round's rows: the stream each belongs to (`owner`), its position and the chunk row its group starts at.
 pub const Group = struct {
     verifier: *const Verifier,
     caches: []const *Cache,
@@ -193,7 +183,6 @@ pub const Group = struct {
     pos: [max_rows]u32 = @splat(0),
     first: [max_rows]u32 = @splat(0),
 
-    /// The batch convolution for grouped rows (`i2v_conv`), capturing each row's input for the commit.
     pub fn conv(g: *const Group, enc: mtl.ComputeEncoder, x: mtl.Buffer, x_off: usize, weight: Tensor, dyn: ?mtl.Buffer, dyn_off: usize, out: mtl.Buffer, out_off: usize, channels: u32, heads: u32, layout: u32, norm: f32, slot: u32, site: prefill.ConvSite) void {
         const v = g.verifier;
         var rows: [max_rows]ConvRow = undefined;
@@ -221,8 +210,6 @@ pub const Group = struct {
 
     pub const AttnBuffers = struct { q: mtl.Buffer, k: mtl.Buffer, v: mtl.Buffer, r: mtl.Buffer, sink: mtl.Buffer, relbias: mtl.Buffer, out: mtl.Buffer, parts: mtl.Buffer, combine: mtl.Pipeline };
 
-    /// The batch attention for grouped rows: keys and values into the slot's capture (`i2v_store_rel`), the split
-    /// reading the group's own rows from it (`i2v_split`), then the batch combine.
     pub fn attend(g: *const Group, enc: mtl.ComputeEncoder, m: *const Model, rel_bias: Tensor, slot: u32, full: bool, extent: u32, bufs: AttnBuffers) void {
         const v = g.verifier;
         const config = &m.config;
@@ -280,8 +267,6 @@ pub const Group = struct {
     }
 };
 
-/// The drafts the target's greedy picks confirm: `targets[j]` is the target's token after the stream's newest token and
-/// its first `j` drafts, so a draft is accepted while each equals the pick before it.
 pub fn acceptedDrafts(drafts: []const u32, targets: []const u32) usize {
     var n: usize = 0;
     while (n < drafts.len and n < targets.len and drafts[n] == targets[n]) n += 1;

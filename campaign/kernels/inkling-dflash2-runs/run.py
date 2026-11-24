@@ -2,7 +2,7 @@
 
 usage:
   run.py prompts RUNNER OUT.json [--cells 1024,4096] [--effort 0.9]
-  run.py bench RUNNER PROMPTS.json NAME [--bits 4] [--tokens 512] [--env K=V ...]
+  run.py bench RUNNER PROMPTS.json NAME [--bits 4] [--tokens 512] [--reading entering|outputs|unnormed]
   run.py widths RUNNER PROMPTS.json NAME [--reps 9] [--load SECONDS]
   run.py table NAME [NAME ...]
   run.py project BENCH WIDTHS
@@ -108,13 +108,12 @@ def gated(name: str, command: list[str], env: dict[str, str]) -> None:
 
 def bench(args: argparse.Namespace) -> None:
     runner = Path(args.runner).resolve()
-    env = dict(e.split("=", 1) for e in args.env)
     out = HERE / f"{args.name}.jsonl"
     command = [str(runner), str(TARGET), str(Path(args.prompts).resolve()), "dflash", str(DRAFTER), str(args.tokens),
-               str(out), str(args.bits)]
-    gated(args.name, command, env)
+               str(out), str(args.bits), args.reading]
+    gated(args.name, command, {})
     meta = {"kind": "binary", "runner": str(runner), "runner_sha256": sha256(runner), "target": str(TARGET),
-            "drafter": str(DRAFTER), "prompts_sha256": sha256(Path(args.prompts)), "env": env}
+            "drafter": str(DRAFTER), "prompts_sha256": sha256(Path(args.prompts)), "reading": args.reading}
     out.write_text(json.dumps(meta) + "\n" + out.read_text())
 
 
@@ -195,7 +194,7 @@ def main() -> None:
     a.add_argument("name")
     a.add_argument("--bits", type=int, default=4)
     a.add_argument("--tokens", type=int, default=512)
-    a.add_argument("--env", nargs="*", default=[])
+    a.add_argument("--reading", default="entering", choices=["entering", "outputs", "unnormed"])
     a = sub.add_parser("widths")
     a.add_argument("runner")
     a.add_argument("prompts")

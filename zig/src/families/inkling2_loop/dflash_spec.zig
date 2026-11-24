@@ -1,5 +1,4 @@
-//! Greedy speculative decoding of Inkling 2 Mini with its DFlash2 drafter: each round drafts a chain after the newest
-//! token, verifies it in one grouped batch step, commits the accepted prefix and gives the drafter its rows' taps.
+//! Greedy speculative decoding of Inkling 2 Mini with its DFlash2 drafter, one grouped verify a round.
 const std = @import("std");
 const mtl = @import("metal");
 const tf = @import("tensorfold");
@@ -8,7 +7,6 @@ const dflash = @import("dflash.zig");
 
 pub const prefill_chunk: usize = 512;
 
-/// One round: its anchor's position, what it drafted and kept, and where its wall time went.
 pub const Round = struct {
     position: u64,
     offered: u32,
@@ -22,7 +20,6 @@ pub const Round = struct {
     total_ns: u64,
 };
 
-/// Drafts other than the drafter's, for checks that force acceptance: `out.len` tokens after `pending` at `position`.
 pub const Proposer = struct { ptr: *anyopaque, call: *const fn (*anyopaque, u32, u64, []u32) anyerror!void };
 
 pub const Prefill = struct { first: u32, prefill_ns: u64, flush_ns: u64 };
@@ -37,7 +34,6 @@ pub const Speculator = struct {
     proposer: ?Proposer = null,
     depth: u32 = dflash.depth,
 
-    /// `visits`: the target rows the drafter reads, `dflash.tap_ids` but for a diagnostic of another reading.
     pub fn init(model: *inkling.Model, drafter: *dflash.Drafter, visits: []const u32) !Speculator {
         var verifier = try inkling.group.Verifier.init(model.device, &model.config);
         errdefer verifier.deinit();
@@ -57,7 +53,6 @@ pub const Speculator = struct {
         s.verifier.deinit();
     }
 
-    /// `ids` into an empty `cache`, every row's taps into a reset drafter, then the drafter's window: the first token.
     pub fn start(s: *Speculator, cache: *inkling.Cache, ids: []const u32) !Prefill {
         if (cache.len != 0 or ids.len == 0) return error.BadPrompt;
         try s.drafter.reset();
@@ -77,7 +72,6 @@ pub const Speculator = struct {
         return .{ .first = first, .prefill_ns = t1 - t0, .flush_ns = now() - t1 };
     }
 
-    /// Decodes after `first` (already in `tokens`) until `tokens` holds `limit` tokens or ends at an `eos` token.
     pub fn run(s: *Speculator, cache: *inkling.Cache, first: u32, limit: usize, eos: []const u32, a: std.mem.Allocator, tokens: *std.ArrayList(u32), rounds: ?*std.ArrayList(Round)) !void {
         if (s.drafter.committed() != cache.len) return error.DraftContextBehind;
         if (s.depth == 0 or s.depth > dflash.depth) return error.BadDraftDepth;
@@ -121,7 +115,6 @@ pub const Speculator = struct {
     }
 };
 
-/// Plain greedy decoding: one batch step a token after `first`, until `tokens` holds `limit` or ends at an `eos` token.
 pub fn plain(m: *inkling.Model, bs: *inkling.BatchScratch, cache: *inkling.Cache, first: u32, limit: usize, eos: []const u32, a: std.mem.Allocator, tokens: *std.ArrayList(u32), steps_ns: ?*std.ArrayList(u64)) !void {
     const logits = try a.alloc(f32, m.config.text.unpadded_vocab);
     defer a.free(logits);
@@ -135,7 +128,6 @@ pub fn plain(m: *inkling.Model, bs: *inkling.BatchScratch, cache: *inkling.Cache
     }
 }
 
-/// A prompt prefilled without taps: its first token.
 pub fn prefillPlain(m: *inkling.Model, ps: *inkling.PrefillScratch, cache: *inkling.Cache, ids: []const u32) !u32 {
     if (cache.len != 0 or ids.len == 0) return error.BadPrompt;
     var at: usize = 0;

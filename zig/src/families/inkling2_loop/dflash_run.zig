@@ -1,5 +1,4 @@
-//! `tf-inkling2-loop-run`'s DFlash2 modes: greedy speculative decoding against plain greedy decoding in one process,
-//! with every round's timing, and the grouped verifier's cost at widths 1, 2, 4 and 8 from identical states.
+//! `tf-inkling2-loop-run`'s DFlash2 modes: speculative against plain greedy decoding, and grouped verify widths.
 const std = @import("std");
 const mtl = @import("metal");
 const tf = @import("tensorfold");
@@ -8,7 +7,7 @@ const dflash = @import("dflash.zig");
 const spec = @import("dflash_spec.zig");
 
 pub const usage =
-    \\tf-inkling2-loop-run <model> <prompts.json> dflash <drafter> <tokens> <out.jsonl> [bits]  speculative and plain greedy
+    \\tf-inkling2-loop-run <model> <prompts.json> dflash <drafter> <tokens> <out.jsonl> [bits] [entering|outputs|unnormed]
     \\tf-inkling2-loop-run <model> <prompts.json> dflash-widths <reps> <out.jsonl> [load_s]  grouped verify at widths 1-8,
     \\  each prompt after load_s seconds of eight-row verifies (sustained load; 0: none)
     \\  prompts.json: [{"name": ..., "ids": [...]}]; EOS is ignored; a run whose tokens differ from plain exits non-zero
@@ -30,11 +29,12 @@ pub fn main(init: std.process.Init, args: []const [:0]const u8) !void {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(gpa);
     if (std.mem.eql(u8, mode, "dflash")) {
-        if (args.len != 7 and args.len != 8) return error.ExpectedArgs;
+        if (args.len < 7 or args.len > 9) return error.ExpectedArgs;
         const limit = try std.fmt.parseInt(usize, args[5], 10);
-        const bits = if (args.len == 8) try std.fmt.parseInt(u8, args[7], 10) else 0;
+        const bits = if (args.len >= 8) try std.fmt.parseInt(u8, args[7], 10) else 0;
+        const reading = if (args.len == 9) std.meta.stringToEnum(Reading, args[8]) orelse return error.ExpectedArgs else .entering;
         if (limit < 2) return error.ExpectedArgs;
-        const same = try speculate(gpa, init.io, m, args[4], parsed.value, limit, bits, &out);
+        const same = try speculate(gpa, init.io, m, args[4], parsed.value, limit, bits, reading, &out);
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[6], .data = out.items });
         if (!same) return error.SpeculationDiffersFromPlain;
         return;
@@ -51,13 +51,9 @@ pub fn main(init: std.process.Init, args: []const [:0]const u8) !void {
     return error.ExpectedArgs;
 }
 
-fn flag(name: [*:0]const u8) bool {
-    const v = std.c.getenv(name) orelse return false;
-    const text = std.mem.span(v);
-    return text.len > 0 and !std.mem.eql(u8, text, "0");
-}
+/// The capture reading a run drafts from: the checkpoint's, or a diagnostic of another (`outputs`, `unnormed`).
+const Reading = enum { entering, outputs, unnormed };
 
-/// The tokens' sha256 over their little-endian u32 bytes.
 fn digest(tokens: []const u32) [32]u8 {
     var h = std.crypto.hash.sha2.Sha256.init(.{});
     for (tokens) |t| {
@@ -84,7 +80,6 @@ fn sorted(a: std.mem.Allocator, values: []const f64) ![]f64 {
     return copy;
 }
 
-/// The nearest-rank `p` quantile of ascending `values`.
 fn quantile(values: []const f64, p: f64) f64 {
     const rank: usize = @intFromFloat(@ceil(p * @as(f64, @floatFromInt(values.len))));
     return values[@max(rank, 1) - 1];
@@ -96,9 +91,9 @@ fn mean(values: []const f64) f64 {
     return sum / @as(f64, @floatFromInt(values.len));
 }
 
-fn speculate(gpa: std.mem.Allocator, io: std.Io, m: *inkling.Model, dir: []const u8, prompts: []const Prompt, limit: usize, bits: u8, out: *std.ArrayList(u8)) !bool {
-    const shifted = flag("TF_INKLING_DFLASH2_TAP_SHIFT");
-    const unnormed = flag("TF_INKLING_DFLASH2_NO_EMBED_NORM");
+fn speculate(gpa: std.mem.Allocator, io: std.Io, m: *inkling.Model, dir: []const u8, prompts: []const Prompt, limit: usize, bits: u8, reading: Reading, out: *std.ArrayList(u8)) !bool {
+    const shifted = reading == .outputs;
+    const unnormed = reading == .unnormed;
     const drafter = try dflash.Drafter.init(gpa, io, m, dir, .{ .bits = bits, .embed_norm = !unnormed });
     defer drafter.deinit();
     const visits = if (shifted) &[_]u32{ dflash.tap_ids[0] + 1, dflash.tap_ids[1] + 1, dflash.tap_ids[2] + 1, dflash.tap_ids[3] } else dflash.tap_ids;

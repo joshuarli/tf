@@ -1,5 +1,4 @@
-//! A drafter's view of the target's forward: bf16 rows `[rows][count * hidden]` of the block residual entering listed
-//! visits (execution order, every core pass counting) and of the final norm the head reads, as the forward runs.
+//! bf16 tap rows `[rows][count * hidden]`: the block residual entering listed visits, and the final norm (id 48).
 const std = @import("std");
 const mtl = @import("metal");
 const cfg = @import("config.zig");
@@ -15,7 +14,6 @@ pub const Taps = struct {
     hidden: u32,
     visits: [max_taps]u32 = @splat(0),
     count: u32,
-    /// The listed id the final normalized state fills: the slot count, past every executed visit.
     final: u32,
 
     pub fn init(device: mtl.Device, config: *const cfg.Config, visits: []const u32, rows: usize) !Taps {
@@ -43,12 +41,10 @@ pub const Taps = struct {
         return @as(usize, t.count) * t.hidden * 2;
     }
 
-    /// Rows [first, first + n) as the forward that filled them wrote them, tap-major within a row.
     pub fn bytes(t: *const Taps, first: usize, n: usize) []const u8 {
         return t.buffer.contents()[first * t.rowBytes() ..][0 .. n * t.rowBytes()];
     }
 
-    /// Copies `rows` f32 rows at `src` into each listed tap whose id is `visit`.
     pub fn encode(t: *const Taps, enc: mtl.ComputeEncoder, visit: u32, src: mtl.Buffer, offset: usize, rows: u32) void {
         for (t.visits[0..t.count], 0..) |v, i| {
             if (v != visit) continue;

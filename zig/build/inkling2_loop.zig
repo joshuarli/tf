@@ -137,8 +137,7 @@ pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.B
     test_step.dependOn(&dflash_run.step);
 }
 
-/// A module over the engine (`tensorfold`), as `tf-inkling2-loop-run` builds it: the DFlash2 drafter reads the shared
-/// `qwen27/dflash` runtime, which the family's own module graph does not carry.
+/// The DFlash2 drafter reads the shared `qwen27/dflash` runtime, so its tests import the engine, not the family.
 fn dflashModule(b: *std.Build, target: std.Build.ResolvedTarget, root: []const u8) *std.Build.Module {
     const ids = b.addWriteFiles();
     _ = ids.addCopyFile(b.path("zig/src/families/nemotron/draft_ids.txt"), "draft_ids.txt");

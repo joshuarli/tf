@@ -1,5 +1,4 @@
-//! incoai/Inkling-2-Mini-DFlash2 on the shared Metal DFlash2 runtime (`qwen27/dflash`), bound to the oQ4e target's
-//! affine 8-bit embedding through its embedding norm and to its head over the target's real tokens.
+//! incoai/Inkling-2-Mini-DFlash2 on the shared Metal DFlash2 runtime, bound to the oQ4e target's embedding and head.
 const std = @import("std");
 const mtl = @import("metal");
 const tf = @import("tensorfold");
@@ -25,8 +24,6 @@ pub const Drafter = struct {
     config: cfg.Config,
     step_ms: f64 = 0,
 
-    /// `bits` 0 reads the checkpoint's BF16 linears, 4 their prepared q4 copies; `embed_norm` false is a diagnostic
-    /// that feeds the token table's rows without the target's norm.
     pub const Options = struct { bits: u8 = 0, embed_norm: bool = true };
 
     pub fn init(a: std.mem.Allocator, io: std.Io, target: *inkling.Model, dir: []const u8, options: Options) !*Drafter {
@@ -80,29 +77,24 @@ pub const Drafter = struct {
         d.a.destroy(d);
     }
 
-    /// An empty context: no committed taps.
     pub fn reset(d: *Drafter) !void {
         try d.model.reset();
     }
 
-    /// Committed positions whose taps the context holds.
     pub fn committed(d: *const Drafter) u64 {
         return d.model.committed_end;
     }
 
-    /// `rows` committed target positions' tap rows, `tapWidth` bf16 each, after the ones the context holds.
     pub fn absorb(d: *Drafter, rows_bytes: []const u8, rows: u32) !void {
         try d.model.ring().absorbBytes(rows_bytes, rows);
     }
 
-    /// The window's keys and values from the committed taps, so the next proposal absorbs only its round's rows.
     pub fn flush(d: *Drafter) !void {
         const pool = mtl.objc.Pool.push();
         defer pool.pop();
         try d.model.flush();
     }
 
-    /// The greedy chain of `n` proposals after `pending`, the newest committed token's successor not yet verified.
     pub fn propose(d: *Drafter, pending: u32, n: u32, out: []u32) !void {
         if (n == 0) return;
         if (n > depth or out.len < n) return error.BadDraftDepth;
@@ -122,7 +114,6 @@ pub const Drafter = struct {
         try q.residency.appendDraft(&d.model.backend, d.a, list);
     }
 
-    /// Device bytes the drafter holds beyond its target's: its weights, prepared copies, context and workspace.
     pub fn fixedBytes(d: *Drafter) !u64 {
         var list: std.ArrayList(mtl.Buffer) = .empty;
         defer list.deinit(d.a);
@@ -154,7 +145,6 @@ pub const Drafter = struct {
     }
 };
 
-/// The drafter's config against its target, before any weights load: a refusal names what differs.
 pub fn admit(a: std.mem.Allocator, io: std.Io, target: *const inkling.Model, dir: []const u8) !cfg.Config {
     const t = &target.config;
     const path = try std.fs.path.join(a, &.{ dir, "config.json" });
@@ -164,7 +154,6 @@ pub fn admit(a: std.mem.Allocator, io: std.Io, target: *const inkling.Model, dir
     return bind(try cfg.parse(a, text), t);
 }
 
-/// A parsed draft config bound to the Inkling target `t`: its taps, final norm, softcap and real tokens.
 pub fn bind(parsed: cfg.Config, t: *const inkling.config.Config) !cfg.Config {
     if (t.checkpoint != .mlx) return error.InklingDFlash2NeedsAffineHead;
     var c = parsed;

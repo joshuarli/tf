@@ -259,13 +259,15 @@ python3 -I $D/run.py bench $R $D/prompts.json q4-a --bits 4 --tokens 512
 python3 -I $D/run.py bench $R $D/prompts.json bf16-a --bits 0 --tokens 512
 python3 -I $D/run.py widths $R $D/prompts.json widths-a --reps 9
 python3 -I $D/run.py widths $R $D/prompts.json widths-b --reps 9 --load 20
-python3 -I $D/run.py bench $R $D/prompts-1k.json shift-q4 --bits 4 --env TF_INKLING_DFLASH2_TAP_SHIFT=1
-python3 -I $D/run.py bench $R $D/prompts-1k.json nonorm-q4 --bits 4 --env TF_INKLING_DFLASH2_NO_EMBED_NORM=1
+python3 -I $D/run.py bench $R $D/prompts-1k.json shift-q4 --bits 4 --reading outputs
+python3 -I $D/run.py bench $R $D/prompts-1k.json nonorm-q4 --bits 4 --reading unnormed
 python3 -I $D/run.py table q4-a bf16-a widths-a
 python3 -I $D/run.py project q4-c widths-b
 ```
 
-The two `TF_INKLING_DFLASH2_*` switches are runner-only diagnostics of the capture reading. The prompt builder
+`shift-q4` and `nonorm-q4` were recorded with runner `dca724f2…` through its environment switches
+`TF_INKLING_DFLASH2_TAP_SHIFT=1` and `TF_INKLING_DFLASH2_NO_EMBED_NORM=1`. The runner now takes the reading as its last
+`dflash` argument (`entering`, `outputs` or `unnormed`), which the commands above pass. The prompt builder
 reproduces `campaign/prompts/inkling/code-1024.json` at effort 0, except its last content token: that fixture was
 cut as text, these are cut as tokens.
 

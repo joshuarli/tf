@@ -1,6 +1,4 @@
-// Grouped verification, compiled after attention.metal: the batch step's rows, several of them a stream's consecutive
-// positions. Each kernel is the batch kernel it names with the same arithmetic, except that a row's earlier positions
-// in its own group come from this forward's rows instead of the stream's cache, and nothing is written to a cache.
+// Each kernel keeps the bits of the batch kernel it twins; a group's earlier rows come from captures, not the cache.
 
 inline float i2v_bf(const device bfloat* p, size_t i) { return float(p[i]); }
 
@@ -257,10 +255,7 @@ struct i2v_row { device half* keys; device half* values; i2_attn_parts args; uin
   else i2v_split_serial(Q, rows[tg.y].keys, rows[tg.y].values, KH, VH, first, gpos, B, sink, a, PART, tg.x, tid2.x, sg, lane, nth2.x, (threadgroup float4*)KS4, (threadgroup float4*)VS4);
 }
 
-// The accepted rows into their streams' caches: every slot's normalized keys and values at the row's position (a
-// local slot's ring row), and the convolution inputs of a group's newest ring-length rows. keep 0 marks a rejected
-// draft; conv_keep 0 an accepted row that newer accepted rows of its group push out of the ring. The captures hold
-// `stride` rows a slot: KV [slots][2][stride][kvw], CAP as the verification's ConvCapture.
+// Captures hold `stride` rows a slot: KV [slots][2][stride][kvw], CAP laid out as prefill.ConvCapture.
 struct i2v_commit_row { device half* keys; device half* values; device float* conv[4]; uint pos, capacity, keep, conv_keep; };
 struct i2v_commit_slot { uint local, locals_before, globals_before, pad; };
 struct i2v_commit_args { uint kvw, hidden, rows, stride, slots, window, ring; };
@@ -291,8 +286,7 @@ struct i2v_commit_args { uint kvw, hidden, rows, stride, slots, window, ring; };
   r.conv[site][((size_t)slot * a.ring + r.pos % a.ring) * width + c] = CAP[src];
 }
 
-// Each row's greedy pick as the host's scan picks it: the first index of the largest value, a NaN never winning and a
-// NaN at index 0 kept. One threadgroup a row.
+// The host scan's pick: the first index of the largest value; a NaN never wins and a NaN at index 0 is kept.
 struct i2v_argmax_args { uint vocab; };
 
 [[kernel]] void i2v_argmax(const device float* L [[buffer(0)]], constant i2v_argmax_args& a [[buffer(1)]],

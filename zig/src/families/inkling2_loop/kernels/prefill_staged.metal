@@ -8,10 +8,9 @@ struct i2ps_part { uint tile, row, n, pad; };
 struct i2ps_args { uint k, rows, count, pad; i2ps_part part[6]; };
 struct i2ps_gate_args { uint count; };
 
-kernel void i2ps_gemm_split(device half* x [[buffer(0)]], device half* w [[buffer(1)]], constant i2ps_args& a [[buffer(2)]],
-    device float* y0 [[buffer(3)]], device float* y1 [[buffer(4)]], device float* y2 [[buffer(5)]],
-    device float* y3 [[buffer(6)]], device float* y4 [[buffer(7)]], device float* y5 [[buffer(8)]],
-    uint2 gid [[threadgroup_position_in_grid]]) {
+template <bool LO>
+inline void i2ps_gemm(device half* x, device half* w, constant i2ps_args& a, device float* y0, device float* y1,
+    device float* y2, device float* y3, device float* y4, device float* y5, uint2 gid) {
   uint p = 0;
   for (uint i = 1; i < a.count; ++i) if (gid.x >= a.part[i].tile) p = i;
   const i2ps_part part = a.part[p];
@@ -31,9 +30,19 @@ kernel void i2ps_gemm_split(device half* x [[buffer(0)]], device half* w [[buffe
   auto acc = op.get_destination_cooperative_tensor<metal::remove_addrspace_t<decltype(ah)>, metal::remove_addrspace_t<decltype(bb)>, float>();
   for (uint i = 0; i < acc.get_capacity(); ++i) acc[i] = 0;
   op.run(ah, bb, acc);
-  op.run(al, bb, acc);
+  if (LO) op.run(al, bb, acc);
   acc.store(cc);
 }
+
+#define I2PS_GEMM(NAME, LO) \
+kernel void NAME(device half* x [[buffer(0)]], device half* w [[buffer(1)]], constant i2ps_args& a [[buffer(2)]], \
+    device float* y0 [[buffer(3)]], device float* y1 [[buffer(4)]], device float* y2 [[buffer(5)]], \
+    device float* y3 [[buffer(6)]], device float* y4 [[buffer(7)]], device float* y5 [[buffer(8)]], \
+    uint2 gid [[threadgroup_position_in_grid]]) { \
+  i2ps_gemm<LO>(x, w, a, y0, y1, y2, y3, y4, y5, gid); \
+}
+I2PS_GEMM(i2ps_gemm_split, true)
+I2PS_GEMM(i2ps_gemm_hi, false)
 
 kernel void i2ps_split_gated(device const float* x [[buffer(0)]], device const float* g [[buffer(1)]],
     constant i2ps_gate_args& a [[buffer(2)]], device half* y [[buffer(3)]], device atomic_uint* overflow [[buffer(4)]],

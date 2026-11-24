@@ -11,6 +11,7 @@ pub const max_listed = 8;
 
 pub const Pipes = struct {
     gemm: mtl.Pipeline,
+    hi: mtl.Pipeline,
     gated: mtl.Pipeline,
 
     pub fn init(device: mtl.Device) !Pipes {
@@ -18,11 +19,14 @@ pub const Pipes = struct {
         defer lib.deinit();
         const gemm = try mtl.Pipeline.init(device, lib, "i2ps_gemm_split", false);
         errdefer gemm.deinit();
-        return .{ .gemm = gemm, .gated = try mtl.Pipeline.init(device, lib, "i2ps_split_gated", false) };
+        const hi = try mtl.Pipeline.init(device, lib, "i2ps_gemm_hi", false);
+        errdefer hi.deinit();
+        return .{ .gemm = gemm, .hi = hi, .gated = try mtl.Pipeline.init(device, lib, "i2ps_split_gated", false) };
     }
 
     pub fn deinit(p: Pipes) void {
         p.gemm.deinit();
+        p.hi.deinit();
         p.gated.deinit();
     }
 };
@@ -55,6 +59,7 @@ pub const Stage = struct {
     inputs: mtl.Buffer,
     overflow: mtl.Buffer,
     rows: u32,
+    half_inputs: bool = false,
 };
 
 fn rowBytes(view: Tensor) usize {
@@ -168,7 +173,7 @@ pub fn encode(s: Stage, sources: []const Tensor, parts: []const Part, inputs: [3
             args.part[i] = .{ .tile = tiles, .row = 0, .n = 0 };
             outs[i] = outs[0];
         }
-        s.enc.setPipeline(s.pipes.gemm);
+        s.enc.setPipeline(if (s.half_inputs) s.pipes.hi else s.pipes.gemm);
         s.enc.setBuffer(s.inputs, 0, 0);
         s.enc.setBuffer(s.weights, 0, 1);
         s.enc.setValue(args, 2);
@@ -192,6 +197,18 @@ pub fn gatedProjection(s: Stage, w: Tensor, out: mtl.Buffer, x: mtl.Buffer, gate
     s.enc.setBuffer(s.inputs, 0, 3);
     s.enc.setBuffer(s.overflow, 0, 4);
     s.enc.dispatchThreads(mtl.Size.of(count / 4, 1, 1), mtl.Size.of(256, 1, 1));
+    if (s.half_inputs) {
+        var args = GemmArgs{ .k = k, .rows = s.rows, .count = 1, .part = undefined };
+        args.part[0] = .{ .tile = 0, .row = 0, .n = n };
+        for (1..max_parts) |i| args.part[i] = .{ .tile = (n + 63) / 64, .row = 0, .n = 0 };
+        s.enc.setPipeline(s.pipes.hi);
+        s.enc.setBuffer(s.inputs, 0, 0);
+        s.enc.setBuffer(s.weights, 0, 1);
+        s.enc.setValue(args, 2);
+        for (0..max_parts) |i| s.enc.setBuffer(out, 0, 3 + i);
+        s.enc.dispatchGroups(mtl.Size.of((n + 63) / 64, (s.rows + 63) / 64, 1), mtl.Size.of(128, 1, 1));
+        return true;
+    }
     s.enc.setPipeline(s.gemm_split);
     s.enc.setBuffer(s.inputs, 0, 0);
     s.enc.setBuffer(s.weights, 0, 1);

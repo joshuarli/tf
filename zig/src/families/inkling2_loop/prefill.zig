@@ -19,6 +19,7 @@ pub const default_chunk: usize = 1024;
 pub const half_source = "#define I2P_HALF_OPERANDS 1\n#define I2P_MATRIX_THRESHOLD 14\n#define I2P_DOWN_MATRIX_THRESHOLD 8\n" ++ kernels.prefill ++ kernels.prefill_expert_wide;
 /// The same on tensor units: the matrices there, and half activations from grouped gate/up for down's matrices.
 pub const units_source = "#define I2P_TENSOR_UNITS 1\n#define I2P_HALF_ACT 1\n" ++ half_source ++ @embedFile("kernels/prefill_grouped.metal");
+const units_rows_source = "#define I2P_TENSOR_UNITS 1\n#define I2P_HALF_ACT 1\n#define I2P_HALF_OPERANDS 1\n#define I2P_MATRIX_THRESHOLD 1\n#define I2P_DOWN_MATRIX_THRESHOLD 1\n" ++ kernels.prefill ++ kernels.prefill_expert_wide ++ @embedFile("kernels/prefill_grouped.metal");
 
 pub fn profile(text: ?[]const u8) error{BadInklingProfile}!bool {
     const value = text orelse return false;
@@ -315,6 +316,8 @@ pub const PrefillScratch = struct {
     /// The half path's expert matrices, attention and staged projections on tensor units; off is the shader cores.
     units: bool,
     fuse: bool,
+    half_rows_all: bool,
+    half_inputs: bool,
     capture: ?mtl.Buffer,
     capture_row: usize,
     routes: ?mtl.Buffer,
@@ -347,6 +350,9 @@ pub const PrefillScratch = struct {
         s.half = true;
         s.units = true;
         s.fuse = true;
+        const rounding: []const u8 = if (std.c.getenv("INKLING_PREFILL_HALF")) |v| std.mem.span(v) else "";
+        s.half_rows_all = std.mem.eql(u8, rounding, "experts") or std.mem.eql(u8, rounding, "both");
+        s.half_inputs = std.mem.eql(u8, rounding, "inputs") or std.mem.eql(u8, rounding, "both");
         s.bf16_input = if (fast and device.tensorUnits()) try device.buffer(@max(chunk * @max(2 * h, @max(qw, @max(kvw, rank))) * 2, 16), mtl.ResourceOptions.private) else null;
         errdefer if (s.bf16_input) |buf| buf.deinit();
         s.half_overflow = if (fast or device.tensorUnits()) try device.buffer(16, mtl.ResourceOptions.shared) else null;
@@ -589,7 +595,7 @@ pub const PrefillScratch = struct {
         s.pipes.grouped_up = null;
         s.pipes.grouped_down = null;
         if (fast or device.tensorUnits()) {
-            const half_lib = try mtl.Library.fromSource(device, if (device.tensorUnits()) units_source else half_source, opts);
+            const half_lib = try mtl.Library.fromSource(device, if (!device.tensorUnits()) half_source else if (s.half_rows_all) units_rows_source else units_source, opts);
             defer half_lib.deinit();
             if (device.tensorUnits()) {
                 s.pipes.wide_expert_nv = try mtl.Pipeline.init(device, half_lib, "i2p_expert_matrix_wide", false);
@@ -1123,6 +1129,7 @@ const Chunk = struct {
             .inputs = s.affine_stage_x orelse return null,
             .overflow = s.half_overflow orelse return null,
             .rows = c.n,
+            .half_inputs = s.half_inputs,
         };
     }
 

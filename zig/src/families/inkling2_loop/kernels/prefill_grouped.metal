@@ -2,8 +2,8 @@
 constant constexpr uint I2PG_COLS = 8u;
 constant constexpr uint I2PG_THREADS = 32u * I2PG_COLS;
 constant constexpr uint I2PG_KB = 512u;
-constant constexpr uint I2PG_UP_ROWS = I2P_MATRIX_THRESHOLD - 1u;
-constant constexpr uint I2PG_DOWN_ROWS = I2P_DOWN_MATRIX_THRESHOLD - 1u;
+constant constexpr uint I2PG_UP_ROWS = I2P_MATRIX_THRESHOLD > 1 ? I2P_MATRIX_THRESHOLD - 1u : 1u;
+constant constexpr uint I2PG_DOWN_ROWS = I2P_DOWN_MATRIX_THRESHOLD > 1 ? I2P_DOWN_MATRIX_THRESHOLD - 1u : 1u;
 
 inline float i2pg_code(uint c) {
   const uint mag = c & 7u;

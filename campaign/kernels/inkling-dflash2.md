@@ -91,8 +91,8 @@ Committed tokens per round. Without the norm, all 1,530 rounds that offered draf
 
 ## Correctness
 
-- `python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu` exited 0 on `fff7591e7`
-  (`.work/suite/20261123T231107`, 9.6 min). `inkling-host` passed 35/35 on its first run. `inkling-gpu` passed
+- `python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu` exited 0 on `2ad8a2c4c`
+  (`.work/suite/20261123T233209`, 8.8 min), as on `fff7591e7` and `f7a2a4329` before it. `inkling-host` passed 35/35 on its first run. `inkling-gpu` passed
   14/14 steps and 123/123 tests, with none skipped: 115 already on main and the 8 below.
 - Family module, both checkpoints:
   - Grouped logits, GPU picks and committed caches equal sequential batch decoding bit for bit. Three streams of
@@ -112,7 +112,8 @@ Committed tokens per round. Without the norm, all 1,530 rounds that offered draf
   - `zig build test-qwen27`: 48/48 steps. Before, 197/202 passed with 5 skipped; after, 200/205 with 5
     skipped. The 3 new tests are the Inkling config, Flint's refusal of a final-norm tap, softcap or narrowed
     vocabulary, and the selector's softcap.
-- `zig build native -Dcpu=apple_m1` exited 0.
+- `zig build native -Dcpu=apple_m1` exited 0 on `2ad8a2c4c`. `lean_new.py` against main finds 0 new problems
+  (257 on both).
 
 ## Round table
 

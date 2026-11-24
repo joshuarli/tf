@@ -14,9 +14,11 @@
   - `lane/d3-harbour`: a wip probe tool. No bug was found; the receipt is on main.
   - Rejected and kept for reference: `b1f-interleave` (retry only with staggered arrivals), `s1-skip-logits` (token-buffer race), `e2-prefill-experts2`, `e3-expert-tensorops`, `m1-bf16-prefill` and `p6-prefill-gemm2`. Their receipts are in `campaign/kernels/`.
   - Old wip records: `c0-ground`, `k2-inkling-experts`.
+- **B2, first pass done** (`campaign/kernels/inkling-b2-baselines.md`): TensorFold leads oMLX at one and two agents, trails it at four (0.84× and 0.90×) and matches at eight. Its warm aggregate is flat from two to eight agents, and its four-agent TTFT is 998 ms against 623 ms for oMLX.
 - **Next slice:**
-  1. B2: corrected baselines at 1/2/4/8 agents, cold and warm. Measure llama.cpp upstream and its best Inkling stack first, since they likely set the T3 bar. Then measure oMLX with MTP off and on.
-  2. R1: the source map and ledger, per `frontier-brief.md`.
+  1. J1: TensorFold multi-agent scheduling. Find why aggregate throughput stops rising after two agents and why four-agent TTFT is high (the open P3c TTFT item may share the cause). Profile a served four-agent sweep, then fix the dominant cause.
+  2. B2 remainder: the best llama.cpp Inkling stack (#32808, #32752 or #32883, #32855), mlx-serve and MTPLX, and oMLX on one server per agent count.
+  3. R1: the source map and ledger, per `frontier-brief.md`.
 
   Run one GPU-timing lane at a time: the shared lock and outside load (OrbStack at 4–10 cores) left parallel lanes unmeasurable.
 - History: the "Status log" section of `campaign/ledger.md`.

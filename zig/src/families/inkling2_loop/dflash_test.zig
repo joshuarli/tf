@@ -582,12 +582,14 @@ test "chained drafts give the unchained rounds' trees bit for bit and stop at a 
     }
     try std.testing.expect(tally[0].chained > 0 and tally[1].chained == 0 and tally[0].short > 0);
     const ids = parsed.value[1].token_ids;
-    var cache = try inkling.Cache.init(s.model.device, &s.model.config, ids.len + 80);
+    var cache = try inkling.Cache.init(s.model.device, &s.model.config, ids.len + 64 + inkling.group.max_rows);
     defer cache.deinit();
+    var bs = try inkling.BatchScratch.init(s.model.device, &s.model.config, 1);
+    defer bs.deinit();
     var plain: std.ArrayList(u32) = .empty;
     defer plain.deinit(a);
     try plain.append(a, try spec.prefillPlain(s.model, &s.prefill, &cache, ids));
-    try spec.plain(s.model, &s.batch, &cache, plain.items[0], 64, &.{}, a, &plain, null);
+    try spec.plain(s.model, &bs, &cache, plain.items[0], 64, &.{}, a, &plain, null);
     var cut: TreeTally = .{};
     var stop: usize = 8;
     while (stop < 60 and cut.cut == 0) : (stop += 1) if (std.mem.indexOfScalar(u32, plain.items[0..stop], plain.items[stop]) == null) {

@@ -73,3 +73,53 @@ inline float i2pr_total(float sum, threadgroup float* part, uint t) {
     for (uint i = 0; i < I2PR_PER; ++i) o[t + i * I2PR_THREADS] = out[i] * r * float(g[t + i * I2PR_THREADS]);
   }
 }
+
+struct i2pr_clip_args { uint heads, kv, items; float q_threshold, rel_threshold, eps; };
+
+inline float i2pr_part(float v) {
+  return simd_sum(fma(v, v, 0.0f));
+}
+
+[[kernel]] void i2pr_clips(device float* Q [[buffer(0)]], const device bfloat* QS [[buffer(1)]],
+    device float* R [[buffer(2)]], const device bfloat* RS [[buffer(3)]], const device float* KC [[buffer(4)]],
+    const device float* VC [[buffer(5)]], device half* KH [[buffer(6)]], device half* VH [[buffer(7)]],
+    constant i2pr_clip_args& a [[buffer(8)]], uint2 tg [[threadgroup_position_in_grid]],
+    ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
+  const uint item = tg.x * 8u + sg, row = tg.y;
+  if (item >= a.items) return;
+  if (item < 2u * a.heads) {
+    const bool rel = item >= a.heads;
+    const uint h = rel ? item - a.heads : item;
+    if (rel) {
+      device float* x = R + ((size_t)row * a.heads + h) * 16u;
+      const device bfloat* sc = RS + (size_t)h * 16u;
+      const float v = lane < 16u ? x[lane] * float(sc[lane]) : 0.0f;
+      float total = 0.0f;
+      total += i2pr_part(v);
+      const float clip = clamp(a.rel_threshold / (sqrt(total) + 1e-6f), 0.0f, 1.0f);
+      if (lane < 16u) x[lane] = x[lane] * float(sc[lane]) * clip;
+      return;
+    }
+    device float* x = Q + ((size_t)row * a.heads + h) * 128u;
+    const device bfloat* sc = QS + (size_t)h * 128u;
+    float total = 0.0f;
+    for (uint s = 0; s < 4u; ++s) total += i2pr_part(x[lane + 32u * s] * float(sc[lane + 32u * s]));
+    const float clip = clamp(a.q_threshold / (sqrt(total) + 1e-6f), 0.0f, 1.0f);
+    for (uint s = 0; s < 4u; ++s) x[lane + 32u * s] = x[lane + 32u * s] * float(sc[lane + 32u * s]) * clip;
+    return;
+  }
+  const uint h = item - 2u * a.heads;
+  const size_t at = ((size_t)row * a.kv + h) * 128u;
+  float kt = 0.0f;
+  float vt = 0.0f;
+  for (uint s = 0; s < 4u; ++s) {
+    kt += i2pr_part(KC[at + lane + 32u * s]);
+    vt += i2pr_part(VC[at + lane + 32u * s]);
+  }
+  const float clip = clamp(a.q_threshold / (sqrt(kt) + 1e-6f), 0.0f, 1.0f);
+  const float inv = 1.0f / sqrt(vt / 128.0f + a.eps);
+  for (uint s = 0; s < 4u; ++s) {
+    KH[at + lane + 32u * s] = KC[at + lane + 32u * s] * clip;
+    VH[at + lane + 32u * s] = VC[at + lane + 32u * s] * inv;
+  }
+}

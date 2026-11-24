@@ -1160,25 +1160,32 @@ const Chunk = struct {
         const fused = c.batch != null and lay.attn.q.affine != null;
         const staged = !fused and c.stagedProjections(lay, ins, full);
         const ready = fused or staged;
+        const clips = staged and c.dim == rows_mod.clip_dim and c.drel == rows_mod.clip_rel;
         if (fused) c.affineProjections(lay, ins, full) else if (!staged) c.lin(lay.attn.q, ins[0], b(s.q));
-        if (c.batch == null) c.clipScaled(b(s.q), lay.attn.q_scale, c.heads, c.dim, text.qk_clip);
+        if (c.batch == null and !clips) c.clipScaled(b(s.q), lay.attn.q_scale, c.heads, c.dim, text.qk_clip);
         if (!ready) c.lin(lay.attn.r, ins[0], b(s.r));
-        if (c.batch == null) c.clipScaled(b(s.r), lay.attn.r_scale, c.heads, c.drel, text.rel_clip);
+        if (c.batch == null and !clips) c.clipScaled(b(s.r), lay.attn.r_scale, c.heads, c.drel, text.rel_clip);
         const ring = c.rings(slot);
         if (!ready) c.lin(lay.attn.k, ins[1], b(s.k));
         c.convolve(b(s.k), b(s.kc), lay.attn.k_conv, lay.attn.k_dyn, ins[1], b(s.kdyn), ring[0], c.kvw, if (full) c.kv else 0, @intFromBool(full), slot, .key, ready);
         if (c.batch != null) {
             c.setP(s.pipes.clip3, Clip3B{ .heads = c.heads, .kv = c.kv, .dim = c.dim, .rel = c.drel, .q_threshold = text.qk_clip, .rel_threshold = text.rel_clip }, &.{ b(s.q), t(lay.attn.q_scale), b(s.r), t(lay.attn.r_scale), b(s.kc), A });
             c.enc.dispatchGroups(mtl.Size.of((2 * c.heads + c.kv) * c.n, 1, 1), mtl.Size.of(256, 1, 1));
-        } else c.clipPlain(b(s.kc), c.kv, c.dim, text.qk_clip);
+        } else if (!clips) c.clipPlain(b(s.kc), c.kv, c.dim, text.qk_clip);
         if (!ready) c.lin(lay.attn.v, ins[2], b(s.v));
         c.convolve(b(s.v), b(s.vc), lay.attn.v_conv, lay.attn.v_dyn, ins[2], b(s.vdyn), ring[1], c.kvw, if (full) c.kv else 0, @intFromBool(full), slot, .value, ready);
         if (!ready) c.lin(lay.attn.sink, ins[0], b(s.sink));
         if (c.batch) |batch| {
             c.batchAttention(lay, slot, full, extent, batch);
         } else {
-        c.setG(.rms_kv_store, Rms{ .width = c.dim, .blocks = 0, .eps = text.eps }, &.{ b(s.kc), b(s.vc), b(s.kh), b(s.vh), A });
-        c.enc.dispatchGroups(mtl.Size.of(c.kv * c.n, 1, 1), mtl.Size.of(256, 1, 1));
+        if (clips) {
+            const items = 2 * c.heads + c.kv;
+            c.setP(s.pipes.rows.clips, rows_mod.ClipArgs{ .heads = c.heads, .kv = c.kv, .items = items, .q_threshold = text.qk_clip, .rel_threshold = text.rel_clip, .eps = text.eps }, &.{ b(s.q), t(lay.attn.q_scale), b(s.r), t(lay.attn.r_scale), b(s.kc), b(s.vc), b(s.kh), b(s.vh), A });
+            c.enc.dispatchGroups(mtl.Size.of((items + rows_mod.clip_items - 1) / rows_mod.clip_items, c.n, 1), mtl.Size.of(32 * rows_mod.clip_items, 1, 1));
+        } else {
+            c.setG(.rms_kv_store, Rms{ .width = c.dim, .blocks = 0, .eps = text.eps }, &.{ b(s.kc), b(s.vc), b(s.kh), b(s.vh), A });
+            c.enc.dispatchGroups(mtl.Size.of(c.kv * c.n, 1, 1), mtl.Size.of(256, 1, 1));
+        }
         c.relative(lay, b(s.r), extent, full);
         const win: u32 = if (full) 0 else text.window;
         const keybase = bo(c.cache.keys, c.slotBase(slot));

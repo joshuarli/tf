@@ -465,10 +465,13 @@ def costtable(args: argparse.Namespace) -> None:
     on either side, other widths on the line between those anchors, then made non-decreasing; printed as
     `verify.Plan.default_verify_ms`."""
     by: dict = {}
+    drafts = []
     for name in args.names.split(","):
         for r in timed(name):
             if r["kind"] == "round" and r.get("source") == "tree":
                 by.setdefault(r["offered"] + 1, []).append(r["verify_ms"])
+                if r["drafted"]:
+                    drafts.append(r["draft_ms"])
     measured = {w: sum(v) / len(v) for w, v in by.items() if len(v) >= 20}
     rested: dict = {}
     for name in (args.widths.split(",") if args.widths else []):
@@ -497,6 +500,8 @@ def costtable(args: argparse.Namespace) -> None:
     for w in range(1, 17):
         print(f"{w:2d} rows: {table[w]:6.2f} ms ({source.get(w, 'line')}, {len(by.get(w, []))} rounds)")
     print("pub const default_verify_ms = [max_rows + 1]f64{ 0.0, " + ", ".join(f"{v:.1f}" for v in table[1:]) + " };")
+    if drafts:
+        print(f"pub const default_draft_ms: f64 = {sum(drafts) / len(drafts):.1f}; ({len(drafts)} drafted rounds)")
 
 
 def same(args: argparse.Namespace) -> None:

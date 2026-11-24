@@ -78,8 +78,45 @@ fn checkStore(m: *const inkling.Model, p: *inkling.PrefillScratch, ids: []const 
     std.debug.print("store: len={d} state_bytes={d} state_equal=true continuation_logits_equal=true\n", .{ point, actual.length() });
 }
 
+fn schedule(init: std.process.Init, args: []const [:0]const u8) !void {
+    const a = init.gpa;
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, args[2], a, .limited(16 << 20));
+    defer a.free(bytes);
+    const ids = try std.json.parseFromSlice([]const u32, a, bytes, .{});
+    defer ids.deinit();
+    var sizes: std.ArrayList(usize) = .empty;
+    defer sizes.deinit(a);
+    var words = std.mem.tokenizeScalar(u8, args[3], ',');
+    var total: usize = 0;
+    while (words.next()) |word| {
+        try sizes.append(a, try std.fmt.parseInt(usize, word, 10));
+        total += sizes.items[sizes.items.len - 1];
+    }
+    if (total != ids.value.len) return error.ScheduleLength;
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const m = try inkling.Model.load(a, init.io, args[1]);
+    defer m.deinit();
+    const vocab: usize = m.config.text.unpadded_vocab;
+    var c = try inkling.Cache.init(m.device, &m.config, ids.value.len);
+    defer c.deinit();
+    var p = try inkling.PrefillScratch.init(m.device, &m.config, inkling.default_chunk);
+    defer p.deinit();
+    const out = try a.alloc(f32, ids.value.len * vocab);
+    defer a.free(out);
+    var at: usize = 0;
+    for (sizes.items) |n| {
+        try inkling.prefillWant(m, &p, &c, ids.value[at..][0..n], .all);
+        @memcpy(out[at * vocab ..][0 .. n * vocab], p.logits.slice(f32, n * vocab));
+        at += n;
+    }
+    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[4], .data = std.mem.sliceAsBytes(out) });
+    std.debug.print("schedule: {d} tokens in {d} chunks, every row's logits\n", .{ ids.value.len, sizes.items.len });
+}
+
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
+    if (args.len == 5) return schedule(init, args);
     if (args.len != 3) return error.ExpectedModelAndCapture;
     const a = init.gpa;
     const bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, args[2], a, .limited(16 << 20));

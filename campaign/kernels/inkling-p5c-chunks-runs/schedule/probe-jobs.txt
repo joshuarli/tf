@@ -1,0 +1,3 @@
+../ids-1024.json 768,128,127,1 probe/main-on.bin
+../ids-1024.json 1024 probe/main-off.bin
+../ids-1024.json 1023,1 probe/lane.bin

@@ -48,7 +48,7 @@ pub const Round = struct {
 
 pub const Times = tf.qwen27.dflash.runtime_frame.Times;
 
-/// A tree round on `mtl.clock` (host seconds) and the GPU's clock, kept while `TF_INKLING_ROUND_SPLIT` is set.
+/// A tree round on `mtl.clock` (host seconds) and the GPU's clock, kept while `INKLING_ROUND_SPLIT` is set.
 pub const Split = struct {
     /// Host seconds: the round's start, the drafter's call and return, the tree built, the verify's return, the end.
     start: f64 = 0,
@@ -87,9 +87,9 @@ pub const Speculator = struct {
     plan: inkling.verify.Plan,
     gathered: []u8,
     a: std.mem.Allocator,
-    /// Tree rounds' splits, printed as `inkling2 split` lines when a run ends (null: `TF_INKLING_ROUND_SPLIT` unset).
+    /// Tree rounds' splits, printed as `inkling2 split` lines when a run ends (null: `INKLING_ROUND_SPLIT` unset).
     splits: ?std.ArrayList(Split) = null,
-    /// Tree rounds draft behind each verify unless `TF_INKLING_CHAIN=0`: null, each draft runs in its own round.
+    /// Tree rounds draft behind each verify unless `INKLING_DRAFT_CHAIN=0`: null, each draft runs in its own round.
     chain: ?chain_mod.Chain = null,
     /// The next round's draft, submitted as this round's verify returned, and one encoded onto the context after it.
     flight: ?chain_mod.Ticket = null,
@@ -110,8 +110,8 @@ pub const Speculator = struct {
         errdefer drafter.a.free(gathered);
         var plan = inkling.verify.Plan.init();
         plan.most = verifier.limit;
-        const split = if (std.c.getenv("TF_INKLING_ROUND_SPLIT")) |v| v[0] != 0 and v[0] != '0' else false;
-        const chained = if (std.c.getenv("TF_INKLING_CHAIN")) |v| !(v[0] == '0' and v[1] == 0) else true;
+        const split = if (std.c.getenv("INKLING_ROUND_SPLIT")) |v| v[0] != 0 and v[0] != '0' else false;
+        const chained = if (std.c.getenv("INKLING_DRAFT_CHAIN")) |v| !(v[0] == '0' and v[1] == 0) else true;
         return .{ .model = model, .drafter = drafter, .verifier = verifier, .batch = batch, .prefill = ps, .taps = taps, .plan = plan, .gathered = gathered, .a = drafter.a, .splits = if (split) .empty else null, .chain = if (chained) try chain_mod.Chain.init(drafter.model) else null };
     }
 
@@ -325,8 +325,7 @@ pub const Speculator = struct {
         return s.drafter.proposeTree(pending, s.plan.nodes, s.plan.children);
     }
 
-    /// When the next round drafts, its draft follows this round's `path` and `bonus` on the GPU: submitted now, with
-    /// the one after it encoded onto the context it leaves while it runs. `remaining`: tokens left, 0 when done.
+    /// Submits the next round's draft of this `path` and `bonus` if it drafts, then encodes the one after it.
     fn follow(s: *Speculator, cache: *const inkling.Cache, path: []const usize, bonus: u32, remaining: usize) !void {
         const c = if (s.chain) |*c| c else return;
         const m = s.drafter.model;
@@ -364,8 +363,7 @@ pub const Speculator = struct {
         s.spare = try c.encode(m, ticket.next, taps, rows);
     }
 
-    /// The next round's choice, as `treeRound` makes it: whether it offers drafts and its lookup chain leaves the
-    /// drafter in.
+    /// Whether the next round drafts, as `treeRound` decides, with `remaining` tokens left.
     fn nextDrafts(s: *const Speculator, cache: *const inkling.Cache, remaining: usize) bool {
         if (remaining < 2 or cache.len >= cache.capacity) return false;
         const offered: usize = @min(@min(max_drafts, remaining - 1), cache.capacity - cache.len - 1);

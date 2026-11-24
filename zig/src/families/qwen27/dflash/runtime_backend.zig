@@ -65,7 +65,7 @@ pub const Backend = struct {
     caches: []Cache,
     context: op.Context = .{ .cache = 1, .begin = 0, .end = 0 },
     batch: []const []Cache = &.{}, // a batched pass's streams' caches, by stream
-    /// While set, the block reads its ids, rope positions and attention plan from a chained frame's buffers (chain.zig).
+    /// While set, the block reads ids, positions and attention plan from a chained frame's buffers (chain.zig).
     follow: ?*const @import("chain.zig").Follow = null,
     transaction: ?u64 = null,
     staged: ?u64 = null,

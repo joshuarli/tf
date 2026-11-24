@@ -134,7 +134,7 @@ def bench(args: argparse.Namespace) -> None:
     out = HERE / f"{args.name}.jsonl"
     command = [str(runner), str(TARGET), str(Path(args.prompts).resolve()), "dflash", str(DRAFTER), str(args.tokens),
                str(out), "4", "entering", "incremental", args.drafts]
-    gated(args.name, command, {"TF_INKLING_ROUND_SPLIT": "1"} if args.split else {}, timed=not args.untimed)
+    gated(args.name, command, {"INKLING_ROUND_SPLIT": "1"} if args.split else {}, timed=not args.untimed)
     meta = {"kind": "binary", "runner": str(runner), "runner_sha256": sha256(runner), "target": str(TARGET),
             "drafter": str(DRAFTER), "prompts_sha256": sha256(Path(args.prompts)), "drafts": args.drafts,
             "timed": not args.untimed, "split": args.split}
@@ -677,7 +677,7 @@ def main() -> None:
                    ",children=N ,skip=P")
     a.add_argument("--tokens", type=int, default=512)
     a.add_argument("--untimed", action="store_true")
-    a.add_argument("--split", action="store_true", help="TF_INKLING_ROUND_SPLIT=1: the round split in NAME.log")
+    a.add_argument("--split", action="store_true", help="INKLING_ROUND_SPLIT=1: the round split in NAME.log")
     a = sub.add_parser("widths")
     a.add_argument("runner")
     a.add_argument("prompts")

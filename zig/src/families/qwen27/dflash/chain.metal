@@ -1,8 +1,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// A chained frame's inputs, written once its verify returns: the path's length and tap rows, then where the block's
-// context starts in the K/V ring, its rows, and the slot behind an unwrapped one.
+// Written once the verify returns: the path's length, the context's rows, ring start and own slot, the path's rows.
 struct dfc_params { uint count, context, begin, own; uint path[16]; };
 // A dispatch's shape: the first row's position, uint4 words a row, rows, the ring's slots, the block and the keys.
 struct dfc_rows { ulong base; uint width, rows, window, block, keys, pad; };

@@ -75,7 +75,7 @@ fn encodeAppendTo(ops: op.Ops, g: *const w.Graph, preparation: op.Preparation, t
     }
 }
 
-/// A chained frame's path rows at `positions`: their keys and values reach the ring only below the path's filled length.
+/// A chained frame's path rows at `positions`: keys and values reach the ring only below the path's length.
 pub fn absorb(ops: op.Ops, g: *const w.Graph, preparation: op.Preparation, taps: op.View, positions: []const u64, frame: u64, follow: *const @import("chain.zig").Follow) !void {
     try preparation.check();
     try g.config.check();

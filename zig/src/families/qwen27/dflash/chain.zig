@@ -90,9 +90,7 @@ pub const Chain = struct {
         return c.pipes[@intFromEnum(k)];
     }
 
-    /// Encodes into a free frame the absorb of up to `rows` path rows of `taps` (the target's tap rows) onto `context`
-    /// and the block after them; nothing runs until `fill` and `submit`. Null when the block's attention takes another
-    /// kernel at some path length.
+    /// Up to `rows` path rows of `taps` absorbed onto `context`, then the block; null if attention would vary.
     pub fn encode(c: *Chain, m: *Model, context: op.Context, taps: Ref, rows: u32) !?Ticket {
         const b = &m.backend;
         const cf = m.graph.config;

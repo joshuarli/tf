@@ -45,7 +45,7 @@ fn codebookRow(t: weights.Tensor, row: u32, rank: usize) ![]const u8 {
 fn bf16(bytes: []const u8, r: usize) f32 {
     return @bitCast(@as(u32, std.mem.readInt(u16, bytes[r * 2 ..][0..2], .little)) << 16);
 }
-/// The parent's predecessor row times the depth's projection: `edge` multiplies each by a successor value, in rank order.
+/// The parent's predecessor row times the depth's projection; `edge` multiplies each by a successor value.
 fn weighted(g: *const weights.Graph, lattice: op.Lattice, parent: u32, depth: u32, out: []f64) !void {
     @setFloatMode(.strict);
     const row = try codebookRow(g.predecessor, parent, out.len);

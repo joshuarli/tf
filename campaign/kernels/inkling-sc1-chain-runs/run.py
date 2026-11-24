@@ -576,6 +576,90 @@ def picks(args: argparse.Namespace) -> None:
     print(f"{args.out}: {row['rows']} rows, {len(row['picks'])} picks")
 
 
+def split_rounds(name: str) -> dict[str, list[dict]]:
+    """NAME.log's `inkling2 split` lines by prompt: each prompt's lines precede its `dflash PROMPT:` summary."""
+    out: dict[str, list[dict]] = {}
+    held: list[dict] = []
+    for line in (HERE / f"{name}.log").read_text().splitlines():
+        if line.startswith("inkling2 split "):
+            held.append(json.loads(line[len("inkling2 split "):]))
+        elif line.startswith("dflash ") and ":" in line and held:
+            out[line[len("dflash "):line.index(":")]] = held
+            held = []
+    return out
+
+
+def split_parts(rounds: list[dict]) -> list[dict]:
+    """Each round from its start to the next one's, in ms: the host before the drafter's GPU start, the drafter's
+    GPU busy and idle span, the gap to the verify's GPU start, the verify's GPU, and the host after it. The verify's
+    GPU end is the host's return from it less the drafter's own wake latency (its last buffer's end to the return)."""
+    wakes = sorted(r["d_returned"] - r["d_end"] for r in rounds if r["d_frames"] > 0)
+    wake_default = wakes[len(wakes) // 2] if wakes else 0.0
+    parts = []
+    for i, r in enumerate(rounds):
+        nxt = rounds[i + 1]["start"] if i + 1 < len(rounds) else r["done"]
+        drafted = r["d_frames"] > 0
+        chained = drafted and r["d_committed"] < r["start"]
+        wake = (r["d_returned"] - r["d_end"]) if drafted else wake_default
+        v_end = r["verified"] - wake
+        v_start = v_end - r["v_gpu"]
+        p = {"wall": nxt - r["start"], "rows": r["rows"], "accepted": r["accepted"], "drafted": drafted, "chained": chained,
+             "v_gpu": r["v_gpu"], "after": nxt - v_end, "wake": wake}
+        if drafted:
+            p["d_busy"] = r["d_busy"]
+            p["d_idle"] = (r["d_end"] - r["d_start"]) - r["d_busy"]
+            p["before"] = r["d_start"] - r["start"]
+            p["gap_a"] = v_start - r["d_end"]
+            p["select"] = r["draft_return"] - r["d_returned"]
+            p["plan"] = r["planned"] - r["draft_return"]
+            p["encode"] = v_start - r["planned"]
+            p["to_draft"] = r["d_start"] - (r["d_committed"] if not chained else r["start"])
+            p["pre_draft"] = r["draft_call"] - r["start"]
+        else:
+            p["d_busy"] = p["d_idle"] = 0.0
+            p["before"] = v_start - r["start"]
+            p["gap_a"] = 0.0
+        parts.append({k: v * 1000 if isinstance(v, float) else v for k, v in p.items()})
+    for i in range(len(parts) - 1):
+        nxt = parts[i + 1]
+        parts[i]["gap_b"] = parts[i]["after"] + nxt["before"] if nxt["drafted"] else None
+    if parts:
+        parts[-1]["gap_b"] = None
+    return parts
+
+
+def split_table(args: argparse.Namespace) -> None:
+    """Mean ms a round over each prompt's rounds, pooled over the named processes: wall, drafter GPU busy and idle span,
+    verify GPU, the host between drafter and verify (selector, plan, verify encode and submit) and between verify and
+    the next draft, and what a draft started on the GPU behind the verify would recover at most (the second gap and
+    the drafter's idle span)."""
+    names = args.names.split(",")
+    table: dict[str, list[dict]] = {}
+    for name in names:
+        for prompt, rounds in split_rounds(name).items():
+            table.setdefault(prompt, []).extend(split_parts(rounds))
+    cols = ["wall", "d_busy", "d_idle", "v_gpu", "gap_a", "select", "plan", "encode", "gap_b", "pre_draft", "to_draft",
+            "recoverable"]
+    print("| Prompt | Rounds | Drafted | Chained | " + " | ".join(cols) + " |")
+    print("| --- | ---: | ---: | ---: | " + " | ".join("---:" for _ in cols) + " |")
+    for prompt, parts in table.items():
+        drafted = [p for p in parts if p["drafted"]]
+        def mean(key: str, rows: list[dict]) -> float:
+            vals = [p[key] for p in rows if p.get(key) is not None]
+            return sum(vals) / len(vals) if vals else float("nan")
+        wall = mean("wall", parts)
+        gap_b = [p["gap_b"] for p in parts if p.get("gap_b") is not None]
+        rec = (sum(gap_b) + sum(p["d_idle"] for p in drafted)) / len(parts)
+        values = {"wall": wall, "d_busy": sum(p["d_busy"] for p in parts) / len(parts),
+                  "d_idle": sum(p["d_idle"] for p in parts) / len(parts), "v_gpu": mean("v_gpu", parts),
+                  "gap_a": sum(p["gap_a"] for p in parts) / len(parts), "select": mean("select", drafted),
+                  "plan": mean("plan", drafted), "encode": mean("encode", drafted),
+                  "gap_b": sum(gap_b) / len(parts), "pre_draft": mean("pre_draft", drafted),
+                  "to_draft": mean("to_draft", drafted), "recoverable": rec}
+        print(f"| {prompt} | {len(parts)} | {len(drafted)} | {sum(p['chained'] for p in parts)} | "
+              + " | ".join(f"{values[c]:.3f}" for c in cols) + " |")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="action", required=True)
@@ -609,6 +693,8 @@ def main() -> None:
     for name in ("calibrate", "costs", "roundtable", "widthtable", "shapes", "budgets", "same", "kerneltable"):
         a = sub.add_parser(name)
         a.add_argument("names")
+    a = sub.add_parser("split")
+    a.add_argument("names")
     a = sub.add_parser("modeled")
     a.add_argument("names")
     a.add_argument("--table", default="")
@@ -632,7 +718,8 @@ def main() -> None:
     {"prompts": prompts, "bench": bench, "widths": widths, "calibrate": calibrate, "costs": costs,
      "roundtable": roundtable, "pairs": pairs, "widthtable": widthtable, "shapes": shapes,
      "picks": picks, "kernels": kernels, "attribution": attribution, "budgets": budgets,
-     "widthcompare": widthcompare, "same": same, "kerneltable": kerneltable, "modeled": modeled}[args.action](args)
+     "widthcompare": widthcompare, "same": same, "kerneltable": kerneltable, "modeled": modeled,
+     "split": split_table}[args.action](args)
 
 
 if __name__ == "__main__":

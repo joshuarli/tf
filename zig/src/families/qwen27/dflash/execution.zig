@@ -54,8 +54,8 @@ fn checkAppend(g: *const w.Graph, preparation: op.Preparation, context: op.Conte
     try taps.check(@intCast(positions.len), c.tapWidth(), .bf16);
 }
 
-/// Where appended keys and values go: a transaction's context, or a batched pass's stream.
-const Sink = union(enum) { transaction: u64, stream: u32 };
+/// Where appended keys and values go: a transaction's context, a batched pass's stream, or a chained frame's ring.
+const Sink = union(enum) { transaction: u64, stream: u32, chain: *const @import("chain.zig").Follow };
 fn encodeAppend(ops: op.Ops, g: *const w.Graph, preparation: op.Preparation, taps: op.View, positions: []const u64, frame: u64, transaction: u64) !void {
     return encodeAppendTo(ops, g, preparation, taps, positions, frame, .{ .transaction = transaction });
 }
@@ -70,8 +70,18 @@ fn encodeAppendTo(ops: op.Ops, g: *const w.Graph, preparation: op.Preparation, t
         switch (sink) {
             .transaction => |t| try ops.vtable.context_append(ops.ptr, t, frame, @intCast(i), keys, values, positions),
             .stream => |k| try ops.vtable.stream_append(ops.ptr, frame, k, @intCast(i), keys, values, positions),
+            .chain => |f| try @import("chain.zig").append(ops.ptr, frame, f, @intCast(i), keys, values, positions),
         }
     }
+}
+
+/// A chained frame's path rows at `positions`: their keys and values reach the ring only below the path's filled length.
+pub fn absorb(ops: op.Ops, g: *const w.Graph, preparation: op.Preparation, taps: op.View, positions: []const u64, frame: u64, follow: *const @import("chain.zig").Follow) !void {
+    try preparation.check();
+    try g.config.check();
+    if (positions.len == 0) return error.BadCommittedTaps;
+    try taps.check(@intCast(positions.len), g.config.tapWidth(), .bf16);
+    try encodeAppendTo(ops, g, preparation, taps, positions, frame, .{ .chain = follow });
 }
 
 /// append then forwardBlock in one frame: one commit and one wait for the committed taps and the block that reads them.

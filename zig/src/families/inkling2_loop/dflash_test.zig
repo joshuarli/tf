@@ -326,10 +326,14 @@ const TreeTally = struct {
     most_accepted: usize = 0,
     /// Rounds that offered fewer drafts than a tree holds: the output limit falls inside their tree.
     short: usize = 0,
+    /// Rounds whose draft ran behind the last verify; `keep` collects every round when set.
+    chained: usize = 0,
+    keep: ?*std.ArrayList(spec.Round) = null,
 
     fn add(t: *TreeTally, rounds: []const spec.Round) void {
         for (rounds) |r| {
             t.rounds += 1;
+            t.chained += @intFromBool(r.chained);
             t.most_accepted = @max(t.most_accepted, r.accepted);
             if (r.offered < inkling.verify.max_drafts) t.short += 1;
             if (r.offered > 0 and r.accepted == 0) t.zero += 1;
@@ -379,6 +383,7 @@ fn compareTree(s: *spec.Speculator, ids: []const u32, limit: usize, eos: []const
     if (caches_equal) try expectSameCache(m, &plain_cache, &spec_cache);
     for (rounds.items) |r| try std.testing.expectEqual(spec.Source.tree, r.source);
     tally.add(rounds.items);
+    if (tally.keep) |list| try list.appendSlice(a, rounds.items);
     return want.items.len;
 }
 
@@ -542,4 +547,52 @@ test "a tree round merges the lookup chain from before the drafter's window, as 
     const n = try compareTree(&s, ids, 128, &.{}, &tally, true);
     std.debug.print("dflash2 tree lookup: {d} tokens and caches equal plain greedy in {d} rounds; {d} lookup rows, {d} accepted, {d} rounds accepted past depth 7\n", .{ n, tally.rounds, tally.looked, tally.looked_accepted, tally.deep });
     try std.testing.expect(tally.looked_accepted > 0);
+}
+
+test "chained drafts give the unchained rounds' trees bit for bit and stop at a limit or an EOS inside a tree as plain greedy" {
+    const loaded = try load(.{ .bits = 4 }) orelse return error.SkipZigTest;
+    defer loaded.model.deinit();
+    defer loaded.drafter.deinit();
+    const a = std.testing.allocator;
+    var s = try spec.Speculator.init(loaded.model, loaded.drafter, dflash.tap_ids);
+    defer s.deinit();
+    var lookup = spec.Lookup.init(a);
+    defer lookup.deinit();
+    s.lookup = &lookup;
+    s.mode = .tree;
+    const parsed = try std.json.parseFromSlice([]const Prompt, a, prompts_json, .{});
+    defer parsed.deinit();
+    var trees: [2]std.ArrayList(spec.Round) = .{ .empty, .empty };
+    defer for (&trees) |*t| t.deinit(a);
+    var tally: [2]TreeTally = .{ .{ .keep = &trees[0] }, .{ .keep = &trees[1] } };
+    if (s.chain == null) return error.SkipZigTest;
+    var parked: @TypeOf(s.chain) = null;
+    defer if (parked) |*c| c.deinit();
+    for (0..2) |pass| {
+        if (pass == 1) std.mem.swap(@TypeOf(s.chain), &s.chain, &parked);
+        for (parsed.value) |p| _ = try compareTree(&s, p.token_ids, 101, &.{}, &tally[pass], pass == 0);
+    }
+    std.mem.swap(@TypeOf(s.chain), &s.chain, &parked);
+    try std.testing.expectEqual(trees[1].items.len, trees[0].items.len);
+    for (trees[0].items, trees[1].items) |x, y| {
+        try std.testing.expectEqual(y.offered, x.offered);
+        try std.testing.expectEqualSlices(u32, y.drafts[0..y.offered], x.drafts[0..x.offered]);
+        try std.testing.expectEqualSlices(u8, y.parents[0..y.offered], x.parents[0..x.offered]);
+        try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(y.q[0..y.offered]), std.mem.sliceAsBytes(x.q[0..x.offered]));
+    }
+    try std.testing.expect(tally[0].chained > 0 and tally[1].chained == 0 and tally[0].short > 0);
+    const ids = parsed.value[1].token_ids;
+    var cache = try inkling.Cache.init(s.model.device, &s.model.config, ids.len + 80);
+    defer cache.deinit();
+    var plain: std.ArrayList(u32) = .empty;
+    defer plain.deinit(a);
+    try plain.append(a, try spec.prefillPlain(s.model, &s.prefill, &cache, ids));
+    try spec.plain(s.model, &s.batch, &cache, plain.items[0], 64, &.{}, a, &plain, null);
+    var cut: TreeTally = .{};
+    var stop: usize = 8;
+    while (stop < 60 and cut.cut == 0) : (stop += 1) if (std.mem.indexOfScalar(u32, plain.items[0..stop], plain.items[stop]) == null) {
+        try std.testing.expectEqual(stop + 1, try compareTree(&s, ids, 64, &.{plain.items[stop]}, &cut, true));
+    };
+    try std.testing.expect(cut.cut > 0 and cut.chained > 0);
+    std.debug.print("dflash2 chained trees: {d} rounds, {d} drafted behind the verify, trees equal to unchained bit for bit; {d} short; an EOS cut {d}\n", .{ tally[0].rounds, tally[0].chained, tally[0].short, cut.cut });
 }

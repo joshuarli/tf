@@ -191,3 +191,52 @@ Records:
 - `campaign/runs/2026-11-23/splash-spec-*.jsonl` (decode trials).
 - `campaign/runs/2026-11-24/*-prefill-*.jsonl` (curves, with a final `conditions` record each).
 - `campaign/kernels/inkling-splash-runs/` (the Splash server logs that carry tokens per cycle).
+
+## How Splash gets there (source study, 1.7.2 `2afc7337aacc`, Apache-2.0)
+
+These findings come from reading the pinned source. Paths are under `runtime/`, and anything inferred is marked.
+
+- **The cycle is a tree, not a chain.** A cycle runs the drafter once: 8 rows, the anchor plus 7 mask rows
+  (`model/DFlashDraft.cpp:268`). A lane then verifies up to 16 rows (`metal/abi/ExecutionGeometry.h:8-18`).
+  - Drafted rows stop at depth 7.
+  - A prompt-lookup chain is merged into the same tree: the latest earlier match of the last 3 or more
+    tokens, proposing up to 15 tokens (`model/LookupProposals.hpp:32-39`). It is the only source of rows
+    deeper than 7 (`metal/kernels/decode/sampling.metal:1777-1787`). Code-4096's 9.1 tokens a cycle comes
+    from it (inferred).
+- **How the tree grows.** It grows best-first (`draft_select_tree`, `sampling.metal:1632-1804`):
+  - each node takes up to 4 children;
+  - a step's estimate is sigmoid(slope·logit(q) + intercept[position]), refit online every 64 cycles
+    (`model/VerifyBudget.hpp:31-53`).
+- **`--verify-rows auto`** picks the row count with the most expected tokens per millisecond
+  (`model/StepCosts.cpp:274-302`). The cost side is a per-kernel-class table measured at startup, plus a
+  history term.
+- **Tree verify.** Each row carries an ancestor bitmask and a depth (`metal/abi/VerifyTree.h:20-37`).
+  - Relative attention masks block keys that are not ancestors.
+  - Accepted rows' KV move from slot committed+row to committed+depth (`kernels/common/kv_path_commit.h`).
+  - The short convolutions run along each row's path and rebuild state from a tape of the retained path
+    (`shared/short_convolution.metal:171-204`).
+  - Rejected rows are simply overwritten in the next cycle.
+- **Routed experts, grouped by expert** (`ops/MoE.cpp:294-357`).
+  - `moe_group_routes_verified_s0` counts routes per expert and writes tiles {expert, rows, first_row} with
+    indirect grids.
+  - Rows are gathered into dense M8 tiles, or M32 above 128 routes.
+  - Each threadgroup dequantizes its expert's weights once and runs a small matmul over the tile's rows. An
+    expert with 1–2 rows gets a register GEMV.
+  - The combine sums weight × output in fp32 in route order (`shared/moe.metal:230-520`).
+  - Its cost grows about 0.75 ms a row from 8 to 16 rows. tf's grows 5.7 ms.
+- **The drafter's context window.**
+  - Ring slot = position % 2048, with K roped at the absolute position (`kernels/common/draft_context_kv.h`).
+  - Prefill captures only the last min(prompt, 2048) rows (`model/DraftContextPlan.cpp:44-46`).
+  - A query at position p sees keys from p−2047 onward, plus its own 8 block rows in both directions
+    (`kernels/decode/draft.metal:197-389`).
+- **Selector.**
+  - Top 16 candidates by raw logit.
+  - Rank-256 edge from the predecessor's candidate.
+  - Score 30·tanh((logit + edge)/30).
+  - q is a temperature-1 softmax.
+  - The greedy path takes the argmax given its parent's own candidate at each step (`sampling.metal:1099-1696`).
+
+For tf, this splits the gap into three pieces:
+- V1: verify cost per row, by grouping experts.
+- DF2a: acceptance at 4K, by checking the drafter context against the window semantics above.
+- DF2b: a tree with prompt lookup, after V1 lands, since it needs a tree-masked verify.

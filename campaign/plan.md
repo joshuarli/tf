@@ -25,9 +25,11 @@
   3. V1, running: lane `lane/v1-verify` in `.work/wt/v1-verify` (scope `usrn_651ac2c0-caf8-4b08-aa21-4ba53965fe17`),
      an Opus subagent. Target: 8-row grouped verify at or under about 30 ms at 1K, at the expert-read floor. On
      resume after a lost session, check its branch and receipt `campaign/kernels/inkling-v1-verify.md`.
-  3a. DF2 (new from S1): acceptance. Splash commits 1.3× (code-1024) to 3.3× (code-4096) what tf's chain commits
-     with the same drafter. Trace tf's 4K collapse (prompt taps from the half-precision prefill path, window
-     handling), then tree or deeper verification within the row budget V1 delivers.
+  3a. DF2a, running beside V1 (acceptance only, no timing): `lane/df2-accept` in `.work/wt/df2-accept` (scope
+     `usrn_0269a0d1-fa1d-4c55-841f-a4b02e188630`), receipt `inkling-df2-accept.md`. Splash commits 1.3× (code-1024)
+     to 3.3× (code-4096) what tf's chain commits with the same drafter. Trace and fix tf's 4K collapse against
+     Splash's drafter window semantics (`inkling-splash.md`, source study).
+  3b. DF2b, after V1: a tree-masked verify of up to 16 rows with prompt-lookup chains, as Splash does.
   4. SV1, done and merged (`inkling-sv1-serve.md`). `INKLING_DRAFTER=<dir>` turns on served greedy DFlash2
      speculation, byte-identical to plain greedy across prompt-cache hits, forks and EOS (133/133 in `inkling-gpu`).
      It is faster only on code-1024 (1.47×) and prose-1024 (1.16×), so it stays opt-in until V1 and DF2 land. It

@@ -1,0 +1,11 @@
+Apple M5 Max
+f32 single MMA, 1280000 elements, spread 2^±12:
+  fma_fwd: 1280000
+  fma_rev: 609111
+  mul_add_fwd: 900027
+  exact_once: 781560
+  fma_fwd_c_last: 905757
+  pair_tree_fma: 618515
+  fma_rev_c_last: 564102
+heavy: done: peak charged 22.6 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 22.6 GB); host pressure worst 1, host swap +0 MB, host pageins 4822286
+exit 0

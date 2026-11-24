@@ -57,7 +57,7 @@ test "few-row affine projections give each row the one-row kernel's bytes" {
     var prng = std.Random.DefaultPrng.init(0x726f_7773);
     const rng = prng.random();
     var checked: usize = 0;
-    for ([_][3]u32{ .{ 2312, 3072, 0 }, .{ 65600, 1024, 30 } }) |shape| {
+    for ([_][3]u32{ .{ 2312, 3072, 0 }, .{ 65600, 1024, 30 }, .{ 1034, 2304, 30 }, .{ 2306, 3072, 0 } }) |shape| {
         const n = shape[0];
         const k = shape[1];
         const cap: f32 = @floatFromInt(shape[2]);
@@ -70,7 +70,7 @@ test "few-row affine projections give each row the one-row kernel's bytes" {
         defer for (outs) |o| o.deinit();
         for (2..9) |rows| for ([_]u32{ 0, 1 }) |xb| {
             const args = Dense{ .n = n, .k = k, .rows = @intCast(rows), .xs = 1, .xb = xb, .bits = 8, .cap = cap };
-            const d = shared.dense(rows, n, k, 8).?;
+            const d = shared.dense(rows, n, k, 8) orelse return error.TestUnexpectedResult;
             const cb = queue.commandBuffer();
             const enc = cb.compute(.serial);
             for (0..2) |side| {
@@ -128,7 +128,7 @@ test "few-row fused attention projections give each row the one-row kernel's byt
         var total: usize = 0;
         for (m) |v| total += v;
         for (2..9) |rows| {
-            const d = shared.fused(rows, total, k) orelse continue;
+            const d = shared.fused(rows, m, k) orelse continue;
             const cb = queue.commandBuffer();
             const enc = cb.compute(.serial);
             for (0..2) |side| {

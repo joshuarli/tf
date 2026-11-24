@@ -1,0 +1,23 @@
+PYTHONDONTWRITEBYTECODE=1 ~/.local/bin/uv run --project /Users/josh/repos/tf/.work/wt/v2-arith/campaign python /Users/josh/repos/tf/.work/wt/v2-arith/campaign/quality/verify_pins.py --dir /Users/josh/repos/tf/.work/src/xgrammar-v0.2.8
+xgrammar v0.2.8 at 97787376faee5ed8466cfad57c99855e4ce2f6aa and 3 submodules match the pins
+cd /Users/josh/repos/tf/.work/tmp/v2/base-src && zig build grammar -Dxgrammar=/Users/josh/repos/tf/.work/src/xgrammar-v0.2.8
+test -f /Users/josh/repos/tf/.work/tmp/v2/base-src/zig-out/native/lib/libtfgrammar.dylib
+built /Users/josh/repos/tf/.work/tmp/v2/base-src/zig-out/native/lib/libtfgrammar.dylib
+serve /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd under INKLING_LOAD_LIMIT_GB=26 through /Users/josh/repos/tf/.work/wt/v2-arith/campaign/heavy.py: tensorfold-native serve /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd --host 127.0.0.1 --port <free> --parallel 1 --context 32768 --prompt-cache-gib 2 --no-update-check --no-drafts --temperature 0
+PYTHONDONTWRITEBYTECODE=1 ~/.local/bin/uv run --project /Users/josh/repos/tf/.work/wt/v2-arith/campaign python /Users/josh/repos/tf/.work/wt/v2-arith/campaign/quality/run.py \
+		--model inkling2-mini-oq4e --set dev --bin '/Users/josh/repos/tf/.work/tmp/v2/base-src/zig-out/native/bin/tensorfold-native'
+serving Inkling-2-Mini-oQ4e-mtp@3eea042751cd; startup {'lock_wait_s': 4.444, 'startup_s': 0.308, 'engine_load_s': 4.6, 'spawn_to_ready_s': 4.752}
+1/12 code-c01 code: pass (tests passed)
+2/12 code-c02 code: fail (truncated at 8192 tokens: no fenced python code block)
+3/12 code-c03 code: pass (tests passed)
+4/12 structured-s01 structured: fail (request failed: HTTPError: HTTP Error 400: Bad Request b'{"error": {"message": "structured output (response_format and the guided_* fields) is not supported by this engine yet", "type": "invalid_request_error"}}')
+5/12 structured-s02 structured: fail (request failed: HTTPError: HTTP Error 400: Bad Request b'{"error": {"message": "structured output (response_format and the guided_* fields) is not supported by this engine yet", "type": "invalid_request_error"}}')
+6/12 structured-s09 structured: fail (request failed: HTTPError: HTTP Error 400: Bad Request b'{"error": {"message": "Inkling does not support grammar-constrained tool_choice required or named functions; send auto or none", "type": "invalid_request_error"}}')
+7/12 reasoning-gsm8k-167 reasoning: pass (16)
+8/12 reasoning-gsm8k-83 reasoning: pass (600)
+9/12 reasoning-mmlu-163 reasoning: pass (C)
+10/12 retrieval-t01 retrieval: pass (QX-7419)
+11/12 retrieval-t02 retrieval: pass (VN-6403)
+12/12 retrieval-t05: excluded (campaign context budget exceeded: 43076 rendered prompt tokens + 8192 reply tokens > 32768; prompt must fit 24576 tokens; the fixture was not truncated)
+quality 7/11 passed; code 2/3, reasoning 3/3, retrieval 2/2, structured 0/3; wrote /Users/josh/repos/tf/.work/wt/v2-arith/campaign/quality/results/inkling2-mini-oq4e-dev-20261124T135030Z/result.json
+make: *** [quality-inkling2-mini-oq4e] Error 1

@@ -97,11 +97,13 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    Opt-in `INKLING_PREFILL_HALF=both` serves 2,048/2,059 tok/s at 4K/8K (1.18–1.36× default) but agrees with the
    exact path's top-1 on 97.49% of rows at margin ≥ 0.1, under the 99.5% bar, so it is not promoted; `inputs`
    97.32%, `experts` 97.25%. Unresolved: `experts` alone measured slower in its one trial.
-5a. PH, on the GPU after the DF2b merge suite (not a timing lane; it yields to a timing lane): qualify `INKLING_PREFILL_HALF=both` under Decision 19. Already
-   measured (P4): oracle top-1 94.73% against exact 94.96% (−0.23 points), mean KL 0.0199 against 0.0195 (1.02×);
-   quality dev 7/11 on both, losing `retrieval-t01` (ran to the 8,192 cap) and gaining `code-c02`. Still needed:
-   `quality SET=full` on exact and `both`, `retrieval-t01` examined for repeatability, and Pi tasks. If it passes,
-   flip the default and keep `INKLING_PREFILL_HALF=off` for the exact path.
+5a. PH, done (`inkling-ph-half.md`): `INKLING_PREFILL_HALF=both` passes Decision 19. Oracle KL 1.02×, top-1
+   −0.23 points; full quality 29/44 on both; Pi 7/8 on both (`read-and-answer` fails on both). It swaps one runaway
+   for another, repeatably: exact loops on `code-c02`, which half passes; half loops on `retrieval-t01`, which exact
+   answers. Both are tracked under Q3.
+5e. PH2, after P5c merges (shares `prefill.zig`): make `both` the default prefill, add an explicit exact value
+   (`INKLING_PREFILL_HALF=off`), rerun the oracle gate and the served curve, and record the flip under Execution
+   boundary's contract changes.
 5b. P5c, running (code and tests; timing via `.work/tmp/p5c-timing-go`, first in the timing queue):
    `lane/p5c-chunks` in `.work/wt/p5c-chunks` (scope `usrn_265d53ea-e1a8-4a21-a50b-9bb72e300e69`), receipt
    `inkling-p5c-chunks.md`. The host's fork-point chunking: prompts are cut on a 128-row grid and end with a 128-row
@@ -122,7 +124,7 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
 5d. SC2, after SV2: one pinned scorecard for the integrated configuration (served prefill curve, committed decode
    by class, round time and accepted work, quality, peak footprint). Every target miss names its dominant measured
    cost; external reported results, local comparisons and projections stay separate.
-6. Q3: the `code-c02` reasoning loop from P3c.
+6. Q3: the long-reasoning runaways: `code-c02` under exact prefill (open since P3c) and `retrieval-t01` under half prefill.
 7. Deferred off the critical path: see **Later**.
 
 Items run on per-model chains, and items whose owned files are disjoint run in parallel:
@@ -296,7 +298,8 @@ The owner made the first two decisions on 2026-11-21:
     - mean KL within 1.10× the exact path's;
     - top-1 no more than 0.5 points below the exact path's;
     - the full quality set (`SET=full`) loses at most one case against the exact path, every lost case examined, and
-      no new runaway reasoning (a reply reaching the 8,192-token cap where exact answers);
+      no more runaways (replies reaching the 8,192-token cap) than the exact path has (owner, 2026-11-24: counted
+      net, after PH swapped one runaway for another);
     - Pi coding tasks no worse than exact.
 
     A variant that passes becomes the default; the exact path stays selectable. Weight requantization and KV

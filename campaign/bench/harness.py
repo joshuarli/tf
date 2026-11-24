@@ -39,21 +39,25 @@ PROMPTS_DIR = CAMPAIGN / "prompts"
 PROMPT_MANIFEST = PROMPTS_DIR / "manifest.json"
 RUNS_DIR = CAMPAIGN / "runs"
 
-REPO_NAMES = {"flint-int4": "flint-int4", "flint-dflash2": "Flint-DFlash2", "inkling-2-mini": "Inkling-2-Mini"}
-MODEL_KEYS = {"flint": "flint-int4", "inkling2-mini": "inkling-2-mini", "inkling-2-mini": "inkling-2-mini"}
-LOAD_LIMIT_VARS = {"flint-int4": "FLINT_LOAD_LIMIT_GB", "inkling-2-mini": "INKLING_LOAD_LIMIT_GB"}
+INKLING_KEYS = ("inkling-2-mini", "inkling-2-mini-oq4e-mtp")
+REPO_NAMES = {"flint-int4": "flint-int4", "flint-dflash2": "Flint-DFlash2", "inkling-2-mini": "Inkling-2-Mini",
+              "inkling-2-mini-oq4e-mtp": "Inkling-2-Mini-oQ4e-mtp"}
+MODEL_KEYS = {"flint": "flint-int4", "inkling2-mini": "inkling-2-mini", "inkling-2-mini": "inkling-2-mini",
+              "inkling2-mini-oq4e": "inkling-2-mini-oq4e-mtp"}
+LOAD_LIMIT_VARS = {"flint-int4": "FLINT_LOAD_LIMIT_GB", **dict.fromkeys(INKLING_KEYS, "INKLING_LOAD_LIMIT_GB")}
 UNSUPPORTED_MODES = {
-    "inkling-2-mini": {
+    key: {
         "drafter": "Inkling 2 Mini has no served drafter in this campaign (its mtp.safetensors head is not wired); "
                    "run mode ar",
-    },
+    }
+    for key in INKLING_KEYS
 }
 # Flags every server for a model passes, whatever the caller's mode; Server applies them itself.
-MODEL_SERVE_ARGS = {"inkling-2-mini": ["--temperature", "0"]}
+MODEL_SERVE_ARGS = {key: ["--temperature", "0"] for key in INKLING_KEYS}
 # The mode a caller that names none (Pi) serves: Inkling is greedy ar unless copy drafts are requested.
-DEFAULT_SERVE_ARGS = {"flint-int4": [], "inkling-2-mini": ["--no-drafts"]}
+DEFAULT_SERVE_ARGS = {"flint-int4": [], **{key: ["--no-drafts"] for key in INKLING_KEYS}}
 # Inkling's copy drafts are opt-in through the environment, not a flag.
-COPY_DRAFT_ENV = {"inkling-2-mini": {"INKLING_COPY_DRAFTS": "1"}}
+COPY_DRAFT_ENV = {key: {"INKLING_COPY_DRAFTS": "1"} for key in INKLING_KEYS}
 
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
@@ -393,7 +397,9 @@ def served_model_matches(key: str, model_id: str | None) -> bool:
     """Whether a served model id names ``key``; the served name is the checkpoint directory's basename."""
     if not model_id:
         return False
-    return str(model_id).lower().startswith(served_identity_name(key).lower())
+    name = served_identity_name(key).lower()
+    served = str(model_id).lower()
+    return served == name or served.startswith(f"{name}@")
 
 
 def load_limit_env(model: Path) -> dict[str, str]:

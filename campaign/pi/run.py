@@ -37,7 +37,7 @@ def needs_vision(task_dir: Path) -> bool:
 
 def applicable(task_dirs: list[Path], key: str) -> tuple[list[Path], list[dict]]:
     """Split Pi tasks into runnable ones and the ones a text-only model excludes with a recorded reason."""
-    if key != "inkling-2-mini":
+    if key not in harness.INKLING_KEYS:
         return list(task_dirs), []
     kept, excluded = [], []
     for task_dir in task_dirs:

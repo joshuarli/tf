@@ -41,7 +41,7 @@ def needs_vision(case: dict) -> bool:
 
 def applicable(cases: list[dict], key: str) -> tuple[list[dict], list[dict]]:
     """Split a selection into scored cases and the cases a text-only model excludes with a recorded reason."""
-    if key != "inkling-2-mini":
+    if key not in harness.INKLING_KEYS:
         return list(cases), []
     kept, excluded = [], []
     for case in cases:

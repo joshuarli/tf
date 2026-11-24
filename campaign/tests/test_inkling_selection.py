@@ -135,6 +135,23 @@ class ServedIdentity(unittest.TestCase):
         self.assertTrue(harness.served_model_matches("flint-int4", "flint-int4@3b93f9053b53"))
         self.assertFalse(harness.served_model_matches("flint-int4", "Inkling-2-Mini@ed40e7da625f"))
 
+    def test_oq4e_and_the_original_checkpoint_are_not_interchangeable(self):
+        original = "Inkling-2-Mini@ed40e7da625f"
+        oq4e = "Inkling-2-Mini-oQ4e-mtp@3eea042751cd"
+        self.assertTrue(harness.served_model_matches("inkling-2-mini-oq4e-mtp", oq4e))
+        self.assertFalse(harness.served_model_matches("inkling-2-mini", oq4e))
+        self.assertFalse(harness.served_model_matches("inkling-2-mini-oq4e-mtp", original))
+
+    def test_oq4e_is_served_under_the_inkling_contract(self):
+        key = harness.model_key("inkling2-mini-oq4e")
+        self.assertEqual(harness.model_dir(key).name, "Inkling-2-Mini-oQ4e-mtp@3eea042751cd")
+        self.assertEqual(harness.model_key_for_dir(harness.model_dir(key)), key)
+        self.assertEqual(harness.load_limit_env(harness.model_dir(key)), {"INKLING_LOAD_LIMIT_GB": "26"})
+        self.assertEqual(harness.default_serve_args(key), ["--no-drafts"])
+        self.assertEqual(harness.model_serve_args(key), ["--temperature", "0"])
+        vision = [{"id": "vision-v01", "kind": "vision", "prompt": "describe"}]
+        self.assertEqual(quality_run.applicable(vision, key)[0], [])
+
     def test_pi_identity_check_names_the_family(self):
         problems = pi_run.identity_problems(
             {"model_ids": ["flint-int4@3b93f9053b53"], "models": [{"owned_by": "tensorfold"}]},

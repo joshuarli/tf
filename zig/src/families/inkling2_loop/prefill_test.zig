@@ -1604,4 +1604,5 @@ test "wide expert and grouped fallback partition threshold occupancy" {
 
 test {
     _ = @import("prefill_staged_test.zig");
+    _ = @import("prefill_rows.zig");
 }

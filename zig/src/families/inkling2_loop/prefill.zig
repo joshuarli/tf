@@ -5,6 +5,7 @@ const st = @import("state.zig");
 const wts = @import("model.zig");
 const kernels = @import("kernels.zig");
 const staged_mod = @import("prefill_staged.zig");
+const rows_mod = @import("prefill_rows.zig");
 
 const Model = wts.Model;
 const Cache = st.Cache;
@@ -176,6 +177,7 @@ pub const Pipes = struct {
     attn_units: ?mtl.Pipeline,
     half_rows: ?mtl.Pipeline,
     staged: ?staged_mod.Pipes,
+    rows: rows_mod.Pipes,
     moe_zero: mtl.Pipeline,
     moe_count: mtl.Pipeline,
     moe_offsets: mtl.Pipeline,
@@ -207,6 +209,7 @@ pub const Pipes = struct {
         if (p.attn_units) |pipe| pipe.deinit();
         if (p.half_rows) |pipe| pipe.deinit();
         if (p.staged) |pipes| pipes.deinit();
+        p.rows.deinit();
         inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "gemm", "smallrow", "pick", "gu_g_nv", "down_g_nv", "gu_g_mx", "down_g_mx", "expert_matrix_nv", "expert_matrix_mx", "moe_zero", "moe_count", "moe_offsets", "moe_sort", "embed", "rms", "rms3", "rms_pair", "gather_rms", "scatter", "pass_copy", "mix", "mix4", "ctl", "clips", "clip3", "clip", "conv", "batch_conv", "batch_store_rel", "cstore", "kv", "rel", "rel_rows", "attn", "attn_tiled", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
     }
 };
@@ -468,6 +471,8 @@ pub const PrefillScratch = struct {
         errdefer if (s.pipes.affine_stage_gemm_split) |pipe| pipe.deinit();
         s.pipes.staged = if (s.affine_stage_w != null) try staged_mod.Pipes.init(device) else null;
         errdefer if (s.pipes.staged) |pipes| pipes.deinit();
+        s.pipes.rows = try rows_mod.Pipes.init(device);
+        errdefer s.pipes.rows.deinit();
         s.pipes.affine_half_rows = null;
         s.pipes.affine_half_up = null;
         s.pipes.affine_half_down = null;
@@ -903,6 +908,17 @@ const Chunk = struct {
     fn mixBlocks(c: Chunk, cur: B, query: Tensor, out: B) void {
         c.gatherM(b(c.s.blocks), cur, @intCast(c.count + 1));
         c.mixQ(query, out);
+    }
+
+    fn mixNorm(c: Chunk, cur: B, query: Tensor, out: B, norms: []const Tensor, outs: [3]B) bool {
+        const k = nrows(query);
+        if (c.batch != null or !c.s.fuse or !rows_mod.mixFits(c.h, c.count + 1, k, norms.len)) return false;
+        const args = rows_mod.MixArgs{ .width = c.h, .depth = @intCast(c.count + 1), .stride = st.mix_states, .k = @intCast(k), .norm = @intFromBool(norms.len > 0), .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.h))), .eps = c.m.config.text.eps };
+        var weights: [3]B = @splat(t(query));
+        for (norms, 0..) |w, i| weights[i] = t(w);
+        c.setP(c.s.pipes.rows.mix, args, &.{ b(c.s.blocks), cur, t(query), A, out, weights[0], weights[1], weights[2], outs[0], outs[1], outs[2] });
+        c.enc.dispatchGroups(mtl.Size.of(c.n, 1, 1), mtl.Size.of(rows_mod.threads, 1, 1));
+        return true;
     }
 
     fn pushBlock(c: *Chunk) void {
@@ -1364,9 +1380,13 @@ const Chunk = struct {
         const s = c.s;
 
         var ins: [3]In = .{ .{ .buf = b(s.x), .xs = 1, .xb = 0 }, .{ .buf = b(s.x), .xs = 1, .xb = 0 }, .{ .buf = b(s.x), .xs = 1, .xb = 0 } };
+        const normed = [3]B{ b(s.n0), b(s.n1), b(s.n2) };
+        var fused_norm = false;
         if (index > 0) {
             const q = m.weights.attn_queries[index - 1];
-            c.mixBlocks(b(s.x), q, bo(s.mixout, 0));
+            const norms: []const Tensor = if (full) &.{ lay.q_norm, lay.k_norm, lay.v_norm } else &.{lay.q_norm};
+            fused_norm = bank == null and c.mixNorm(b(s.x), q, bo(s.mixout, 0), norms, normed);
+            if (!fused_norm and !c.mixNorm(b(s.x), q, bo(s.mixout, 0), &.{}, normed)) c.mixBlocks(b(s.x), q, bo(s.mixout, 0));
             const k: u32 = @intCast(nrows(q));
             if (full) {
                 ins = .{ .{ .buf = bo(s.mixout, 0), .xs = k, .xb = 0 }, .{ .buf = bo(s.mixout, 0), .xs = k, .xb = 1 }, .{ .buf = bo(s.mixout, 0), .xs = k, .xb = 2 } };
@@ -1395,7 +1415,9 @@ const Chunk = struct {
         }
 
         for (0..3) |j| c.record(slot, j, ins[j]);
-        if (full or bank != null) {
+        if (fused_norm) {
+            ins = if (full) .{ .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, .{ .buf = b(s.n1), .xs = 1, .xb = 0 }, .{ .buf = b(s.n2), .xs = 1, .xb = 0 } } else .{ .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, .{ .buf = b(s.n0), .xs = 1, .xb = 0 } };
+        } else if (full or bank != null) {
             c.setP(s.pipes.rms3, Rms3{ .width = c.h, .xs = .{ ins[0].xs, ins[1].xs, ins[2].xs }, .xb = .{ ins[0].xb, ins[1].xb, ins[2].xb }, .eps = text.eps }, &.{ ins[0].buf, ins[1].buf, ins[2].buf, t(lay.q_norm), t(if (full) lay.k_norm else lay.q_norm), t(if (full) lay.v_norm else lay.q_norm), A, b(s.n0), b(s.n1), b(s.n2) });
             c.enc.dispatchGroups(mtl.Size.of(3 * c.n, 1, 1), mtl.Size.of(256, 1, 1));
             ins = .{ .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, .{ .buf = b(s.n1), .xs = 1, .xb = 0 }, .{ .buf = b(s.n2), .xs = 1, .xb = 0 } };
@@ -1412,12 +1434,14 @@ const Chunk = struct {
         } else c.addN(b(s.x), b(s.o), @as(usize, c.n) * c.h);
 
         c.record(slot, 7, .{ .buf = b(s.x), .xs = 1, .xb = 0 });
-        c.mixBlocks(b(s.x), m.weights.mlp_queries[index], bo(s.mixout, 0));
+        const mlp_query = m.weights.mlp_queries[index];
+        const mlp_fused = bank == null and c.mixNorm(b(s.x), mlp_query, bo(s.mixout, 0), &.{lay.mlp_norm}, .{ b(s.m0), b(s.m0), b(s.m0) });
+        if (!mlp_fused and !c.mixNorm(b(s.x), mlp_query, bo(s.mixout, 0), &.{}, normed)) c.mixBlocks(b(s.x), mlp_query, bo(s.mixout, 0));
         if (bank) |_| {
             const ctl = lay.controllers[3] orelse return error.MissingController;
             c.control(ctl, .{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, .{ .buf = b(s.msg), .xs = 4, .xb = 3 }, bo(s.mixout, 0), 1, 0);
         }
-        c.rmsW(.{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, t(lay.mlp_norm), b(s.m0), 1, 0, c.h, text.eps);
+        if (!mlp_fused) c.rmsW(.{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, t(lay.mlp_norm), b(s.m0), 1, 0, c.h, text.eps);
         c.experts(lay, b(s.m0), slot);
         const slots = c.rings(slot);
         c.convolve(b(s.moe), b(s.aconv), lay.mlp_post, null, undefined, b(s.moe), slots[3], c.h, 0, 0, slot, .mlp, false);

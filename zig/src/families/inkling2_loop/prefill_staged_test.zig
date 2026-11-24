@@ -48,7 +48,7 @@ fn fill(m: *const model.Model, ps: *prefill.PrefillScratch, ids: []const u32, ch
     return Snapshot.take(m, &cache, ps.logits.slice(f32, chunks[chunks.len - 1] * m.config.text.unpadded_vocab));
 }
 
-test "oQ4e staged projections over joined rows keep the per-projection bytes and cache state" {
+test "oQ4e fused prefill keeps the unfused logits and cache state byte for byte" {
     const path = std.c.getenv("TF_INKLING2_LOOP_OQ4E_DIR") orelse return error.SkipZigTest;
     const m = try model.Model.load(t.allocator, t.io, std.mem.span(path));
     defer m.deinit();

@@ -12,7 +12,6 @@ const Layer = wts.Layer;
 const Controller = wts.Controller;
 
 pub const default_chunk: usize = 1024;
-const shared_expert_rows = 8;
 
 /// The half-operand expert library: gate/up matrices from 14 rows an expert, down from 8, grouped f32 kernels below.
 pub const half_source = "#define I2P_HALF_OPERANDS 1\n#define I2P_MATRIX_THRESHOLD 14\n#define I2P_DOWN_MATRIX_THRESHOLD 8\n" ++ kernels.prefill ++ kernels.prefill_expert_wide;
@@ -72,6 +71,7 @@ const Pair = extern struct { count: u32 };
 const AffineBatchControl = extern struct { k: u32, m0: u32, m1: u32, h: u32, cxs: u32, cxb: u32, mxs: u32, mxb: u32, ys: u32, yb: u32 };
 const RmsPair = extern struct { width: u32, xs0: u32, xb0: u32, xs1: u32, xb1: u32, eps: f32 };
 const AffineProjections = extern struct { k: u32, full: u32, m: [8]u32 };
+const SharedProjections = extern struct { k: u32, full: u32, rows: u32, m: [8]u32 };
 const AffineDense = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32, bits: u32, cap: f32 };
 
 const B = struct { buf: mtl.Buffer, off: usize = 0, args: bool = false };
@@ -787,6 +787,8 @@ const Chunk = struct {
                 c.setP(c.s.pipes.affine_half_rows.?, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out, b(c.s.half_overflow.?) });
                 c.enc.dispatchGroups(mtl.Size.of((n + 63) / 64, (rows + 31) / 32, 1), mtl.Size.of(256, 1, 1));
                 return;
+            } else if (c.sharedDense(w, q, x, out, args)) {
+                return;
             } else {
                 c.setP(p.dense, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out });
             }
@@ -801,6 +803,14 @@ const Chunk = struct {
         c.enc.dispatchGroups(mtl.Size.of((n + 7) / 8, rows, 1), mtl.Size.of(256, 1, 1));
     }
 
+    fn sharedDense(c: Chunk, w: Tensor, q: wts.Affine, x: In, out: B, args: AffineDense) bool {
+        const batch = c.batch orelse return false;
+        const d = batch.scratch.shared.dense(args.rows, args.n, args.k, args.bits) orelse return false;
+        c.setP(d.pipe, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out });
+        c.enc.dispatchGroups(d.groups, d.threads);
+        return true;
+    }
+
     fn affineProjections(c: Chunk, lay: *const Layer, inputs: [3]In, full: bool) void {
         const a = &lay.attn;
         const s = c.s;
@@ -812,12 +822,18 @@ const Chunk = struct {
         const ms: [8]u32 = .{ @intCast(nrows(a.q)), @intCast(nrows(a.k)), @intCast(nrows(a.v)), @intCast(nrows(a.r)), @intCast(nrows(a.gate)), @intCast(nrows(a.sink)), if (full) @intCast(nrows(a.k_dyn.?)) else 0, if (full) @intCast(nrows(a.v_dyn.?)) else 0 };
         var total: usize = 0;
         for (ms) |n| total += n;
-        c.setP(c.m.affine_pipes.?.batch_projections, AffineProjections{ .k = @intCast(width(a.q)), .full = @intFromBool(full), .m = ms }, &.{
+        const bufs = [_]B{
             inputs[0].buf, inputs[1].buf, inputs[2].buf, t(a.q), bo(qf.scales, qf.scale_offset), bo(qf.biases, qf.bias_offset),
             t(k), bo(kf.scales, kf.scale_offset), bo(kf.biases, kf.bias_offset),
             t(v), bo(vf.scales, vf.scale_offset), bo(vf.biases, vf.bias_offset),
             b(s.q), b(s.k), b(s.v), b(s.r), b(s.gate), b(s.sink), b(s.kdyn), b(s.vdyn), A,
-        });
+        };
+        if (c.batch) |batch| if (batch.scratch.shared.fused(c.n, total, @intCast(width(a.q)))) |d| {
+            c.setP(d.pipe, SharedProjections{ .k = @intCast(width(a.q)), .full = @intFromBool(full), .rows = c.n, .m = ms }, &bufs);
+            c.enc.dispatchGroups(d.groups, d.threads);
+            return;
+        };
+        c.setP(c.m.affine_pipes.?.batch_projections, AffineProjections{ .k = @intCast(width(a.q)), .full = @intFromBool(full), .m = ms }, &bufs);
         c.enc.dispatchGroups(mtl.Size.of((total + 7) / 8, c.n, 1), mtl.Size.of(256, 1, 1));
     }
 
@@ -1145,9 +1161,9 @@ const Chunk = struct {
         }
         if (c.n <= 8 or !s.half) {
             const codes = b(if (lay.precision == .mxfp8) m.t256 else m.t16);
-            const shared = c.batch != null and c.n >= shared_expert_rows and lay.precision != .mxfp8;
-            const gu = if (lay.precision == .mxfp8) s.pipes.gu_mx else if (shared) c.batch.?.scratch.gu_rows else s.pipes.gu_nv;
-            const down = if (lay.precision == .mxfp8) s.pipes.down_mx else if (shared) c.batch.?.scratch.down_rows else s.pipes.down_nv;
+            if (lay.precision == .nvfp4) if (c.batch) |batch| if (c.gatheredExperts(lay, input, batch, codes)) return;
+            const gu = if (lay.precision == .mxfp8) s.pipes.gu_mx else s.pipes.gu_nv;
+            const down = if (lay.precision == .mxfp8) s.pipes.down_mx else s.pipes.down_nv;
             c.setP(gu, MoeB{ .k = c.h, .n = inter, .slots = slots, .topk = K, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.picks), A, b(s.act), codes });
             c.enc.dispatchGroups(mtl.Size.of(inter, slots, 1), mtl.Size.of(32, 1, 1));
             if (lay.precision == .mxfp8) {
@@ -1203,6 +1219,22 @@ const Chunk = struct {
         c.enc.dispatchGroups(mtl.Size.of(if (wide_matrix or half_matrix == null) (c.h + 63) / 64 else (c.h + 31) / 32, E, (c.n + 31) / 32), mtl.Size.of(if (wide_matrix or half_matrix == null) 256 else 128, 1, 1));
         c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = K, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
         c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
+    }
+
+    fn gatheredExperts(c: Chunk, lay: *const Layer, input: B, batch: *BatchContext, codes: B) bool {
+        const s = c.s;
+        const text = &c.m.config.text;
+        const shared = &batch.scratch.shared;
+        const slots: u32 = c.n * text.topk;
+        const gu = shared.gateUp(c.n, text.expert_inter, c.h, slots) orelse return false;
+        const dn = shared.downs(c.n, c.h, text.expert_inter, slots) orelse return false;
+        c.setP(gu.pipe, MoeB{ .k = c.h, .n = text.expert_inter, .slots = slots, .topk = text.topk, .gate_cap = text.gate_cap, .up_cap = text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.picks), A, b(s.act), codes });
+        c.enc.dispatchGroups(gu.groups, gu.threads);
+        c.setP(dn.pipe, MoeB{ .k = text.expert_inter, .n = c.h, .slots = slots, .topk = text.topk, .gate_cap = 0, .up_cap = 0 }, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.picks), A, b(s.down), codes });
+        c.enc.dispatchGroups(dn.groups, dn.threads);
+        c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = text.topk, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
+        c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
+        return true;
     }
 
     /// Routed NVFP4 projections on tensor units; experts under the matrix thresholds keep the grouped f32 kernels.

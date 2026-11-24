@@ -751,7 +751,7 @@ test "batched depth mixes keep the prefill mixes' bytes" {
 
 const MoeArgs = extern struct { k: u32, n: u32, slots: u32, topk: u32, gate_cap: f32, up_cap: f32 };
 
-test "batched expert projections keep the per-slot kernels' bytes" {
+test "gathered expert projections keep the per-slot kernels' bytes" {
     if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
     const device = mtl.Device.init() catch return error.SkipZigTest;
     defer device.deinit();
@@ -759,14 +759,14 @@ test "batched expert projections keep the per-slot kernels' bytes" {
     defer pool.pop();
     const queue = try device.queue();
     defer queue.deinit();
-    const lib = try mtl.Library.fromSource(device, kernels.expertSource(false), mtl.CompileOptions.mlx());
-    defer lib.deinit();
+    var shared = try @import("rows.zig").Pipes.init(device);
+    defer shared.deinit();
     const prefill_lib = try mtl.Library.fromSource(device, kernels.prefillSource(false), mtl.CompileOptions.mlx());
     defer prefill_lib.deinit();
-    const gu = [_]mtl.Pipeline{ try mtl.Pipeline.init(device, prefill_lib, "i2p_gu", false), try mtl.Pipeline.init(device, lib, "i2_gu_rows", false) };
-    defer for (gu) |p| p.deinit();
-    const down = [_]mtl.Pipeline{ try mtl.Pipeline.init(device, prefill_lib, "i2p_down", false), try mtl.Pipeline.init(device, lib, "i2_down_rows", false) };
-    defer for (down) |p| p.deinit();
+    const gu = try mtl.Pipeline.init(device, prefill_lib, "i2p_gu", false);
+    defer gu.deinit();
+    const down = try mtl.Pipeline.init(device, prefill_lib, "i2p_down", false);
+    defer down.deinit();
     const experts = 12;
     const h = 2304;
     const inter = 48;
@@ -820,8 +820,9 @@ test "batched expert projections keep the per-slot kernels' bytes" {
             const args = if (up) MoeArgs{ .k = h, .n = inter, .slots = @intCast(slots), .topk = topk, .gate_cap = 30, .up_cap = 20 } else MoeArgs{ .k = inter, .n = h, .slots = @intCast(slots), .topk = topk, .gate_cap = 0, .up_cap = 0 };
             const cb = queue.commandBuffer();
             const enc = cb.compute(.serial);
+            const gathered = if (up) shared.gateUp(rows, inter, h, @intCast(slots)).? else shared.downs(rows, h, inter, @intCast(slots)).?;
             for (0..2) |side| {
-                enc.setPipeline(if (up) gu[side] else down[side]);
+                enc.setPipeline(if (side == 1) gathered.pipe else if (up) gu else down);
                 enc.setBuffer(if (up) x else act, 0, 0);
                 enc.setBuffer(if (up) w13 else w2, 0, 1);
                 enc.setBuffer(if (up) s13 else s2, 0, 2);
@@ -831,7 +832,7 @@ test "batched expert projections keep the per-slot kernels' bytes" {
                 enc.setValue(args, 6);
                 enc.setBuffer(outs[side], 0, 7);
                 enc.setBuffer(codes, 0, 8);
-                enc.dispatchGroups(mtl.Size.of(if (up) inter else h, slots, 1), mtl.Size.of(32, 1, 1));
+                if (side == 1) enc.dispatchGroups(gathered.groups, gathered.threads) else enc.dispatchGroups(mtl.Size.of(if (up) inter else h, slots, 1), mtl.Size.of(32, 1, 1));
             }
             enc.end();
             cb.commit();
@@ -848,5 +849,5 @@ test "batched expert projections keep the per-slot kernels' bytes" {
             checked += 1;
         }
     }
-    std.debug.print("batched expert test: {d} cases byte-equal to the per-slot kernels\n", .{checked});
+    std.debug.print("gathered expert test: {d} cases byte-equal to the per-slot kernels\n", .{checked});
 }

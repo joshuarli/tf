@@ -27,6 +27,7 @@ const usage =
     \\tf-inkling2-loop-run <tokenizer.json> <ids.json> detokenize <out>  the ids' text
     \\tf-inkling2-loop-run <model> <prompts.json> dflash <drafter> <tokens> <out.jsonl> [bits] [reading]  DFlash2 vs plain greedy
     \\tf-inkling2-loop-run <model> <prompts.json> dflash-widths <reps> <out.jsonl> [load_s]  grouped verify at widths 1/2/4/8
+    \\tf-inkling2-loop-run <model> <prompts.json> dflash-kernels <reps> <out.jsonl> [picks.json]  shared-row kernels alone
     \\
 ;
 
@@ -94,7 +95,7 @@ pub fn main(init: std.process.Init) !void {
         try detokenize(gpa, init.io, args[1], args[2], args[4]);
         return;
     }
-    if (std.mem.eql(u8, mode, "dflash") or std.mem.eql(u8, mode, "dflash-widths")) {
+    if (std.mem.eql(u8, mode, "dflash") or std.mem.eql(u8, mode, "dflash-widths") or std.mem.eql(u8, mode, "dflash-kernels")) {
         try @import("dflash_run.zig").main(init, args);
         return;
     }

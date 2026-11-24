@@ -351,13 +351,24 @@ def pairs(args: argparse.Namespace) -> None:
         all_logs.extend(logs)
         print(f"| {prompt} | {med(cb):.2f} | {med(ca):.2f} | {cell(tb)} | {cell(ta)} | "
               f"{', '.join(f'{x:.2f}' for x in ratios)} | {math.exp(sum(logs) / len(logs)):.2f} |")
-    n = len(all_logs)
-    mean = sum(all_logs) / n
-    sd = math.sqrt(sum((x - mean) ** 2 for x in all_logs) / (n - 1)) if n > 1 else 0.0
+    print()
+    print_interval("all prompt-pairs", all_logs)
+    per_pair = [sum(all_logs[i::len(before)]) / len(prompts_seen) for i in range(len(before))]
+    print(", ".join(f"{math.exp(x):.3f}" for x in per_pair) + ": each process pair's geometric mean over prompts")
+    print_interval("process pairs", per_pair)
+
+
+def print_interval(label: str, logs: list) -> None:
+    """The geometric mean of log ratios with a two-sided 95% t interval (n - 1 degrees of freedom)."""
+    n = len(logs)
+    mean = sum(logs) / n
+    sd = math.sqrt(sum((x - mean) ** 2 for x in logs) / (n - 1)) if n > 1 else 0.0
     t = {1: 12.71, 2: 4.30, 3: 3.18, 4: 2.78, 5: 2.57, 6: 2.45, 7: 2.36, 8: 2.31, 9: 2.26, 10: 2.23, 11: 2.20,
-         12: 2.18, 13: 2.16, 14: 2.14, 15: 2.13, 16: 2.12, 17: 2.11}.get(n - 1, 2.0)
-    half = t * sd / math.sqrt(n) if n > 1 else 0.0
-    print(f"\nall prompt-pairs: geometric mean {math.exp(mean):.3f}, 95% interval {math.exp(mean - half):.3f}–"
+         12: 2.18, 13: 2.16, 14: 2.14, 15: 2.13, 16: 2.12, 17: 2.11, 18: 2.10, 19: 2.09, 20: 2.09, 25: 2.06,
+         30: 2.04, 35: 2.03, 40: 2.02}
+    df = max(k for k in t if k <= max(n - 1, 1))
+    half = t[df] * sd / math.sqrt(n) if n > 1 else 0.0
+    print(f"{label}: geometric mean {math.exp(mean):.3f}, 95% interval {math.exp(mean - half):.3f}–"
           f"{math.exp(mean + half):.3f} (n = {n})")
 
 

@@ -171,3 +171,75 @@ test "verification commits the same width prefix across cache boundaries" {
     try initial_a.finish(&anchors, 0);
     try initial_b.finish(&anchors, 0);
 }
+
+const vfy = @import("verify.zig");
+
+fn expectParentsFirst(t: *const vfy.Tree) !void {
+    for (t.shape(), 1..) |p, r| {
+        try std.testing.expect(p < r);
+        try std.testing.expectEqual(t.depth[p] + 1, t.depth[r]);
+    }
+}
+
+test "a tree plan merges the lookup chain into the drafter's tree where tokens agree, parents before children" {
+    var plan = vfy.Plan.init();
+    plan.verify_ms = @splat(1);
+    const drafted = vfy.Drafted{ .tokens = &.{ 10, 20, 11, 30 }, .parents = &.{ -1, -1, 0, 2 }, .scores = &.{ -0.05, -2.0, -0.1, -0.2 } };
+    const t = plan.build(7, drafted, &.{ 10, 11, 40, 41 }, 20, 16);
+    try std.testing.expectEqual(@as(usize, 7), t.rows);
+    try expectParentsFirst(&t);
+    try std.testing.expectEqual(@as(u32, 7), t.tokens[0]);
+    try std.testing.expectEqual(@as(usize, 4), t.looked());
+    try std.testing.expectEqual(@as(u32, 20), t.match);
+    var seen: [6]bool = @splat(false);
+    for (1..t.rows) |r| {
+        const at = std.mem.indexOfScalar(u32, &.{ 10, 20, 11, 30, 40, 41 }, t.tokens[r]).?;
+        seen[at] = true;
+        const chained = t.chain[r] != vfy.Plan.unlooked;
+        try std.testing.expectEqual(at != 1 and at != 3, chained);
+        try std.testing.expectEqual(at < 4, t.q[r] > 0);
+    }
+    for (seen) |s| try std.testing.expect(s);
+    const again = plan.build(7, drafted, &.{ 10, 11, 40, 41 }, 20, 16);
+    try std.testing.expectEqualSlices(u32, t.tokens[0..t.rows], again.tokens[0..again.rows]);
+    try std.testing.expectEqualSlices(u8, t.shape(), again.shape());
+}
+
+test "a plan verifies few rows for unlikely drafts and all of a long likely chain past the drafter's depth" {
+    var plan = vfy.Plan.init();
+    const weak = vfy.Drafted{ .tokens = &.{ 1, 2, 3, 4, 5, 6, 7 }, .parents = &.{ -1, 0, 1, 2, 3, 4, 5 }, .scores = &.{ -2.5, -5, -7.5, -10, -12.5, -15, -17.5 } };
+    try std.testing.expect(plan.build(9, weak, &.{}, 0, 16).rows <= 2);
+    var chain: [15]u32 = undefined;
+    for (&chain, 0..) |*c, i| c.* = @intCast(100 + i);
+    const strong = plan.build(9, null, &chain, 40, 16);
+    try std.testing.expectEqual(@as(usize, 16), strong.rows);
+    try std.testing.expectEqual(@as(u8, 15), strong.depth[15]);
+    try expectParentsFirst(&strong);
+    try std.testing.expectEqual(@as(usize, 6), plan.build(9, null, &chain, 40, 6).rows);
+    plan.most = 8;
+    try std.testing.expectEqual(@as(usize, 8), plan.build(9, null, &chain, 40, 16).rows);
+}
+
+test "a plan learns from each draft under an accepted parent and leaves the drafter out only behind a long likely chain" {
+    var plan = vfy.Plan.init();
+    try std.testing.expect(plan.lookupSuffices(15, 40));
+    try std.testing.expect(!plan.lookupSuffices(7, 40));
+    try std.testing.expect(!plan.lookupSuffices(15, 3));
+    const before = plan.estimate(0, 0, 0, 3, false);
+    var chain: [15]u32 = undefined;
+    for (&chain, 0..) |*c, i| c.* = @intCast(100 + i);
+    const t = plan.build(9, null, chain[0..4], 3, 16);
+    var picks: [16]u32 = @splat(0);
+    for (1..t.rows) |r| picks[t.shape()[r - 1]] = t.tokens[r];
+    for (0..20) |_| plan.learn(&t, &picks);
+    try std.testing.expect(plan.estimate(0, 0, 0, 3, false) > before);
+    for (&picks) |*p| p.* = 1;
+    for (0..60) |_| plan.learn(&t, &picks);
+    try std.testing.expect(plan.estimate(0, 0, 0, 3, false) < before);
+    const fresh = vfy.Plan.init();
+    try std.testing.expectEqual(fresh.estimate(0, 0, 0, 3, true), plan.estimate(0, 0, 0, 3, true));
+    plan.reset();
+    try std.testing.expectEqual(before, plan.estimate(0, 0, 0, 3, false));
+    plan.skip_at = 0;
+    try std.testing.expect(!plan.lookupSuffices(15, 40));
+}

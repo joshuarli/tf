@@ -9,14 +9,17 @@ const run = @import("run.zig");
 
 pub const usage =
     \\tf-inkling2-loop-run <model> <prompts.json> dflash <drafter> <tokens> <out.jsonl> [bits] [entering|outputs|unnormed]
-    \\  [incremental|rebuilt|f32_taps|first128|first512|window8192] [chain|lookup]  the drafter's context: built row by
-    \\  row, rebuilt each round at positions from 0, prompt taps from eight-row (f32) prefill chunks, the request's
-    \\  first 128 or 512 rows rebuilt each round ahead of its latest, or an 8,192-row window; lookup drafts a round
-    \\  whose latest tokens occurred before the drafter's window from what followed them there
-    \\tf-inkling2-loop-run <model> <prompts.json> dflash-widths <reps> <out.jsonl> [load_s]  grouped verify at widths 1-8,
-    \\  each prompt after load_s seconds of eight-row verifies (sustained load; 0: none)
+    \\  [incremental|rebuilt|f32_taps|first128|first512|window8192] [chain|lookup|tree|drafter_tree]  the drafter's
+    \\  context: built row by row, rebuilt each round at positions from 0, prompt taps from eight-row (f32) prefill
+    \\  chunks, the request's first 128 or 512 rows rebuilt each round ahead of its latest, or an 8,192-row window;
+    \\  lookup drafts a round whose latest tokens occurred before the drafter's window from what followed them there;
+    \\  tree verifies up to 16 rows of the drafter's tree merged with the lookup chain, drafter_tree without the chain;
+    \\  either takes ,nodes=N ,children=N ,skip=P (the drafter's tree and the chain estimate that leaves it out)
+    \\tf-inkling2-loop-run <model> <prompts.json> dflash-widths <reps> <out.jsonl> [load_s] [widths]  grouped verify at
+    \\  widths 1, 2, 4, 8, 12 and 16 (or the comma-separated widths; 0: the one-row batch step), each prompt after load_s
+    \\  seconds of eight-row verifies (sustained load; 0: none)
     \\tf-inkling2-loop-run <model> <prompts.json> dflash-kernels <reps> <out.jsonl> [picks.json]  one-row against
-    \\  shared-row kernels on the weights at 2, 4 and 8 rows; picks.json: a widths run's 48 x 64 routed experts
+    \\  shared-row kernels on the weights at 1 to 16 rows; picks.json: a widths run's 48 visits of routed experts
     \\  prompts.json: [{"name": ..., "ids": [...]}]; EOS is ignored; a run whose tokens differ from plain exits non-zero
     \\
 ;
@@ -43,9 +46,16 @@ pub fn main(init: std.process.Init, args: []const [:0]const u8) !void {
         const bits = if (args.len >= 8) try std.fmt.parseInt(u8, args[7], 10) else 0;
         const reading = if (args.len >= 9) std.meta.stringToEnum(Reading, args[8]) orelse return error.ExpectedArgs else .entering;
         const context = if (args.len >= 10) std.meta.stringToEnum(Context, args[9]) orelse return error.ExpectedArgs else .incremental;
-        const drafts = if (args.len == 11) std.meta.stringToEnum(Drafts, args[10]) orelse return error.ExpectedArgs else .chain;
+        var options = std.mem.splitScalar(u8, if (args.len == 11) args[10] else "chain", ',');
+        const drafts = std.meta.stringToEnum(Drafts, options.first()) orelse return error.ExpectedArgs;
+        var plan = inkling.verify.Plan.init();
+        while (options.next()) |option| {
+            const eq = std.mem.indexOfScalar(u8, option, '=') orelse return error.ExpectedArgs;
+            const value = option[eq + 1 ..];
+            if (std.mem.eql(u8, option[0..eq], "nodes")) plan.nodes = try std.fmt.parseInt(u32, value, 10) else if (std.mem.eql(u8, option[0..eq], "children")) plan.children = try std.fmt.parseInt(u32, value, 10) else if (std.mem.eql(u8, option[0..eq], "skip")) plan.skip_at = try std.fmt.parseFloat(f64, value) else return error.ExpectedArgs;
+        }
         if (limit < 2) return error.ExpectedArgs;
-        const same = try speculate(gpa, init.io, m, args[4], parsed.value, limit, bits, reading, context, drafts, &out);
+        const same = try speculate(gpa, init.io, m, args[4], parsed.value, limit, bits, reading, context, drafts, plan, &out);
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[6], .data = out.items });
         if (!same) return error.SpeculationDiffersFromPlain;
         return;
@@ -57,11 +67,29 @@ pub fn main(init: std.process.Init, args: []const [:0]const u8) !void {
         return;
     }
     if (std.mem.eql(u8, mode, "dflash-widths")) {
-        if (args.len != 6 and args.len != 7) return error.ExpectedArgs;
+        if (args.len < 6 or args.len > 8) return error.ExpectedArgs;
         const reps = try std.fmt.parseInt(usize, args[4], 10);
-        const load_s = if (args.len == 7) try std.fmt.parseFloat(f64, args[6]) else 0;
+        const load_s = if (args.len >= 7) try std.fmt.parseFloat(f64, args[6]) else 0;
         if (reps == 0 or load_s < 0) return error.ExpectedArgs;
-        const result = widths(gpa, m, parsed.value, reps, load_s, &out);
+        var chosen: [8]usize = undefined;
+        var count: usize = 0;
+        for ([_]usize{ 0, 1, 2, 4, 8, 12, 16 }) |w| {
+            chosen[count] = w;
+            count += 1;
+        }
+        if (args.len == 8) {
+            count = 0;
+            var it = std.mem.splitScalar(u8, args[7], ',');
+            while (it.next()) |text| {
+                if (count == chosen.len) return error.ExpectedArgs;
+                const w = try std.fmt.parseInt(usize, text, 10);
+                if (w > inkling.group.max_rows) return error.ExpectedArgs;
+                chosen[count] = w;
+                count += 1;
+            }
+            if (count == 0) return error.ExpectedArgs;
+        }
+        const result = widths(gpa, m, parsed.value, reps, load_s, chosen[0..count], &out);
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[5], .data = out.items });
         return result;
     }
@@ -73,7 +101,7 @@ const Reading = enum { entering, outputs, unnormed };
 
 const Context = enum { incremental, rebuilt, f32_taps, first128, first512, window8192 };
 
-const Drafts = enum { chain, lookup };
+const Drafts = enum { chain, lookup, tree, drafter_tree };
 
 const Rebuilt = struct {
     drafter: *dflash.Drafter,
@@ -157,7 +185,7 @@ fn mean(values: []const f64) f64 {
     return sum / @as(f64, @floatFromInt(values.len));
 }
 
-fn speculate(gpa: std.mem.Allocator, io: std.Io, m: *inkling.Model, dir: []const u8, prompts: []const Prompt, limit: usize, bits: u8, reading: Reading, context: Context, drafts: Drafts, out: *std.ArrayList(u8)) !bool {
+fn speculate(gpa: std.mem.Allocator, io: std.Io, m: *inkling.Model, dir: []const u8, prompts: []const Prompt, limit: usize, bits: u8, reading: Reading, context: Context, drafts: Drafts, plan: inkling.verify.Plan, out: *std.ArrayList(u8)) !bool {
     const shifted = reading == .outputs;
     const unnormed = reading == .unnormed;
     const drafter = try dflash.Drafter.init(gpa, io, m, dir, .{ .bits = bits, .embed_norm = !unnormed, .window = if (context == .window8192) 8192 else null });
@@ -175,13 +203,19 @@ fn speculate(gpa: std.mem.Allocator, io: std.Io, m: *inkling.Model, dir: []const
     if (context == .rebuilt or rebuilt.first_rows > 0) s.proposer = .{ .ptr = &rebuilt, .call = Rebuilt.call };
     var lookup = spec.Lookup.init(gpa);
     defer lookup.deinit();
-    if (drafts == .lookup) s.lookup = &lookup;
+    if (drafts == .lookup or drafts == .tree) s.lookup = &lookup;
+    if (drafts == .tree or drafts == .drafter_tree) s.mode = .tree;
+    s.plan.nodes = plan.nodes;
+    s.plan.children = plan.children;
+    s.plan.skip_at = plan.skip_at;
     var small: ?inkling.PrefillScratch = if (context == .f32_taps) try inkling.PrefillScratch.init(m.device, &m.config, 8) else null;
     defer if (small) |*p| p.deinit();
     var small_taps: ?inkling.Taps = if (context == .f32_taps) try inkling.Taps.init(m.device, &m.config, visits, 8) else null;
     defer if (small_taps) |*t| t.deinit();
     const residency = try drafter.fixedBytes();
-    try out.print(gpa, "{{\"kind\":\"meta\",\"drafter_bits\":{d},\"draft_residency_bytes\":{d},\"warm_draft_ms\":{d:.3},\"limit\":{d},\"depth\":{d},\"taps\":[{d},{d},{d},{d}],\"embed_norm\":{},\"context\":\"{s}\",\"drafts\":\"{s}\"}}\n", .{ bits, residency, drafter.step_ms, limit, s.depth, visits[0], visits[1], visits[2], visits[3], !unnormed, @tagName(context), @tagName(drafts) });
+    try out.print(gpa, "{{\"kind\":\"meta\",\"drafter_bits\":{d},\"draft_residency_bytes\":{d},\"warm_draft_ms\":{d:.3},\"limit\":{d},\"depth\":{d},\"taps\":[{d},{d},{d},{d}],\"embed_norm\":{},\"context\":\"{s}\",\"drafts\":\"{s}\",\"plan\":{{\"nodes\":{d},\"children\":{d},\"most\":{d},\"skip_at\":{d:.3},\"draft_ms\":{d:.2},\"verify_ms\":[", .{ bits, residency, drafter.step_ms, limit, s.depth, visits[0], visits[1], visits[2], visits[3], !unnormed, @tagName(context), @tagName(drafts), s.plan.nodes, s.plan.children, s.plan.most, s.plan.skip_at, s.plan.draft_ms });
+    for (s.plan.verify_ms[1..], 0..) |v, i| try out.print(gpa, "{s}{d:.2}", .{ if (i == 0) "" else ",", v });
+    try out.appendSlice(gpa, "]}}\n");
     var all_same = true;
     for (prompts, 0..) |prompt, index| {
         var spec_tokens: std.ArrayList(u32) = .empty;
@@ -236,6 +270,15 @@ fn speculate(gpa: std.mem.Allocator, io: std.Io, m: *inkling.Model, dir: []const
         for (rounds.items, 0..) |r, i| {
             try out.print(gpa, "{{\"kind\":\"round\",\"prompt\":\"{s}\",\"round\":{d},\"position\":{d},\"offered\":{d},\"accepted\":{d},\"emitted\":{d},\"draft_ms\":{d:.4},\"verify_ms\":{d:.4},\"select_ms\":{d:.4},\"commit_ms\":{d:.4},\"host_ms\":{d:.4},\"total_ms\":{d:.4},\"source\":\"{s}\",\"drafts\":", .{ prompt.name, i, r.position, r.offered, r.accepted, r.emitted, ms(r.draft_ns), ms(r.verify_ns), ms(r.select_ns), ms(r.commit_ns), ms(r.host_ns), ms(r.total_ns), @tagName(r.source) });
             try tokensJson(gpa, out, r.drafts[0..r.offered]);
+            if (r.source == .tree) {
+                try out.print(gpa, ",\"looked\":{d},\"looked_accepted\":{d},\"expected\":{d:.4},\"match\":{d},\"hits\":{d},\"drafted\":{},\"parents\":[", .{ r.looked, r.looked_accepted, r.expected, r.match, r.hits, r.drafted });
+                for (r.parents[0..r.offered], 0..) |p, k| try out.print(gpa, "{s}{d}", .{ if (k == 0) "" else ",", p });
+                try out.appendSlice(gpa, "],\"q\":[");
+                for (r.q[0..r.offered], 0..) |v, k| try out.print(gpa, "{s}{d:.5}", .{ if (k == 0) "" else ",", v });
+                try out.appendSlice(gpa, "],\"chain\":[");
+                for (r.chain[0..r.offered], 0..) |v, k| try out.print(gpa, "{s}{d}", .{ if (k == 0) "" else ",", if (v == inkling.verify.Plan.unlooked) -1 else @as(i32, v) });
+                try out.appendSlice(gpa, "]");
+            }
             try out.appendSlice(gpa, "}\n");
             try totals.append(gpa, ms(r.total_ns));
             for ([_]u64{ r.draft_ns, r.verify_ns, r.select_ns, r.commit_ns, r.host_ns }, 0..) |ns, k| parts[k] += ms(ns);
@@ -264,10 +307,10 @@ fn speculate(gpa: std.mem.Allocator, io: std.Io, m: *inkling.Model, dir: []const
     return all_same;
 }
 
-fn widths(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, reps: usize, load_s: f64, out: *std.ArrayList(u8)) !void {
+fn widths(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, reps: usize, load_s: f64, cells: []const usize, out: *std.ArrayList(u8)) !void {
     var verifier = try inkling.group.Verifier.init(m.device, &m.config);
     defer verifier.deinit();
-    var bs = try inkling.BatchScratch.init(m.device, &m.config, inkling.group.max_rows);
+    var bs = try inkling.group.scratch(m.device, &m.config);
     defer bs.deinit();
     var ps = try inkling.PrefillScratch.init(m.device, &m.config, spec.prefill_chunk);
     defer ps.deinit();
@@ -278,7 +321,7 @@ fn widths(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, re
     defer gpa.free(logits);
     const plain = try gpa.alloc(f32, inkling.group.max_rows * vocab);
     defer gpa.free(plain);
-    const cells = [_]usize{ 0, 1, 2, 4, 8 };
+    const load_rows = 8;
     var all_equal = true;
     for (prompts) |prompt| {
         var cache = try inkling.Cache.init(m.device, &m.config, prompt.ids.len + 16);
@@ -292,7 +335,8 @@ fn widths(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, re
             if (i + 1 < rows.len) rows[i + 1] = spec.argmax(plain[i * vocab ..][0..vocab]);
         }
         try rollback.copy(m.queue, &m.config, &cache, false);
-        for (cells[1..]) |width| {
+        for (cells) |width| {
+            if (width == 0) continue;
             const g = try verifier.group(&.{&cache}, &.{width});
             try verifier.forward(m, &bs, &g, rows[0..width]);
             const got = bs.rows.logits.slice(f32, width * vocab);
@@ -311,15 +355,15 @@ fn widths(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, re
         const load_start = spec.now();
         var loaded: usize = 0;
         while (@as(f64, @floatFromInt(spec.now() - load_start)) / 1e9 < load_s) : (loaded += 1) {
-            const g = try verifier.group(&.{&cache}, &.{inkling.group.max_rows});
-            try verifier.forward(m, &bs, &g, &rows);
-            _ = try verifier.picks(m, bs.rows.logits, inkling.group.max_rows);
+            const g = try verifier.group(&.{&cache}, &.{load_rows});
+            try verifier.forward(m, &bs, &g, rows[0..load_rows]);
+            _ = try verifier.picks(m, bs.rows.logits, load_rows);
         }
-        var samples: [cells.len]std.ArrayList(f64) = @splat(.empty);
+        var samples: [8]std.ArrayList(f64) = @splat(.empty);
         defer for (&samples) |*list| list.deinit(gpa);
-        var forward_only: [cells.len]std.ArrayList(f64) = @splat(.empty);
+        var forward_only: [8]std.ArrayList(f64) = @splat(.empty);
         defer for (&forward_only) |*list| list.deinit(gpa);
-        var gpu_only: [cells.len]std.ArrayList(f64) = @splat(.empty);
+        var gpu_only: [8]std.ArrayList(f64) = @splat(.empty);
         defer for (&gpu_only) |*list| list.deinit(gpa);
         for (0..reps + 1) |rep| {
             for (0..cells.len) |k| {
@@ -386,7 +430,7 @@ fn routeOverlap(gpa: std.mem.Allocator, m: *inkling.Model, verifier: *const inkl
         try out.print(gpa, "{s}{d}", .{ if (slot == 0 and i == 0) "" else ",", e });
     };
     try out.appendSlice(gpa, "]}\n");
-    for ([_]usize{ 1, 2, 4, 8 }) |width| {
+    for ([_]usize{ 1, 2, 4, 8, 12, 16 }) |width| {
         if (width > rows.len) continue;
         var total: usize = 0;
         var most: usize = 0;

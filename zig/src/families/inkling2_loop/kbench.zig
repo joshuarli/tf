@@ -9,6 +9,8 @@ const SharedProj = extern struct { k: u32, full: u32, rows: u32, m: [8]u32 };
 const Moe = extern struct { k: u32, n: u32, slots: u32, topk: u32, gate_cap: f32, up_cap: f32 };
 
 const Kind = enum { head, oproj, proj, gate_up, down };
+const widest = inkling.group.max_rows;
+const slots_a_visit = widest * 8;
 const Io = struct { x: mtl.Buffer, act: mtl.Buffer, y: mtl.Buffer, outs: [8]mtl.Buffer, picks: mtl.Buffer, visits: usize };
 const Case = struct { pipe: mtl.Pipeline, groups: mtl.Size, threads: mtl.Size };
 
@@ -17,29 +19,32 @@ pub fn run(gpa: std.mem.Allocator, m: *inkling.Model, reps: usize, picks_path: ?
     var bs = try inkling.BatchScratch.init(m.device, c, 8);
     defer bs.deinit();
     const vocab: usize = c.text.unpadded_vocab;
-    const x = try filled(m, 8 * 3072, 1);
+    const x = try filled(m, widest * 3072, 1);
     defer x.deinit();
-    const act = try filled(m, 64 * c.text.expert_inter, 2);
+    const act = try filled(m, slots_a_visit * c.text.expert_inter, 2);
     defer act.deinit();
-    const y = try m.device.buffer(8 * vocab * 4, mtl.ResourceOptions.private);
+    const y = try m.device.buffer(widest * vocab * 4, mtl.ResourceOptions.private);
     defer y.deinit();
     var outs: [8]mtl.Buffer = undefined;
-    for (&outs) |*b| b.* = try m.device.buffer(8 * 3072 * 4, mtl.ResourceOptions.private);
+    for (&outs) |*b| b.* = try m.device.buffer(widest * 3072 * 4, mtl.ResourceOptions.private);
     defer for (outs) |b| b.deinit();
     const visits: usize = 48;
-    const picks = try m.device.buffer(visits * 64 * 4, mtl.ResourceOptions.shared);
+    const picks = try m.device.buffer(visits * slots_a_visit * 4, mtl.ResourceOptions.shared);
     defer picks.deinit();
-    const pv = picks.slice(i32, visits * 64);
-    for (0..visits) |v| for (0..8) |r| for (0..8) |j| {
-        pv[v * 64 + r * 8 + j] = @intCast((r * 4 + j) % 32);
+    const pv = picks.slice(i32, visits * slots_a_visit);
+    for (0..visits) |v| for (0..widest) |r| for (0..8) |j| {
+        pv[v * slots_a_visit + r * 8 + j] = @intCast((r * 4 + j) % 32);
     };
+    var picked_rows: usize = widest;
     if (picks_path) |path| {
-        const bytes = try std.Io.Dir.cwd().readFileAlloc(io_ctx, path, gpa, .limited(1 << 20));
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io_ctx, path, gpa, .limited(4 << 20));
         defer gpa.free(bytes);
         const parsed = try std.json.parseFromSlice([]const i32, gpa, bytes, .{});
         defer parsed.deinit();
-        if (parsed.value.len != visits * 64) return error.BadPicks;
-        @memcpy(pv, parsed.value);
+        if (parsed.value.len % (visits * 8) != 0 or parsed.value.len > visits * slots_a_visit) return error.BadPicks;
+        const per = parsed.value.len / visits;
+        picked_rows = per / 8;
+        for (0..visits) |v| @memcpy(pv[v * slots_a_visit ..][0..per], parsed.value[v * per ..][0..per]);
     }
     const io = Io{ .x = x, .act = act, .y = y, .outs = outs, .picks = picks, .visits = visits };
     const affine = m.affine_pipes.?;
@@ -48,7 +53,8 @@ pub fn run(gpa: std.mem.Allocator, m: *inkling.Model, reps: usize, picks_path: ?
     const local = localLayer(m, 0);
     var total: usize = 0;
     for ([_]usize{ local.attn.q.shape[0], local.attn.k.shape[0], local.attn.v.shape[0], local.attn.r.shape[0], local.attn.gate.shape[0], local.attn.sink.shape[0] }) |n| total += n;
-    for ([_]u32{ 1, 2, 3, 4, 8 }) |rows| for ([_]Kind{ .head, .oproj, .proj, .gate_up, .down }) |kind| {
+    for ([_]u32{ 1, 2, 3, 4, 8, 12, 16 }) |rows| for ([_]Kind{ .head, .oproj, .proj, .gate_up, .down }) |kind| {
+        if (rows > picked_rows) continue;
         const slots = rows * text.topk;
         const ms: [8]u32 = .{ @intCast(local.attn.q.shape[0]), @intCast(local.attn.k.shape[0]), @intCast(local.attn.v.shape[0]), @intCast(local.attn.r.shape[0]), @intCast(local.attn.gate.shape[0]), @intCast(local.attn.sink.shape[0]), 0, 0 };
         const one: Case = switch (kind) {
@@ -123,7 +129,7 @@ fn encode(enc: mtl.ComputeEncoder, m: *inkling.Model, kind: Kind, i: usize, shar
             const up = kind == .gate_up;
             enc.setBuffer(if (up) io.x else io.act, 0, 0);
             for ([_]inkling.Tensor{ if (up) lay.w13 else lay.w2, if (up) lay.w13_scale else lay.w2_scale, if (up) lay.w13_global.? else lay.w2_global.?, if (up) lay.w13_den.? else lay.w2_den.? }, 1..) |t, j| enc.setBuffer(t.buffer, t.offset, j);
-            enc.setBuffer(io.picks, (i % io.visits) * 64 * 4, 5);
+            enc.setBuffer(io.picks, (i % io.visits) * slots_a_visit * 4, 5);
             enc.setValue(Moe{ .k = if (up) text.hidden else text.expert_inter, .n = if (up) text.expert_inter else text.hidden, .slots = rows * 8, .topk = 8, .gate_cap = if (up) text.gate_cap else 0, .up_cap = if (up) text.up_cap else 0 }, 6);
             enc.setBuffer(io.y, 0, 7);
             enc.setBuffer(m.t16, 0, 8);

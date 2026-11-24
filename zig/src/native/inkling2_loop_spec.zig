@@ -9,6 +9,8 @@ const ck = q.checkpoint;
 const Allocator = std.mem.Allocator;
 
 pub const depth: u32 = 7;
+/// The most drafts a round's tree holds.
+pub const max_drafts: u32 = inkling.verify.max_drafts;
 const tap_ids = cfg.inkling_tap_ids[0..4];
 
 pub const Rows = struct {
@@ -22,20 +24,26 @@ pub const Rows = struct {
 };
 
 pub const Round = struct {
-    ids: [inkling.group.max_rows]u32 = undefined,
-    picks: [inkling.group.max_rows]u32 = undefined,
+    /// The accepted path's drafts and then the target's pick after them.
+    tokens: [inkling.group.max_rows]u32 = undefined,
     offered: u32 = 0,
     kept: u32 = 0,
+    /// The tree's lookup rows, and those on the accepted path.
+    looked: u32 = 0,
+    looked_kept: u32 = 0,
     draft_ns: u64 = 0,
     verify_ns: u64 = 0,
     commit_ns: u64 = 0,
 
     pub fn token(r: *const Round, j: usize) u32 {
-        return if (j < r.kept) r.ids[j + 1] else r.picks[r.kept];
+        return r.tokens[j];
     }
 };
 
-const Lane = struct { context: *rt.Context, first: u64 = 0, kept: Rows = .{} };
+/// A request's tokens: its prompt and what it has generated, the newest last.
+pub const History = struct { prompt: []const u32, emitted: []const u32 };
+
+const Lane = struct { context: *rt.Context, first: u64 = 0, kept: Rows = .{}, lookup: inkling.verify.Lookup, plan: inkling.verify.Plan };
 
 pub const Draft = struct {
     a: Allocator,
@@ -49,6 +57,7 @@ pub const Draft = struct {
     prompt: inkling.Taps,
     step: inkling.Taps,
     lanes: []Lane,
+    gathered: []u8,
     name: []const u8,
     failed: bool = false,
 
@@ -62,7 +71,7 @@ pub const Draft = struct {
         errdefer a.destroy(d);
         const name = try a.dupe(u8, dir);
         errdefer a.free(name);
-        d.* = .{ .a = a, .model = undefined, .glue = try q.glue_gpu.Kernels.init(target.device), .kernels = .{ .allocator = a, .device = target.device, .raw_tiles = false }, .dims = undefined, .bound = undefined, .config = c, .verifier = undefined, .prompt = undefined, .step = undefined, .lanes = &.{}, .name = name };
+        d.* = .{ .a = a, .model = undefined, .glue = try q.glue_gpu.Kernels.init(target.device), .kernels = .{ .allocator = a, .device = target.device, .raw_tiles = false }, .dims = undefined, .bound = undefined, .config = c, .verifier = undefined, .prompt = undefined, .step = undefined, .lanes = &.{}, .gathered = &.{}, .name = name };
         errdefer d.glue.deinit();
         errdefer d.kernels.deinit();
         d.dims = try target.device.buffer(4096, mtl.ResourceOptions.shared);
@@ -98,14 +107,21 @@ pub const Draft = struct {
         d.step = try inkling.Taps.init(target.device, &target.config, tap_ids, inkling.group.max_rows);
         errdefer d.step.deinit();
         if (d.step.rowBytes() != d.stride()) return error.TapWidth;
+        d.gathered = try a.alloc(u8, inkling.group.max_rows * d.stride());
+        errdefer a.free(d.gathered);
         d.lanes = try a.alloc(Lane, slots);
         var made: usize = 0;
         errdefer {
-            for (d.lanes[0..made]) |l| l.context.deinit(a);
+            for (d.lanes[0..made]) |*l| {
+                l.context.deinit(a);
+                l.lookup.deinit();
+            }
             a.free(d.lanes);
         }
         for (d.lanes) |*l| {
-            l.* = .{ .context = try rt.Context.init(a, d.model, true) };
+            var plan = inkling.verify.Plan.init();
+            plan.most = d.verifier.limit;
+            l.* = .{ .context = try rt.Context.init(a, d.model, true), .lookup = inkling.verify.Lookup.init(a), .plan = plan };
             made += 1;
         }
         return d;
@@ -115,8 +131,10 @@ pub const Draft = struct {
         for (d.lanes) |*l| {
             l.context.deinit(d.a);
             l.kept.deinit(d.a);
+            l.lookup.deinit();
         }
         d.a.free(d.lanes);
+        d.a.free(d.gathered);
         d.step.deinit();
         d.prompt.deinit();
         d.verifier.deinit();
@@ -146,7 +164,7 @@ pub const Draft = struct {
             };
             if (!seen) total += b.length();
         }
-        return total + d.lanes.len * (d.config.window - 1) * d.stride();
+        return total + d.lanes.len * (d.config.window - 1) * d.stride() + d.gathered.len;
     }
 
     fn stride(d: *const Draft) usize {
@@ -235,50 +253,86 @@ pub const Draft = struct {
         return d.keep(lane, end, d.a, &d.lanes[lane].kept);
     }
 
-    pub fn round(d: *Draft, lane: usize, m: *inkling.Model, batch: *inkling.BatchScratch, cache: *inkling.Cache, pending: u32, offered: u32) !Round {
-        var r: Round = .{ .offered = offered };
-        r.ids[0] = pending;
+    /// A new request takes the lane: its lookup and estimates start over.
+    pub fn forget(d: *Draft, lane: usize) void {
+        const l = &d.lanes[lane];
+        l.lookup.reset();
+        l.plan.reset();
+    }
+
+    /// One tree round from the request's newest token over the drafter and its lookup chain: the accepted path.
+    pub fn round(d: *Draft, lane: usize, m: *inkling.Model, batch: *inkling.BatchScratch, cache: *inkling.Cache, history: History, offered: u32) !Round {
+        const l = &d.lanes[lane];
+        const pending = history.emitted[history.emitted.len - 1];
+        var r: Round = .{};
         const t0 = now();
-        if (offered > 0) d.propose(lane, pending, r.ids[1..][0..offered]) catch |e| {
+        var chain: [inkling.verify.max_drafts]u32 = undefined;
+        var chained: u32 = 0;
+        var match_length: u32 = 0;
+        if (offered > 0) {
+            if (catchUp(&l.lookup, history)) |_| {
+                if (l.lookup.match()) |found| {
+                    chained = l.lookup.proposals(found, chain[0..offered]);
+                    match_length = found.length;
+                }
+            } else |_| l.lookup.reset();
+        }
+        var proposal: ?tf.qwen27.dflash.selector.Tree = null;
+        defer if (proposal) |*t| t.deinit();
+        if (offered > 0 and !l.plan.lookupSuffices(chained, match_length)) proposal = d.propose(lane, pending, l.plan.nodes, l.plan.children) catch |e| {
             d.fail(e);
             return error.DrafterFailed;
         };
+        const drafted: ?inkling.verify.Drafted = if (proposal) |t| .{ .tokens = t.tokens, .parents = t.parents, .scores = t.scores } else null;
+        const tree = l.plan.build(pending, drafted, chain[0..chained], match_length, @as(usize, offered) + 1);
         const t1 = now();
-        const caches = [1]*inkling.Cache{cache};
-        const sizes = [1]usize{@as(usize, offered) + 1};
-        const g = try d.verifier.group(&caches, &sizes);
+        const g = try d.verifier.tree(&.{cache}, &.{tree.rows}, tree.shape());
         batch.rows.taps = &d.step;
-        const forward = d.verifier.forward(m, batch, &g, r.ids[0 .. offered + 1]);
+        const decided = d.verifier.decide(m, batch, &g, tree.tokens[0..tree.rows], .commit);
         batch.rows.taps = null;
-        try forward;
-        const picks = try d.verifier.picks(m, batch.rows.logits, offered + 1);
-        @memcpy(r.picks[0 .. offered + 1], picks);
-        r.kept = @intCast(inkling.group.acceptedDrafts(r.ids[1..][0..offered], r.picks[0 .. offered + 1]));
+        const outcome = try decided;
         const t2 = now();
-        const accepted = [1]usize{r.kept};
-        try d.verifier.commit(m, &g, &accepted);
-        d.absorb(lane, d.step.bytes(0, r.kept + 1), r.kept + 1);
+        var line: [inkling.group.max_rows]usize = undefined;
+        const path = g.line(0, outcome.last[0], &line);
+        for (path[1..], 0..) |row, j| {
+            r.tokens[j] = tree.tokens[row];
+            r.looked_kept += @intFromBool(tree.chain[row] != inkling.verify.Plan.unlooked);
+        }
+        r.tokens[path.len - 1] = outcome.picks[path[path.len - 1]];
+        r.offered = @intCast(tree.rows - 1);
+        r.kept = @intCast(path.len - 1);
+        r.looked = @intCast(tree.looked());
+        l.plan.learn(&tree, outcome.picks);
+        const s = d.stride();
+        for (path, 0..) |row, i| @memcpy(d.gathered[i * s ..][0..s], d.step.bytes(row, 1));
+        d.absorb(lane, d.gathered[0 .. path.len * s], path.len);
         r.draft_ns = t1 - t0;
         r.verify_ns = t2 - t1;
         r.commit_ns = now() - t2;
         return r;
     }
 
-    fn propose(d: *Draft, lane: usize, pending: u32, out: []u32) !void {
+    fn catchUp(lookup: *inkling.verify.Lookup, history: History) !void {
+        var have = lookup.tokens.items.len;
+        if (have < history.prompt.len) {
+            try lookup.append(history.prompt[have..]);
+            have = history.prompt.len;
+        }
+        if (have - history.prompt.len > history.emitted.len) return error.LookupAhead;
+        try lookup.append(history.emitted[have - history.prompt.len ..]);
+    }
+
+    fn propose(d: *Draft, lane: usize, pending: u32, nodes: u32, children: u32) !tf.qwen27.dflash.selector.Tree {
         const pool = mtl.objc.Pool.push();
         defer pool.pop();
         const x = d.lanes[lane].context;
         try d.model.swap(x);
-        var result = d.model.proposeOptions(pending, .{ .nodes = @intCast(out.len), .children = 1, .edge = 1 });
+        var result = d.model.proposeOptions(pending, .{ .nodes = nodes, .children = children, .edge = 1 });
         d.model.swap(x) catch |e| {
             if (result) |*tree| tree.deinit() else |_| {}
             return e;
         };
-        var tree = try result;
-        defer tree.deinit();
-        if (tree.tokens.len != out.len) return error.ShortDraftChain;
-        for (tree.parents, 0..) |p, i| if (p != @as(i32, @intCast(i)) - 1) return error.NotDraftChain;
-        @memcpy(out, tree.tokens);
+        return result;
     }
 
     fn warm(d: *Draft) !void {

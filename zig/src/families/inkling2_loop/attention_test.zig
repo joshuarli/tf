@@ -771,7 +771,8 @@ test "gathered expert projections keep the per-slot kernels' bytes" {
     const h = 2304;
     const inter = 48;
     const topk = 8;
-    const most = 8 * topk;
+    const widest = @import("rows.zig").max_rows;
+    const most = widest * topk;
     var prng = std.Random.DefaultPrng.init(0x6578_7073);
     const rng = prng.random();
     const w13 = try device.buffer(experts * 2 * inter * h / 2, mtl.ResourceOptions.shared);
@@ -795,9 +796,9 @@ test "gathered expert projections keep the per-slot kernels' bytes" {
     const codes = try device.buffer(16 * 4, mtl.ResourceOptions.shared);
     defer codes.deinit();
     for (codes.slice(f32, 16), [_]f32{ 0, 0.5, 1, 1.5, 2, 3, 4, 6, -0.0, -0.5, -1, -1.5, -2, -3, -4, -6 }) |*v, c| v.* = c;
-    const x = try device.buffer(8 * h * 4, mtl.ResourceOptions.shared);
+    const x = try device.buffer(widest * h * 4, mtl.ResourceOptions.shared);
     defer x.deinit();
-    fill(rng, x.slice(f32, 8 * h));
+    fill(rng, x.slice(f32, widest * h));
     const act = try device.buffer(most * inter * 4, mtl.ResourceOptions.shared);
     defer act.deinit();
     fill(rng, act.slice(f32, most * inter));
@@ -807,14 +808,14 @@ test "gathered expert projections keep the per-slot kernels' bytes" {
     for (&outs) |*o| o.* = try device.buffer(most * h * 4, mtl.ResourceOptions.shared);
     defer for (outs) |o| o.deinit();
     var checked: usize = 0;
-    for (0..17) |case| {
-        const rows = case % 8 + 1;
+    for (0..2 * widest + 1) |case| {
+        const rows = case % widest + 1;
         const slots = rows * topk;
         const ps = picks.slice(i32, most);
         for (0..rows) |r| {
             var order: [experts]i32 = undefined;
             for (&order, 0..) |*o, i| o.* = @intCast(i);
-            if (case < 8) rng.shuffle(i32, &order);
+            if (case < widest) rng.shuffle(i32, &order);
             for (0..topk) |k| ps[r * topk + k] = order[k];
         }
         for ([_]bool{ true, false }) |up| {

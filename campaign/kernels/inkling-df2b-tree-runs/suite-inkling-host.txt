@@ -1,0 +1,21 @@
+test-inkling2-loop-host
++- run test stderr
+inkling prefix: reused 0 of 1 prompt tokens
+inkling prefix: reused 0 of 1 prompt tokens
+inkling prefix: reused 0 of 1 prompt tokens
+failed command: ./.zig-cache/o/ce22b30ad33793542c83af61688fcbc1/test --cache-dir=./.zig-cache --seed=0x52921734 --listen=-
+
+Build Summary: 10/10 steps succeeded; 35/35 tests passed
+test-inkling2-loop-host success
++- run test 24 pass (24 total) 1s MaxRSS:111M
+|  +- compile test debug native success 3s MaxRSS:548M
+|     +- run exe test-allocator-runner-source (test_runner.zig) success 281ms
+|        +- compile exe test-allocator-runner-source safe native success 4s MaxRSS:351M
++- run test 10 pass (10 total) 284ms MaxRSS:3M
+|  +- compile test debug native success 1s MaxRSS:267M
+|     +- run exe test-allocator-runner-source (test_runner.zig) (+1 more reused dependencies)
++- run test 1 pass (1 total) 249ms MaxRSS:7M
+   +- compile test debug native success 1s MaxRSS:365M
+      +- run exe test-allocator-runner-source (test_runner.zig) (+1 more reused dependencies)
+      +- WriteFile inkling_host_facade.zig cached
+

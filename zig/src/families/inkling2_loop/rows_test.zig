@@ -63,12 +63,12 @@ test "few-row affine projections give each row the one-row kernel's bytes" {
         const cap: f32 = @floatFromInt(shape[2]);
         const w = try affine(device, rng, n, k);
         defer for (w) |buf| buf.deinit();
-        const x = try inputs(device, rng, 9 * k);
+        const x = try inputs(device, rng, (rows_mod.max_rows + 1) * k);
         defer x.deinit();
         var outs: [2]mtl.Buffer = undefined;
-        for (&outs) |*o| o.* = try device.buffer(8 * n * 4, mtl.ResourceOptions.shared);
+        for (&outs) |*o| o.* = try device.buffer(rows_mod.max_rows * n * 4, mtl.ResourceOptions.shared);
         defer for (outs) |o| o.deinit();
-        for (2..9) |rows| for ([_]u32{ 0, 1 }) |xb| {
+        for (2..rows_mod.max_rows + 1) |rows| for ([_]u32{ 0, 1 }) |xb| {
             const args = Dense{ .n = n, .k = k, .rows = @intCast(rows), .xs = 1, .xb = xb, .bits = 8, .cap = cap };
             const d = shared.dense(rows, n, k, 8) orelse return error.TestUnexpectedResult;
             const cb = queue.commandBuffer();
@@ -118,16 +118,16 @@ test "few-row fused attention projections give each row the one-row kernel's byt
         const wv = try affine(device, rng, 1056, k);
         defer for (wv) |buf| buf.deinit();
         var xs: [3]mtl.Buffer = undefined;
-        for (&xs) |*x| x.* = try inputs(device, rng, 8 * k);
+        for (&xs) |*x| x.* = try inputs(device, rng, rows_mod.max_rows * k);
         defer for (xs) |x| x.deinit();
         var outs: [2][8]mtl.Buffer = undefined;
         for (&outs) |*side| for (side, m) |*o, rows_m| {
-            o.* = try device.buffer(@max(8 * rows_m * 4, 16), mtl.ResourceOptions.shared);
+            o.* = try device.buffer(@max(rows_mod.max_rows * rows_m * 4, 16), mtl.ResourceOptions.shared);
         };
         defer for (outs) |side| for (side) |o| o.deinit();
         var total: usize = 0;
         for (m) |v| total += v;
-        for (2..9) |rows| {
+        for (2..rows_mod.max_rows + 1) |rows| {
             const d = shared.fused(rows, m, k) orelse continue;
             const cb = queue.commandBuffer();
             const enc = cb.compute(.serial);

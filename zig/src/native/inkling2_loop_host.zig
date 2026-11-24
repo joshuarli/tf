@@ -27,6 +27,8 @@ const Job = struct {
     draft_ns: u64 = 0,
     verify_ns: u64 = 0,
     commit_ns: u64 = 0,
+    looked: u64 = 0,
+    looked_kept: u64 = 0,
 };
 
 pub const sampling_refusal = "Inkling 2 Mini decodes greedily only: send temperature 0 or leave it out";
@@ -307,8 +309,8 @@ pub const Host = struct {
             }
         }
         std.debug.print("inkling prefix: reused {d} of {d} prompt tokens\n", .{ job.reused, job.request.prompt.len });
-        var line: [192]u8 = undefined;
-        const telemetry: []const u8 = if (job.spec_rounds == 0) "" else std.fmt.bufPrint(&line, "{{\"kind\":\"DFlash2\",\"rounds\":{d},\"draft_ms\":{d:.3},\"verify_ms\":{d:.3},\"commit_ms\":{d:.3}}}", .{ job.spec_rounds, ms(job.draft_ns), ms(job.verify_ns), ms(job.commit_ns) }) catch "";
+        var line: [256]u8 = undefined;
+        const telemetry: []const u8 = if (job.spec_rounds == 0) "" else std.fmt.bufPrint(&line, "{{\"kind\":\"DFlash2\",\"rounds\":{d},\"draft_ms\":{d:.3},\"verify_ms\":{d:.3},\"commit_ms\":{d:.3},\"lookup_rows\":{d},\"lookup_kept\":{d}}}", .{ job.spec_rounds, ms(job.draft_ns), ms(job.verify_ns), ms(job.commit_ns), job.looked, job.looked_kept }) catch "";
         const narrowest: u32 = if (job.min_rows == 0 or job.rounds > job.spec_rounds) 1 else job.min_rows;
         const stats: api.Stats = .{ .rounds = job.rounds, .drafted = job.drafted, .accepted = job.accepted, .min_rows = narrowest, .prefill_seconds = job.prefill_seconds, .queued_seconds = @as(f64, @floatFromInt(@max(0, job.began - job.queued))) / 1e9, .telemetry_json = telemetry };
         h.lock();
@@ -396,6 +398,7 @@ pub const Host = struct {
         const job = slot.job.?;
         const r = job.request;
         job.began = h.now();
+        if (h.draft) |d| d.forget(h.lane(slot));
         if (r.images.len > 0 or r.prompt.len == 0 or r.prompt.len + r.max_tokens > h.capacity or r.sampling != null) {
             emit(job, .{ .prefilled = 0 });
             job.prefill_sent = true;
@@ -627,8 +630,8 @@ pub const Host = struct {
     fn speculate(h: *Host, d: *spec.Draft, slot: *Slot) void {
         const job = slot.job.?;
         const remaining = job.request.max_tokens - job.emitted.items.len;
-        const offered: u32 = @intCast(@min(@min(spec.depth, remaining - 1), (slot.cache.capacity -| slot.cache.len) -| 1));
-        const round = d.round(h.lane(slot), h.model, &h.batch, &slot.cache, job.emitted.items[job.emitted.items.len - 1], offered) catch |e| {
+        const offered: u32 = @intCast(@min(@min(spec.max_drafts, remaining - 1), (slot.cache.capacity -| slot.cache.len) -| 1));
+        const round = d.round(h.lane(slot), h.model, &h.batch, &slot.cache, .{ .prompt = job.request.prompt, .emitted = job.emitted.items }, offered) catch |e| {
             if (e != error.DrafterFailed) h.retire(slot, .failed, @errorName(e));
             return;
         };
@@ -640,6 +643,8 @@ pub const Host = struct {
         job.draft_ns += round.draft_ns;
         job.verify_ns += round.verify_ns;
         job.commit_ns += round.commit_ns;
+        job.looked += round.looked;
+        job.looked_kept += round.looked_kept;
         if (h.cancelled(job)) return h.retire(slot, .cancelled, "");
         for (0..round.kept + 1) |j| {
             h.token(slot, round.token(j));
@@ -668,7 +673,7 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
             for (0..((fork_window + fork_interval - 1) / fork_interval)) |i| slot.snapshots[i] = try inkling.Cache.Rollback.initRows(model.device, &model.config, fork_window);
         }
     }
-    var batch = try inkling.BatchScratch.init(model.device, &model.config, if (draft != null) inkling.group.max_rows else count);
+    var batch = if (draft != null) try inkling.group.scratch(model.device, &model.config) else try inkling.BatchScratch.init(model.device, &model.config, count);
     errdefer batch.deinit();
     const batch_logits = try gpa.alloc(f32, count * model.config.text.unpadded_vocab);
     errdefer gpa.free(batch_logits);

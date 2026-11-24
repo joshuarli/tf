@@ -102,6 +102,11 @@ pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.B
     const step = b.step("test-inkling2-loop", "Inkling 2 Mini's native Metal forward against the checkpoint and its own state");
     step.dependOn(&run.step);
     test_step.dependOn(&run.step);
+    if (b.option([]const u8, "inkling-filter", "Only the Inkling 2 Mini family tests whose names contain this text")) |filter| {
+        const filtered = b.addRunArtifact(b.addTest(.{ .root_module = m, .filters = b.dupeStrings(&.{filter}) }));
+        filtered.has_side_effects = true;
+        b.step("test-inkling2-loop-filtered", "The Inkling 2 Mini family tests that -Dinkling-filter names").dependOn(&filtered.step);
+    }
     const d = b.createModule(.{
         .root_source_file = b.path("zig/src/families/inkling2_loop/dense_test.zig"),
         .target = target,

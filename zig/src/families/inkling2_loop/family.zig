@@ -3,6 +3,7 @@
 //! parts that name `engine_api`, which the engine module graph does not carry.
 pub const config = @import("config.zig");
 pub const Model = @import("model.zig").Model;
+pub const Tensor = @import("model.zig").Tensor;
 pub const Cache = @import("state.zig").Cache;
 pub const Scratch = @import("state.zig").Scratch;
 pub const BatchScratch = @import("batch.zig").BatchScratch;
@@ -19,6 +20,8 @@ pub const default_chunk = @import("prefill.zig").default_chunk;
 pub const Verification = @import("verify.zig").Verification;
 pub const verify = @import("verify.zig");
 pub const hybrid_drafts = @import("verify.zig").hybrid_drafts;
+pub const group = @import("group.zig");
+pub const Taps = @import("taps.zig").Taps;
 pub const refuse = @import("refuse.zig");
 pub const kernels = @import("kernels.zig");
 
@@ -38,4 +41,7 @@ test {
     _ = @import("units_attention_test.zig");
     _ = @import("verify_test.zig");
     _ = @import("batch_test.zig");
+    _ = @import("taps.zig");
+    _ = @import("group.zig");
+    _ = @import("group_test.zig");
 }

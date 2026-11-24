@@ -308,6 +308,7 @@ pub const PrefillScratch = struct {
     capture_row: usize,
     routes: ?mtl.Buffer,
     verify_conv: ?*ConvCapture,
+    taps: ?*const @import("taps.zig").Taps,
 
     pub fn init(device: mtl.Device, c: *const cfg.Config, chunk: usize) !PrefillScratch {
         return initRows(device, c, chunk, chunk);
@@ -350,6 +351,7 @@ pub const PrefillScratch = struct {
         s.capture_row = 0;
         s.routes = null;
         s.verify_conv = null;
+        s.taps = null;
         s.chunk = chunk;
         s.logit_rows = @min(@max(logit_rows, 1), chunk);
         s.h = @intCast(h);
@@ -827,6 +829,10 @@ const Chunk = struct {
         c.enc.dispatchThreads(mtl.Size.of(count, 1, 1), mtl.Size.of(256, 1, 1));
     }
 
+    fn tap(c: Chunk, visit: u32) void {
+        if (c.s.taps) |taps| taps.encode(c.enc, visit, c.s.x, 0, c.n);
+    }
+
     fn copyN(c: Chunk, x: B, out: B, count: usize) void {
         c.flat(.copy, Pair{ .count = @intCast(count) }, &.{ x, out, A }, count);
     }
@@ -875,6 +881,10 @@ const Chunk = struct {
         const norm: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(mul * taps + 1)));
         if (!dyn_ready) if (dyn) |dw| c.lin(dw, dyn_in, dyn_out);
         if (c.batch) |batch| {
+            if (batch.group) |g| {
+                g.conv(c.enc, x.buf, x.off, weight, if (dyn != null) dyn_out.buf else null, dyn_out.off, if (site == .mlp) c.s.x else out.buf, if (site == .mlp) 0 else out.off, channels, conv_heads, layout, norm, slot, site);
+                return;
+            }
             var rows: [8]ConvRow = undefined;
             for (batch.caches, 0..) |cache, row| {
                 const buf = switch (site) {
@@ -928,6 +938,10 @@ const Chunk = struct {
     }
 
     fn batchAttention(c: Chunk, lay: *const Layer, slot: u32, full: bool, extent: u32, batch: *BatchContext) void {
+        if (batch.group) |g| {
+            g.attend(c.enc, c.m, lay.attn.rel_bias, slot, full, extent, .{ .q = c.s.q, .k = c.s.kc, .v = c.s.vc, .r = c.s.r, .sink = c.s.sink, .relbias = c.s.relbias, .out = c.s.attn, .parts = batch.scratch.parts, .combine = batch.scratch.combine });
+            return;
+        }
         const s = c.s;
         const text = &c.m.config.text;
         const win: u32 = if (full) 0 else text.window;
@@ -1345,6 +1359,7 @@ pub const Bank = struct { states: B, out: B, n: usize };
 const BatchContext = struct {
     scratch: *@import("batch.zig").BatchScratch,
     caches: []const *Cache,
+    group: ?*const @import("group.zig").Group = null,
 };
 
 pub fn prefill(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32) !void {
@@ -1360,9 +1375,16 @@ pub fn batchStep(m: *const Model, s: *@import("batch.zig").BatchScratch, caches:
     try run(m, &s.rows, caches[0], ids, .all, &context);
 }
 
+/// The batch step over grouped rows (`group.Group`): every row's logits, the caches untouched until its commit.
+pub fn groupStep(m: *const Model, s: *@import("batch.zig").BatchScratch, group: *const @import("group.zig").Group, ids: []const u32) !void {
+    var context = BatchContext{ .scratch = s, .caches = group.caches, .group = group };
+    try run(m, &s.rows, group.caches[0], ids, .all, &context);
+}
+
 fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, want: WantLogits, batch: ?*BatchContext) !void {
     if (ids.len == 0 or ids.len > s.chunk or (want == .all and ids.len > s.logit_rows)) return error.BadChunk;
     if (batch == null and ids.len + cache.len > cache.capacity) return error.ContextFull;
+    if (s.taps) |taps| if (taps.rows < ids.len) return error.TapsTooSmall;
     if (s.half_overflow) |buf| buf.slice(u32, 1)[0] = 0;
     @memcpy(s.ids.slice(u32, ids.len), ids);
     const kvw: usize = m.config.text.local.kv * m.config.text.local.dim;
@@ -1401,6 +1423,7 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
     var profile_name: [64]u8 = undefined;
     for (0..config.loop.core_start) |i| {
         if (profiling) try rounds.next(&c, try std.fmt.bufPrint(&profile_name, "inkling2-slot-{d}", .{i}));
+        c.tap(@intCast(i));
         try c.layer(@intCast(i), @intCast(i), null);
         try profileOccupancy(&rounds, &c, @intCast(i), "inkling2-occupancy");
     }
@@ -1423,18 +1446,21 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
         for (config.loop.core_start..config.loop.core_end) |ip| {
             const slot: u32 = if (pass == 0) @intCast(ip) else @intCast(text.layers + (pass - 1) * span + (ip - config.loop.core_start));
             if (profiling) try rounds.next(&c, try std.fmt.bufPrint(&profile_name, "inkling2-slot-{d}", .{slot}));
+            c.tap(@intCast(config.loop.core_start + pass * span + (ip - config.loop.core_start)));
             try c.layer(slot, @intCast(ip), bk);
             try profileOccupancy(&rounds, &c, slot, "inkling2-occupancy");
         }
     }
     for (config.loop.core_end..text.layers) |i| {
         if (profiling) try rounds.next(&c, try std.fmt.bufPrint(&profile_name, "inkling2-slot-{d}", .{i}));
+        c.tap(@intCast(config.loop.core_start + config.loop.passes * span + (i - config.loop.core_end)));
         try c.layer(@intCast(i), @intCast(i), null);
         try profileOccupancy(&rounds, &c, @intCast(i), "inkling2-occupancy");
     }
     if (profiling) try rounds.next(&c, "inkling2-head");
     c.mixBlocks(b(s.x), m.weights.output_query, bo(s.mixout, 0));
     c.rmsW(.{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, t(m.weights.norm), b(s.n0), 1, 0, c.h, text.eps);
+    if (s.taps) |taps| taps.encode(c.enc, taps.final, s.n0, 0, c.n);
     if (profiling) try rounds.next(&c, "inkling2-vocabulary");
     switch (want) {
         .none => {},
@@ -1458,6 +1484,8 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
         }
     }
     if (batch) |value| {
-        for (value.caches) |item| item.len += 1;
+        if (value.group == null) for (value.caches) |item| {
+            item.len += 1;
+        };
     } else cache.len += ids.len;
 }

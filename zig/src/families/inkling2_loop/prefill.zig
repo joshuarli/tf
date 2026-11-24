@@ -18,8 +18,8 @@ pub const default_chunk: usize = 1024;
 /// The half-operand expert library: gate/up matrices from 14 rows an expert, down from 8, grouped f32 kernels below.
 pub const half_source = "#define I2P_HALF_OPERANDS 1\n#define I2P_MATRIX_THRESHOLD 14\n#define I2P_DOWN_MATRIX_THRESHOLD 8\n" ++ kernels.prefill ++ kernels.prefill_expert_wide;
 /// The same on tensor units: the matrices there, and half activations from grouped gate/up for down's matrices.
-pub const units_source = "#define I2P_TENSOR_UNITS 1\n#define I2P_HALF_ACT 1\n" ++ half_source ++ @embedFile("kernels/prefill_grouped.metal") ++ @embedFile("kernels/prefill_units.metal");
-const units_rows_source = "#define I2P_TENSOR_UNITS 1\n#define I2P_HALF_ACT 1\n#define I2P_HALF_OPERANDS 1\n#define I2P_MATRIX_THRESHOLD 1\n#define I2P_DOWN_MATRIX_THRESHOLD 1\n" ++ kernels.prefill ++ kernels.prefill_expert_wide ++ @embedFile("kernels/prefill_grouped.metal") ++ @embedFile("kernels/prefill_units.metal");
+pub const units_source = "#define I2P_TENSOR_UNITS 1\n#define I2P_HALF_ACT 1\n" ++ half_source ++ @embedFile("kernels/prefill_grouped.metal") ++ @embedFile("kernels/prefill_units.metal") ++ @embedFile("kernels/prefill_attn.metal");
+const units_rows_source = "#define I2P_TENSOR_UNITS 1\n#define I2P_HALF_ACT 1\n#define I2P_HALF_OPERANDS 1\n#define I2P_MATRIX_THRESHOLD 1\n#define I2P_DOWN_MATRIX_THRESHOLD 1\n" ++ kernels.prefill ++ kernels.prefill_expert_wide ++ @embedFile("kernels/prefill_grouped.metal") ++ @embedFile("kernels/prefill_units.metal") ++ @embedFile("kernels/prefill_attn.metal");
 
 pub fn profile(text: ?[]const u8) error{BadInklingProfile}!bool {
     const value = text orelse return false;
@@ -177,6 +177,7 @@ pub const Pipes = struct {
     affine_units_down: ?mtl.Pipeline,
     paired: [4]?mtl.Pipeline,
     attn_units: ?mtl.Pipeline,
+    attn_units64: ?mtl.Pipeline,
     half_rows: ?mtl.Pipeline,
     grouped_up: ?mtl.Pipeline,
     grouped_down: ?mtl.Pipeline,
@@ -212,6 +213,7 @@ pub const Pipes = struct {
         if (p.affine_units_down) |pipe| pipe.deinit();
         for (p.paired) |paired| if (paired) |pipe| pipe.deinit();
         if (p.attn_units) |pipe| pipe.deinit();
+        if (p.attn_units64) |pipe| pipe.deinit();
         if (p.half_rows) |pipe| pipe.deinit();
         if (p.grouped_up) |pipe| pipe.deinit();
         if (p.grouped_down) |pipe| pipe.deinit();
@@ -594,6 +596,7 @@ pub const PrefillScratch = struct {
         s.pipes.affine_units_down = null;
         s.pipes.paired = @splat(null);
         s.pipes.attn_units = null;
+        s.pipes.attn_units64 = null;
         s.pipes.half_rows = null;
         s.pipes.grouped_up = null;
         s.pipes.grouped_down = null;
@@ -622,6 +625,8 @@ pub const PrefillScratch = struct {
                 errdefer for (s.pipes.paired) |pipe| pipe.?.deinit();
                 s.pipes.attn_units = try mtl.Pipeline.init(device, half_lib, "i2p_attn_units", false);
                 errdefer s.pipes.attn_units.?.deinit();
+                s.pipes.attn_units64 = try mtl.Pipeline.init(device, half_lib, "i2pa_attn_units64", false);
+                errdefer s.pipes.attn_units64.?.deinit();
                 s.pipes.half_rows = try mtl.Pipeline.init(device, half_lib, "i2p_half_rows", false);
                 errdefer s.pipes.half_rows.?.deinit();
                 s.pipes.grouped_up = try mtl.Pipeline.init(device, half_lib, "i2pg_gu", false);
@@ -636,6 +641,7 @@ pub const PrefillScratch = struct {
             errdefer if (s.pipes.affine_units_up) |pipe| pipe.deinit();
             errdefer if (s.pipes.affine_units_down) |pipe| pipe.deinit();
             errdefer if (s.pipes.attn_units) |pipe| pipe.deinit();
+            errdefer if (s.pipes.attn_units64) |pipe| pipe.deinit();
             errdefer if (s.pipes.half_rows) |pipe| pipe.deinit();
             errdefer if (s.pipes.grouped_up) |pipe| pipe.deinit();
             errdefer if (s.pipes.grouped_down) |pipe| pipe.deinit();
@@ -662,6 +668,7 @@ pub const PrefillScratch = struct {
         errdefer if (s.pipes.affine_units_up) |pipe| pipe.deinit();
         errdefer if (s.pipes.affine_units_down) |pipe| pipe.deinit();
         errdefer if (s.pipes.attn_units) |pipe| pipe.deinit();
+        errdefer if (s.pipes.attn_units64) |pipe| pipe.deinit();
         errdefer if (s.pipes.half_rows) |pipe| pipe.deinit();
         errdefer if (s.pipes.grouped_up) |pipe| pipe.deinit();
         errdefer if (s.pipes.grouped_down) |pipe| pipe.deinit();
@@ -1233,7 +1240,10 @@ const Chunk = struct {
         const tiled = c.heads == 24 and c.kv == 8 and c.dim == 128;
         const attn_args = AttnB{ .heads = c.heads, .kv = c.kv, .dim = c.dim, .rel = c.drel, .extent = extent, .window = win, .base = c.base, .rows = c.n, .rmode = @intFromBool(c.ring), .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.dim))), .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha };
         if (tiled and s.half and s.pipes.half_attn != null and (s.fast or (c.n > 8 and c.m.affine_pipes != null))) {
-            if (s.units and s.pipes.attn_units != null) {
+            if (s.units and s.fuse and s.pipes.attn_units64 != null) {
+                c.setP(s.pipes.attn_units64.?, attn_args, &.{ b(s.q), keybase, valbase, b(s.relbias), b(s.sink), A, b(s.attn), b(s.kh), b(s.vh), b(s.half_overflow.?) });
+                c.enc.dispatchGroups(mtl.Size.of(c.kv, (c.n + 63) / 64, 1), mtl.Size.of(384, 1, 1));
+            } else if (s.units and s.pipes.attn_units != null) {
                 c.setP(s.pipes.attn_units.?, attn_args, &.{ b(s.q), keybase, valbase, b(s.relbias), b(s.sink), A, b(s.attn), b(s.kh), b(s.vh), b(s.half_overflow.?) });
                 c.enc.dispatchGroups(mtl.Size.of(c.kv, (c.n + 31) / 32, 1), mtl.Size.of(192, 1, 1));
             } else {

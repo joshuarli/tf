@@ -71,6 +71,7 @@ const Pair = extern struct { count: u32 };
 const AffineBatchControl = extern struct { k: u32, m0: u32, m1: u32, h: u32, cxs: u32, cxb: u32, mxs: u32, mxb: u32, ys: u32, yb: u32 };
 const RmsPair = extern struct { width: u32, xs0: u32, xb0: u32, xs1: u32, xb1: u32, eps: f32 };
 const AffineProjections = extern struct { k: u32, full: u32, m: [8]u32 };
+const SharedProjections = extern struct { k: u32, full: u32, rows: u32, m: [8]u32 };
 const AffineDense = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32, bits: u32, cap: f32 };
 
 const B = struct { buf: mtl.Buffer, off: usize = 0, args: bool = false };
@@ -782,6 +783,10 @@ const Chunk = struct {
                 c.setP(c.s.pipes.affine_half_rows.?, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out, b(c.s.half_overflow.?) });
                 c.enc.dispatchGroups(mtl.Size.of((n + 63) / 64, (rows + 31) / 32, 1), mtl.Size.of(256, 1, 1));
                 return;
+            } else if (rows >= 2 and rows <= 8) {
+                c.setP(p.dense_shared, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out });
+                c.enc.dispatchGroups(mtl.Size.of((n + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+                return;
             } else {
                 c.setP(p.dense, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out });
             }
@@ -807,12 +812,18 @@ const Chunk = struct {
         const ms: [8]u32 = .{ @intCast(nrows(a.q)), @intCast(nrows(a.k)), @intCast(nrows(a.v)), @intCast(nrows(a.r)), @intCast(nrows(a.gate)), @intCast(nrows(a.sink)), if (full) @intCast(nrows(a.k_dyn.?)) else 0, if (full) @intCast(nrows(a.v_dyn.?)) else 0 };
         var total: usize = 0;
         for (ms) |n| total += n;
-        c.setP(c.m.affine_pipes.?.batch_projections, AffineProjections{ .k = @intCast(width(a.q)), .full = @intFromBool(full), .m = ms }, &.{
+        const bufs = [_]B{
             inputs[0].buf, inputs[1].buf, inputs[2].buf, t(a.q), bo(qf.scales, qf.scale_offset), bo(qf.biases, qf.bias_offset),
             t(k), bo(kf.scales, kf.scale_offset), bo(kf.biases, kf.bias_offset),
             t(v), bo(vf.scales, vf.scale_offset), bo(vf.biases, vf.bias_offset),
             b(s.q), b(s.k), b(s.v), b(s.r), b(s.gate), b(s.sink), b(s.kdyn), b(s.vdyn), A,
-        });
+        };
+        if (c.n >= 2) {
+            c.setP(c.m.affine_pipes.?.shared_projections, SharedProjections{ .k = @intCast(width(a.q)), .full = @intFromBool(full), .rows = c.n, .m = ms }, &bufs);
+            c.enc.dispatchGroups(mtl.Size.of((total + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+            return;
+        }
+        c.setP(c.m.affine_pipes.?.batch_projections, AffineProjections{ .k = @intCast(width(a.q)), .full = @intFromBool(full), .m = ms }, &bufs);
         c.enc.dispatchGroups(mtl.Size.of((total + 7) / 8, c.n, 1), mtl.Size.of(256, 1, 1));
     }
 
@@ -842,7 +853,8 @@ const Chunk = struct {
     fn mixQ(c: Chunk, query: Tensor, out: B) void {
         const depth = c.count + 1;
         const k: u32 = @intCast(nrows(query));
-        c.setP(c.s.pipes.mix, MixB{ .width = c.h, .depth = @intCast(depth), .k = k, .rows = c.n, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.h))) }, &.{ b(c.s.staged), t(query), A, out });
+        const pipe = if (c.batch != null and k <= 4 and depth <= st.mix_states) c.batch.?.scratch.mix else c.s.pipes.mix;
+        c.setP(pipe, MixB{ .width = c.h, .depth = @intCast(depth), .k = k, .rows = c.n, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.h))) }, &.{ b(c.s.staged), t(query), A, out });
         c.enc.dispatchGroups(mtl.Size.of(c.n, 1, 1), mtl.Size.of(256, 1, 1));
     }
 
@@ -996,7 +1008,8 @@ const Chunk = struct {
         const s = c.s;
         const at: usize = ip - m.config.loop.core_start;
         c.gatherM(bk.states, bk.out, @intCast(bk.n + 1));
-        c.setP(s.pipes.mix4, MixB{ .width = c.h, .depth = @intCast(bk.n + 1), .k = 4, .rows = c.n, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.h))) }, &.{
+        const pipe = if (c.batch != null and bk.n + 1 <= st.mix_states) c.batch.?.scratch.mix4 else s.pipes.mix4;
+        c.setP(pipe, MixB{ .width = c.h, .depth = @intCast(bk.n + 1), .k = 4, .rows = c.n, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.h))) }, &.{
             b(s.staged),
             t(srows(m.weights.cross_pass_q, at * 2, 1)),
             t(srows(m.weights.cross_pass_kv, at * 2, 1)),
@@ -1072,7 +1085,8 @@ const Chunk = struct {
             c.setP(s.pipes.router, RouterA{ .n = E, .k = c.h, .rows = c.n, .xs = 1, .xb = 0 }, &.{ input, t(lay.router), A, b(s.router) });
             c.enc.dispatchGroups(mtl.Size.of((E + 31) / 32, c.n, 1), mtl.Size.of(1024, 1, 1));
         }
-        c.setP(s.pipes.pick, Pick{ .experts = E, .topk = K, .rows = c.n, .route_scale = cc.text.route_scale }, &.{ b(s.router), t(lay.router_bias), A, b(s.picks), b(s.wts) });
+        const pick = if (c.batch != null and E <= 128 and K <= 8) c.batch.?.scratch.pick else s.pipes.pick;
+        c.setP(pick, Pick{ .experts = E, .topk = K, .rows = c.n, .route_scale = cc.text.route_scale }, &.{ b(s.router), t(lay.router_bias), A, b(s.picks), b(s.wts) });
         c.enc.dispatchGroups(mtl.Size.of(c.n, 1, 1), mtl.Size.of(32, 1, 1));
         if (s.capture) |capture| {
             c.copyN(bo(s.picks, s.capture_row * K * 4), bo(capture, (cc.slots() * st.trace_rows * c.h + slot * K) * 4), K);
@@ -1126,8 +1140,9 @@ const Chunk = struct {
         }
         if (c.n <= 8 or !s.half) {
             const codes = b(if (lay.precision == .mxfp8) m.t256 else m.t16);
-            const gu = if (lay.precision == .mxfp8) s.pipes.gu_mx else s.pipes.gu_nv;
-            const down = if (lay.precision == .mxfp8) s.pipes.down_mx else s.pipes.down_nv;
+            const shared = c.batch != null and c.n >= 2 and lay.precision != .mxfp8;
+            const gu = if (lay.precision == .mxfp8) s.pipes.gu_mx else if (shared) c.batch.?.scratch.gu_rows else s.pipes.gu_nv;
+            const down = if (lay.precision == .mxfp8) s.pipes.down_mx else if (shared) c.batch.?.scratch.down_rows else s.pipes.down_nv;
             c.setP(gu, MoeB{ .k = c.h, .n = inter, .slots = slots, .topk = K, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.picks), A, b(s.act), codes });
             c.enc.dispatchGroups(mtl.Size.of(inter, slots, 1), mtl.Size.of(32, 1, 1));
             if (lay.precision == .mxfp8) {

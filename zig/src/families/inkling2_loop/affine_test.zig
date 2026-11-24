@@ -686,3 +686,284 @@ test "oQ4e prefill chunks longer than the local window match window-bounded chun
         }
     }
 }
+
+const SharedProjections = extern struct { k: u32, full: u32, rows: u32, m: [8]u32 };
+
+fn sameWords(a: []const f32, b: []const f32) bool {
+    for (a, b) |x, y| if (@as(u32, @bitCast(x)) != @as(u32, @bitCast(y))) return false;
+    return true;
+}
+
+test "shared-row affine kernels give each row the per-row kernel's bytes" {
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, @embedFile("kernels/affine.metal"), mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const dense = try mtl.Pipeline.init(device, lib, "i2a_dense", false);
+    defer dense.deinit();
+    const dense_shared = try mtl.Pipeline.init(device, lib, "i2a_dense_shared", false);
+    defer dense_shared.deinit();
+    const batch = try mtl.Pipeline.init(device, lib, "i2a_batch_projections", false);
+    defer batch.deinit();
+    const shared = try mtl.Pipeline.init(device, lib, "i2a_shared_projections", false);
+    defer shared.deinit();
+    const k = 2304;
+    const n = 37;
+    const wrows = 64;
+    var prng = std.Random.DefaultPrng.init(0x72_6f_77_73);
+    const rng = prng.random();
+    const x = try device.buffer(3 * 8 * k * 4, mtl.ResourceOptions.shared);
+    defer x.deinit();
+    for (x.slice(f32, 3 * 8 * k)) |*v| v.* = rng.float(f32) * 4 - 2;
+    var w: [3]mtl.Buffer = undefined;
+    var sc: [3]mtl.Buffer = undefined;
+    var bi: [3]mtl.Buffer = undefined;
+    for (0..3) |i| {
+        w[i] = try device.buffer(wrows * k, mtl.ResourceOptions.shared);
+        for (w[i].slice(u32, wrows * k / 4)) |*v| v.* = rng.int(u32);
+        sc[i] = try device.buffer(wrows * (k / 64) * 2, mtl.ResourceOptions.shared);
+        bi[i] = try device.buffer(wrows * (k / 64) * 2, mtl.ResourceOptions.shared);
+        for (sc[i].slice(u16, wrows * (k / 64)), bi[i].slice(u16, wrows * (k / 64))) |*s, *b| {
+            s.* = @truncate(@as(u32, @bitCast(rng.float(f32) * 0.02 + 0.001)) >> 16);
+            b.* = @truncate(@as(u32, @bitCast(rng.float(f32) * 0.5 - 0.25)) >> 16);
+        }
+    }
+    defer for (0..3) |i| {
+        w[i].deinit();
+        sc[i].deinit();
+        bi[i].deinit();
+    };
+    const out_a = try device.buffer(8 * 8 * wrows * 4, mtl.ResourceOptions.shared);
+    defer out_a.deinit();
+    const out_b = try device.buffer(8 * 8 * wrows * 4, mtl.ResourceOptions.shared);
+    defer out_b.deinit();
+    var checked: usize = 0;
+    for ([_]u32{ 4, 8 }) |bits| for ([_]f32{ 0, 30 }) |cap| for (2..9) |rows| {
+        const args = Dense{ .n = n, .k = k, .rows = @intCast(rows), .xs = 2, .xb = 1, .bits = bits, .cap = cap };
+        const cb = queue.commandBuffer();
+        const enc = cb.compute(.serial);
+        for ([_]mtl.Pipeline{ dense, dense_shared }, [_]mtl.Buffer{ out_a, out_b }, 0..) |pipe, out, i| {
+            enc.setPipeline(pipe);
+            enc.setBuffer(x, 0, 0);
+            enc.setBuffer(w[0], 0, 1);
+            enc.setBuffer(sc[0], 0, 2);
+            enc.setBuffer(bi[0], 0, 3);
+            enc.setValue(args, 4);
+            enc.setBuffer(out, 0, 5);
+            enc.dispatchGroups(mtl.Size.of((n + 7) / 8, if (i == 0) rows else 1, 1), mtl.Size.of(256, 1, 1));
+        }
+        enc.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |_| return error.GpuFailed;
+        if (!sameWords(out_a.slice(f32, rows * n), out_b.slice(f32, rows * n))) {
+            std.debug.print("shared dense bits={d} cap={d} rows={d}: bytes differ\n", .{ bits, cap, rows });
+            return error.TestUnexpectedResult;
+        }
+        checked += 1;
+    };
+    for ([_]bool{ false, true }) |full| for (2..9) |rows| {
+        const ms: [8]u32 = .{ 13, 9, 7, 5, 11, 3, if (full) 6 else 0, if (full) 4 else 0 };
+        var total: usize = 0;
+        for (ms) |m| total += m;
+        const cb = queue.commandBuffer();
+        const enc = cb.compute(.serial);
+        for ([_]mtl.Pipeline{ batch, shared }, [_]mtl.Buffer{ out_a, out_b }, 0..) |pipe, out, i| {
+            enc.setPipeline(pipe);
+            for (0..3) |j| enc.setBuffer(x, j * 8 * k * 4, j);
+            for (0..3) |j| {
+                enc.setBuffer(w[j], 0, 3 + j * 3);
+                enc.setBuffer(sc[j], 0, 4 + j * 3);
+                enc.setBuffer(bi[j], 0, 5 + j * 3);
+            }
+            for (0..8) |j| enc.setBuffer(out, j * 8 * wrows * 4, 12 + j);
+            if (i == 0) {
+                enc.setValue(Projections{ .k = k, .full = @intFromBool(full), .m = ms }, 20);
+                enc.dispatchGroups(mtl.Size.of((total + 7) / 8, rows, 1), mtl.Size.of(256, 1, 1));
+            } else {
+                enc.setValue(SharedProjections{ .k = k, .full = @intFromBool(full), .rows = @intCast(rows), .m = ms }, 20);
+                enc.dispatchGroups(mtl.Size.of((total + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+            }
+        }
+        enc.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |_| return error.GpuFailed;
+        for (ms, 0..) |m, j| {
+            const at = j * 8 * wrows;
+            if (!sameWords(out_a.slice(f32, 8 * 8 * wrows)[at..][0 .. rows * m], out_b.slice(f32, 8 * 8 * wrows)[at..][0 .. rows * m])) {
+                std.debug.print("shared projections full={} rows={d} output={d}: bytes differ\n", .{ full, rows, j });
+                return error.TestUnexpectedResult;
+            }
+        }
+        checked += 1;
+    };
+    std.debug.print("shared-row affine kernels: {d} cases byte-equal to the per-row kernels\n", .{checked});
+}
+
+
+/// The affine dot and float projection before their loads were issued ahead of the sums.
+const serial_affine =
+    \\#include <metal_stdlib>
+    \\using namespace metal;
+    \\
+    \\struct i2a_dense_args { uint n, k, rows, xs, xb, bits; float cap; };
+    \\struct i2a_expert_args { uint k, n, slots, topk; float gate_cap, up_cap; };
+    \\struct i2a_embed_args { uint width, rows; float eps; };
+    \\struct i2a_projection_args { uint k, full; uint m[8]; };
+    \\struct i2a_pair_args { uint k, m0, m1; };
+    \\
+    \\inline float i2a_weight(const device uint* w, const device bfloat* s, const device bfloat* b,
+    \\                        size_t row, uint k, uint width, uint bits) {
+    \\  const uint per = 32u / bits;
+    \\  const uint code = (w[row * (width / per) + k / per] >> ((k % per) * bits)) & ((1u << bits) - 1u);
+    \\  const size_t group = row * (width / 64u) + k / 64u;
+    \\  return float(code) * float(s[group]) + float(b[group]);
+    \\}
+    \\
+    \\inline float i2a_dot(const device float* x, const device uint* w, const device bfloat* s,
+    \\                     const device bfloat* b, size_t row, uint width, uint bits, uint lane) {
+    \\  const uint per = 32u / bits;
+    \\  const uint mask = (1u << bits) - 1u;
+    \\  float acc = 0.0f;
+    \\  for (uint word = lane; word < width / per; word += 32u) {
+    \\    const uint packed = w[row * (width / per) + word];
+    \\    const size_t group = row * (width / 64u) + (word * per) / 64u;
+    \\    const float scale = float(s[group]), bias = float(b[group]);
+    \\    const uint4 shift = uint4(0u, bits, bits * 2u, bits * 3u);
+    \\    const float4 code0 = float4((uint4(packed) >> shift) & mask);
+    \\    const float4 input0 = float4(*reinterpret_cast<const device packed_float4*>(x + word * per));
+    \\    const float4 value0 = fma(code0, float4(scale), float4(bias));
+    \\    acc = fma(input0.x, value0.x, acc);
+    \\    acc = fma(input0.y, value0.y, acc);
+    \\    acc = fma(input0.z, value0.z, acc);
+    \\    acc = fma(input0.w, value0.w, acc);
+    \\    if (bits == 4u) {
+    \\      const float4 code1 = float4((uint4(packed >> 16u) >> shift) & mask);
+    \\      const float4 input1 = float4(*reinterpret_cast<const device packed_float4*>(x + word * per + 4u));
+    \\      const float4 value1 = fma(code1, float4(scale), float4(bias));
+    \\      acc = fma(input1.x, value1.x, acc);
+    \\      acc = fma(input1.y, value1.y, acc);
+    \\      acc = fma(input1.z, value1.z, acc);
+    \\      acc = fma(input1.w, value1.w, acc);
+    \\    }
+    \\  }
+    \\  return simd_sum(acc);
+    \\}
+    \\
+    \\[[kernel]] void i2a_float(const device float* x [[buffer(0)]], const device float* w [[buffer(1)]],
+    \\    constant i2a_dense_args& a [[buffer(2)]], device float* y [[buffer(3)]],
+    \\    uint2 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
+    \\  const uint col = group.x * 8u + tid / 32u;
+    \\  const uint row = group.y, lane = tid % 32u;
+    \\  if (col >= a.n || row >= a.rows) return;
+    \\  const device float* input = x + (size_t)(row * a.xs + a.xb) * a.k;
+    \\  const device float* weight = w + (size_t)col * a.k;
+    \\  float acc = 0.0f;
+    \\  uint base = 0u;
+    \\  for (; base + 128u <= a.k; base += 128u) {
+    \\    const uint k = base + lane * 4u;
+    \\    const float4 xv = float4(*reinterpret_cast<const device packed_float4*>(input + k));
+    \\    const float4 wv = float4(*reinterpret_cast<const device packed_float4*>(weight + k));
+    \\    acc = fma(xv.x, wv.x, acc);
+    \\    acc = fma(xv.y, wv.y, acc);
+    \\    acc = fma(xv.z, wv.z, acc);
+    \\    acc = fma(xv.w, wv.w, acc);
+    \\  }
+    \\  for (uint k = base + lane; k < a.k; k += 32u) acc = fma(input[k], weight[k], acc);
+    \\  acc = simd_sum(acc);
+    \\  if (lane == 0u) y[(size_t)row * a.n + col] = acc;
+    \\}
+    \\
+    \\[[kernel]] void i2a_dense(const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]],
+    \\    const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
+    \\    constant i2a_dense_args& a [[buffer(4)]], device float* y [[buffer(5)]],
+    \\    uint2 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
+    \\  const uint col = group.x * 8u + tid / 32u;
+    \\  const uint row = group.y;
+    \\  const uint lane = tid % 32u;
+    \\  if (col >= a.n || row >= a.rows) return;
+    \\  const device float* input = x + (size_t)(row * a.xs + a.xb) * a.k;
+    \\  const float acc = i2a_dot(input, w, s, b, col, a.k, a.bits, lane);
+    \\  if (lane == 0u) y[(size_t)row * a.n + col] = a.cap > 0.0f ? a.cap * precise::tanh(acc / a.cap) : acc;
+    \\}
+    \\
+;
+
+test "prefetched affine and float projections keep the serial kernels' bytes" {
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const device = try mtl.Device.init();
+    defer device.deinit();
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, @embedFile("kernels/affine.metal"), mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const old_lib = try mtl.Library.fromSource(device, serial_affine, mtl.CompileOptions.mlx());
+    defer old_lib.deinit();
+    var prng = std.Random.DefaultPrng.init(0x70_72_65_66);
+    const rng = prng.random();
+    const kmax = 4608;
+    const n = 41;
+    const x = try device.buffer(3 * kmax * 4, mtl.ResourceOptions.shared);
+    defer x.deinit();
+    for (x.slice(f32, 3 * kmax)) |*v| v.* = rng.float(f32) * 4 - 2;
+    const w = try device.buffer(n * kmax * 4, mtl.ResourceOptions.shared);
+    defer w.deinit();
+    const sc = try device.buffer(n * (kmax / 64) * 2, mtl.ResourceOptions.shared);
+    defer sc.deinit();
+    const bi = try device.buffer(n * (kmax / 64) * 2, mtl.ResourceOptions.shared);
+    defer bi.deinit();
+    for (sc.slice(u16, n * (kmax / 64)), bi.slice(u16, n * (kmax / 64))) |*s, *b| {
+        s.* = @truncate(@as(u32, @bitCast(rng.float(f32) * 0.02 + 0.001)) >> 16);
+        b.* = @truncate(@as(u32, @bitCast(rng.float(f32) * 0.5 - 0.25)) >> 16);
+    }
+    const outs = [_]mtl.Buffer{ try device.buffer(3 * n * 4, mtl.ResourceOptions.shared), try device.buffer(3 * n * 4, mtl.ResourceOptions.shared) };
+    defer for (outs) |o| o.deinit();
+    var checked: usize = 0;
+    for ([_][]const u8{ "i2a_dense", "i2a_float" }) |name| {
+        const pipes = [_]mtl.Pipeline{ try mtl.Pipeline.init(device, old_lib, name, false), try mtl.Pipeline.init(device, lib, name, false) };
+        defer for (pipes) |p| p.deinit();
+        const float = std.mem.eql(u8, name, "i2a_float");
+        for ([_]u32{ 64, 2304, 3072, 4608, 4544 }) |k| for ([_]u32{ 4, 8 }) |bits| {
+            if (float and bits == 8) continue;
+            if (float) {
+                for (w.slice(f32, n * kmax)) |*v| v.* = rng.float(f32) * 2 - 1;
+            } else {
+                for (w.slice(u32, n * kmax)) |*v| v.* = rng.int(u32);
+            }
+            const args = Dense{ .n = n, .k = k, .rows = 3, .xs = 1, .xb = 0, .bits = bits, .cap = if (k == 2304) 30 else 0 };
+            const cb = queue.commandBuffer();
+            const enc = cb.compute(.serial);
+            for (pipes, outs) |pipe, out| {
+                enc.setPipeline(pipe);
+                enc.setBuffer(x, 0, 0);
+                enc.setBuffer(w, 0, 1);
+                if (float) {
+                    enc.setValue(args, 2);
+                    enc.setBuffer(out, 0, 3);
+                } else {
+                    enc.setBuffer(sc, 0, 2);
+                    enc.setBuffer(bi, 0, 3);
+                    enc.setValue(args, 4);
+                    enc.setBuffer(out, 0, 5);
+                }
+                enc.dispatchGroups(mtl.Size.of((n + 7) / 8, 3, 1), mtl.Size.of(256, 1, 1));
+            }
+            enc.end();
+            cb.commit();
+            cb.wait();
+            if (cb.failure()) |_| return error.GpuFailed;
+            if (!sameWords(outs[0].slice(f32, 3 * n), outs[1].slice(f32, 3 * n))) {
+                std.debug.print("prefetched {s} k={d} bits={d}: bytes differ\n", .{ name, k, bits });
+                return error.TestUnexpectedResult;
+            }
+            checked += 1;
+        };
+    }
+    std.debug.print("prefetched affine projections: {d} cases byte-equal to the serial kernels\n", .{checked});
+}

@@ -3,12 +3,11 @@ using namespace metal;
 
 struct i2_attn_parts { uint heads, kv, dim, rel, extent, window, pos, tau, splits, chunk; float scale, floor, alpha; };
 
-[[kernel]] void i2_attn_split(const device float* Q [[buffer(0)]], const device half* KEYS [[buffer(1)]],
-    const device half* VALUES [[buffer(2)]], const device float* B [[buffer(3)]], const device float* sink [[buffer(4)]],
-    constant i2_attn_parts& a [[buffer(5)]], device float* PART [[buffer(6)]],
-    uint tgp [[threadgroup_position_in_grid]], uint tid [[thread_position_in_threadgroup]],
-    uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]],
-    uint nth [[threads_per_threadgroup]]) {
+// One split's rows for the G query heads of a key/value head, one SIMD group a head, a row at a time: the order every
+// decode result, and prefill's attention, follow.
+inline void i2_split_serial(const device float* Q, const device half* KEYS, const device half* VALUES,
+    const device float* B, const device float* sink, constant i2_attn_parts& a, device float* PART,
+    uint tgp, uint tid, uint sg, uint lane, uint nth, threadgroup float4* KB4, threadgroup float4* VB4) {
   const uint G = a.heads / a.kv;
   const uint D = a.dim, per = max(1u, D / 32u);
   const uint kv = tgp / a.splits, s = tgp % a.splits, h = kv * G + sg;
@@ -27,8 +26,6 @@ struct i2_attn_parts { uint heads, kv, dim, rel, extent, window, pos, tau, split
     for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) PART[base + 2u + lane + 32u * u] = 0.0f;
     return;
   }
-  threadgroup float4 KB4[32];
-  threadgroup float4 VB4[32];
   threadgroup float* KB = (threadgroup float*)KB4;
   threadgroup float* VB = (threadgroup float*)VB4;
   float top = -INFINITY, mass = 0.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -64,9 +61,149 @@ struct i2_attn_parts { uint heads, kv, dim, rel, extent, window, pos, tau, split
   for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) PART[base + 2u + lane + 32u * u] = acc[u];
 }
 
-[[kernel]] void i2_attn_combine(const device float* PART [[buffer(0)]],
-    constant i2_attn_parts& a [[buffer(1)]], device float* O [[buffer(2)]],
-    uint h [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
+// Row r's sum over the 32 lanes lands in lane r, with the additions simd_sum makes: partners at xor 1, 2, 4, 8, 16.
+inline float i2_rows_sum(thread float (&p)[32], uint lane) {
+  float a1[16], a2[8], a3[4], a4[2];
+  const bool b0 = (lane & 1u) != 0u, b1 = (lane & 2u) != 0u, b2 = (lane & 4u) != 0u, b3 = (lane & 8u) != 0u;
+  const bool b4 = (lane & 16u) != 0u;
+#pragma unroll
+  for (uint m = 0; m < 16u; ++m) {
+    const float lo = p[2u * m], hi = p[2u * m + 1u];
+    a1[m] = (b0 ? hi : lo) + simd_shuffle_xor(b0 ? lo : hi, ushort(1));
+  }
+#pragma unroll
+  for (uint m = 0; m < 8u; ++m) {
+    const float lo = a1[2u * m], hi = a1[2u * m + 1u];
+    a2[m] = (b1 ? hi : lo) + simd_shuffle_xor(b1 ? lo : hi, ushort(2));
+  }
+#pragma unroll
+  for (uint m = 0; m < 4u; ++m) {
+    const float lo = a2[2u * m], hi = a2[2u * m + 1u];
+    a3[m] = (b2 ? hi : lo) + simd_shuffle_xor(b2 ? lo : hi, ushort(4));
+  }
+#pragma unroll
+  for (uint m = 0; m < 2u; ++m) {
+    const float lo = a3[2u * m], hi = a3[2u * m + 1u];
+    a4[m] = (b3 ? hi : lo) + simd_shuffle_xor(b3 ? lo : hi, ushort(8));
+  }
+  return (b4 ? a4[1] : a4[0]) + simd_shuffle_xor(b4 ? a4[0] : a4[1], ushort(16));
+}
+
+// The same split for 128-wide heads, three to a key/value head, 96 threads: 32-row blocks staged by every thread, lane
+// l holding dimensions l, l + 32, l + 64 and l + 96 of each row. The scores come out of one reduction for the block,
+// the running maximum out of a lane prefix maximum and the exponentials one row a lane; only the mass and value
+// recurrences stay serial. Every value is the serial kernel's: the same products, sums and expressions.
+inline void i2_split_blocks(const device float* Q, const device half* KEYS, const device half* VALUES,
+    const device float* B, const device float* sink, constant i2_attn_parts& a, device float* PART,
+    uint tgp, uint tid, uint sg, uint lane, threadgroup half4* KS4, threadgroup half4* VS4) {
+  constexpr uint D = 128u, G = 3u, N = 96u, R = 32u, CELLS = (R * 32u + N - 1u) / N;
+  const uint kv = tgp / a.splits, s = tgp % a.splits, h = kv * G + sg;
+  const float tau = a.tau ? 1.0f + a.alpha * precise::log(max(1.0f, (float(a.pos) + 1.0f) / a.floor)) : 1.0f;
+  float qv[4];
+  for (uint j = 0; j < 4u; ++j) qv[j] = Q[h * D + lane + 32u * j] * a.scale * tau;
+  const float sk = sink[h];
+  const uint lo = a.window ? (a.pos + 1u > a.window ? a.pos + 1u - a.window : 0u) : 0u;
+  const size_t base = ((size_t)h * a.splits + s) * (D + 2u);
+  const uint js = lo + s * a.chunk, je = min(js + a.chunk, a.pos + 1u);
+  float top = -INFINITY, mass = 0.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+  for (uint j0 = js; j0 < je; j0 += R) {
+    const uint n = min(R, je - j0);
+    const uint first = a.window ? j0 % a.window : j0;
+    half4 kc[CELLS], vc[CELLS];
+#pragma unroll
+    for (uint i = 0; i < CELLS; ++i) {
+      const uint e = tid + i * N;
+      const uint r = min(e / 32u, n - 1u), j = first + r;
+      const uint rj = a.window && j >= a.window ? j - a.window : j;
+      const device half* kr = KEYS + ((size_t)rj * a.kv + kv) * D + e % 32u;
+      const device half* vr = VALUES + ((size_t)rj * a.kv + kv) * D + e % 32u;
+      kc[i] = half4(kr[0], kr[32], kr[64], kr[96]);
+      vc[i] = half4(vr[0], vr[32], vr[64], vr[96]);
+    }
+    float own = 0.0f;
+    if (lane < n) own = B[h * (a.extent + 1u) + min(a.pos - (j0 + lane), a.extent)] - sk;
+#pragma unroll
+    for (uint i = 0; i < CELLS; ++i) {
+      const uint e = tid + i * N;
+      if (e < R * 32u) {
+        KS4[e] = kc[i];
+        VS4[e] = vc[i];
+      }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float p[32];
+#pragma unroll
+    for (uint r = 0; r < R; ++r) {
+      const float4 kk = float4(KS4[r * 32u + lane]);
+      float dot = 0.0f;
+      dot = fma(qv[0], kk.x, dot);
+      dot = fma(qv[1], kk.y, dot);
+      dot = fma(qv[2], kk.z, dot);
+      dot = fma(qv[3], kk.w, dot);
+      p[r] = dot;
+    }
+    const float score = i2_rows_sum(p, lane) + own;
+    float run = lane < n ? score : -INFINITY;
+    for (ushort off = 1; off < 32; off <<= 1) {
+      const float other = simd_shuffle_up(run, off);
+      if (lane >= off) run = max(other, run);
+    }
+    const float peak = max(top, run);
+    const float before = lane == 0u ? top : simd_shuffle_up(peak, ushort(1));
+    const float rescales = precise::exp(before - peak);
+    const float weights = precise::exp(score - peak);
+    if (n == R) {
+#pragma unroll
+      for (uint r = 0; r < R; ++r) {
+        const float rescale = simd_shuffle(rescales, ushort(r));
+        const float w = simd_shuffle(weights, ushort(r));
+        mass = mass * rescale + w;
+        const float4 vv = float4(VS4[r * 32u + lane]);
+        acc[0] = acc[0] * rescale + w * vv.x;
+        acc[1] = acc[1] * rescale + w * vv.y;
+        acc[2] = acc[2] * rescale + w * vv.z;
+        acc[3] = acc[3] * rescale + w * vv.w;
+      }
+    } else {
+      for (uint r = 0; r < n; ++r) {
+        const float rescale = simd_shuffle(rescales, ushort(r));
+        const float w = simd_shuffle(weights, ushort(r));
+        mass = mass * rescale + w;
+        const float4 vv = float4(VS4[r * 32u + lane]);
+        acc[0] = acc[0] * rescale + w * vv.x;
+        acc[1] = acc[1] * rescale + w * vv.y;
+        acc[2] = acc[2] * rescale + w * vv.z;
+        acc[3] = acc[3] * rescale + w * vv.w;
+      }
+    }
+    top = simd_shuffle(peak, ushort(n - 1u));
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  if (lane == 0u) {
+    PART[base] = top;
+    PART[base + 1u] = mass;
+  }
+  for (uint u = 0; u < 4u; ++u) PART[base + 2u + lane + 32u * u] = acc[u];
+}
+
+inline bool i2_blocked(constant i2_attn_parts& a, uint nth) {
+  return a.dim == 128u && a.heads == 3u * a.kv && nth == 96u;
+}
+
+[[kernel]] void i2_attn_split(const device float* Q [[buffer(0)]], const device half* KEYS [[buffer(1)]],
+    const device half* VALUES [[buffer(2)]], const device float* B [[buffer(3)]], const device float* sink [[buffer(4)]],
+    constant i2_attn_parts& a [[buffer(5)]], device float* PART [[buffer(6)]],
+    uint tgp [[threadgroup_position_in_grid]], uint tid [[thread_position_in_threadgroup]],
+    uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]],
+    uint nth [[threads_per_threadgroup]]) {
+  threadgroup half4 KS4[32 * 32];
+  threadgroup half4 VS4[32 * 32];
+  if (i2_blocked(a, nth)) i2_split_blocks(Q, KEYS, VALUES, B, sink, a, PART, tgp, tid, sg, lane, KS4, VS4);
+  else i2_split_serial(Q, KEYS, VALUES, B, sink, a, PART, tgp, tid, sg, lane, nth, (threadgroup float4*)KS4, (threadgroup float4*)VS4);
+}
+
+// The splits' partials merged in split order from the sink's (0, 1).
+inline void i2_combine_serial(const device float* PART, constant i2_attn_parts& a, device float* O, uint h, uint lane) {
   const uint D = a.dim, S = a.splits, per = max(1u, D / 32u);
   float top = 0.0f, mass = 1.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
   for (uint s = 0; s < S; ++s) {
@@ -82,6 +219,46 @@ struct i2_attn_parts { uint heads, kv, dim, rel, extent, window, pos, tau, split
     top = peak;
   }
   for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) O[h * D + lane + 32u * u] = acc[u] / mass;
+}
+
+// The same merge for 128-wide heads and at most 16 splits, every partial loaded before the merge starts.
+inline void i2_combine_loaded(const device float* PART, constant i2_attn_parts& a, device float* O, uint h, uint lane) {
+  constexpr uint D = 128u;
+  const uint S = a.splits;
+  const size_t first = (size_t)h * S * (D + 2u);
+  const size_t mine = first + (size_t)min(lane, S - 1u) * (D + 2u);
+  const float tops = PART[mine], masses = PART[mine + 1u];
+  float pv[16][4];
+#pragma unroll
+  for (uint s = 0; s < 16u; ++s) {
+    const size_t base = first + (size_t)min(s, S - 1u) * (D + 2u) + 2u + lane;
+    pv[s][0] = PART[base];
+    pv[s][1] = PART[base + 32u];
+    pv[s][2] = PART[base + 64u];
+    pv[s][3] = PART[base + 96u];
+  }
+  float top = 0.0f, mass = 1.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+#pragma unroll
+  for (uint s = 0; s < 16u; ++s) {
+    if (s >= S) break;
+    const float ptop = simd_shuffle(tops, ushort(s));
+    const float pmass = simd_shuffle(masses, ushort(s));
+    if (pmass == 0.0f) continue;
+    const float peak = max(top, ptop);
+    const float r0 = precise::exp(top - peak);
+    const float r1 = precise::exp(ptop - peak);
+    mass = mass * r0 + pmass * r1;
+    for (uint u = 0; u < 4u; ++u) acc[u] = acc[u] * r0 + r1 * pv[s][u];
+    top = peak;
+  }
+  for (uint u = 0; u < 4u; ++u) O[h * D + lane + 32u * u] = acc[u] / mass;
+}
+
+[[kernel]] void i2_attn_combine(const device float* PART [[buffer(0)]],
+    constant i2_attn_parts& a [[buffer(1)]], device float* O [[buffer(2)]],
+    uint h [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
+  if (a.dim == 128u && a.splits <= 16u) i2_combine_loaded(PART, a, O, h, lane);
+  else i2_combine_serial(PART, a, O, h, lane);
 }
 
 struct i2_batch_row { device half* keys; device half* values; i2_attn_parts args; };
@@ -91,93 +268,167 @@ struct i2_batch_row { device half* keys; device half* values; i2_attn_parts args
     uint2 tg [[threadgroup_position_in_grid]], uint2 tid2 [[thread_position_in_threadgroup]],
     uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]],
     uint2 nth2 [[threads_per_threadgroup]]) {
-  const uint tid = tid2.x, nth = nth2.x;
+  threadgroup half4 KS4[32 * 32];
+  threadgroup half4 VS4[32 * 32];
   constant i2_attn_parts& a = rows[tg.y].args;
-  const device half* KEYS = rows[tg.y].keys;
-  const device half* VALUES = rows[tg.y].values;
+  if (tg.x >= a.kv * a.splits) return;
   Q += size_t(tg.y) * a.heads * a.dim;
   B += size_t(tg.y) * a.heads * (a.extent + 1u);
   sink += size_t(tg.y) * a.heads;
   PART += size_t(tg.y) * a.heads * 16u * (a.dim + 2u);
-  const uint tgp = tg.x;
-  if (tgp >= a.kv * a.splits) return;
-  const uint G = a.heads / a.kv;
-  const uint D = a.dim, per = max(1u, D / 32u);
-  const uint kv = tgp / a.splits, s = tgp % a.splits, h = kv * G + sg;
-  const float tau = a.tau ? 1.0f + a.alpha * precise::log(max(1.0f, (float(a.pos) + 1.0f) / a.floor)) : 1.0f;
-  float qv[4];
-  for (uint j = 0; j < per; ++j) qv[j] = (lane + 32u * j < D) ? Q[h * D + lane + 32u * j] * a.scale * tau : 0.0f;
-  const float sk = sink[h];
-  const uint lo = a.window ? (a.pos + 1u > a.window ? a.pos + 1u - a.window : 0u) : 0u;
-  const size_t base = ((size_t)h * a.splits + s) * (D + 2u);
-  const uint js = lo + s * a.chunk, je = min(js + a.chunk, a.pos + 1u);
-  if (js >= je) {
-    if (lane == 0u) {
-      PART[base] = -INFINITY;
-      PART[base + 1u] = 0.0f;
-    }
-    for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) PART[base + 2u + lane + 32u * u] = 0.0f;
-    return;
-  }
-  threadgroup float4 KB4[32];
-  threadgroup float4 VB4[32];
-  threadgroup float* KB = (threadgroup float*)KB4;
-  threadgroup float* VB = (threadgroup float*)VB4;
-  float top = -INFINITY, mass = 0.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-  for (uint j = js; j < je; ++j) {
-    const uint col = min(a.pos - j, a.extent);
-    const uint rj = a.window ? (j % a.window) : j;
-    const size_t at = ((size_t)rj * a.kv + kv) * D;
-    const float bias = B[h * (a.extent + 1u) + col] - sk;
-    for (uint v = tid; v < D / 4u; v += nth) {
-      KB4[v] = float4(*reinterpret_cast<const device packed_half4*>(KEYS + at + v * 4u));
-      VB4[v] = float4(*reinterpret_cast<const device packed_half4*>(VALUES + at + v * 4u));
-    }
-    for (uint i = (D / 4u) * 4u + tid; i < D; i += nth) {
-      KB[i] = KEYS[at + i];
-      VB[i] = VALUES[at + i];
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    float dot = 0.0f;
-    for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) dot = fma(qv[u], KB[lane + 32u * u], dot);
-    const float score = simd_sum(dot) + bias;
-    const float peak = max(top, score);
-    const float rescale = precise::exp(top - peak);
-    const float w = precise::exp(score - peak);
-    mass = mass * rescale + w;
-    for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) acc[u] = acc[u] * rescale + w * VB[lane + 32u * u];
-    top = peak;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-  }
-  if (lane == 0u) {
-    PART[base] = top;
-    PART[base + 1u] = mass;
-  }
-  for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) PART[base + 2u + lane + 32u * u] = acc[u];
+  if (i2_blocked(a, nth2.x)) i2_split_blocks(Q, rows[tg.y].keys, rows[tg.y].values, B, sink, a, PART, tg.x, tid2.x, sg, lane, KS4, VS4);
+  else i2_split_serial(Q, rows[tg.y].keys, rows[tg.y].values, B, sink, a, PART, tg.x, tid2.x, sg, lane, nth2.x, (threadgroup float4*)KS4, (threadgroup float4*)VS4);
 }
-
 
 [[kernel]] void i2_batch_combine(const device float* PART [[buffer(0)]], constant i2_batch_row* rows [[buffer(1)]],
     device float* O [[buffer(2)]], uint2 tg [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
   constant i2_attn_parts& a = rows[tg.y].args;
-  const uint h = tg.x;
   PART += size_t(tg.y) * a.heads * 16u * (a.dim + 2u);
   O += size_t(tg.y) * a.heads * a.dim;
-  const uint D = a.dim, S = a.splits, per = max(1u, D / 32u);
-  float top = 0.0f, mass = 1.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-  for (uint s = 0; s < S; ++s) {
-    const size_t base = ((size_t)h * S + s) * (D + 2u);
-    const float ptop = PART[base];
-    const float pmass = PART[base + 1u];
-    if (pmass == 0.0f) continue;
-    const float peak = max(top, ptop);
-    const float r0 = precise::exp(top - peak);
-    const float r1 = precise::exp(ptop - peak);
-    mass = mass * r0 + pmass * r1;
-    for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) acc[u] = acc[u] * r0 + r1 * PART[base + 2u + lane + 32u * u];
-    top = peak;
+  if (a.dim == 128u && a.splits <= 16u) i2_combine_loaded(PART, a, O, tg.x, lane);
+  else i2_combine_serial(PART, a, O, tg.x, lane);
+}
+
+struct i2_mix_args { uint width, depth, k, rows; float scale; };
+
+// A token's depth mix for up to four queries over up to five states, one threadgroup of 256 a row: every query and
+// state's dot is accumulated in one pass, each with the per-thread order, SIMD reduction and part order of i2p_mix.
+inline void i2_mix_rows(const device float* S, const device float* q0, const device float* q1, const device float* q2,
+    const device float* q3, constant i2_mix_args& a, uint kn, device float* O, uint t, uint i,
+    threadgroup float (&part)[4][5][8], threadgroup float (&w)[4][5]) {
+  const device float* st = S + (size_t)t * a.depth * a.width;
+  device float* out = O + (size_t)t * kn * a.width;
+  const device float* qs[4] = { q0, q1, q2, q3 };
+  float sums[4][5];
+#pragma unroll
+  for (uint k = 0; k < 4u; ++k) {
+#pragma unroll
+    for (uint j = 0; j < 5u; ++j) sums[k][j] = 0.0f;
   }
-  for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) O[h * D + lane + 32u * u] = acc[u] / mass;
+  for (uint u = i; u < a.width; u += 256u) {
+    float sv[5];
+#pragma unroll
+    for (uint j = 0; j < 5u; ++j) sv[j] = j < a.depth ? st[j * a.width + u] : 0.0f;
+#pragma unroll
+    for (uint k = 0; k < 4u; ++k) {
+      if (k >= kn) break;
+      const float qv = qs[k][u];
+#pragma unroll
+      for (uint j = 0; j < 5u; ++j) if (j < a.depth) sums[k][j] = fma(sv[j], qv, sums[k][j]);
+    }
+  }
+#pragma unroll
+  for (uint k = 0; k < 4u; ++k) {
+    if (k >= kn) break;
+#pragma unroll
+    for (uint j = 0; j < 5u; ++j) {
+      if (j >= a.depth) break;
+      const float sum = simd_sum(sums[k][j]);
+      if (i % 32u == 0u) part[k][j][i / 32u] = sum;
+    }
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (i < kn) {
+    const uint k = i;
+    for (uint j = 0; j < a.depth; ++j) {
+      float total = 0.0f;
+      for (uint s = 0; s < 8u; ++s) total += part[k][j][s];
+      w[k][j] = total * a.scale;
+    }
+    float peak = w[k][0];
+    for (uint j = 1; j < a.depth; ++j) peak = max(peak, w[k][j]);
+    float total = 0.0f;
+    for (uint j = 0; j < a.depth; ++j) total += precise::exp(w[k][j] - peak);
+    for (uint j = 0; j < a.depth; ++j) w[k][j] = precise::exp(w[k][j] - peak) / total;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint k = 0; k < kn; ++k) {
+    for (uint u = i; u < a.width; u += 256u) {
+      float sum = 0.0f;
+      for (uint j = 0; j < a.depth; ++j) sum = fma(w[k][j], st[j * a.width + u], sum);
+      out[k * a.width + u] = sum;
+    }
+  }
+}
+
+[[kernel]] void i2_batch_mix(const device float* S [[buffer(0)]], const device float* Q [[buffer(1)]],
+    constant i2_mix_args& a [[buffer(2)]], device float* O [[buffer(3)]],
+    uint t [[threadgroup_position_in_grid]], uint i [[thread_position_in_threadgroup]]) {
+  threadgroup float part[4][5][8];
+  threadgroup float w[4][5];
+  i2_mix_rows(S, Q, Q + a.width, Q + 2u * a.width, Q + 3u * a.width, a, min(a.k, 4u), O, t, i, part, w);
+}
+
+[[kernel]] void i2_batch_mix4(const device float* S [[buffer(0)]], const device float* Q [[buffer(1)]],
+    const device float* K [[buffer(2)]], const device float* V [[buffer(3)]], const device float* F [[buffer(4)]],
+    constant i2_mix_args& a [[buffer(5)]], device float* O [[buffer(6)]],
+    uint t [[threadgroup_position_in_grid]], uint i [[thread_position_in_threadgroup]]) {
+  threadgroup float part[4][5][8];
+  threadgroup float w[4][5];
+  i2_mix_rows(S, Q, K, V, F, a, 4u, O, t, i, part, w);
+}
+
+struct i2_pick_args { uint experts, topk, rows; float route_scale; };
+
+// i2p_routepick's selection for up to 128 experts and eight picks, its arrays indexed at compile time: the same
+// probabilities, biased scores, ties to the lower expert, pick order and normalization.
+[[kernel]] void i2_batch_pick(const device float* L [[buffer(0)]], const device float* bias [[buffer(1)]],
+    constant i2_pick_args& a [[buffer(2)]], device int* picks [[buffer(3)]], device float* wts [[buffer(4)]],
+    uint t [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
+  if (t >= a.rows) return;
+  const uint E = a.experts, K = a.topk;
+  const device float* l = L + (size_t)t * E;
+  float probs[4], sel[4];
+#pragma unroll
+  for (uint j = 0; j < 4u; ++j) {
+    const uint e = lane + 32u * j;
+    probs[j] = e < E ? 1.0f / (1.0f + precise::exp(-l[e])) : 0.0f;
+    sel[j] = e < E ? probs[j] + bias[e] : NAN;
+  }
+  float denom = 0.0f;
+  float chosen[8];
+  int which[8];
+#pragma unroll
+  for (uint k = 0; k < 8u; ++k) {
+    if (k >= K) break;
+    float bv = 0.0f;
+    uint bi = E;
+#pragma unroll
+    for (uint j = 0; j < 4u; ++j) {
+      const uint e = lane + 32u * j;
+      if (e < E && !isnan(sel[j]) && (bi == E || sel[j] > bv)) { bv = sel[j]; bi = e; }
+    }
+    for (ushort off = 16; off > 0; off >>= 1) {
+      const float ov = simd_shuffle_down(bv, off);
+      const uint oi = simd_shuffle_down(bi, off);
+      if (lane + off < 32u && oi != E && (bi == E || ov > bv || (ov == bv && oi < bi))) { bv = ov; bi = oi; }
+    }
+    bi = simd_broadcast_first(bi);
+    which[k] = int(bi);
+    if (bi != E) {
+      const uint j = bi / 32u;
+      const float mine = j == 0u ? probs[0] : j == 1u ? probs[1] : j == 2u ? probs[2] : probs[3];
+      const float p = simd_shuffle(mine, ushort(bi % 32u));
+      if (lane == bi % 32u) {
+        if (j == 0u) sel[0] = NAN;
+        else if (j == 1u) sel[1] = NAN;
+        else if (j == 2u) sel[2] = NAN;
+        else sel[3] = NAN;
+      }
+      denom += p;
+      chosen[k] = p;
+    } else {
+      chosen[k] = NAN;
+    }
+  }
+  if (lane == 0) {
+#pragma unroll
+    for (uint k = 0; k < 8u; ++k) {
+      if (k >= K) break;
+      picks[(size_t)t * K + k] = which[k];
+      wts[(size_t)t * K + k] = chosen[k] / (denom + 1e-20f) * a.route_scale;
+    }
+  }
 }
 
 struct i2_controls_args { uint h, rank, rows; uint xs[3], xb[3]; };

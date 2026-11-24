@@ -9,6 +9,10 @@ const run = @import("run.zig");
 
 pub const usage =
     \\tf-inkling2-loop-run <model> <prompts.json> dflash <drafter> <tokens> <out.jsonl> [bits] [entering|outputs|unnormed]
+    \\  [incremental|rebuilt|f32_taps|first128|first512|window8192] [chain|lookup]  the drafter's context: built row by
+    \\  row, rebuilt each round at positions from 0, prompt taps from eight-row (f32) prefill chunks, the request's
+    \\  first 128 or 512 rows rebuilt each round ahead of its latest, or an 8,192-row window; lookup drafts a round
+    \\  whose latest tokens occurred before the drafter's window from what followed them there
     \\tf-inkling2-loop-run <model> <prompts.json> dflash-widths <reps> <out.jsonl> [load_s]  grouped verify at widths 1-8,
     \\  each prompt after load_s seconds of eight-row verifies (sustained load; 0: none)
     \\tf-inkling2-loop-run <model> <prompts.json> dflash-kernels <reps> <out.jsonl> [picks.json]  one-row against
@@ -34,12 +38,14 @@ pub fn main(init: std.process.Init, args: []const [:0]const u8) !void {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(gpa);
     if (std.mem.eql(u8, mode, "dflash")) {
-        if (args.len < 7 or args.len > 9) return error.ExpectedArgs;
+        if (args.len < 7 or args.len > 11) return error.ExpectedArgs;
         const limit = try std.fmt.parseInt(usize, args[5], 10);
         const bits = if (args.len >= 8) try std.fmt.parseInt(u8, args[7], 10) else 0;
-        const reading = if (args.len == 9) std.meta.stringToEnum(Reading, args[8]) orelse return error.ExpectedArgs else .entering;
+        const reading = if (args.len >= 9) std.meta.stringToEnum(Reading, args[8]) orelse return error.ExpectedArgs else .entering;
+        const context = if (args.len >= 10) std.meta.stringToEnum(Context, args[9]) orelse return error.ExpectedArgs else .incremental;
+        const drafts = if (args.len == 11) std.meta.stringToEnum(Drafts, args[10]) orelse return error.ExpectedArgs else .chain;
         if (limit < 2) return error.ExpectedArgs;
-        const same = try speculate(gpa, init.io, m, args[4], parsed.value, limit, bits, reading, &out);
+        const same = try speculate(gpa, init.io, m, args[4], parsed.value, limit, bits, reading, context, drafts, &out);
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[6], .data = out.items });
         if (!same) return error.SpeculationDiffersFromPlain;
         return;
@@ -64,6 +70,55 @@ pub fn main(init: std.process.Init, args: []const [:0]const u8) !void {
 
 /// The capture reading a run drafts from: the checkpoint's, or a diagnostic of another (`outputs`, `unnormed`).
 const Reading = enum { entering, outputs, unnormed };
+
+const Context = enum { incremental, rebuilt, f32_taps, first128, first512, window8192 };
+
+const Drafts = enum { chain, lookup };
+
+const Rebuilt = struct {
+    drafter: *dflash.Drafter,
+    rows: []u8,
+    first: []u8,
+    first_rows: usize = 0,
+
+    fn call(ptr: *anyopaque, pending: u32, _: u64, out: []u32) anyerror!void {
+        const r: *Rebuilt = @ptrCast(@alignCast(ptr));
+        const ring = r.drafter.model.ring();
+        const end = ring.end.*;
+        const keep: usize = @intCast(@min(end, ring.window - 1));
+        const first = if (end > keep) r.first_rows else 0;
+        @memcpy(r.rows[0 .. first * ring.stride], r.first[0 .. first * ring.stride]);
+        var i: usize = first;
+        while (i < keep) {
+            const slot: usize = @intCast((end - keep + i) % ring.window);
+            const count = @min(keep - i, ring.window - slot);
+            @memcpy(r.rows[i * ring.stride ..][0 .. count * ring.stride], ring.buf.contents()[slot * ring.stride ..][0 .. count * ring.stride]);
+            i += count;
+        }
+        try r.drafter.reset();
+        try r.drafter.absorb(r.rows[0 .. keep * ring.stride], @intCast(keep));
+        try r.drafter.flush();
+        try r.drafter.propose(pending, @intCast(out.len), out);
+    }
+};
+
+fn startF32(s: *spec.Speculator, cache: *inkling.Cache, twin: *inkling.Cache, small: *inkling.PrefillScratch, taps: *const inkling.Taps, ids: []const u32) !spec.Prefill {
+    try s.drafter.reset();
+    const t0 = spec.now();
+    const first = try spec.prefillPlain(s.model, &s.prefill, cache, ids);
+    small.taps = taps;
+    defer small.taps = null;
+    var at: usize = 0;
+    while (at < ids.len) {
+        const take = @min(small.chunk, ids.len - at);
+        try inkling.prefillWant(s.model, small, twin, ids[at..][0..take], .none);
+        try s.drafter.absorb(taps.bytes(0, take), @intCast(take));
+        at += take;
+    }
+    const t1 = spec.now();
+    try s.drafter.flush();
+    return .{ .first = first, .prefill_ns = t1 - t0, .flush_ns = spec.now() - t1 };
+}
 
 fn digest(tokens: []const u32) [32]u8 {
     var h = std.crypto.hash.sha2.Sha256.init(.{});
@@ -102,16 +157,31 @@ fn mean(values: []const f64) f64 {
     return sum / @as(f64, @floatFromInt(values.len));
 }
 
-fn speculate(gpa: std.mem.Allocator, io: std.Io, m: *inkling.Model, dir: []const u8, prompts: []const Prompt, limit: usize, bits: u8, reading: Reading, out: *std.ArrayList(u8)) !bool {
+fn speculate(gpa: std.mem.Allocator, io: std.Io, m: *inkling.Model, dir: []const u8, prompts: []const Prompt, limit: usize, bits: u8, reading: Reading, context: Context, drafts: Drafts, out: *std.ArrayList(u8)) !bool {
     const shifted = reading == .outputs;
     const unnormed = reading == .unnormed;
-    const drafter = try dflash.Drafter.init(gpa, io, m, dir, .{ .bits = bits, .embed_norm = !unnormed });
+    const drafter = try dflash.Drafter.init(gpa, io, m, dir, .{ .bits = bits, .embed_norm = !unnormed, .window = if (context == .window8192) 8192 else null });
     defer drafter.deinit();
     const visits = if (shifted) &[_]u32{ dflash.tap_ids[0] + 1, dflash.tap_ids[1] + 1, dflash.tap_ids[2] + 1, dflash.tap_ids[3] } else dflash.tap_ids;
     var s = try spec.Speculator.init(m, drafter, visits);
     defer s.deinit();
+    var rebuilt = Rebuilt{ .drafter = drafter, .rows = try gpa.alloc(u8, @as(usize, drafter.config.window - 1) * s.taps.rowBytes()), .first = try gpa.alloc(u8, 512 * s.taps.rowBytes()), .first_rows = switch (context) {
+        .first128 => 128,
+        .first512 => 512,
+        else => 0,
+    } };
+    defer gpa.free(rebuilt.rows);
+    defer gpa.free(rebuilt.first);
+    if (context == .rebuilt or rebuilt.first_rows > 0) s.proposer = .{ .ptr = &rebuilt, .call = Rebuilt.call };
+    var lookup = spec.Lookup.init(gpa);
+    defer lookup.deinit();
+    if (drafts == .lookup) s.lookup = &lookup;
+    var small: ?inkling.PrefillScratch = if (context == .f32_taps) try inkling.PrefillScratch.init(m.device, &m.config, 8) else null;
+    defer if (small) |*p| p.deinit();
+    var small_taps: ?inkling.Taps = if (context == .f32_taps) try inkling.Taps.init(m.device, &m.config, visits, 8) else null;
+    defer if (small_taps) |*t| t.deinit();
     const residency = try drafter.fixedBytes();
-    try out.print(gpa, "{{\"kind\":\"meta\",\"drafter_bits\":{d},\"draft_residency_bytes\":{d},\"warm_draft_ms\":{d:.3},\"limit\":{d},\"depth\":{d},\"taps\":[{d},{d},{d},{d}],\"embed_norm\":{}}}\n", .{ bits, residency, drafter.step_ms, limit, s.depth, visits[0], visits[1], visits[2], visits[3], !unnormed });
+    try out.print(gpa, "{{\"kind\":\"meta\",\"drafter_bits\":{d},\"draft_residency_bytes\":{d},\"warm_draft_ms\":{d:.3},\"limit\":{d},\"depth\":{d},\"taps\":[{d},{d},{d},{d}],\"embed_norm\":{},\"context\":\"{s}\",\"drafts\":\"{s}\"}}\n", .{ bits, residency, drafter.step_ms, limit, s.depth, visits[0], visits[1], visits[2], visits[3], !unnormed, @tagName(context), @tagName(drafts) });
     var all_same = true;
     for (prompts, 0..) |prompt, index| {
         var spec_tokens: std.ArrayList(u32) = .empty;
@@ -130,7 +200,17 @@ fn speculate(gpa: std.mem.Allocator, io: std.Io, m: *inkling.Model, dir: []const
             var cache = try inkling.Cache.init(m.device, &m.config, prompt.ids.len + limit + inkling.group.max_rows);
             defer cache.deinit();
             if (speculative) {
-                started = try s.start(&cache, prompt.ids);
+                var twin: ?inkling.Cache = if (context == .f32_taps) try inkling.Cache.init(m.device, &m.config, prompt.ids.len) else null;
+                defer if (twin) |*t| t.deinit();
+                if (rebuilt.first_rows > 0) {
+                    var first_cache = try inkling.Cache.init(m.device, &m.config, rebuilt.first_rows);
+                    defer first_cache.deinit();
+                    s.prefill.taps = &s.taps;
+                    defer s.prefill.taps = null;
+                    try inkling.prefillWant(m, &s.prefill, &first_cache, prompt.ids[0..rebuilt.first_rows], .none);
+                    @memcpy(rebuilt.first[0 .. rebuilt.first_rows * s.taps.rowBytes()], s.taps.bytes(0, rebuilt.first_rows));
+                }
+                started = if (twin) |*t| try startF32(&s, &cache, t, &small.?, &small_taps.?, prompt.ids) else try s.start(&cache, prompt.ids);
                 try spec_tokens.append(gpa, started.first);
                 const t0 = spec.now();
                 try s.run(&cache, started.first, limit, &.{}, gpa, &spec_tokens, &rounds);
@@ -154,7 +234,9 @@ fn speculate(gpa: std.mem.Allocator, io: std.Io, m: *inkling.Model, dir: []const
         var full: usize = 0;
         var zero: usize = 0;
         for (rounds.items, 0..) |r, i| {
-            try out.print(gpa, "{{\"kind\":\"round\",\"prompt\":\"{s}\",\"round\":{d},\"position\":{d},\"offered\":{d},\"accepted\":{d},\"emitted\":{d},\"draft_ms\":{d:.4},\"verify_ms\":{d:.4},\"select_ms\":{d:.4},\"commit_ms\":{d:.4},\"host_ms\":{d:.4},\"total_ms\":{d:.4}}}\n", .{ prompt.name, i, r.position, r.offered, r.accepted, r.emitted, ms(r.draft_ns), ms(r.verify_ns), ms(r.select_ns), ms(r.commit_ns), ms(r.host_ns), ms(r.total_ns) });
+            try out.print(gpa, "{{\"kind\":\"round\",\"prompt\":\"{s}\",\"round\":{d},\"position\":{d},\"offered\":{d},\"accepted\":{d},\"emitted\":{d},\"draft_ms\":{d:.4},\"verify_ms\":{d:.4},\"select_ms\":{d:.4},\"commit_ms\":{d:.4},\"host_ms\":{d:.4},\"total_ms\":{d:.4},\"source\":\"{s}\",\"drafts\":", .{ prompt.name, i, r.position, r.offered, r.accepted, r.emitted, ms(r.draft_ns), ms(r.verify_ns), ms(r.select_ns), ms(r.commit_ns), ms(r.host_ns), ms(r.total_ns), @tagName(r.source) });
+            try tokensJson(gpa, out, r.drafts[0..r.offered]);
+            try out.appendSlice(gpa, "}\n");
             try totals.append(gpa, ms(r.total_ns));
             for ([_]u64{ r.draft_ns, r.verify_ns, r.select_ns, r.commit_ns, r.host_ns }, 0..) |ns, k| parts[k] += ms(ns);
             emitted += r.emitted;

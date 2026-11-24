@@ -715,6 +715,107 @@
       "license": "Apache-2.0",
       "purpose": "Pinned Inkling-2-Mini-NVFP4-XL.gguf from Xylolabs/Inkling-2-Mini-GGUF, the llama.cpp weights closest in size to oQ4e, for the best-practical table",
       "model": "inkling-2-mini-nvfp4-xl-gguf"
+    },
+    {
+      "name": "inkling-2-mini-dflash2/.gitattributes",
+      "version": "4f9088ea66c21f2b99ed657d1941c306b03e84d2",
+      "sha256": "8e63f02a5caa4dbc92838d44dddcfa2c1b76f355503fcbeaa3d6512f7fe132ef",
+      "url": "https://huggingface.co/incoai/Inkling-2-Mini-DFlash2/resolve/4f9088ea66c21f2b99ed657d1941c306b03e84d2/.gitattributes",
+      "size": 1581,
+      "role": "weights",
+      "license": "Apache-2.0",
+      "purpose": "Pinned .gitattributes from incoai/Inkling-2-Mini-DFlash2 at revision 4f9088ea66c21f2b99ed657d1941c306b03e84d2",
+      "model": "inkling-2-mini-dflash2"
+    },
+    {
+      "name": "inkling-2-mini-dflash2/README.md",
+      "version": "4f9088ea66c21f2b99ed657d1941c306b03e84d2",
+      "sha256": "e809da60c54b754707657585ef479981925cfc9a14d3d4fe5223189b354a8a91",
+      "url": "https://huggingface.co/incoai/Inkling-2-Mini-DFlash2/resolve/4f9088ea66c21f2b99ed657d1941c306b03e84d2/README.md",
+      "size": 4660,
+      "role": "weights",
+      "license": "Apache-2.0",
+      "purpose": "Pinned README.md from incoai/Inkling-2-Mini-DFlash2 at revision 4f9088ea66c21f2b99ed657d1941c306b03e84d2",
+      "model": "inkling-2-mini-dflash2"
+    },
+    {
+      "name": "inkling-2-mini-dflash2/config.json",
+      "version": "4f9088ea66c21f2b99ed657d1941c306b03e84d2",
+      "sha256": "d094e435eb939e01fca6297f637c5af35e3da4b552f8e1ab0a181cd278a1cefa",
+      "url": "https://huggingface.co/incoai/Inkling-2-Mini-DFlash2/resolve/4f9088ea66c21f2b99ed657d1941c306b03e84d2/config.json",
+      "size": 1311,
+      "role": "weights",
+      "license": "Apache-2.0",
+      "purpose": "Pinned config.json from incoai/Inkling-2-Mini-DFlash2 at revision 4f9088ea66c21f2b99ed657d1941c306b03e84d2",
+      "model": "inkling-2-mini-dflash2"
+    },
+    {
+      "name": "inkling-2-mini-dflash2/model.safetensors",
+      "version": "4f9088ea66c21f2b99ed657d1941c306b03e84d2",
+      "sha256": "217980ab00d116693fa5946df7bbfd967caf5fac1f529afd541fbd470ddb54ee",
+      "url": "https://huggingface.co/incoai/Inkling-2-Mini-DFlash2/resolve/4f9088ea66c21f2b99ed657d1941c306b03e84d2/model.safetensors",
+      "size": 989975616,
+      "role": "weights",
+      "license": "Apache-2.0",
+      "purpose": "Pinned model.safetensors from incoai/Inkling-2-Mini-DFlash2 at revision 4f9088ea66c21f2b99ed657d1941c306b03e84d2",
+      "model": "inkling-2-mini-dflash2"
+    },
+    {
+      "name": "inkling-2-mini-dflash2/sglang_inkling_dflash2.py",
+      "version": "4f9088ea66c21f2b99ed657d1941c306b03e84d2",
+      "sha256": "14223ae2f3aa1d661da67cf0143ec33070d952a6e28a119e6cec64fcc0bebe50",
+      "url": "https://huggingface.co/incoai/Inkling-2-Mini-DFlash2/resolve/4f9088ea66c21f2b99ed657d1941c306b03e84d2/sglang_inkling_dflash2.py",
+      "size": 8772,
+      "role": "weights",
+      "license": "Apache-2.0",
+      "purpose": "Pinned sglang_inkling_dflash2.py from incoai/Inkling-2-Mini-DFlash2 at revision 4f9088ea66c21f2b99ed657d1941c306b03e84d2",
+      "model": "inkling-2-mini-dflash2"
+    },
+    {
+      "name": "inkling-2-mini-ud-q4km-gguf/Inkling-2-Mini-UD-Q4_K_M.gguf",
+      "version": "8078d149286eec7193795413b9e0643da6d11fa1",
+      "sha256": "78fcedcf93c5d1bfe83e225513b71392bb52259be0eaa5f8899c856a2e5834ae",
+      "url": "https://huggingface.co/unsloth/Inkling-2-Mini-GGUF/resolve/8078d149286eec7193795413b9e0643da6d11fa1/Inkling-2-Mini-UD-Q4_K_M.gguf",
+      "size": 16610544608,
+      "role": "weights",
+      "license": "Apache-2.0",
+      "purpose": "Pinned Inkling-2-Mini-UD-Q4_K_M.gguf from unsloth/Inkling-2-Mini-GGUF at revision 8078d149286eec7193795413b9e0643da6d11fa1, the weights Splash 1.7.2 advertises for Inkling 2 Mini, for the best-practical table",
+      "model": "inkling-2-mini-ud-q4km-gguf"
+    },
+    {
+      "name": "inkling-2-mini-ud-q4km-gguf/README.md",
+      "version": "8078d149286eec7193795413b9e0643da6d11fa1",
+      "sha256": "f3ef315925ac98f55e512193b08929c77c890b6be2cc1e222063b745cff973ce",
+      "url": "https://huggingface.co/unsloth/Inkling-2-Mini-GGUF/resolve/8078d149286eec7193795413b9e0643da6d11fa1/README.md",
+      "size": 56469,
+      "role": "weights",
+      "license": "Apache-2.0",
+      "purpose": "Pinned README.md from unsloth/Inkling-2-Mini-GGUF at revision 8078d149286eec7193795413b9e0643da6d11fa1",
+      "model": "inkling-2-mini-ud-q4km-gguf"
+    },
+    {
+      "name": "splash/splash-1.7.2-arm64-macos26.tar.gz",
+      "version": "2afc7337aacc044722fa95e4cb3da75c281a19a8",
+      "sha256": "40a1e6d585ed8f51b2f2e17c331e7d9533a1b666e1e6e418ddd623bdd3a29e2b",
+      "url": "https://github.com/incoai/splash/releases/download/1.7.2/splash-1.7.2-arm64-macos26.tar.gz",
+      "size": 108514802,
+      "role": "comparator",
+      "license": "Apache-2.0",
+      "purpose": "Splash 1.7.2 release build, the same-model Inkling 2 Mini reference (plan Decision 17)",
+      "model": "splash",
+      "store": "src"
+    },
+    {
+      "name": "splash-src/splash-2afc7337aacc044722fa95e4cb3da75c281a19a8.tar.gz",
+      "version": "2afc7337aacc044722fa95e4cb3da75c281a19a8",
+      "sha256": "d5bf52c3e8b75098658013c561dd86f295abcc88943fbc4d112df00aa443402c",
+      "url": "https://codeload.github.com/incoai/splash/tar.gz/2afc7337aacc044722fa95e4cb3da75c281a19a8",
+      "size": 2380504,
+      "role": "reference",
+      "license": "Apache-2.0",
+      "purpose": "Splash 1.7.2 source: the Inkling 2 Mini DFlash2 target, draft and selector reference",
+      "model": "splash-src",
+      "store": "src"
     }
   ]
 }

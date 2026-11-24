@@ -8,6 +8,7 @@ const staged_mod = @import("prefill_staged.zig");
 const rows_mod = @import("prefill_rows.zig");
 
 const Model = wts.Model;
+const Dispatch = @import("rows.zig").Dispatch;
 const Cache = st.Cache;
 const Tensor = wts.Tensor;
 const Layer = wts.Layer;
@@ -913,7 +914,7 @@ const Chunk = struct {
             t(v), bo(vf.scales, vf.scale_offset), bo(vf.biases, vf.bias_offset),
             b(s.q), b(s.k), b(s.v), b(s.r), b(s.gate), b(s.sink), b(s.kdyn), b(s.vdyn), A,
         };
-        if (c.batch) |batch| if (batch.scratch.shared.fused(c.n, total, @intCast(width(a.q)))) |d| {
+        if (c.batch) |batch| if (batch.scratch.shared.fused(c.n, ms, @intCast(width(a.q)))) |d| {
             c.setP(d.pipe, SharedProjections{ .k = @intCast(width(a.q)), .full = @intFromBool(full), .rows = c.n, .m = ms }, &bufs);
             c.enc.dispatchGroups(d.groups, d.threads);
             return;
@@ -1424,8 +1425,8 @@ const Chunk = struct {
         const text = &c.m.config.text;
         const shared = &batch.scratch.shared;
         const slots: u32 = c.n * text.topk;
-        const gu = shared.gateUp(c.n, text.expert_inter, c.h, slots) orelse return false;
         const dn = shared.downs(c.n, c.h, text.expert_inter, slots) orelse return false;
+        const gu = shared.gateUp(c.n, text.expert_inter, c.h, slots) orelse Dispatch{ .pipe = s.pipes.gu_nv, .groups = mtl.Size.of(text.expert_inter, slots, 1), .threads = mtl.Size.of(32, 1, 1) };
         c.setP(gu.pipe, MoeB{ .k = c.h, .n = text.expert_inter, .slots = slots, .topk = text.topk, .gate_cap = text.gate_cap, .up_cap = text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.picks), A, b(s.act), codes });
         c.enc.dispatchGroups(gu.groups, gu.threads);
         c.setP(dn.pipe, MoeB{ .k = text.expert_inter, .n = c.h, .slots = slots, .topk = text.topk, .gate_cap = 0, .up_cap = 0 }, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.picks), A, b(s.down), codes });

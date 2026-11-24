@@ -5,7 +5,7 @@
 **Active 2026-11-24.**
 - Resume prompt: "Resume the Inkling 2K/200 campaign (Decision 17) from `campaign/plan.md` **Status**."
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
-- **Last accepted code: V1 + SV1 merge `33ec5cf1c`** (green: `inkling-host`, `inkling-gpu` on the merge). Before it, DF1, `93de31eca`, green (`inkling-host`, `inkling-gpu` 123/123, `zig build native`; receipt `campaign/kernels/inkling-dflash2.md`). Before it, D2 `038f24cce`: Passing there: `evidence-controls`, `inkling-host`, `inkling-gpu` (107 tests), `zig build native` and the `inkling-omlx-oracle` report (mean KL 0.0195 at chunk 512). Receipts: `campaign/kernels/inkling-cold-prefill.md` and `campaign/kernels/inkling-decode-step.md`.
+- **Last accepted code: DF2a merge `6c5a5fe0f`** (green: `inkling-host`, `inkling-gpu` 149/149 on main `1e441ef6c`). Before it, V1 + SV1 merge `33ec5cf1c`. Before it, DF1, `93de31eca`, green (`inkling-host`, `inkling-gpu` 123/123, `zig build native`; receipt `campaign/kernels/inkling-dflash2.md`). Before it, D2 `038f24cce`: Passing there: `evidence-controls`, `inkling-host`, `inkling-gpu` (107 tests), `zig build native` and the `inkling-omlx-oracle` report (mean KL 0.0195 at chunk 512). Receipts: `campaign/kernels/inkling-cold-prefill.md` and `campaign/kernels/inkling-decode-step.md`.
 - **Open from P3c:** `code-c02` now falls into a repeatable reasoning loop, and oQ4e quality dev is 7/11 (base 6/11), below the fast profile's 8-case bar. Mean TTFT at four agents rose on the warm repetition; the cause is not traced.
 - **Parked branches** (all on `origin`), with item, cause and retry:
   - `lane/p3c-prefill` at `f0ff849e6`: commits the prefill scratch at setup. Two 1K pairs are inconclusive and it has not run the suite. Retry: the suite, then three first-pass pairs at 1K.
@@ -42,7 +42,8 @@
      speculation, byte-identical to plain greedy across prompt-cache hits, forks and EOS (133/133 in `inkling-gpu`).
      It is faster only on code-1024 (1.47×) and prose-1024 (1.16×), so it stays opt-in until V1 and DF2 land. It
      speculates only while one lane decodes. `bench.py MODE=drafter` still passes Flint's `--drafter`.
-  5. P4: prefill to 2K across the curve: qualify `lane/p3c-prefill`, fuse compatible projections and split the
+  5. P4, coding (timing waits for V2 via `.work/tmp/p4-timing-go`): `lane/p4-prefill` in `.work/wt/p4-prefill`
+     (scope `usrn_f4aecfdf-1818-4a23-a8ed-94305532f730`), receipt `inkling-p4-prefill.md`. Prefill to 2K across the curve: qualify `lane/p3c-prefill`, fuse compatible projections and split the
      shared input once (P3c profile), then 1K/4K/8K/16K and near-cap results plus first-request numbers.
   6. Q3: the `code-c02` reasoning loop from P3c.
   7. Deferred off the critical path: J1 (multi-agent scheduling), B2 remainder, R1.

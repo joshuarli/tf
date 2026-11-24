@@ -1,0 +1,26 @@
+PYTHONDONTWRITEBYTECODE=1 ~/.local/bin/uv run --project /Users/josh/repos/tf/.work/wt/v2-arith/campaign python /Users/josh/repos/tf/.work/wt/v2-arith/campaign/quality/verify_pins.py --dir /Users/josh/repos/tf/.work/src/xgrammar-v0.2.8
+xgrammar v0.2.8 at 97787376faee5ed8466cfad57c99855e4ce2f6aa and 3 submodules match the pins
+cd /Users/josh/repos/tf/.work/tmp/v2/base-src && zig build grammar -Dxgrammar=/Users/josh/repos/tf/.work/src/xgrammar-v0.2.8
+test -f /Users/josh/repos/tf/.work/tmp/v2/base-src/zig-out/native/lib/libtfgrammar.dylib
+built /Users/josh/repos/tf/.work/tmp/v2/base-src/zig-out/native/lib/libtfgrammar.dylib
+serve /Users/josh/models/Inkling-2-Mini@ed40e7da625f under INKLING_LOAD_LIMIT_GB=26 through /Users/josh/repos/tf/.work/wt/v2-arith/campaign/heavy.py: tensorfold-native serve /Users/josh/models/Inkling-2-Mini@ed40e7da625f --host 127.0.0.1 --port <free> --parallel 1 --context 32768 --prompt-cache-gib 2 --no-update-check --no-drafts --temperature 0
+PYTHONDONTWRITEBYTECODE=1 ~/.local/bin/uv run --project /Users/josh/repos/tf/.work/wt/v2-arith/campaign python /Users/josh/repos/tf/.work/wt/v2-arith/campaign/quality/run.py \
+		--model inkling2-mini --set dev --bin '/Users/josh/repos/tf/.work/tmp/v2/base-src/zig-out/native/bin/tensorfold-native'
+Traceback (most recent call last):
+  File "/Users/josh/repos/tf/.work/wt/v2-arith/campaign/quality/run.py", line 268, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/Users/josh/repos/tf/.work/wt/v2-arith/campaign/quality/run.py", line 264, in main
+    return run(parser.parse_args())
+  File "/Users/josh/repos/tf/.work/wt/v2-arith/campaign/quality/run.py", line 168, in run
+    with harness.Server(binary, model, [], PROMPT_CACHE_GIB, log_path) as server:
+         ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/josh/repos/tf/.work/wt/v2-arith/campaign/bench/harness.py", line 561, in __enter__
+    self.start()
+    ~~~~~~~~~~^^
+  File "/Users/josh/repos/tf/.work/wt/v2-arith/campaign/bench/harness.py", line 466, in start
+    raise RuntimeError(f"server exited before ready ({self.process.returncode}): "
+                       f"{self.reader.text()[-2000:]}")
+RuntimeError: server exited before ready (1): tensorfold: --parallel 1 --context 32768: Inkling needs 26324461664 bytes including caches and reserves under a 26000000000-byte load limit; each session fits at most 22866 tokens
+heavy: done: peak charged 0.2 GB of the 28 GB cap (footprint 0.2 GB, resident 0.2 GB, host wired growth 0.1 GB); host pressure worst 1, host swap +0 MB, host pageins 20531
+make: *** [quality-inkling2-mini] Error 1

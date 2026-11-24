@@ -52,6 +52,7 @@ const Gather = extern struct { width: u32, depth: u32, stride: u32 };
 const MixB = extern struct { width: u32, depth: u32, k: u32, rows: u32, scale: f32 };
 const ControlsArgs = extern struct { h: u32, rank: u32, rows: u32, xs: [3]u32, xb: [3]u32 };
 const CtlB = extern struct { h: u32, rows: u32, cxs: u32, cxb: u32, mxs: u32, mxb: u32, ys: u32, yb: u32 };
+const GateCtl = extern struct { h: u32, rows: u32, k: u32, cxs: u32, cxb: u32, mxs: u32, mxb: u32, ys: u32, yb: u32 };
 const Clip3B = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, q_threshold: f32, rel_threshold: f32 };
 const ClipB = extern struct { heads: u32, width: u32, rows: u32, threshold: f32 };
 const ConvB = extern struct { channels: u32, heads: u32, ring: u32, base: u32, rows: u32, layout: u32, norm: f32 };
@@ -128,6 +129,7 @@ pub const Pipes = struct {
     affine_stage_split: ?mtl.Pipeline,
     affine_stage_gemm_split: ?mtl.Pipeline,
     float_mpp: ?mtl.Pipeline,
+    gate_ctl: ?mtl.Pipeline,
     affine_half_up: ?mtl.Pipeline,
     affine_half_down: ?mtl.Pipeline,
     bf16_convert: ?mtl.Pipeline,
@@ -198,6 +200,7 @@ pub const Pipes = struct {
         if (p.affine_stage_split) |pipe| pipe.deinit();
         if (p.affine_stage_gemm_split) |pipe| pipe.deinit();
         if (p.float_mpp) |pipe| pipe.deinit();
+        if (p.gate_ctl) |pipe| pipe.deinit();
         if (p.affine_half_up) |pipe| pipe.deinit();
         if (p.affine_half_down) |pipe| pipe.deinit();
         if (p.bf16_convert) |pipe| pipe.deinit();
@@ -462,12 +465,16 @@ pub const PrefillScratch = struct {
         defer small_lib.deinit();
         s.pipes.smallrow = try mtl.Pipeline.init(device, small_lib, "i2p_small", false);
         errdefer s.pipes.smallrow.deinit();
+        s.pipes.gate_ctl = null;
         s.pipes.float_mpp = if (s.affine_stage_w != null) blk: {
             const float_lib = try mtl.Library.fromSource(device, kernels.float_mpp, opts);
             defer float_lib.deinit();
+            s.pipes.gate_ctl = try mtl.Pipeline.init(device, float_lib, "i2af_gate_ctl", false);
+            errdefer s.pipes.gate_ctl.?.deinit();
             break :blk try mtl.Pipeline.init(device, float_lib, "i2af_gemm", false);
         } else null;
         errdefer if (s.pipes.float_mpp) |pipe| pipe.deinit();
+        errdefer if (s.pipes.gate_ctl) |pipe| pipe.deinit();
         s.pipes.affine_stage_prepare = null;
         s.pipes.affine_stage_gemm = null;
         s.pipes.affine_stage_split = null;
@@ -1127,6 +1134,13 @@ const Chunk = struct {
             c.enc.dispatchGroups(mtl.Size.of((n + 7) / 8, c.n, 1), mtl.Size.of(256, 1, 1));
             return;
         }
+        const rank: u32 = @intCast(width(ctl.gain));
+        const fusable = c.batch == null and s.fuse and c.n > 8 and s.half and s.pipes.float_mpp != null and ctl.gain.dtype == .f32 and ctl.forget.dtype == .f32 and nrows(ctl.gain) == c.h and nrows(ctl.forget) == c.h and width(ctl.forget) == rank;
+        if (fusable) if (s.pipes.gate_ctl) |pipe| {
+            c.setP(pipe, GateCtl{ .h = c.h, .rows = c.n, .k = rank, .cxs = cur.xs, .cxb = cur.xb, .mxs = msg.xs, .mxb = msg.xb, .ys = ys, .yb = yb }, &.{ b(s.normed), t(ctl.gain), t(ctl.forget), A, cur.buf, msg.buf, out });
+            c.enc.dispatchGroups(mtl.Size.of((c.h + 31) / 32, (c.n + 15) / 16, 1), mtl.Size.of(128, 1, 1));
+            return;
+        };
         c.lin(ctl.gain, .{ .buf = b(s.normed), .xs = 1, .xb = 0 }, b(s.tanhg));
         c.lin(ctl.forget, .{ .buf = b(s.normed), .xs = 1, .xb = 0 }, b(s.tanhf));
         c.setP(s.pipes.ctl, CtlB{ .h = c.h, .rows = c.n, .cxs = cur.xs, .cxb = cur.xb, .mxs = msg.xs, .mxb = msg.xb, .ys = ys, .yb = yb }, &.{ cur.buf, msg.buf, b(s.tanhg), b(s.tanhf), A, out });

@@ -29,7 +29,8 @@
      with the same drafter. Trace tf's 4K collapse (prompt taps from the half-precision prefill path, window
      handling), then tree or deeper verification within the row budget V1 delivers.
   4. SV1: the draft path in the served `inkling2_loop_host` (today `copy_drafts` is discarded and every lane runs
-     `batchStep`).
+     `batchStep`). Running beside V1 as a code-and-correctness lane: `lane/sv1-serve` in
+     `.work/wt/sv1-serve` (scope `usrn_e4ddd616-df91-4066-b5b4-5db6bead10bd`), receipt `inkling-sv1-serve.md`.
   5. P4: prefill to 2K across the curve: qualify `lane/p3c-prefill`, fuse compatible projections and split the
      shared input once (P3c profile), then 1K/4K/8K/16K and near-cap results plus first-request numbers.
   6. Q3: the `code-c02` reasoning loop from P3c.

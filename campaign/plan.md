@@ -5,7 +5,7 @@
 **Active 2026-11-24.**
 - Resume prompt: "Resume the Inkling 2K/200 campaign (Decision 17) from `campaign/plan.md` **Status**."
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
-- **Last accepted code: DF2a merge `6c5a5fe0f`** (green: `inkling-host`, `inkling-gpu` 149/149 on main `1e441ef6c`). Before it, V1 + SV1 merge `33ec5cf1c`. Before it, DF1, `93de31eca`, green (`inkling-host`, `inkling-gpu` 123/123, `zig build native`; receipt `campaign/kernels/inkling-dflash2.md`). Before it, D2 `038f24cce`: Passing there: `evidence-controls`, `inkling-host`, `inkling-gpu` (107 tests), `zig build native` and the `inkling-omlx-oracle` report (mean KL 0.0195 at chunk 512). Receipts: `campaign/kernels/inkling-cold-prefill.md` and `campaign/kernels/inkling-decode-step.md`.
+- **Last accepted code: V2 merge `3881b3d8c`** (green: `inkling-host` 25/25, `inkling-gpu` 155/155 on main `50b4a681a`). Before it, DF2a merge `6c5a5fe0f` (green: `inkling-host`, `inkling-gpu` 149/149 on main `1e441ef6c`). Before it, V1 + SV1 merge `33ec5cf1c`. Before it, DF1, `93de31eca`, green (`inkling-host`, `inkling-gpu` 123/123, `zig build native`; receipt `campaign/kernels/inkling-dflash2.md`). Before it, D2 `038f24cce`: Passing there: `evidence-controls`, `inkling-host`, `inkling-gpu` (107 tests), `zig build native` and the `inkling-omlx-oracle` report (mean KL 0.0195 at chunk 512). Receipts: `campaign/kernels/inkling-cold-prefill.md` and `campaign/kernels/inkling-decode-step.md`.
 - **Open from P3c:** `code-c02` now falls into a repeatable reasoning loop, and oQ4e quality dev is 7/11 (base 6/11), below the fast profile's 8-case bar. Mean TTFT at four agents rose on the warm repetition; the cause is not traced.
 - **Parked branches** (all on `origin`), with item, cause and retry:
   - `lane/p3c-prefill` at `f0ff849e6`: commits the prefill scratch at setup. Two 1K pairs are inconclusive and it has not run the suite. Retry: the suite, then three first-pass pairs at 1K.
@@ -26,23 +26,31 @@
      rested at 1K (was 56.2) and 52.7 sustained. Speculative decode is up 23–29% on every prompt
      (code-1024 116.6 tok/s, 1.90× plain), and a round waits once. No width meets a Decision 17 budget: the 8-row
      verify is 2.7× its 17.0 ms floor under per-row summation order, and the one-row step is 2.1× its 7.65 ms floor.
-  3c. V2, running (Decision 18): `lane/v2-arith` in `.work/wt/v2-arith` (scope
-     `usrn_d996b77c-2510-4d79-9e42-b1435d8c4771`), receipt `inkling-v2-arith.md`. One matrix-unit arithmetic for the one-row step, batch step and grouped verify, with row
-     results independent of grouping. Target: 8 rows at about 26 ms, and one row no slower.
+  3c. V2, done and merged `3881b3d8c` (`inkling-v2-arith.md`, Decision 18). On this M5 Max a float matrix-unit
+     product is one fma chain in index order, so 8x8 tiles reproduce every one-row kernel bit for bit (a device
+     probe falls back otherwise). The 8-row verify drops from 45.7 to 34.3 ms rested at 1K (40.2 sustained); 4 rows
+     25.7, 2 rows 19.9, one-row step 15.7 (no slower). Speculative tok/s is 25–30% over V1 (code-1024 149.5,
+     2.41× plain). Fidelity bit-equal; oQ4e quality dev 11 of 11 replies equal to main (7/11). Still no width meets a
+     Decision 17 budget at today's acceptance: width 8 needs 7.7 committed tokens a round, the best prompt gives
+     5.84. Next lever there: expert tiles for 4–8 live rows, which cost about twice their bytes.
+     `inkling-quality-dev` now runs oQ4e with the binary's own grammar library (`50b4a681a`): the native
+     checkpoint needs 26.32 GB at 32,768 context with a 2 GiB prompt cache, over the 26 GB load limit.
   3a. DF2a, done and merged (`inkling-df2-accept.md`). The 4K drop is the drafter's own 2,047-row window, not a tf
      bug: 4K replies quote text from before the window, and widening the window does not help. Lookup rounds,
      which draft from an earlier match that lies before the window, raise 4K committed tokens per round to
      3.12/2.95/3.57 (from 2.76/2.69/3.43) and leave 1K unchanged. Served lookup still needs the host to pass the
      request's tokens in. First-rows retention (3.43/3.01/4.15) is parked: it departs from the checkpoint's window,
      only works as a full rebuild every round, and every test prompt puts its instruction first.
-  3b. DF2b, after V2: a tree-masked verify of up to 16 rows that merges the drafter's candidates with lookup chains
-     as deep as 15, as Splash does. That is where Splash's 9.1 tokens a cycle on code comes from. It also wires lookup
-     into the served round.
+  3b. DF2b, running (code and correctness now; timing waits for P4 via `.work/tmp/df2b-timing-go`):
+     `lane/df2b-tree` in `.work/wt/df2b-tree` (scope `usrn_5365e82f-0fed-4516-9e86-c517d413dc60`), receipt
+     `inkling-df2b-tree.md`. A tree-masked verify of up to 16 rows that merges the drafter's candidates with lookup
+     chains as deep as 15, as Splash does (where Splash's 9.1 tokens a cycle on code comes from), and lookup in the
+     served round.
   4. SV1, done and merged (`inkling-sv1-serve.md`). `INKLING_DRAFTER=<dir>` turns on served greedy DFlash2
      speculation, byte-identical to plain greedy across prompt-cache hits, forks and EOS (133/133 in `inkling-gpu`).
      It is faster only on code-1024 (1.47×) and prose-1024 (1.16×), so it stays opt-in until V1 and DF2 land. It
      speculates only while one lane decodes. `bench.py MODE=drafter` still passes Flint's `--drafter`.
-  5. P4, coding (timing waits for V2 via `.work/tmp/p4-timing-go`): `lane/p4-prefill` in `.work/wt/p4-prefill`
+  5. P4, running and holding the timing lane (released after V2): `lane/p4-prefill` in `.work/wt/p4-prefill`
      (scope `usrn_f4aecfdf-1818-4a23-a8ed-94305532f730`), receipt `inkling-p4-prefill.md`. Prefill to 2K across the curve: qualify `lane/p3c-prefill`, fuse compatible projections and split the
      shared input once (P3c profile), then 1K/4K/8K/16K and near-cap results plus first-request numbers.
   6. Q3: the `code-c02` reasoning loop from P3c.

@@ -1394,6 +1394,7 @@ const BatchContext = struct {
     scratch: *@import("batch.zig").BatchScratch,
     caches: []const *Cache,
     group: ?*const @import("group.zig").Group = null,
+    finish: ?@import("group.zig").Finish = null,
 };
 
 pub fn prefill(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32) !void {
@@ -1412,6 +1413,11 @@ pub fn batchStep(m: *const Model, s: *@import("batch.zig").BatchScratch, caches:
 /// The batch step over grouped rows (`group.Group`): every row's logits, the caches untouched until its commit.
 pub fn groupStep(m: *const Model, s: *@import("batch.zig").BatchScratch, group: *const @import("group.zig").Group, ids: []const u32) !void {
     var context = BatchContext{ .scratch = s, .caches = group.caches, .group = group };
+    try run(m, &s.rows, group.caches[0], ids, .all, &context);
+}
+
+pub fn groupFinish(m: *const Model, s: *@import("batch.zig").BatchScratch, group: *const @import("group.zig").Group, ids: []const u32, finish: @import("group.zig").Finish) !void {
+    var context = BatchContext{ .scratch = s, .caches = group.caches, .group = group, .finish = finish };
     try run(m, &s.rows, group.caches[0], ids, .all, &context);
 }
 
@@ -1509,6 +1515,7 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
         .last => c.headModelLast(m.weights.unembed, bo(s.n0, (@as(usize, c.n) - 1) * c.h * 4), b(s.logits), text.unpadded_vocab),
         .all => c.headModel(m.weights.unembed, .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, b(s.logits), text.unpadded_vocab),
     }
+    if (batch) |context| if (context.group) |g| if (context.finish) |finish| g.verifier.encodeFinish(c.enc, m, s.ids, s.logits, g, finish);
     c.enc.end();
     rounds.cb.commit();
     rounds.cb.wait();

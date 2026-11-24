@@ -91,12 +91,11 @@ pub const Speculator = struct {
             const g = try s.verifier.group(&.{cache}, &.{@as(usize, offered) + 1});
             s.batch.rows.taps = &s.taps;
             defer s.batch.rows.taps = null;
-            try s.verifier.forward(s.model, &s.batch, &g, ids[0 .. offered + 1]);
+            const decided = try s.verifier.decide(s.model, &s.batch, &g, ids[0 .. offered + 1], .commit);
             const t2 = now();
-            const picks = try s.verifier.picks(s.model, s.batch.rows.logits, offered + 1);
-            const kept = inkling.group.acceptedDrafts(drafts, picks);
+            const picks = decided.picks;
+            const kept: usize = decided.accepted[0];
             const t3 = now();
-            try s.verifier.commit(s.model, &g, &.{kept});
             const t4 = now();
             try s.drafter.absorb(s.taps.bytes(0, kept + 1), @intCast(kept + 1));
             var emitted: u32 = 0;

@@ -1,0 +1,15 @@
+{"kind":"kernel","rows":2,"op":"head","one_row_us":1504.43,"shared_us":1008.36,"shared_kernel":true}
+{"kind":"kernel","rows":2,"op":"oproj","one_row_us":25.96,"shared_us":22.24,"shared_kernel":true}
+{"kind":"kernel","rows":2,"op":"proj","one_row_us":48.88,"shared_us":52.50,"shared_kernel":false}
+{"kind":"kernel","rows":2,"op":"gate_up","one_row_us":91.46,"shared_us":86.88,"shared_kernel":true}
+{"kind":"kernel","rows":2,"op":"down","one_row_us":66.74,"shared_us":54.91,"shared_kernel":true}
+{"kind":"kernel","rows":4,"op":"head","one_row_us":2988.31,"shared_us":1402.03,"shared_kernel":true}
+{"kind":"kernel","rows":4,"op":"oproj","one_row_us":47.26,"shared_us":28.88,"shared_kernel":true}
+{"kind":"kernel","rows":4,"op":"proj","one_row_us":74.00,"shared_us":73.95,"shared_kernel":false}
+{"kind":"kernel","rows":4,"op":"gate_up","one_row_us":184.12,"shared_us":159.47,"shared_kernel":true}
+{"kind":"kernel","rows":4,"op":"down","one_row_us":130.41,"shared_us":96.51,"shared_kernel":true}
+{"kind":"kernel","rows":8,"op":"head","one_row_us":6483.79,"shared_us":2702.52,"shared_kernel":true}
+{"kind":"kernel","rows":8,"op":"oproj","one_row_us":100.84,"shared_us":71.65,"shared_kernel":true}
+{"kind":"kernel","rows":8,"op":"proj","one_row_us":158.09,"shared_us":135.07,"shared_kernel":true}
+{"kind":"kernel","rows":8,"op":"gate_up","one_row_us":378.82,"shared_us":301.76,"shared_kernel":true}
+{"kind":"kernel","rows":8,"op":"down","one_row_us":281.55,"shared_us":186.19,"shared_kernel":true}

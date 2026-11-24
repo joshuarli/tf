@@ -1,0 +1,15 @@
+{"kind":"kernel","rows":2,"op":"head","one_row_us":1505.80,"shared_us":1005.06,"shared_kernel":true}
+{"kind":"kernel","rows":2,"op":"oproj","one_row_us":25.93,"shared_us":22.17,"shared_kernel":true}
+{"kind":"kernel","rows":2,"op":"proj","one_row_us":53.48,"shared_us":47.75,"shared_kernel":false}
+{"kind":"kernel","rows":2,"op":"gate_up","one_row_us":91.70,"shared_us":86.52,"shared_kernel":true}
+{"kind":"kernel","rows":2,"op":"down","one_row_us":66.72,"shared_us":54.96,"shared_kernel":true}
+{"kind":"kernel","rows":4,"op":"head","one_row_us":2986.67,"shared_us":1402.91,"shared_kernel":true}
+{"kind":"kernel","rows":4,"op":"oproj","one_row_us":47.27,"shared_us":28.92,"shared_kernel":true}
+{"kind":"kernel","rows":4,"op":"proj","one_row_us":74.02,"shared_us":74.72,"shared_kernel":false}
+{"kind":"kernel","rows":4,"op":"gate_up","one_row_us":184.20,"shared_us":159.38,"shared_kernel":true}
+{"kind":"kernel","rows":4,"op":"down","one_row_us":129.06,"shared_us":96.24,"shared_kernel":true}
+{"kind":"kernel","rows":8,"op":"head","one_row_us":5951.48,"shared_us":2461.94,"shared_kernel":true}
+{"kind":"kernel","rows":8,"op":"oproj","one_row_us":93.34,"shared_us":64.82,"shared_kernel":true}
+{"kind":"kernel","rows":8,"op":"proj","one_row_us":146.77,"shared_us":125.50,"shared_kernel":true}
+{"kind":"kernel","rows":8,"op":"gate_up","one_row_us":353.75,"shared_us":281.53,"shared_kernel":true}
+{"kind":"kernel","rows":8,"op":"down","one_row_us":263.70,"shared_us":176.60,"shared_kernel":true}

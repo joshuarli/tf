@@ -5,7 +5,7 @@
 **Active 2026-11-24.**
 - Resume prompt: "Resume the Inkling 2K/200 campaign (Decision 17) from `campaign/plan.md` **Status**."
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
-- **Last accepted code: DF1, `93de31eca`, green** (`inkling-host`, `inkling-gpu` 123/123, `zig build native`; receipt `campaign/kernels/inkling-dflash2.md`). Before it, D2 `038f24cce`: Passing there: `evidence-controls`, `inkling-host`, `inkling-gpu` (107 tests), `zig build native` and the `inkling-omlx-oracle` report (mean KL 0.0195 at chunk 512). Receipts: `campaign/kernels/inkling-cold-prefill.md` and `campaign/kernels/inkling-decode-step.md`.
+- **Last accepted code: V1 + SV1 merge `33ec5cf1c`** (green: `inkling-host`, `inkling-gpu` on the merge). Before it, DF1, `93de31eca`, green (`inkling-host`, `inkling-gpu` 123/123, `zig build native`; receipt `campaign/kernels/inkling-dflash2.md`). Before it, D2 `038f24cce`: Passing there: `evidence-controls`, `inkling-host`, `inkling-gpu` (107 tests), `zig build native` and the `inkling-omlx-oracle` report (mean KL 0.0195 at chunk 512). Receipts: `campaign/kernels/inkling-cold-prefill.md` and `campaign/kernels/inkling-decode-step.md`.
 - **Open from P3c:** `code-c02` now falls into a repeatable reasoning loop, and oQ4e quality dev is 7/11 (base 6/11), below the fast profile's 8-case bar. Mean TTFT at four agents rose on the warm repetition; the cause is not traced.
 - **Parked branches** (all on `origin`), with item, cause and retry:
   - `lane/p3c-prefill` at `f0ff849e6`: commits the prefill scratch at setup. Two 1K pairs are inconclusive and it has not run the suite. Retry: the suite, then three first-pass pairs at 1K.
@@ -22,9 +22,12 @@
      controlled profile (bf16 KV) breaches the 28 GB cap at 22K tokens.
   2. DF1, done and merged (`inkling-dflash2.md`). Greedy-exact. Rounds take 61–77 ms (93% of it the 8-row verify)
      and commit 5.81/4.52/4.33 at 1K and 2.7–3.4 at 4K: 95 tok/s at best, below plain decode at 4K.
-  3. V1, running: lane `lane/v1-verify` in `.work/wt/v1-verify` (scope `usrn_651ac2c0-caf8-4b08-aa21-4ba53965fe17`),
-     an Opus subagent. Target: 8-row grouped verify at or under about 30 ms at 1K, at the expert-read floor. On
-     resume after a lost session, check its branch and receipt `campaign/kernels/inkling-v1-verify.md`.
+  3. V1, done and merged (`inkling-v1-verify.md`). Bit-exact grouped rows. The 8-row verify takes 45.6 ms
+     rested at 1K (was 56.2) and 52.7 sustained. Speculative decode is up 23–29% on every prompt
+     (code-1024 116.6 tok/s, 1.90× plain), and a round waits once. No width meets a Decision 17 budget: the 8-row
+     verify is 2.7× its 17.0 ms floor under per-row summation order, and the one-row step is 2.1× its 7.65 ms floor.
+  3c. V2 (Decision 18): one matrix-unit arithmetic for the one-row step, batch step and grouped verify, with row
+     results independent of grouping. Target: 8 rows at about 26 ms, and one row no slower.
   3a. DF2a, running beside V1 (acceptance only, no timing): `lane/df2-accept` in `.work/wt/df2-accept` (scope
      `usrn_0269a0d1-fa1d-4c55-841f-a4b02e188630`), receipt `inkling-df2-accept.md`. Splash commits 1.3× (code-1024)
      to 3.3× (code-4096) what tf's chain commits with the same drafter. Trace and fix tf's 4K collapse against
@@ -194,6 +197,20 @@ The owner made the first two decisions on 2026-11-21:
     - **Correctness.** Greedy speculative output equals the qualified target's greedy output (Decision 13); KV,
       convolution and per-pass state roll back exactly. Task quality, looping, truncation and tool behaviour stay
       reported. Fidelity stays reporting-only (Decision 16).
+18. **Delegated: one arithmetic for decode and verify (2026-11-24).** V1 found that keeping every grouped verify
+    row bit-equal to the existing one-row kernels caps the 8-row verify at 45.6 ms, 2.7× its 17.0 ms weight
+    floor, because a weight can then feed only the rows one SIMD group holds in registers. Splash's 26.3 ms uses
+    matrix-unit expert tiles with another summation order, and its greedy output varies run to run.
+    - **The ruling.** The target's decode arithmetic may change, provided one arithmetic serves the one-row step,
+      the batch step and the grouped verify. A row's result must not depend on how many other rows share a
+      kernel, tile or expert. Greedy speculative output must then still equal greedy plain output (Decision 17).
+    - **The qualification.** A new arithmetic replaces the old only after four checks:
+      - the `inkling-omlx-oracle` report shows no regression in mean KL beyond its run-to-run noise (0.0195 at D2);
+      - quality dev shows no regression;
+      - concurrent replies still equal solo replies;
+      - the one-row step does not get slower.
+    - **What it does not allow.** Output that depends on batch composition, as Splash's `--verify-rows auto`
+      allows.
 
 ## Baseline
 

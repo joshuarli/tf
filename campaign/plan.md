@@ -26,7 +26,8 @@
      rested at 1K (was 56.2) and 52.7 sustained. Speculative decode is up 23–29% on every prompt
      (code-1024 116.6 tok/s, 1.90× plain), and a round waits once. No width meets a Decision 17 budget: the 8-row
      verify is 2.7× its 17.0 ms floor under per-row summation order, and the one-row step is 2.1× its 7.65 ms floor.
-  3c. V2 (Decision 18): one matrix-unit arithmetic for the one-row step, batch step and grouped verify, with row
+  3c. V2, running (Decision 18): `lane/v2-arith` in `.work/wt/v2-arith` (scope
+     `usrn_d996b77c-2510-4d79-9e42-b1435d8c4771`), receipt `inkling-v2-arith.md`. One matrix-unit arithmetic for the one-row step, batch step and grouped verify, with row
      results independent of grouping. Target: 8 rows at about 26 ms, and one row no slower.
   3a. DF2a, running beside V1 (acceptance only, no timing): `lane/df2-accept` in `.work/wt/df2-accept` (scope
      `usrn_0269a0d1-fa1d-4c55-841f-a4b02e188630`), receipt `inkling-df2-accept.md`. Splash commits 1.3× (code-1024)

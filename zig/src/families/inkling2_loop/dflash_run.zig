@@ -1,0 +1,225 @@
+//! `tf-inkling2-loop-run`'s DFlash2 modes: greedy speculative decoding against plain greedy decoding in one process,
+//! with every round's timing, and the grouped verifier's cost at widths 1, 2, 4 and 8 from identical states.
+const std = @import("std");
+const mtl = @import("metal");
+const tf = @import("tensorfold");
+const inkling = tf.inkling2_loop;
+const dflash = @import("dflash.zig");
+const spec = @import("dflash_spec.zig");
+
+pub const usage =
+    \\tf-inkling2-loop-run <model> <prompts.json> dflash <drafter> <tokens> <out.jsonl> [bits]  speculative and plain greedy
+    \\tf-inkling2-loop-run <model> <prompts.json> dflash-widths <reps> <out.jsonl>  grouped verify at widths 1, 2, 4, 8
+    \\  prompts.json: [{"name": ..., "ids": [...]}]; EOS is ignored; a run whose tokens differ from plain exits non-zero
+    \\
+;
+
+const Prompt = struct { name: []const u8, ids: []const u32 };
+
+pub fn main(init: std.process.Init, args: []const [:0]const u8) !void {
+    const gpa = init.gpa;
+    const mode = args[3];
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, args[2], gpa, .limited(64 << 20));
+    defer gpa.free(bytes);
+    const parsed = try std.json.parseFromSlice([]const Prompt, gpa, bytes, .{});
+    defer parsed.deinit();
+    if (parsed.value.len == 0) return error.EmptyPrompt;
+    const m = try inkling.Model.load(gpa, init.io, args[1]);
+    defer m.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    if (std.mem.eql(u8, mode, "dflash")) {
+        if (args.len != 7 and args.len != 8) return error.ExpectedArgs;
+        const limit = try std.fmt.parseInt(usize, args[5], 10);
+        const bits = if (args.len == 8) try std.fmt.parseInt(u8, args[7], 10) else 0;
+        if (limit < 2) return error.ExpectedArgs;
+        const same = try speculate(gpa, init.io, m, args[4], parsed.value, limit, bits, &out);
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[6], .data = out.items });
+        if (!same) return error.SpeculationDiffersFromPlain;
+        return;
+    }
+    if (std.mem.eql(u8, mode, "dflash-widths")) {
+        if (args.len != 6) return error.ExpectedArgs;
+        const reps = try std.fmt.parseInt(usize, args[4], 10);
+        if (reps == 0) return error.ExpectedArgs;
+        try widths(gpa, m, parsed.value, reps, &out);
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[5], .data = out.items });
+        return;
+    }
+    return error.ExpectedArgs;
+}
+
+fn flag(name: [*:0]const u8) bool {
+    const v = std.c.getenv(name) orelse return false;
+    const text = std.mem.span(v);
+    return text.len > 0 and !std.mem.eql(u8, text, "0");
+}
+
+fn ms(ns: u64) f64 {
+    return @as(f64, @floatFromInt(ns)) / 1e6;
+}
+
+fn sorted(a: std.mem.Allocator, values: []const f64) ![]f64 {
+    const copy = try a.dupe(f64, values);
+    std.mem.sort(f64, copy, {}, std.sort.asc(f64));
+    return copy;
+}
+
+/// The nearest-rank `p` quantile of ascending `values`.
+fn quantile(values: []const f64, p: f64) f64 {
+    const rank: usize = @intFromFloat(@ceil(p * @as(f64, @floatFromInt(values.len))));
+    return values[@max(rank, 1) - 1];
+}
+
+fn mean(values: []const f64) f64 {
+    var sum: f64 = 0;
+    for (values) |v| sum += v;
+    return sum / @as(f64, @floatFromInt(values.len));
+}
+
+fn speculate(gpa: std.mem.Allocator, io: std.Io, m: *inkling.Model, dir: []const u8, prompts: []const Prompt, limit: usize, bits: u8, out: *std.ArrayList(u8)) !bool {
+    const shifted = flag("TF_INKLING_DFLASH2_TAP_SHIFT");
+    const unnormed = flag("TF_INKLING_DFLASH2_NO_EMBED_NORM");
+    const drafter = try dflash.Drafter.init(gpa, io, m, dir, .{ .bits = bits, .embed_norm = !unnormed });
+    defer drafter.deinit();
+    const visits = if (shifted) &[_]u32{ dflash.tap_ids[0] + 1, dflash.tap_ids[1] + 1, dflash.tap_ids[2] + 1, dflash.tap_ids[3] } else dflash.tap_ids;
+    var s = try spec.Speculator.init(m, drafter, visits);
+    defer s.deinit();
+    const residency = try drafter.fixedBytes();
+    try out.print(gpa, "{{\"kind\":\"meta\",\"drafter_bits\":{d},\"draft_residency_bytes\":{d},\"warm_draft_ms\":{d:.3},\"limit\":{d},\"depth\":{d},\"taps\":[{d},{d},{d},{d}],\"embed_norm\":{}}}\n", .{ bits, residency, drafter.step_ms, limit, s.depth, visits[0], visits[1], visits[2], visits[3], !unnormed });
+    var all_same = true;
+    for (prompts, 0..) |prompt, index| {
+        var spec_tokens: std.ArrayList(u32) = .empty;
+        defer spec_tokens.deinit(gpa);
+        var plain_tokens: std.ArrayList(u32) = .empty;
+        defer plain_tokens.deinit(gpa);
+        var rounds: std.ArrayList(spec.Round) = .empty;
+        defer rounds.deinit(gpa);
+        var steps: std.ArrayList(u64) = .empty;
+        defer steps.deinit(gpa);
+        var started: spec.Prefill = undefined;
+        var spec_ns: u64 = 0;
+        var plain_ns: u64 = 0;
+        for (0..2) |turn| {
+            const speculative = (turn == 0) == (index % 2 == 0);
+            var cache = try inkling.Cache.init(m.device, &m.config, prompt.ids.len + limit + inkling.group.max_rows);
+            defer cache.deinit();
+            if (speculative) {
+                started = try s.start(&cache, prompt.ids);
+                try spec_tokens.append(gpa, started.first);
+                const t0 = spec.now();
+                try s.run(&cache, started.first, limit, &.{}, gpa, &spec_tokens, &rounds);
+                spec_ns = spec.now() - t0;
+            } else {
+                const first = try spec.prefillPlain(m, &s.prefill, &cache, prompt.ids);
+                try plain_tokens.append(gpa, first);
+                const t0 = spec.now();
+                try spec.plain(m, &s.batch, &cache, first, limit, &.{}, gpa, &plain_tokens, &steps);
+                plain_ns = spec.now() - t0;
+            }
+        }
+        const same = std.mem.eql(u32, spec_tokens.items, plain_tokens.items);
+        var first_diff: usize = 0;
+        while (first_diff < @min(spec_tokens.items.len, plain_tokens.items.len) and spec_tokens.items[first_diff] == plain_tokens.items[first_diff]) first_diff += 1;
+        all_same = all_same and same;
+        var totals: std.ArrayList(f64) = .empty;
+        defer totals.deinit(gpa);
+        var parts: [5]f64 = @splat(0);
+        var emitted: usize = 0;
+        var full: usize = 0;
+        var zero: usize = 0;
+        for (rounds.items, 0..) |r, i| {
+            try out.print(gpa, "{{\"kind\":\"round\",\"prompt\":\"{s}\",\"round\":{d},\"position\":{d},\"offered\":{d},\"accepted\":{d},\"emitted\":{d},\"draft_ms\":{d:.4},\"verify_ms\":{d:.4},\"select_ms\":{d:.4},\"commit_ms\":{d:.4},\"host_ms\":{d:.4},\"total_ms\":{d:.4}}}\n", .{ prompt.name, i, r.position, r.offered, r.accepted, r.emitted, ms(r.draft_ns), ms(r.verify_ns), ms(r.select_ns), ms(r.commit_ns), ms(r.host_ns), ms(r.total_ns) });
+            try totals.append(gpa, ms(r.total_ns));
+            for ([_]u64{ r.draft_ns, r.verify_ns, r.select_ns, r.commit_ns, r.host_ns }, 0..) |ns, k| parts[k] += ms(ns);
+            emitted += r.emitted;
+            full += @intFromBool(r.offered > 0 and r.accepted == r.offered);
+            zero += @intFromBool(r.offered > 0 and r.accepted == 0);
+        }
+        const n: f64 = @floatFromInt(@max(rounds.items.len, 1));
+        const ordered = try sorted(gpa, totals.items);
+        defer gpa.free(ordered);
+        var step_ms: std.ArrayList(f64) = .empty;
+        defer step_ms.deinit(gpa);
+        for (steps.items) |ns| try step_ms.append(gpa, ms(ns));
+        const plain_sorted = try sorted(gpa, step_ms.items);
+        defer gpa.free(plain_sorted);
+        const spec_rate = @as(f64, @floatFromInt(emitted)) / (@as(f64, @floatFromInt(spec_ns)) / 1e9);
+        const flush_rate = @as(f64, @floatFromInt(emitted)) / (@as(f64, @floatFromInt(spec_ns + started.flush_ns)) / 1e9);
+        const plain_rate = @as(f64, @floatFromInt(steps.items.len)) / (@as(f64, @floatFromInt(plain_ns)) / 1e9);
+        const committed = @as(f64, @floatFromInt(emitted)) / n;
+        try out.print(gpa, "{{\"kind\":\"spec\",\"prompt\":\"{s}\",\"prompt_tokens\":{d},\"limit\":{d},\"equal_plain\":{},\"first_difference\":{d},\"rounds\":{d},\"emitted\":{d},\"full_rounds\":{d},\"zero_rounds\":{d},\"mean_committed\":{d:.4},\"round_ms_mean\":{d:.4},\"round_ms_p50\":{d:.4},\"round_ms_p90\":{d:.4},\"draft_ms_mean\":{d:.4},\"verify_ms_mean\":{d:.4},\"select_ms_mean\":{d:.4},\"commit_ms_mean\":{d:.4},\"host_ms_mean\":{d:.4},\"prefill_ms\":{d:.3},\"flush_ms\":{d:.3},\"decode_s\":{d:.4},\"tok_s\":{d:.3},\"tok_s_with_flush\":{d:.3},\"spec_first\":{}}}\n", .{ prompt.name, prompt.ids.len, limit, same, first_diff, rounds.items.len, emitted, full, zero, committed, mean(totals.items), quantile(ordered, 0.5), quantile(ordered, 0.9), parts[0] / n, parts[1] / n, parts[2] / n, parts[3] / n, parts[4] / n, ms(started.prefill_ns), ms(started.flush_ns), @as(f64, @floatFromInt(spec_ns)) / 1e9, spec_rate, flush_rate, index % 2 == 0 });
+        try out.print(gpa, "{{\"kind\":\"plain\",\"prompt\":\"{s}\",\"steps\":{d},\"step_ms_mean\":{d:.4},\"step_ms_p50\":{d:.4},\"step_ms_p90\":{d:.4},\"decode_s\":{d:.4},\"tok_s\":{d:.3}}}\n", .{ prompt.name, steps.items.len, mean(step_ms.items), quantile(plain_sorted, 0.5), quantile(plain_sorted, 0.9), @as(f64, @floatFromInt(plain_ns)) / 1e9, plain_rate });
+        std.debug.print("dflash {s}: prompt={d} equal={} rounds={d} committed/round={d:.3} round_ms mean={d:.2} p90={d:.2} (draft {d:.2} verify {d:.2} select {d:.2} commit {d:.2} host {d:.2}) spec_tok_s={d:.2} plain_tok_s={d:.2} plain_ms={d:.2} full={d} zero={d}\n", .{ prompt.name, prompt.ids.len, same, rounds.items.len, committed, mean(totals.items), quantile(ordered, 0.9), parts[0] / n, parts[1] / n, parts[2] / n, parts[3] / n, parts[4] / n, spec_rate, plain_rate, mean(step_ms.items), full, zero });
+    }
+    return all_same;
+}
+
+fn widths(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, reps: usize, out: *std.ArrayList(u8)) !void {
+    var verifier = try inkling.group.Verifier.init(m.device, &m.config);
+    defer verifier.deinit();
+    var bs = try inkling.BatchScratch.init(m.device, &m.config, inkling.group.max_rows);
+    defer bs.deinit();
+    var ps = try inkling.PrefillScratch.init(m.device, &m.config, spec.prefill_chunk);
+    defer ps.deinit();
+    var rollback = try inkling.Cache.Rollback.initRows(m.device, &m.config, inkling.group.max_rows);
+    defer rollback.deinit();
+    const logits = try gpa.alloc(f32, m.config.text.unpadded_vocab);
+    defer gpa.free(logits);
+    const cells = [_]usize{ 0, 1, 2, 4, 8 };
+    for (prompts) |prompt| {
+        var cache = try inkling.Cache.init(m.device, &m.config, prompt.ids.len + 16);
+        defer cache.deinit();
+        const first = try spec.prefillPlain(m, &ps, &cache, prompt.ids);
+        var rows: [inkling.group.max_rows]u32 = undefined;
+        rows[0] = first;
+        try rollback.copy(m.queue, &m.config, &cache, true);
+        for (rows[1..], 0..) |*r, i| {
+            try inkling.batchStep(m, &bs, &.{&cache}, &.{rows[i]}, logits);
+            r.* = spec.argmax(logits);
+        }
+        try rollback.copy(m.queue, &m.config, &cache, false);
+        var samples: [cells.len]std.ArrayList(f64) = @splat(.empty);
+        defer for (&samples) |*list| list.deinit(gpa);
+        var forward_only: [cells.len]std.ArrayList(f64) = @splat(.empty);
+        defer for (&forward_only) |*list| list.deinit(gpa);
+        for (0..reps + 1) |rep| {
+            for (0..cells.len) |k| {
+                const cell = (k + rep) % cells.len;
+                const width = cells[cell];
+                const t0 = spec.now();
+                var t1 = t0;
+                if (width == 0) {
+                    try rollback.copy(m.queue, &m.config, &cache, true);
+                    const s0 = spec.now();
+                    try inkling.batchStep(m, &bs, &.{&cache}, &.{first}, logits);
+                    _ = spec.argmax(logits);
+                    t1 = spec.now();
+                    try rollback.copy(m.queue, &m.config, &cache, false);
+                    if (rep > 0) {
+                        try samples[cell].append(gpa, ms(t1 - s0));
+                        try forward_only[cell].append(gpa, ms(t1 - s0));
+                    }
+                    continue;
+                }
+                const g = try verifier.group(&.{&cache}, &.{width});
+                try verifier.forward(m, &bs, &g, rows[0..width]);
+                t1 = spec.now();
+                _ = try verifier.picks(m, bs.rows.logits, width);
+                const t2 = spec.now();
+                if (rep > 0) {
+                    try samples[cell].append(gpa, ms(t2 - t0));
+                    try forward_only[cell].append(gpa, ms(t1 - t0));
+                }
+            }
+        }
+        for (cells, 0..) |width, cell| {
+            const ordered = try sorted(gpa, samples[cell].items);
+            defer gpa.free(ordered);
+            const fw = try sorted(gpa, forward_only[cell].items);
+            defer gpa.free(fw);
+            try out.print(gpa, "{{\"kind\":\"width\",\"prompt\":\"{s}\",\"context\":{d},\"width\":{d},\"path\":\"{s}\",\"reps\":{d},\"ms_mean\":{d:.4},\"ms_p50\":{d:.4},\"ms_p90\":{d:.4},\"ms_min\":{d:.4},\"ms_max\":{d:.4},\"forward_ms_p50\":{d:.4}}}\n", .{ prompt.name, cache.len, if (width == 0) 1 else width, if (width == 0) "batch_step" else "grouped", reps, mean(ordered), quantile(ordered, 0.5), quantile(ordered, 0.9), ordered[0], ordered[ordered.len - 1], quantile(fw, 0.5) });
+            std.debug.print("widths {s}: context={d} {s} width={d} p50={d:.3} ms p90={d:.3} ms forward p50={d:.3} ms\n", .{ prompt.name, cache.len, if (width == 0) "batch_step" else "grouped", if (width == 0) 1 else width, quantile(ordered, 0.5), quantile(ordered, 0.9), quantile(fw, 0.5) });
+        }
+    }
+}

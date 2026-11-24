@@ -25,6 +25,8 @@ const usage =
     \\tf-inkling2-loop-run <model> <tokens.json> profile-prefill <chunk>  warm and profile fresh-cache prompt chunks
     \\tf-inkling2-loop-run <tokenizer.json> <text> tokenize <out>   the text's token ids, for the modes above
     \\tf-inkling2-loop-run <tokenizer.json> <ids.json> detokenize <out>  the ids' text
+    \\tf-inkling2-loop-run <model> <prompts.json> dflash <drafter> <tokens> <out.jsonl> [bits]  DFlash2 against plain greedy
+    \\tf-inkling2-loop-run <model> <prompts.json> dflash-widths <reps> <out.jsonl>  grouped verify cost at widths 1/2/4/8
     \\
 ;
 
@@ -77,6 +79,10 @@ pub fn main(init: std.process.Init) !void {
     }
     if (std.mem.eql(u8, mode, "detokenize")) {
         try detokenize(gpa, init.io, args[1], args[2], args[4]);
+        return;
+    }
+    if (std.mem.eql(u8, mode, "dflash") or std.mem.eql(u8, mode, "dflash-widths")) {
+        try @import("dflash_run.zig").main(init, args);
         return;
     }
     const bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, args[2], gpa, .limited(64 << 20));

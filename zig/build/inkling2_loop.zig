@@ -94,8 +94,11 @@ pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.B
     });
     const exe = b.addExecutable(.{ .name = "tf-inkling2-prefix-check", .root_module = check });
     b.step("tf-inkling2-prefix-check", "Compare retained state to identical replay and full prefill").dependOn(&b.addInstallArtifact(exe, .{}).step);
-    const run = b.addRunArtifact(b.addTest(.{ .root_module = m }));
+    const family_test = b.addTest(.{ .root_module = m });
+    const run = b.addRunArtifact(family_test);
     run.has_side_effects = true;
+    const compile = b.step("compile-inkling2-loop", "Compile the Inkling 2 Mini Metal test binaries without running them on the GPU");
+    compile.dependOn(&family_test.step);
     const step = b.step("test-inkling2-loop", "Inkling 2 Mini's native Metal forward against the checkpoint and its own state");
     step.dependOn(&run.step);
     test_step.dependOn(&run.step);
@@ -108,7 +111,9 @@ pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.B
     d.addImport("metal", metal);
     d.addImport("core", core);
     d.addImport("inkling2_config", b.createModule(.{ .root_source_file = b.path("zig/src/families/inkling2/config.zig"), .target = target, .optimize = .Debug }));
-    const dense_run = b.addRunArtifact(b.addTest(.{ .root_module = d }));
+    const dense_test = b.addTest(.{ .root_module = d });
+    compile.dependOn(&dense_test.step);
+    const dense_run = b.addRunArtifact(dense_test);
     dense_run.has_side_effects = true;
     step.dependOn(&dense_run.step);
     test_step.dependOn(&dense_run.step);
@@ -116,11 +121,37 @@ pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.B
     affine.addImport("metal", metal);
     affine.addImport("core", core);
     affine.addImport("inkling2_config", b.createModule(.{ .root_source_file = b.path("zig/src/families/inkling2/config.zig"), .target = target, .optimize = .Debug }));
-    const affine_run = b.addRunArtifact(b.addTest(.{ .root_module = affine }));
+    const affine_test = b.addTest(.{ .root_module = affine });
+    compile.dependOn(&affine_test.step);
+    const affine_run = b.addRunArtifact(affine_test);
     affine_run.has_side_effects = true;
     b.step("test-inkling2-loop-affine", "Compare affine dense and expert kernels with float64").dependOn(&affine_run.step);
     step.dependOn(&affine_run.step);
     test_step.dependOn(&affine_run.step);
+    const dflash_test = b.addTest(.{ .root_module = dflashModule(b, target, "zig/src/families/inkling2_loop/dflash_test.zig") });
+    compile.dependOn(&dflash_test.step);
+    const dflash_run = b.addRunArtifact(dflash_test);
+    dflash_run.has_side_effects = true;
+    b.step("test-inkling2-loop-dflash2", "Inkling 2 Mini's DFlash2 drafter: config refusals and greedy speculation against plain decoding").dependOn(&dflash_run.step);
+    step.dependOn(&dflash_run.step);
+    test_step.dependOn(&dflash_run.step);
+}
+
+/// A module over the engine (`tensorfold`), as `tf-inkling2-loop-run` builds it: the DFlash2 drafter reads the shared
+/// `qwen27/dflash` runtime, which the family's own module graph does not carry.
+fn dflashModule(b: *std.Build, target: std.Build.ResolvedTarget, root: []const u8) *std.Build.Module {
+    const ids = b.addWriteFiles();
+    _ = ids.addCopyFile(b.path("zig/src/families/nemotron/draft_ids.txt"), "draft_ids.txt");
+    const draft_ids = b.createModule(.{ .root_source_file = ids.add("draft_ids.zig", "pub const text = @embedFile(\"draft_ids.txt\");\n") });
+    const mods = @import("metal_targets.zig").metalEngineModules(b, target, .fast, draft_ids);
+    mods.sources.addAnonymousImport("nemotron_packed_metallib", .{ .root_source_file = b.addWriteFiles().add("inkling-dflash2-unused.zig", "pub const bytes = \"\";\n") });
+    return b.createModule(.{
+        .root_source_file = b.path(root),
+        .target = target,
+        .optimize = .fast,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "metal", .module = mods.metal }, .{ .name = "tensorfold", .module = mods.engine } },
+    });
 }
 
 /// `tf-inkling2-loop-run`: every position's float32 logits, teacher-forced, for the campaign's parity check.

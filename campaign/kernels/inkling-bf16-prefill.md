@@ -1,7 +1,7 @@
 # Inkling 2 Mini bf16-operand prefill (M1)
 
 Status: **reverted** by the rule declared before results in
-[campaign/plan.md](../plan.md#status). Criteria 2 and 3 fail. The code is parked
+[docs/roadmap.md](../../docs/roadmap.md#status). Criteria 2 and 3 fail. The code is parked
 on `lane/m1-bf16-prefill` at `8df2790ec` and is not on main.
 
 The candidate selected bf16 matrix operands with `INKLING_PREFILL_BF16=1`. The

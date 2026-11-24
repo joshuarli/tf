@@ -1,9 +1,9 @@
-# M5 Max native inference campaign: Flint, then Inkling 2 Mini
+# Roadmap
 
 ## Status
 
 **Active 2026-11-24.**
-- Resume prompt: "Resume the Inkling 2K/200 campaign (Decision 17) from `campaign/plan.md` **Status**."
+- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**.
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
 - **Last accepted code: V2 merge `3881b3d8c`** (green: `inkling-host` 25/25, `inkling-gpu` 155/155 on main `50b4a681a`). Before it, DF2a merge `6c5a5fe0f` (green: `inkling-host`, `inkling-gpu` 149/149 on main `1e441ef6c`). Before it, V1 + SV1 merge `33ec5cf1c`. Before it, DF1, `93de31eca`, green (`inkling-host`, `inkling-gpu` 123/123, `zig build native`; receipt `campaign/kernels/inkling-dflash2.md`). Before it, D2 `038f24cce`: Passing there: `evidence-controls`, `inkling-host`, `inkling-gpu` (107 tests), `zig build native` and the `inkling-omlx-oracle` report (mean KL 0.0195 at chunk 512). Receipts: `campaign/kernels/inkling-cold-prefill.md` and `campaign/kernels/inkling-decode-step.md`.
 - **Open from P3c:** `code-c02` now falls into a repeatable reasoning loop, and oQ4e quality dev is 7/11 (base 6/11), below the fast profile's 8-case bar. Mean TTFT at four agents rose on the warm repetition; the cause is not traced.
@@ -15,49 +15,6 @@
   - Rejected and kept for reference: `b1f-interleave` (retry only with staggered arrivals), `s1-skip-logits` (token-buffer race), `e2-prefill-experts2`, `e3-expert-tensorops`, `m1-bf16-prefill` and `p6-prefill-gemm2`. Their receipts are in `campaign/kernels/`.
   - Old wip records: `c0-ground`, `k2-inkling-experts`.
 - **B2, first pass done** (`campaign/kernels/inkling-b2-baselines.md`): TensorFold leads oMLX at one and two agents, trails it at four (0.84× and 0.90×) and matches at eight. Its warm aggregate is flat from two to eight agents, and its four-agent TTFT is 998 ms against 623 ms for oMLX.
-- **Next slice (Decision 17, owner 2026-11-23): 2,000 tok/s prefill and 200 tok/s single stream.**
-  1. S1, done (`campaign/kernels/inkling-splash.md`). On oQ4e, Splash prefills unseen prompts at 2,200–3,250 tok/s
-     from 1K to the cap; tf `93de31eca` manages 1,180–1,483. Splash cycles take 28–36 ms and commit 3.2–9.1
-     tokens; it reaches 200 tok/s only on code. Its 8-row verify costs 26 ms against tf's 56–66 ms. Its
-     controlled profile (bf16 KV) breaches the 28 GB cap at 22K tokens.
-  2. DF1, done and merged (`inkling-dflash2.md`). Greedy-exact. Rounds take 61–77 ms (93% of it the 8-row verify)
-     and commit 5.81/4.52/4.33 at 1K and 2.7–3.4 at 4K: 95 tok/s at best, below plain decode at 4K.
-  3. V1, done and merged (`inkling-v1-verify.md`). Bit-exact grouped rows. The 8-row verify takes 45.6 ms
-     rested at 1K (was 56.2) and 52.7 sustained. Speculative decode is up 23–29% on every prompt
-     (code-1024 116.6 tok/s, 1.90× plain), and a round waits once. No width meets a Decision 17 budget: the 8-row
-     verify is 2.7× its 17.0 ms floor under per-row summation order, and the one-row step is 2.1× its 7.65 ms floor.
-  3c. V2, done and merged `3881b3d8c` (`inkling-v2-arith.md`, Decision 18). On this M5 Max a float matrix-unit
-     product is one fma chain in index order, so 8x8 tiles reproduce every one-row kernel bit for bit (a device
-     probe falls back otherwise). The 8-row verify drops from 45.7 to 34.3 ms rested at 1K (40.2 sustained); 4 rows
-     25.7, 2 rows 19.9, one-row step 15.7 (no slower). Speculative tok/s is 25–30% over V1 (code-1024 149.5,
-     2.41× plain). Fidelity bit-equal; oQ4e quality dev 11 of 11 replies equal to main (7/11). Still no width meets a
-     Decision 17 budget at today's acceptance: width 8 needs 7.7 committed tokens a round, the best prompt gives
-     5.84. Next lever there: expert tiles for 4–8 live rows, which cost about twice their bytes.
-     `inkling-quality-dev` now runs oQ4e with the binary's own grammar library (`50b4a681a`): the native
-     checkpoint needs 26.32 GB at 32,768 context with a 2 GiB prompt cache, over the 26 GB load limit.
-  3a. DF2a, done and merged (`inkling-df2-accept.md`). The 4K drop is the drafter's own 2,047-row window, not a tf
-     bug: 4K replies quote text from before the window, and widening the window does not help. Lookup rounds,
-     which draft from an earlier match that lies before the window, raise 4K committed tokens per round to
-     3.12/2.95/3.57 (from 2.76/2.69/3.43) and leave 1K unchanged. Served lookup still needs the host to pass the
-     request's tokens in. First-rows retention (3.43/3.01/4.15) is parked: it departs from the checkpoint's window,
-     only works as a full rebuild every round, and every test prompt puts its instruction first.
-  3b. DF2b, running (code and correctness now; timing waits for P4 via `.work/tmp/df2b-timing-go`):
-     `lane/df2b-tree` in `.work/wt/df2b-tree` (scope `usrn_5365e82f-0fed-4516-9e86-c517d413dc60`), receipt
-     `inkling-df2b-tree.md`. A tree-masked verify of up to 16 rows that merges the drafter's candidates with lookup
-     chains as deep as 15, as Splash does (where Splash's 9.1 tokens a cycle on code comes from), and lookup in the
-     served round.
-  4. SV1, done and merged (`inkling-sv1-serve.md`). `INKLING_DRAFTER=<dir>` turns on served greedy DFlash2
-     speculation, byte-identical to plain greedy across prompt-cache hits, forks and EOS (133/133 in `inkling-gpu`).
-     It is faster only on code-1024 (1.47×) and prose-1024 (1.16×), so it stays opt-in until V1 and DF2 land. It
-     speculates only while one lane decodes. `bench.py MODE=drafter` still passes Flint's `--drafter`.
-  5. P4, running and holding the timing lane (released after V2): `lane/p4-prefill` in `.work/wt/p4-prefill`
-     (scope `usrn_f4aecfdf-1818-4a23-a8ed-94305532f730`), receipt `inkling-p4-prefill.md`. Prefill to 2K across the curve: qualify `lane/p3c-prefill`, fuse compatible projections and split the
-     shared input once (P3c profile), then 1K/4K/8K/16K and near-cap results plus first-request numbers.
-  6. Q3: the `code-c02` reasoning loop from P3c.
-  7. Deferred off the critical path: J1 (multi-agent scheduling), B2 remainder, R1.
-
-  Run one GPU-timing lane at a time: the shared lock and outside load (OrbStack at 4–10 cores) left parallel lanes unmeasurable. Code-only lanes may run beside a timing lane, but only reading and editing source: their compiles run outside the GPU lock and spoil timed runs ("compiler observed"), and their device tests take the lock between timed runs.
-- History: the "Status log" section of `campaign/ledger.md`.
 
 ## Charter
 
@@ -81,10 +38,77 @@
 - Per-model dependencies, not phase barriers (owner steering, 2026-11-21). Each model advances on its own chain (see **Sequence**). Profiling is diagnostic and may run while parity investigations continue. Promoting changed arithmetic waits for that model's qualified correctness contract. Speculation is a separate branch after the model's target path is qualified, and comparators run alongside engineering under the GPU lock; neither blocks autoregressive optimization. Broad comparator coverage is needed only before a competitive claim.
 - **Lanes:** parallel for the disjoint sets named in **Sequence**, serial otherwise. Each lane works in `.work/wt/<lane>` on branch `lane/<id>`, following `orchestrate`'s worktree lifecycle; never system temp. Set `TMPDIR=$PWD/.work/tmp`. The parent integrates into `main` and runs the parent steering checkpoint (`orchestrate` skill, `references/campaigns.md`, section "Parent steering checkpoint") after each accepted slice.
 - **GPU lock:** run every timed run, every process that loads a full model, and the Metal device suite through `campaign/heavy.py`, which takes the lock (Decision 8). No compiles inside a timed window. Stop only processes the campaign started.
-- **Commits:** Conventional Commits, scoped to the workstream (`campaign`, `flint`, `inkling2-loop`, `metal`). Put the item ID in the body. End every commit with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Code comments never cite this doc.
+- **Commits:** Conventional Commits, scoped to the workstream (`campaign`, `flint`, `inkling2-loop`, `metal`). Put the item ID in the body. End every commit with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Code comments never cite this roadmap.
 - **TensorFold rules:** follow `docs/recipes/SKILL.md`, `docs/kernel-contract.md` (for GPU work) and `docs/recipes/adding-a-zig-family.md` (for I-items). Skip their ATC, PR and publication steps; see **Execution boundary**.
+- **GPU timing:** run one GPU-timing lane at a time: the shared lock and outside load (OrbStack at 4–10 cores) left parallel lanes unmeasurable. Code-only lanes may run beside a timing lane, but only reading and editing source: their compiles run outside the GPU lock and spoil timed runs ("compiler observed"), and their device tests take the lock between timed runs.
 
-## Decisions
+## Sequence
+
+Current items, campaign **M5 Max native inference**, slice Decision 17. Item specifications for earlier phases are under that campaign's **Items**.
+
+1. S1, done (`campaign/kernels/inkling-splash.md`). On oQ4e, Splash prefills unseen prompts at 2,200–3,250 tok/s
+   from 1K to the cap; tf `93de31eca` manages 1,180–1,483. Splash cycles take 28–36 ms and commit 3.2–9.1
+   tokens; it reaches 200 tok/s only on code. Its 8-row verify costs 26 ms against tf's 56–66 ms. Its
+   controlled profile (bf16 KV) breaches the 28 GB cap at 22K tokens.
+2. DF1, done and merged (`inkling-dflash2.md`). Greedy-exact. Rounds take 61–77 ms (93% of it the 8-row verify)
+   and commit 5.81/4.52/4.33 at 1K and 2.7–3.4 at 4K: 95 tok/s at best, below plain decode at 4K.
+3. V1, done and merged (`inkling-v1-verify.md`). Bit-exact grouped rows. The 8-row verify takes 45.6 ms
+   rested at 1K (was 56.2) and 52.7 sustained. Speculative decode is up 23–29% on every prompt
+   (code-1024 116.6 tok/s, 1.90× plain), and a round waits once. No width meets a Decision 17 budget: the 8-row
+   verify is 2.7× its 17.0 ms floor under per-row summation order, and the one-row step is 2.1× its 7.65 ms floor.
+3c. V2, done and merged `3881b3d8c` (`inkling-v2-arith.md`, Decision 18). On this M5 Max a float matrix-unit
+   product is one fma chain in index order, so 8x8 tiles reproduce every one-row kernel bit for bit (a device
+   probe falls back otherwise). The 8-row verify drops from 45.7 to 34.3 ms rested at 1K (40.2 sustained); 4 rows
+   25.7, 2 rows 19.9, one-row step 15.7 (no slower). Speculative tok/s is 25–30% over V1 (code-1024 149.5,
+   2.41× plain). Fidelity bit-equal; oQ4e quality dev 11 of 11 replies equal to main (7/11). Still no width meets a
+   Decision 17 budget at today's acceptance: width 8 needs 7.7 committed tokens a round, the best prompt gives
+   5.84. Next lever there: expert tiles for 4–8 live rows, which cost about twice their bytes.
+   `inkling-quality-dev` now runs oQ4e with the binary's own grammar library (`50b4a681a`): the native
+   checkpoint needs 26.32 GB at 32,768 context with a 2 GiB prompt cache, over the 26 GB load limit.
+3a. DF2a, done and merged (`inkling-df2-accept.md`). The 4K drop is the drafter's own 2,047-row window, not a tf
+   bug: 4K replies quote text from before the window, and widening the window does not help. Lookup rounds,
+   which draft from an earlier match that lies before the window, raise 4K committed tokens per round to
+   3.12/2.95/3.57 (from 2.76/2.69/3.43) and leave 1K unchanged. Served lookup still needs the host to pass the
+   request's tokens in. First-rows retention (3.43/3.01/4.15) is parked: it departs from the checkpoint's window,
+   only works as a full rebuild every round, and every test prompt puts its instruction first.
+3b. DF2b, running (code and correctness now; timing waits for P4 via `.work/tmp/df2b-timing-go`):
+   `lane/df2b-tree` in `.work/wt/df2b-tree` (scope `usrn_5365e82f-0fed-4516-9e86-c517d413dc60`), receipt
+   `inkling-df2b-tree.md`. A tree-masked verify of up to 16 rows that merges the drafter's candidates with lookup
+   chains as deep as 15, as Splash does (where Splash's 9.1 tokens a cycle on code comes from), and lookup in the
+   served round.
+4. SV1, done and merged (`inkling-sv1-serve.md`). `INKLING_DRAFTER=<dir>` turns on served greedy DFlash2
+   speculation, byte-identical to plain greedy across prompt-cache hits, forks and EOS (133/133 in `inkling-gpu`).
+   It is faster only on code-1024 (1.47×) and prose-1024 (1.16×), so it stays opt-in until V1 and DF2 land. It
+   speculates only while one lane decodes. `bench.py MODE=drafter` still passes Flint's `--drafter`.
+5. P4, running and holding the timing lane (released after V2): `lane/p4-prefill` in `.work/wt/p4-prefill`
+   (scope `usrn_f4aecfdf-1818-4a23-a8ed-94305532f730`), receipt `inkling-p4-prefill.md`. Prefill to 2K across the curve: qualify `lane/p3c-prefill`, fuse compatible projections and split the
+   shared input once (P3c profile), then 1K/4K/8K/16K and near-cap results plus first-request numbers.
+6. Q3: the `code-c02` reasoning loop from P3c.
+7. Deferred off the critical path: see **Later**.
+
+Items run on per-model chains, and items whose owned files are disjoint run in parallel:
+
+- **Flint:** trustworthy measurement (C2, C3) and F2's divergence trace, then a profile at 1K and 4K, then one bounded O-item screened and, if promising, qualified on the promotion matrix and held-out prompts. Any near-cap fixture must reserve reply headroom. F5 speculation branches off after the target path is qualified.
+- **Inkling 2 Mini:** I2's executable native forward path, then I3 minimal serving, then the frozen first-native baseline, then profiling and O-items. I5 branches off after I3.
+- **Comparators:** one runnable strong comparator is the early anchor (F3). The full matrix is needed only before a competitive claim.
+
+The phase headings below group items; they are not barriers. Every item ends on its acceptance command plus the narrowest affected suite, run on the integrated `main`. The full `zig build test test-golden` runs at milestones M1 (after F3), M2 (after I3) and the close.
+
+**Disjoint ownership sets:**
+- `campaign/` (C, Q and H items, plus the F2 and I2 harness files): one writer at a time.
+- Flint: `zig/src/families/flint/`, `zig/src/native/flint.zig`, `zig/kernels/metal/flint/`, `zig/tests/flint/`, `zig/tests/contract/metal_flint*`.
+- Inkling 2 Mini: `zig/src/families/inkling2_loop/` (including its kernels and tests), `zig/src/native/inkling2_loop.zig`, `zig/src/native/inkling2_loop_host.zig`, `zig/build/inkling2_loop.zig`, `campaign/parity/inkling2-mini/`.
+- Shared: `build.zig`, `zig/build/metal_*.zig`, the native registry, `zig/src/core/`, `zig/src/server/` and `zig/kernels/metal/core/`. One registration edit is folded into the item that needs it, and the parent merges these. Any other shared-core change is its own serial item. While it is open, it blocks the other workstream from touching core.
+
+GPU-timed and full-model steps serialize on the GPU lock even when their code lanes run in parallel.
+
+## Campaign: M5 Max native inference
+
+### Goal
+
+State: active. Native Flint, then Inkling 2 Mini, inference on this M5 Max (40-core GPU, 48 GiB) inside the owner's 32 GB budget, measured against the strongest reproducible engines. The current slice is Decision 17: 2,000 tok/s unseen-prompt prefill across the curve and 200 tok/s single-stream decode. Tooling and records live in [campaign/](../campaign/README.md).
+
+### Decisions
 
 The owner made the first two decisions on 2026-11-21:
 
@@ -155,7 +179,7 @@ The owner made the first two decisions on 2026-11-21:
     Bound: one experiment per item, smallest decisive change first. Tie-break: lower correctness risk.
 15. **Prescribed: Exo's M5 exclusions.** Exo PR #2533 (head `c4685725bf6a71fb424e668744744499d44a4fea`, open) gates its fused kernels to M1/M3/M4. The reason it gives is "until verified on that hardware". That is missing validation, not a known numerical difference. Enable a port on M5 only after a bit-exact check against the unfused path on this machine. Exo PR #2530 (open) targets Inkling-**Small**, not Mini; its ideas transfer only where the Mini graph has the same operator.
 
-16. **Owner: frontier campaign T3 (2026-11-23).** The specification is `campaign/frontier-brief.md`.
+16. **Owner: frontier campaign T3 (2026-11-23).** The specification is **Owner specification: frontier brief** below.
     - **Target (T3, owner, 2026-11-23).** In every cell, at least 1.10× the strongest reproducible engine on this
       machine under the same memory budget. The cells cover cold-turn prefill, warm decode, and 1/2/4/8-agent
       aggregate throughput, each on both repetitions. The comparators are:
@@ -226,9 +250,9 @@ The owner made the first two decisions on 2026-11-21:
     - **What it does not allow.** Output that depends on batch composition, as Splash's `--verify-rows auto`
       allows.
 
-## Baseline
+### Baseline
 
-[baseline.md](baseline.md) holds the frozen binary's sha256, the loop timings and every known red test. In brief, for `fa13df5d` built with Zig 0.17.1:
+[campaign/baseline.md](../campaign/baseline.md) holds the frozen binary's sha256, the loop timings and every known red test. In brief, for `fa13df5d` built with Zig 0.17.1:
 
 - `zig build native -Dcpu=apple_m1 -Dversion=1.0.0`: 239.3 s cold and 4.0 s warm no-op;
 - `zig build test-flint-draft-host`: 17.7 s;
@@ -242,25 +266,9 @@ Host facts measured on 2026-11-21:
 - Zig 0.17.1 (owner upgrade; upstream `.zig-version` was 0.17.0). Python 3.15.1, uv, and Pi 1.5.0.
 - 621 GiB of free disk.
 
-## Sequence
+### Items
 
-Items run on per-model chains, and items whose owned files are disjoint run in parallel:
-
-- **Flint:** trustworthy measurement (C2, C3) and F2's divergence trace, then a profile at 1K and 4K, then one bounded O-item screened and, if promising, qualified on the promotion matrix and held-out prompts. Any near-cap fixture must reserve reply headroom. F5 speculation branches off after the target path is qualified.
-- **Inkling 2 Mini:** I2's executable native forward path, then I3 minimal serving, then the frozen first-native baseline, then profiling and O-items. I5 branches off after I3.
-- **Comparators:** one runnable strong comparator is the early anchor (F3). The full matrix is needed only before a competitive claim.
-
-The phase headings below group items; they are not barriers. Every item ends on its acceptance command plus the narrowest affected suite, run on the integrated `main`. The full `zig build test test-golden` runs at milestones M1 (after F3), M2 (after I3) and the close.
-
-**Disjoint ownership sets:**
-- `campaign/` (C, Q and H items, plus the F2 and I2 harness files): one writer at a time.
-- Flint: `zig/src/families/flint/`, `zig/src/native/flint.zig`, `zig/kernels/metal/flint/`, `zig/tests/flint/`, `zig/tests/contract/metal_flint*`.
-- Inkling 2 Mini: `zig/src/families/inkling2_loop/` (including its kernels and tests), `zig/src/native/inkling2_loop.zig`, `zig/src/native/inkling2_loop_host.zig`, `zig/build/inkling2_loop.zig`, `campaign/parity/inkling2-mini/`.
-- Shared: `build.zig`, `zig/build/metal_*.zig`, the native registry, `zig/src/core/`, `zig/src/server/` and `zig/kernels/metal/core/`. One registration edit is folded into the item that needs it, and the parent merges these. Any other shared-core change is its own serial item. While it is open, it blocks the other workstream from touching core.
-
-GPU-timed and full-model steps serialize on the GPU lock even when their code lanes run in parallel.
-
-### P0: ground
+#### P0: ground
 
 - **C0. Ground** (S, no prerequisites). Owns:
   - `campaign/pyproject.toml`, `campaign/uv.lock`, `campaign/sources.lock.json`, `campaign/bootstrap.lock.json`;
@@ -275,7 +283,7 @@ GPU-timed and full-model steps serialize on the GPU lock even when their code la
 
   **Acceptance:** `make -C campaign fetch NAMES="flint-int4 inkling-2-mini" && make -C campaign host && make -C campaign build-baseline` exits 0, the second `fetch` run completes with no downloads, and `baseline.md` lists each timing and every red test.
 
-### P1: Flint parity and harness
+#### P1: Flint parity and harness
 
 - **F1. True autoregressive switch and first inference** (S, after C0). Owns the Flint set.
   - Prove whether `--no-drafts` disables Flint's copy drafts as well as `--drafter`. Make the per-request lane counters show 0 proposals and exactly 1.00 tokens per round.
@@ -331,7 +339,7 @@ GPU-timed and full-model steps serialize on the GPU lock even when their code la
   
   **Acceptance:** `make -C campaign scorecard` shows both tables, matched and best-useful, for every runnable engine. **Milestone M1:** full suite.
 
-### P2: Inkling 2 Mini parity
+#### P2: Inkling 2 Mini parity
 
 I-items own the Inkling set. They may start code work parallel to F-items, and use the GPU only under the lock.
 
@@ -356,7 +364,7 @@ I-items own the Inkling set. They may start code work parallel to F-items, and u
   
   **Acceptance:** `zig build test-inkling2-loop`, `make -C campaign quality MODEL=inkling2-mini SET=full`, `make -C campaign pi-harness MODEL=inkling2-mini` and `make -C campaign scorecard`. **Milestone M2:** full suite.
 
-### P3: hardening and speculation
+#### P3: hardening and speculation
 
 - **F5 and I5. Greedy speculation** (M each; F5 after F3, I5 after I3). F5 is Flint DFlash2 plus copies. I5 is the Inkling MTP head. Test:
   - zero, partial and full acceptance;
@@ -370,7 +378,7 @@ I-items own the Inkling set. They may start code work parallel to F-items, and u
   **Acceptance:** each model's speculation tests plus `make -C campaign bench MODE=drafter` within the speculation memory envelope.
 - **K1. Contract write-up:** record the contract changes listed under **Execution boundary**, and update `docs/supported-models.md` and the recipes.
 
-### P4: optimization
+#### P4: optimization
 
 - **O-items** (each S–M). Each is created from the ranked hypothesis table after profiling: Metal System Trace and capture outside timed windows, short and long context. Profiling attributes time to experts and projections, attention, routing, norms and residuals, quantization, dispatch, synchronization, sampling and memory movement, together with bandwidth estimates.
   
@@ -383,7 +391,7 @@ I-items own the Inkling set. They may start code work parallel to F-items, and u
   concurrency investigation uses at most 32,768 total tokens per stream and reports aggregate throughput
   separately from single-user speed; it is not part of the current quick matrix.
 
-### P5: close
+#### P5: close
 
 - **Z1.** Fetch upstream once and record what changed, without rebasing; import upstream fixes only as separately recorded commits. Use `dead-code-archaeology` to delete campaign scaffolding and kernels made dead by a promoted replacement; prove deadness by search plus the build. Run `ultrareview` and fix its P1 and P2 findings. Write `campaign/report.md`:
   - the Mac, models and quantization, and lengths and modes;
@@ -392,7 +400,216 @@ I-items own the Inkling set. They may start code work parallel to F-items, and u
   - local reproduction kept separate from external claims;
   - regressions, unsupported features, targets met or missed, and the narrowest claim the data supports.
 
-## Acceptance
+### Owner specification: frontier brief (2026-11-23)
+
+Kept verbatim from the owner's T3 brief, *TensorFold: advance the Inkling 2 Mini inference frontier*. Decision 17 narrows its critical path.
+
+Continue the optimization campaign in joshuarli/tf. Establish how current TensorFold compares with the strongest reproducible Inkling 2 Mini implementations, then improve the native Zig/Metal engine on the campaign machine. Optimize complete coding-agent work: cold and warm turn latency, sustained generation, concurrent throughput, memory, and useful task completion.
+
+Treat this as a research-and-implementation campaign. Use the source map below as a starting inventory, discover newer work, and turn the best supported ideas into measured experiments. “SOTA” means an explicitly stated workload, hardware, memory budget, quality level, and date. It is not a universal ranking.
+
+Research snapshot: 23 November 2026. Refresh every moving branch and PR before using it.
+
+#### 1. Recover the current ground truth and preserve campaign scope
+
+Read the current AGENTS instructions, docs/roadmap.md, campaign/shootout.md, campaign/kernels ledgers, current source, pending branches, and latest owner steering. Resolve historical statements by chronology and actual code. Preserve the current delegation and integration policy.
+
+The target is Inkling 2 Mini, architecture inkling2_loop. Distinguish it from Inkling 2 Small, earlier Inkling models, research checkpoints, and modified/abliterated variants. Other models supply possible mechanisms, not interchangeable benchmark results.
+
+The known campaign host is M5 Max, 40 GPU cores, 48 GiB. Reconfirm OS, Xcode/Metal, compiler, build options and power/thermal state. Preserve the current 32 GB campaign budget, 28 GB charged-run ceiling, 26 GB load limit, and heavy.py accounting unless later owner instructions supersede them. Keep benchmark context within 32,768 total tokens including reserved output. Research 128K/256K/1M scalability and report projections separately; do not run those cells without an authorized cap change.
+
+The shipped implementation remains native Zig/Metal. Python, MLX and other engines may serve as development references and comparators. Preserve existing boundaries on system settings, global installations, external writes and paid compute.
+
+Two mandatory starting facts:
+
+- TF commit [69651393](https://github.com/joshuarli/tf/commit/69651393c736d3fa263b6959514fb897e9082207) corrects reasoning replay in both agent workload clients. Earlier sweeps dropped reasoning_content and used an ignored enable_thinking setting. Remeasure both sides on the corrected workload.
+- Read [the existing DSpark receipt](https://github.com/joshuarli/tf/blob/main/campaign/kernels/inkling-dspark.md) and parked lane/ds1-dspark-drafter before proposing a new implementation. Its measured draft cost invalidated earlier optimistic estimates.
+
+Audit which ideas are implemented, pending, rejected, superseded, or genuinely untested. Existing f16 KV, prefix reuse/store, batching, controller fusion and TensorOps work are not new research. Revisit a failed experiment only with a concrete changed hypothesis, workload, precision contract or implementation.
+
+Maintain the distinction between state/kernel consistency, fidelity to the reference, and speculation against its chosen target. Under the latest owner steering, fidelity is reporting-only: run the saved-capture comparison at final integration, and do not revive older top-1/KL thresholds as lane or integration gates. Consistency, greedy-equality where required, and applicable task-quality requirements remain in force.
+
+#### 2. Expand and maintain the source map
+
+Search GitHub commits, open and merged PRs, review comments, issues, releases, forks, experimental branches, benchmark scripts, raw receipts and negative-result ledgers. Search X/Twitter for author announcements, replies, corrections, linked branches and independent reproductions. Follow every material social claim to primary code or measurements where possible.
+
+Use model aliases, architecture names and mechanism terms: Inkling-2-Mini, inkling2_loop, DSpark, Markov, MTP, NVFP4, MXFP8, relative bias, sink attention, Metal, NAX, TensorOps, speculative verification, expert routing, KV, prefix and agent serving. Search both the last 24–72 hours and the release window. Trace dependencies beyond commits mentioning the model.
+
+For each lead record date checked, exact revision, status, source/license, hardware, model/quantization, actual execution path, workload, metric definition, reproducibility, correctness evidence and applicability to TF. Deduplicate forks. Distinguish author claims, reproduced results, source inspection, hypotheses, and inaccessible evidence. Do not claim exhaustive X coverage if search or post retrieval is incomplete.
+
+##### Required starting sources
+
+| Area | Starting points and questions |
+|---|---|
+| Official model and conversions | [Official model](https://huggingface.co/thinkingmachines/Inkling-2-Mini), [model card](https://thinkingmachines.ai/model-card/inkling-2-mini/), [Unsloth GGUF](https://huggingface.co/unsloth/Inkling-2-Mini-GGUF), [DSpark conversion notes](https://huggingface.co/unsloth/Inkling-2-Mini-GGUF/blob/main/dspark/README.md), [Xylolabs](https://huggingface.co/Xylolabs/Inkling-2-Mini-GGUF). Verify tensor formats, scales, tokenizer, template, drafter schema and checkpoint identity. |
+| llama.cpp upstream | [Current upstream](https://github.com/ggml-org/llama.cpp). Refresh #32825 native Metal NVFP4, #32740 compact-bias contract, #32808 Metal indexed-bias attention, #32752/#32883 chunking, #32855 depth-mix operand order, #32824 CONCAT, #32218 DSpark and #32773 speculation costs. Inspect final diffs and dependencies. |
+| llama.cpp supporting work | #32240 separate global/SWA KV types, #32777 loop-aware placement, #30196 output synchronization, #32076 MoE cache, #30685 host-input copies. Audit tokenizer/template/scale/cache fixes #32799, #32763, #32704, #32807, #32828 and #32833. Establish backend and architecture eligibility before proposing flags. |
+| llama.cpp forks | [Koosh0610](https://github.com/Koosh0610/llama.cpp-inkling), its [technical write-up](https://koosh0610.github.io/llama.cpp-inkling/), and [realugbun/inkling2-speed](https://github.com/realugbun/llama.cpp/tree/inkling2-speed). Compare their changes with current upstream; isolate what remains novel. |
+| MLX ecosystem | [MLX](https://github.com/ml-explore/mlx), [mlx-lm](https://github.com/ml-explore/mlx-lm), [MLX-VLM](https://github.com/Blaizzy/mlx-vlm), [oMLX](https://github.com/jundot/omlx). Refresh model branches and kernel changes, including mlx-lm #2086 and MLX #4712/#4781/#4796. Inspect oMLX #5505, #5508, #5528, #5531, #5559 and #5560. |
+| New Mac comparators | [mlx-serve](https://github.com/ddalcu/mlx-serve), especially [drafter global-context fix f501857](https://github.com/ddalcu/mlx-serve/commit/f50185721650f6d8045a550844c70a87f341f49b); [MTPLX](https://github.com/youssofal/MTPLX), [2.13.2 notes](https://mtplx.ai/releases/2.13.2/), and [Nov 23 comparison](https://www.mtplx.com/compare/mlx-serve-vs-omlx-vs-mtplx/). Audit sampler paths, exactness and raw benchmark methodology. |
+| Native Metal research | [nanoattention](https://github.com/justrach/nanoattention), [DankAttn](https://github.com/Dankpaws/DankAttn), [erisinky](https://github.com/Eriskii/erisinky), [gall](https://github.com/ltrgoddard/gall), [tur](https://github.com/danylokravchenko/tur), [rustling](https://github.com/onatm/rustling), [rink](https://github.com/adapt/rink), [saetta](https://github.com/antonellof/saetta). Identify actual Mini support, serving capability and numerical tradeoffs. |
+| Quantization and profiling | [lookatmyquant](https://github.com/ShinMegamiBoson/lookatmyquant), [deeflect/inkling-m4-metal](https://github.com/deeflect/inkling-m4-metal), [mps-moe-perf-notes](https://github.com/ArthurZucker/mps-moe-perf-notes). Separate weight compression, KV compression, activation precision and changed reasoning policies. |
+| CUDA/ROCm/Vulkan prior art | [TokenSpeed](https://github.com/lightseekorg/tokenspeed), [vLLM](https://github.com/vllm-project/vllm), [SGLang](https://github.com/sgl-project/sglang), [kern-inkling-2mini](https://github.com/pegainfer-project/kern-inkling-2mini), [NInfer](https://github.com/iamwavecut/ninfer-all), [ninfer-3090](https://github.com/ashalliants/ninfer-3090), [Strata](https://github.com/Niko1221/Strata), [capy-flash](https://github.com/ValerioDolci/capy-flash). Extract mechanisms, including exact hardware guards; do not transfer their tok/s or percentage gains to Metal. |
+| Scheduling, offload and broader discovery | [Resin](https://github.com/ekzhang/resin), [Exo](https://github.com/exo-explore/exo), [TideLM](https://github.com/raspy135/tideLM), [Pulsar](https://github.com/loopai-hq/pulsar), [awesome-inkling](https://github.com/deeflect/awesome-inkling). Follow references to additional projects. Larger-model, other-model and distributed work stays transfer research until Mini applicability is established. |
+
+This is a discovery inventory, not a mandate to install every engine. Prioritize sources with relevant code and reproducible evidence. Verify licenses before porting and preserve required notices.
+
+#### 3. Establish comparisons that answer different questions
+
+Keep three result tables:
+
+1. **Controlled engine comparison:** matched checkpoint/tensor values where formats permit, tokenizer, rendered input, reasoning policy, precision settings, KV policy, sampler, speculation mode and workload. Disclose every remaining arithmetic difference.
+2. **Best practical configuration:** each engine tuned within the same machine/memory budget and a declared task-quality standard. Different quants or drafting strategies are allowed but identified.
+3. **Experimental speed–quality frontier:** explicitly approximate changes, with their quality and memory costs. Never merge these results into the controlled table.
+
+Same file names or “official weights” labels are insufficient. Inspect tensor hashes/values, scale layouts, conversion steps and included vision/drafter weights. Preserve distinct official-format and oQ4e results.
+
+Benchmark current upstream llama.cpp separately from selected PR/fork stacks. Verify GPU placement and eliminate unintended CPU fallback. Refresh oMLX, mlx-serve, MTPLX and nanoattention before treating an older version as competitive. Record exact commands and SHAs.
+
+Use identical token arrays or record and explain tokenizer differences. Fix chat templates, reasoning_effort, hidden reasoning, tool schemas, stop IDs, EOS handling and output budgets. Correctly replay reasoning and tool calls.
+
+Measure cold load separately from first request, unseen prefill, warm repeated prompt, continuation, prefix fork and mixed multi-turn work. Warm up on unrelated inputs when measuring cold prefill. Let engines use appropriate chunk sizes and record those choices.
+
+Start with 1K/4K cells; extend winners to 16K and applicable cells under the total-token cap. Exercise 1/2/4/8 concurrent agents, including staggered arrivals and unequal histories. State client count and resident slot count separately. Include long generations and copy-heavy edits alongside novel code, prose, reasoning and structured/tool outputs.
+
+Report:
+
+- Client and server TTFT; first engine token, first reasoning token and first visible answer token separately.
+- Actual evaluated input tokens and reused tokens; prefill latency and throughput.
+- Committed output tokens over the full decode interval, per-agent and aggregate rates; distinguish reasoning, visible answer and tool arguments.
+- Complete turn/task time, queue delay, latency tails, errors, retries and completed work.
+- Charged memory, resident/file-backed weights, scratch, target/draft KV, snapshots and prefix stores.
+- Speculative proposals, acceptance, committed tokens per round and the full cost of each round.
+- Quality, output/schema correctness, thermal/contention conditions and uncertainty.
+
+Do not count proposed or replayed tokens as useful output. Do not call a configured context capacity a populated-context result. Do not compare a fastest 32-token stretch with a full-answer average. Use both fixed replay workloads for kernel isolation and live agent tasks for practical value.
+
+#### 4. Research avenues to cover and triage
+
+##### A. Model semantics and loop-aware execution
+
+Audit 24 physical layers versus 48 logical visits, repeated expert traffic, per-pass KV and convolution states, local/global attention, relative-position bias and sinks, depth-residual banks, normalization and loop controllers. Preserve raw DSpark taps and frozen snapshot ownership.
+
+Investigate reuse of immutable normalized states, graph order, depth-mix operand orientation, shared reads and direct writes into the next consumer. Check aliasing and buffer lifetime. Account for prior TF failures before retrying cached normalization. Do not share loop states merely because physical weights are shared.
+
+##### B. Expert execution and packed weights
+
+Profile real routed-row distributions and expert fan-out at single-token decode, few-row verification, concurrency and prefill. Investigate expert grouping/worklists, gather/scatter elimination, route sorting, occupancy-dependent dispatch, gate/up/down tiles, shared activation loads, fused activation/reduction and register-level dequantization.
+
+Compare native NVFP4/MXFP8, affine and other permitted layouts. Evaluate scale traffic, vectorization, split-K, tensor operands and precision by shape. Check whether staging weights costs more bandwidth than it saves. Inspect the actual Metal scale-plane contract: native NVFP4 and MXFP8 scale formats are not interchangeable. Treat single-row and multirow results separately.
+
+##### C. Attention and positional bias
+
+Investigate compact/indexed relative bias inside attention, sink handling, FlashAttention/FlashDecoding, GQA sharing, split-KV, query tiling, local-window bounds and paged/ring layouts. Measure crossover points by populated context and row count.
+
+Audit masking, absolute positions, clipping/softcaps, summation order and row-width consistency. Compare dense-mask, mask-chunk and query-chunk approaches with both peak memory and latency. Metal scheduling may execute nominally separate chunks concurrently, extending allocation lifetimes. Smaller intermediates and fewer launches are hypotheses, not speed guarantees.
+
+##### D. Prefill and intermediate lifetime
+
+Investigate larger/adaptive chunks, aggregate expert routes, tile occupancy, scratch packing by live interval, phase aliasing, direct controller outputs, and backward row-liveness that skips outputs never consumed. Preserve every state needed by future loops, convolution, DSpark, caching and later turns.
+
+Benchmark at actual prefix depth, with cold caches and real token distributions. Distinguish terminal-row-only head work from skipping required intermediate rows. Recheck nanoattention’s corrected methodology and rejected variants before relying on early headline gains.
+
+##### E. GPU scheduling and host overhead
+
+Measure CPU encoding, command-buffer submission, synchronization, resource barriers, dependency depth, allocations, first-touch residency, page faults, queue gaps and CPU/GPU overlap. Use paired traces and wall timings; do not subtract unrelated profiling runs.
+
+Evaluate reusable buffers/arguments, pipeline caches, shape buckets, indirect dispatch, concurrent independent work, reduced readbacks and safe command scheduling. Investigate persistent kernels only where dependencies and platform guarantees support them. Check register pressure, occupancy and pipeline-specific threadgroup limits. Removing dispatches alone is not a success criterion.
+
+##### F. Few-row verification
+
+Treat verification as a separate workload. Compare decode-style row-exact kernels with batched GEMM/attention for widths around all dispatch thresholds. Preserve the chosen target’s arithmetic where greedy equality is required.
+
+Use fixed real token/route traces as well as live drafts. Price padding, expert fan-out, head computation, graph capture/rebuild, compilation and additional scratch. Evaluate fixed and bucketed widths before adaptive widths; include the cost and memory of keeping multiple graphs.
+
+##### G. Native DSpark and alternative proposals
+
+Audit the existing TF branch first. Confirm runtime/converter/drafter compatibility, ctx_mix normalization, Markov tensors, target taps, embedding/head sharing, vocabulary padding and local/global drafter attention. The trained eight-slot block includes an anchor; distinguish verification width from up to seven newly proposed tokens.
+
+Investigate lower-cost drafter precision, efficient head/Markov computation, context updates, full-history attention, shared target features and batched drafts. Benchmark no drafter, loaded-but-paused drafter, and active drafting.
+
+Compare fixed proposal counts 0–7 with adaptive policies based on measured accepted tokens per millisecond, context, concurrency and expert fan-out. Include warmup, draft, verification, rejection, rollback, state-copy and scheduler costs. Use hysteresis/backoff only if they win.
+
+Explore prompt lookup, context copies, suffix/ngram proposals, hybrid copy-plus-DSpark, and carefully bounded trees/beam proposals. Longer copy windows need not obey the trained drafter’s block size, but must satisfy target verification and state semantics. External drafters, EAGLE/DFlash-style methods, self-speculation and distillation are conditional research: establish model support, training needs and feasible resources first.
+
+##### H. GPU sampling and exact speculative semantics
+
+Profile GPU-to-CPU logits transfer, vocabulary reduction, softmax, top-k/top-p/min-p, temperature, penalties, logit bias, RNG and grammar work. Investigate GPU-resident selection and certified filtering without unnecessary full sorts.
+
+For sampled speculation, establish the actual proposal and target distributions, acceptance/rejection correction, bonus tokens and history-dependent controls per speculative row. Include earlier proposals when computing that row’s penalties or grammar state.
+
+Separate greedy equality, preservation of a specified target distribution, and seed-identical outputs. These are different claims. Audit fallback behavior for unsupported controls, uncertain thresholds and numerical edges; do not restart already reached sampling decisions in a way that conditions them on later events. Keep a correct fallback and measure when real clients trigger it.
+
+##### I. KV, convolution and speculative state
+
+f16 KV is already implemented. Explore global/local policies independently; key/value asymmetry; FP8/int8 and lower-bit methods; scales and outliers; fused dequantization; paging; bounded sliding rings; and state reserved only for history that can be read again.
+
+Treat generic KV-quantization support as unproven for Inkling-specific attention until the actual kernels accept it. Audit per-pass ownership, absolute positions, prefix boundaries, convolution history, rejected tokens and target/drafter rollback together.
+
+Measure prefix sharing/copy-on-write, selective snapshots, immutable shared prefixes and private suffixes. Include draft state and graph buffers in admission. Research 128K/256K scalability analytically under the existing run cap; distinguish projected allocation from measured speed, stability and retrieval quality.
+
+##### J. Serving, concurrency and cache policy
+
+Investigate continuous batching, ragged histories, prefill/decode interleaving, decode latency protection, admission, fair scheduling, cancellation and session eviction. Compare synchronized synthetic agents with realistic staggered work.
+
+Measure longest-prefix lookup, cross-session forks, prompt-state checkpoints, cache eviction, disk persistence and target-plus-draft restore atomicity. Optimize useful reuse under the corrected reasoning history. Price cache storage and copying against saved prefill, and ensure all mutable state is restored consistently.
+
+Choose speculation per session or batch when warranted. A single-stream gain may lose under concurrency because verification increases expert fan-out or occupies the GPU longer.
+
+##### K. Agent protocol and application costs
+
+Profile rendering/tokenization, reasoning replay, streaming, tool argument parsing, structured decoding, stop handling, response assembly and network flushing. Include long source-file tool arguments and parallel calls.
+
+Look for quadratic rescanning, whole-history copying, repeated tokenization, blocked event loops and unnecessary synchronization. Inspect vLLM’s recent Inkling parser/state work, including #69293/#69297/#51141, #69351/#69347 and #69444/#69181, as mechanism leads. Check final status and applicable model/backend.
+
+Measure completed tool round-trips and task success. Preserve exact arguments, escaping, Unicode, newlines, call IDs and finish reasons. Keep first visible answer latency separate from hidden reasoning generation.
+
+##### L. Precision and the quality–speed frontier
+
+Explore selective activation precision, accumulator choices, per-layer/per-operation sensitivity, mixed-bit weights, importance-calibrated quantization, head/embedding compression, drafter quantization and compressed KV. Separate each intervention so its benefit and loss can be understood.
+
+Report task quality, coding checks, tool/schema success, retrieval, refusals, looping/runaways, non-finite values and representative logit/greedy comparisons. Include calibration/holdout separation and relevant long histories within the cap.
+
+Expert pruning/skipping, sparse attention, stale-state reuse, reduced loops, early exits and reduced reasoning budgets change model behavior. Keep them explicitly experimental and separately evaluated. A variable-loop research checkpoint is a different comparator. Do not silently apply fewer loops to the fixed Mini checkpoint or label modified models equivalent.
+
+##### M. Hardware limits, offload and other architectures
+
+Build a measured traffic/compute model for actual kernels: physical and repeated weights, KV, activations, scales, head, controllers and temporary buffers. Compare attainable bandwidth and tensor throughput by shape with measured stage time. Use Amdahl-style end-to-end estimates, not multiplication of isolated speedups.
+
+Study CUDA/ROCm/Vulkan implementations for transferable scheduling, worklists, paging and sampling ideas. Inspect architecture guards before assuming a generic optimization executes for Inkling.
+
+Expert caching/offload, CPU/GPU overlap, tensor/expert/context parallelism and multi-device execution are conditional future avenues. Mini fits the present machine, so justify their relevance before introducing complexity or new hardware. Vision preprocessing, encoder/projection caching and multimodal prefixes are similarly conditional on expanding the current text-agent scope.
+
+#### 5. Execute in an evidence-driven order
+
+1. Freeze the corrected workload and current source/weight pins. Produce fresh TF and primary comparator baselines, including speculation on/off where supported.
+2. Measure the integrated TF build, including already landed post-shootout changes. Profile single-stream attention, multi-stream expert work, prefill experts and actual served latency. Choose priorities from current measurements.
+3. Build a compact research ledger: mechanism, source/revision, applicability, existing TF status, expected benefit, implementation cost, correctness risk and next discriminating experiment. Mark each avenue tested, active, rejected with evidence, deferred with reason, or unsupported.
+4. Select the highest-value bounded experiments. Parallelize independent source research and coding within the existing delegation policy; serialize GPU timing and keep one resident engine at a time.
+5. Follow the current lightweight progression: one gated paired screen; three interleaved pairs for promising candidates; integrated workload and quality checks for retained changes. Use identical-build controls or additional pairs when a concrete noise concern requires them. Reuse existing harnesses and receipts.
+6. Keep, revise or revert based on complete-request benefit, memory and applicable correctness/quality requirements. A local kernel win, higher acceptance, lower dispatch count or smaller scratch allocation does not establish an end-to-end win.
+7. Refresh the frontier at integration milestones. Continue when new evidence changes the best next experiment. Avoid endless surveying before implementing a strong lead or repeatedly testing an unchanged failed idea.
+
+Retain the owner’s target of at least **1.10× oMLX aggregate throughput in every same-weights 1/2/4/8-agent cell, on both repetitions**, recalculating thresholds from the corrected workload. If TF uses MTP, remeasure oMLX with MTP on and retain the off comparison. Treat previously suggested absolute rates such as 2,000 prefill tok/s or 80 decode tok/s as aspirations unless current hardware evidence supports them. Establish the broader competitive frontier beyond one old oMLX baseline.
+
+#### 6. Required deliverables
+
+Produce an updated source/coverage map, reproducible current scorecards, a ranked experiment ledger, integrated improvements with concise receipts, and a remaining-opportunities list.
+
+The final comparison must answer:
+
+- Where does TF lead or trail current llama.cpp upstream and the best relevant experimental stack?
+- Where does it stand against current oMLX, mlx-serve, MTPLX and other credible native Metal implementations?
+- Which results isolate engine performance, and which reflect different precision, weights, speculation or output behavior?
+- What wins on cold turns, warm turns, long generations and 1/2/4/8 agents under the same memory limit?
+- Which proposed optimizations failed, why, and what evidence would justify retrying?
+- What is the highest-value next experiment, and which claims remain unverified?
+
+Support performance claims with exact revisions, settings and receipts. State inaccessible X posts, missing raw data and untested transfer assumptions explicitly. Do not call TF SOTA or the research exhaustive on the strength of marketing peaks, a short greedy match, theoretical bandwidth, or an incomplete search.
+
+**Begin with the current-state audit and corrected baseline, then run the first high-value experiment. Do not stop at a literature review.**
+
+### Acceptance
 
 1. **Native engine.** `zig build native -Dcpu=apple_m1` builds. Flint and Inkling 2 Mini serve text. Qualified defaults are on, with opt-in experimental modes and fallbacks. `zig build test test-golden` adds no red beyond what **Baseline** lists.
 2. **Correctness.** `make -C campaign parity MODEL=flint` and `make -C campaign quality MODEL=… SET=full` meet Decision 10. Inkling's `make -C campaign omlx-oracle-gate` is reported (Decision 16).
@@ -403,13 +620,13 @@ I-items own the Inkling set. They may start code work parallel to F-items, and u
 5. **Ledger and report.** `campaign/ledger.md` lists every experiment, including failures. `campaign/report.md` states each target in Decision 12 as met or not met, with its numbers.
 6. **Docs.** `campaign/README.md` says how to build, fetch weights, run, benchmark, verify and resume.
 
-## Needs environment
+### Needs environment
 
 - M1–M4 compatibility of new kernels: an offline compile only, run with `zig build dev-tools`. Running them needs older Macs; the commands are the same `make -C campaign parity MODEL=flint` and `make -C campaign omlx-oracle-gate` on such a machine.
 - Linux and CUDA host CI (`zig build -Dfixed-cpu test-host`) on a Linux host, if the owner wants upstream-style evidence.
 - Comparators that need CUDA, such as vLLM and SGLang: unavailable here, not defeated.
 
-## Execution boundary and non-goals
+### Execution boundary and non-goals
 
 **Authorized:**
 - edits and local commits on `main` and `lane/*` branches in this repo;
@@ -448,7 +665,7 @@ The shipping path stays native Zig/Metal with its existing C/Objective-C glue. A
 - compatibility work for older Macs: see **Needs environment**;
 - repository-wide mutation, coverage or formal-proof work: only the changed inference path is tested.
 
-## Reference
+### Reference
 
 These references were verified on 2026-11-21:
 
@@ -459,3 +676,10 @@ These references were verified on 2026-11-21:
   - `Inkling-2-Mini` `model-00001-of-00001.safetensors`: sha256 `65e60f51aa1284d4fb022584908c315270334d991828bb774af60584523539d1`, 19,526,019,168 bytes.
   - `mtp.safetensors`: sha256 `7c3b651317f01f73bcf4e1dceba66ef8b7e1a1eac6bc171e882e690a4b10a1d2`, 635,801,416 bytes.
   - `tokenizer.json`: sha256 `7f332727f9a3f093dd452a39cc978e6757627e5dad1b0673aa4e75174f236dd6`.
+
+## Later
+
+- J1: multi-agent scheduling (four-agent TTFT 998 ms against oMLX's 623 ms, `campaign/kernels/inkling-b2-baselines.md`).
+- B2 remainder: comparator rows not yet run on the corrected workload.
+- R1: the campaign report's reproduction pass.
+- Splash `--verify-rows all` profile, for a deterministic Splash speculative comparison.

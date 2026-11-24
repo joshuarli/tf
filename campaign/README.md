@@ -1,6 +1,6 @@
 # M5 Max campaign tooling
 
-Development-only tooling for the native inference campaign in [plan.md](plan.md). Nothing here ships in `tensorfold-native`.
+Development-only tooling for the native inference campaign in [docs/roadmap.md](../docs/roadmap.md). Nothing here ships in `tensorfold-native`.
 
 ## Requirements
 
@@ -37,7 +37,7 @@ make -C campaign baseline-timings
 
 ## Resume
 
-Read the **Status** block of [plan.md](plan.md), run `make -C campaign host`, compare the result with the committed `host.json`, then take the next item.
+Read the **Status** block of [docs/roadmap.md](../docs/roadmap.md), run `make -C campaign host`, compare the result with the committed `host.json`, then take the next item.
 
 ## Checks and benchmarks
 

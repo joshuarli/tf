@@ -2,7 +2,7 @@
 
 **Status: final, 2026-11-23.** TensorFold is main at `6285f2f56`, which includes every lane through H6 (f16 KV).
 
-**Superseded workload.** These sweeps used the agent clients from before `69651393c`, which dropped `reasoning_content` between turns. The GO decision stands, but plan Decision 16 requires remeasuring both engines on the corrected clients. Later numbers do not pair with these. Current next steps are in plan **Status**.
+**Superseded workload.** These sweeps used the agent clients from before `69651393c`, which dropped `reasoning_content` between turns. The GO decision stands, but roadmap Decision 16 requires remeasuring both engines on the corrected clients. Later numbers do not pair with these. Current next steps are in roadmap **Status**.
 
 ## Verdict
 

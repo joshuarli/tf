@@ -368,69 +368,6 @@ inline void i2_mix_rows(const device float* S, const device float* q0, const dev
   i2_mix_rows(S, Q, K, V, F, a, 4u, O, t, i, part, w);
 }
 
-struct i2_pick_args { uint experts, topk, rows; float route_scale; };
-
-// i2p_routepick's selection for up to 128 experts and eight picks, its arrays indexed at compile time: the same
-// probabilities, biased scores, ties to the lower expert, pick order and normalization.
-[[kernel]] void i2_batch_pick(const device float* L [[buffer(0)]], const device float* bias [[buffer(1)]],
-    constant i2_pick_args& a [[buffer(2)]], device int* picks [[buffer(3)]], device float* wts [[buffer(4)]],
-    uint t [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
-  if (t >= a.rows) return;
-  const uint E = a.experts, K = a.topk;
-  const device float* l = L + (size_t)t * E;
-  float probs[4], sel[4];
-#pragma unroll
-  for (uint j = 0; j < 4u; ++j) {
-    const uint e = lane + 32u * j;
-    probs[j] = e < E ? 1.0f / (1.0f + precise::exp(-l[e])) : 0.0f;
-    sel[j] = e < E ? probs[j] + bias[e] : NAN;
-  }
-  float denom = 0.0f;
-  float chosen[8];
-  int which[8];
-#pragma unroll
-  for (uint k = 0; k < 8u; ++k) {
-    if (k >= K) break;
-    float bv = 0.0f;
-    uint bi = E;
-#pragma unroll
-    for (uint j = 0; j < 4u; ++j) {
-      const uint e = lane + 32u * j;
-      if (e < E && !isnan(sel[j]) && (bi == E || sel[j] > bv)) { bv = sel[j]; bi = e; }
-    }
-    for (ushort off = 16; off > 0; off >>= 1) {
-      const float ov = simd_shuffle_down(bv, off);
-      const uint oi = simd_shuffle_down(bi, off);
-      if (lane + off < 32u && oi != E && (bi == E || ov > bv || (ov == bv && oi < bi))) { bv = ov; bi = oi; }
-    }
-    bi = simd_broadcast_first(bi);
-    which[k] = int(bi);
-    if (bi != E) {
-      const uint j = bi / 32u;
-      const float mine = j == 0u ? probs[0] : j == 1u ? probs[1] : j == 2u ? probs[2] : probs[3];
-      const float p = simd_shuffle(mine, ushort(bi % 32u));
-      if (lane == bi % 32u) {
-        if (j == 0u) sel[0] = NAN;
-        else if (j == 1u) sel[1] = NAN;
-        else if (j == 2u) sel[2] = NAN;
-        else sel[3] = NAN;
-      }
-      denom += p;
-      chosen[k] = p;
-    } else {
-      chosen[k] = NAN;
-    }
-  }
-  if (lane == 0) {
-#pragma unroll
-    for (uint k = 0; k < 8u; ++k) {
-      if (k >= K) break;
-      picks[(size_t)t * K + k] = which[k];
-      wts[(size_t)t * K + k] = chosen[k] / (denom + 1e-20f) * a.route_scale;
-    }
-  }
-}
-
 struct i2_controls_args { uint h, rank, rows; uint xs[3], xb[3]; };
 
 [[kernel]] void i2_controls_norm(const device float* X0 [[buffer(0)]], const device float* X1 [[buffer(1)]],

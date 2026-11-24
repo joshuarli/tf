@@ -12,6 +12,7 @@ const Layer = wts.Layer;
 const Controller = wts.Controller;
 
 pub const default_chunk: usize = 1024;
+const shared_expert_rows = 8;
 
 /// The half-operand expert library: gate/up matrices from 14 rows an expert, down from 8, grouped f32 kernels below.
 pub const half_source = "#define I2P_HALF_OPERANDS 1\n#define I2P_MATRIX_THRESHOLD 14\n#define I2P_DOWN_MATRIX_THRESHOLD 8\n" ++ kernels.prefill ++ kernels.prefill_expert_wide;
@@ -1074,8 +1075,7 @@ const Chunk = struct {
             c.setP(s.pipes.router, RouterA{ .n = E, .k = c.h, .rows = c.n, .xs = 1, .xb = 0 }, &.{ input, t(lay.router), A, b(s.router) });
             c.enc.dispatchGroups(mtl.Size.of((E + 31) / 32, c.n, 1), mtl.Size.of(1024, 1, 1));
         }
-        const pick = if (c.batch != null and E <= 128 and K <= 8) c.batch.?.scratch.pick else s.pipes.pick;
-        c.setP(pick, Pick{ .experts = E, .topk = K, .rows = c.n, .route_scale = cc.text.route_scale }, &.{ b(s.router), t(lay.router_bias), A, b(s.picks), b(s.wts) });
+        c.setP(s.pipes.pick, Pick{ .experts = E, .topk = K, .rows = c.n, .route_scale = cc.text.route_scale }, &.{ b(s.router), t(lay.router_bias), A, b(s.picks), b(s.wts) });
         c.enc.dispatchGroups(mtl.Size.of(c.n, 1, 1), mtl.Size.of(32, 1, 1));
         if (s.capture) |capture| {
             c.copyN(bo(s.picks, s.capture_row * K * 4), bo(capture, (cc.slots() * st.trace_rows * c.h + slot * K) * 4), K);
@@ -1129,7 +1129,7 @@ const Chunk = struct {
         }
         if (c.n <= 8 or !s.half) {
             const codes = b(if (lay.precision == .mxfp8) m.t256 else m.t16);
-            const shared = c.batch != null and c.n >= 2 and lay.precision != .mxfp8;
+            const shared = c.batch != null and c.n >= shared_expert_rows and lay.precision != .mxfp8;
             const gu = if (lay.precision == .mxfp8) s.pipes.gu_mx else if (shared) c.batch.?.scratch.gu_rows else s.pipes.gu_nv;
             const down = if (lay.precision == .mxfp8) s.pipes.down_mx else if (shared) c.batch.?.scratch.down_rows else s.pipes.down_nv;
             c.setP(gu, MoeB{ .k = c.h, .n = inter, .slots = slots, .topk = K, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.picks), A, b(s.act), codes });

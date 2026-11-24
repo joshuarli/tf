@@ -71,16 +71,16 @@ test "batched independent cache steps match decode" {
     defer ps.deinit();
     var ds = try state.Scratch.init(m.device, &m.config);
     defer ds.deinit();
-    var bs = try batch.BatchScratch.init(m.device, &m.config, 4);
+    var bs = try batch.BatchScratch.init(m.device, &m.config, 8);
     defer bs.deinit();
     const vocab = m.config.text.unpadded_vocab;
-    const logits = try std.testing.allocator.alloc(f32, 4 * vocab);
+    const logits = try std.testing.allocator.alloc(f32, 8 * vocab);
     defer std.testing.allocator.free(logits);
-    for ([_]usize{ 1, 2, 4, 4 }, 0..) |width, case| {
-        var actual: [4]state.Cache = undefined;
-        var expected: [4]state.Cache = undefined;
-        var caches: [4]*state.Cache = undefined;
-        var ids: [4]u32 = undefined;
+    for ([_]usize{ 1, 2, 4, 4, 8 }, 0..) |width, case| {
+        var actual: [8]state.Cache = undefined;
+        var expected: [8]state.Cache = undefined;
+        var caches: [8]*state.Cache = undefined;
+        var ids: [8]u32 = undefined;
         var made: usize = 0;
         defer for (0..made) |i| { actual[i].deinit(); expected[i].deinit(); };
         for (0..width) |i| {
@@ -98,7 +98,7 @@ test "batched independent cache steps match decode" {
                     try prefill.prefillWant(m, &ps, &actual[i], prompt[0..take], .none);
                     at += take;
                 }
-            } else try prefill.prefillWant(m, &ps, &actual[i], prompt[0 .. 4 + i], .none);
+            } else try prefill.prefillWant(m, &ps, &actual[i], prompt[0..@min(4 + i, prompt.len)], .none);
             try copyCache(m, &actual[i], &expected[i]);
             ids[i] = @intCast(150 + i);
         }

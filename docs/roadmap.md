@@ -290,6 +290,19 @@ The owner made the first two decisions on 2026-11-21:
     A variant that passes becomes the default; the exact path stays selectable. Weight requantization and KV
     compression are still separate experimental configurations under Decision 10.
 
+20. **Delegated: prefill chunk schedules (2026-11-24).** Prefill bytes depend on chunk boundaries: on main's
+    runner, one 1,024-row chunk against 896+128 rows of the same held-out code prompt gives no bit-equal row,
+    99.32% top-1, mean KL 0.0036 and max |Δlogit| 14.4 (P5c). Main's own reuse-on and reuse-off schedules already
+    differ this way, so no schedule is privileged. A change of chunk schedule passes when:
+    - against the oMLX oracle, mean KL is within 1.10× main's and top-1 is at most 0.5 points below main's (adding a
+      comparison at the served chunk size if it differs from the gate's 512);
+    - lane-vs-main top-1 at margin ≥ 0.1, mean KL and max |Δlogit| are reported beside main's reuse-on vs reuse-off
+      spread;
+    - quality dev loses at most one case, every lost case examined, with no new runaway to the 8,192 cap.
+
+    Bound: exact replay still holds inside one schedule (a repeated prompt, a store hit and a fork restore the state
+    the chunk computed byte for byte).
+
 ### Baseline
 
 [campaign/baseline.md](../campaign/baseline.md) holds the frozen binary's sha256, the loop timings and every known red test. In brief, for `fa13df5d` built with Zig 0.17.1:

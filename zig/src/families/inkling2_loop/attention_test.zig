@@ -807,20 +807,24 @@ test "gathered expert projections keep the per-slot kernels' bytes" {
     for (&outs) |*o| o.* = try device.buffer(most * h * 4, mtl.ResourceOptions.shared);
     defer for (outs) |o| o.deinit();
     var checked: usize = 0;
-    for (2..9) |rows| {
+    for (0..17) |case| {
+        const rows = case % 8 + 1;
         const slots = rows * topk;
         const ps = picks.slice(i32, most);
         for (0..rows) |r| {
             var order: [experts]i32 = undefined;
             for (&order, 0..) |*o, i| o.* = @intCast(i);
-            rng.shuffle(i32, &order);
+            if (case < 8) rng.shuffle(i32, &order);
             for (0..topk) |k| ps[r * topk + k] = order[k];
         }
         for ([_]bool{ true, false }) |up| {
             const args = if (up) MoeArgs{ .k = h, .n = inter, .slots = @intCast(slots), .topk = topk, .gate_cap = 30, .up_cap = 20 } else MoeArgs{ .k = inter, .n = h, .slots = @intCast(slots), .topk = topk, .gate_cap = 0, .up_cap = 0 };
+            const gathered = (if (up) shared.gateUp(rows, inter, h, @intCast(slots)) else shared.downs(rows, h, inter, @intCast(slots))) orelse {
+                if (up and rows == 1) continue;
+                return error.TestUnexpectedResult;
+            };
             const cb = queue.commandBuffer();
             const enc = cb.compute(.serial);
-            const gathered = if (up) shared.gateUp(rows, inter, h, @intCast(slots)).? else shared.downs(rows, h, inter, @intCast(slots)).?;
             for (0..2) |side| {
                 enc.setPipeline(if (side == 1) gathered.pipe else if (up) gu else down);
                 enc.setBuffer(if (up) x else act, 0, 0);

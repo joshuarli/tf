@@ -48,8 +48,9 @@ pub fn run(gpa: std.mem.Allocator, m: *inkling.Model, reps: usize, picks_path: ?
     const local = localLayer(m, 0);
     var total: usize = 0;
     for ([_]usize{ local.attn.q.shape[0], local.attn.k.shape[0], local.attn.v.shape[0], local.attn.r.shape[0], local.attn.gate.shape[0], local.attn.sink.shape[0] }) |n| total += n;
-    for ([_]u32{ 2, 4, 8 }) |rows| for ([_]Kind{ .head, .oproj, .proj, .gate_up, .down }) |kind| {
+    for ([_]u32{ 1, 2, 3, 4, 8 }) |rows| for ([_]Kind{ .head, .oproj, .proj, .gate_up, .down }) |kind| {
         const slots = rows * text.topk;
+        const ms: [8]u32 = .{ @intCast(local.attn.q.shape[0]), @intCast(local.attn.k.shape[0]), @intCast(local.attn.v.shape[0]), @intCast(local.attn.r.shape[0]), @intCast(local.attn.gate.shape[0]), @intCast(local.attn.sink.shape[0]), 0, 0 };
         const one: Case = switch (kind) {
             .head => .{ .pipe = affine.dense, .groups = mtl.Size.of((vocab + 7) / 8, rows, 1), .threads = mtl.Size.of(256, 1, 1) },
             .oproj => .{ .pipe = affine.dense, .groups = mtl.Size.of((text.hidden + 7) / 8, rows, 1), .threads = mtl.Size.of(256, 1, 1) },
@@ -60,7 +61,7 @@ pub fn run(gpa: std.mem.Allocator, m: *inkling.Model, reps: usize, picks_path: ?
         const d = switch (kind) {
             .head => shared.dense(rows, text.unpadded_vocab, text.hidden, 8),
             .oproj => shared.dense(rows, text.hidden, @intCast(local.attn.o.shape[1]), 8),
-            .proj => shared.fused(rows, total, text.hidden),
+            .proj => shared.fused(rows, ms, text.hidden),
             .gate_up => shared.gateUp(rows, text.expert_inter, text.hidden, slots),
             .down => shared.downs(rows, text.hidden, text.expert_inter, slots),
         };

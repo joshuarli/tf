@@ -149,7 +149,7 @@ pub const Draft = struct {
         return total + d.lanes.len * (d.config.window - 1) * d.stride();
     }
 
-    pub fn stride(d: *const Draft) usize {
+    fn stride(d: *const Draft) usize {
         return @as(usize, d.config.tapWidth()) * 2;
     }
 
@@ -169,7 +169,7 @@ pub const Draft = struct {
         return d.lanes[lane].kept;
     }
 
-    pub fn fail(d: *Draft, err: anyerror) void {
+    fn fail(d: *Draft, err: anyerror) void {
         if (!d.failed) std.log.err("inkling2_loop: the DFlash2 drafter failed ({s}); every reply now decodes without it", .{@errorName(err)});
         d.failed = true;
     }
@@ -295,7 +295,7 @@ pub const Draft = struct {
     }
 };
 
-pub fn admit(a: Allocator, io: std.Io, target: *const inkling.Model, dir: []const u8) !cfg.Config {
+fn admit(a: Allocator, io: std.Io, target: *const inkling.Model, dir: []const u8) !cfg.Config {
     const path = try std.fs.path.join(a, &.{ dir, "config.json" });
     defer a.free(path);
     const text = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(1 << 20));
@@ -303,7 +303,7 @@ pub fn admit(a: Allocator, io: std.Io, target: *const inkling.Model, dir: []cons
     return bind(try cfg.parse(a, text), &target.config);
 }
 
-pub fn bind(parsed: cfg.Config, t: *const inkling.config.Config) !cfg.Config {
+fn bind(parsed: cfg.Config, t: *const inkling.config.Config) !cfg.Config {
     if (t.checkpoint != .mlx) return error.InklingDFlash2NeedsAffineHead;
     var c = parsed;
     try c.bind(t.text.hidden, t.text.vocab, t.slots());
@@ -334,7 +334,7 @@ fn hostTensor(t: tf.checkpoint.Tensor) ck.Tensor {
     return .{ .dtype = t.dtype, .rank = @intCast(t.rank), .shape = shape, .bytes = t.buffer.contents()[t.offset..][0..t.bytes] };
 }
 
-pub fn now() u64 {
+fn now() u64 {
     var ts: std.c.timespec = undefined;
     _ = std.c.clock_gettime(.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));

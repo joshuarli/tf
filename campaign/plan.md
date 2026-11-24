@@ -2,12 +2,13 @@
 
 ## Status
 
-**Paused 2026-11-23.**
+**Active 2026-11-23.**
 - Resume prompt: "Resume the Inkling frontier campaign (Decision 16) from `campaign/plan.md` **Status**."
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
-- **Last accepted revision: `61d62b6a1`, green.** Passing: `evidence-tests`, `inkling-host`, `zig build native` and the `inkling-omlx-oracle` report (mean KL 0.0195). `inkling-gpu` last passed at `4c2af5d2a`; since then Zig and Metal changed only in comments.
+- **Last accepted code: P3c, merge `d7e4b0f70`, green.** Passing there: `evidence-controls`, `inkling-host` (35 tests), `inkling-gpu` (97 tests), `zig build native` and the `inkling-omlx-oracle` report (mean KL 0.0195 at chunk 512, 0.0192 at the served 1,024). Receipt: `campaign/kernels/inkling-cold-prefill.md`.
+- **Open from P3c:** `code-c02` now falls into a repeatable reasoning loop, and oQ4e quality dev is 7/11 (base 6/11), below the fast profile's 8-case bar. Mean TTFT at four agents rose on the warm repetition; the cause is not traced.
 - **Parked branches** (all on `origin`), with item, cause and retry:
-  - `lane/p3c-prefill`: cold prefill on TensorOps with chunk 1,024. Through `997eb064a`, the suite is green and gated single screens give 4K 591 → 1,603 tok/s. The 3-pair matrix and the sweeps never ran, and `f0ff849e6` is wip. Retry: the matrix in its receipt, then the 2- and 4-agent sweeps, then integrate through `997eb064a`.
+  - `lane/p3c-prefill` at `f0ff849e6`: commits the prefill scratch at setup. Two 1K pairs are inconclusive and it has not run the suite. Retry: the suite, then three first-pass pairs at 1K.
   - `lane/d2-attn`: decode attention plus five batch kernels, byte-equal to what they replace; the attention microbenchmark went 4.0 → 1.3 ms per step. Step timing never ran, because outside CPU load deferred the gates. Retry: the `batchbench` pairs in `inkling-decode-step.md`.
   - `lane/m1-mtp`: greedy-exact MTP serving, suite green at `dc7a4dba3`, but negligible gain: proposals take 10–14 ms and one-row verification 20–23 ms. `2cd5f9561` is wip. Retry after D2 makes few-row verification cheaper, with corrected sweeps for MTP on, off and paused. The earlier drafter, `lane/ds1-dspark-drafter` (16.7 / 29.7 ms per round), is superseded by it.
   - `lane/q2-reasoning-replay`: the reasoning-replay quality harness. It never ran because of the GPU queue. Retry: about 2 h on a quiet GPU.
@@ -15,7 +16,7 @@
   - Rejected and kept for reference: `b1f-interleave` (retry only with staggered arrivals), `s1-skip-logits` (token-buffer race), `e2-prefill-experts2`, `e3-expert-tensorops`, `m1-bf16-prefill` and `p6-prefill-gemm2`. Their receipts are in `campaign/kernels/`.
   - Old wip records: `c0-ground`, `k2-inkling-experts`.
 - **Next slice:**
-  1. Qualify and integrate P3c, then D2.
+  1. Qualify and integrate D2.
   2. B2: corrected baselines at 1/2/4/8 agents, cold and warm. Measure llama.cpp upstream and its best Inkling stack first, since they likely set the T3 bar. Then measure oMLX with MTP off and on.
   3. R1: the source map and ledger, per `frontier-brief.md`.
 

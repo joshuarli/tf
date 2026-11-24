@@ -1,6 +1,6 @@
 # Inkling oQ4e cold prefill
 
-Lane P3c, base `4c2af5d2a`, M5 Max 48 GiB, Inkling 2 Mini oQ4e `3eea042751cd`, greedy. The routed experts, tiled attention and staged projections of chunks over eight rows now run on the M5 tensor units, prefill chunks may exceed the local window, and the served chunk is 1,024 rows. The campaign wound down before the interleaved three-pair matrix and the served sweeps ran, so the target is not established: in gated single screens the 4,096-token prompt ran 1,602.9 tok/s on the first `bench` pass (base 590.6) and 1,705.9 on a later pass (base 534.5), while the 1,024-token prompt ran 1,970.7 tok/s on a later pass (base 681.9) but only 487.9–986.9 on first passes, which carry 0.15–2.2 s of host-dependent one-time cost. The suite and the native build pass on the last code commit, `997eb064a`.
+Lane P3c, base `4c2af5d2a`, M5 Max 48 GiB, Inkling 2 Mini oQ4e `3eea042751cd`, greedy. The routed experts, tiled attention and staged projections of chunks over eight rows now run on the M5 tensor units, prefill chunks may exceed the local window, and the served chunk is 1,024 rows. The change is integrated through `997eb064a`. With weights already resident, prefill runs 2.9× the base at 1K, 3.3× at 4K and 3.1× at 8K. A process's first prefill gains 2.0× at 4K; at 1K, two of three pairs show no gain because one-time cost dominates. Decode and batch timing are unchanged. Served 2- and 4-agent aggregate throughput rose 5–41%. Quality dev is 7/11 against the base's 6/11, with one new deterministic reasoning loop on `code-c02`; Pi is 7/8 on both.
 
 ## P3c: tensor-unit prefill
 
@@ -107,22 +107,56 @@ Screen of all six commits (`.work/tmp/screen3.out`, candidate `.work/tmp/cand-b`
 
 At 4K the candidate clears 1,050 tok/s in every pass at every chunk tried (2.7× the base's first pass at the served chunk of 1,024). At 1K its later passes run 2.9× the base's (1,971 against 682), but its first passes (488 and 987) are inside the one-time cost described above, and this table holds one run a cell. The decode medians after prefill decode different tokens on each side (the candidate's prefill rounds differently, so its argmax sequence and expert routing differ) and are not a like-for-like decode comparison; decode and batch kernels are unchanged by these commits (rows ≤ 8 take the same code), but `batchbench` pairs were not run.
 
-The exact next step is the prepared matrix on `997eb064a`, then the served sweeps on its native build:
+### Interleaved matrix
 
-```sh
-python3 campaign/heavy.py -- .work/tmp/screen4.sh .work/tmp/matrix.list .work/tmp/matrix.out
-python3 .work/tmp/matrix_tables.py
-PATH="$PWD/.work/tmp/gates:/opt/homebrew/bin:$PATH" INKLING_MODEL="$HOME/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd" \
-  sh campaign/fx/sweep-subagents.sh 2 4096
-PATH="$PWD/.work/tmp/gates:/opt/homebrew/bin:$PATH" INKLING_MODEL="$HOME/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd" \
-  sh campaign/fx/sweep-subagents.sh 4 4096
-```
+Every run used the gated wrapper from [the f16 KV timing procedure](inkling-f16-kv.md#timing-procedure) with `PERF_GATE_MAX_BUSY_CORES=4`; gate refusals were retried and never counted. The base is `4c2af5d2a` plus the `bench` option from `ec9b5b990`, at chunk 512 (`bench 32 4 512 2`). The candidate is `997eb064a` at chunk 1,024 (`bench 32 4 1024 2`). Pair order was base/candidate, candidate/base, base/candidate. "First" is the process's first prefill and "repeat" is the second, from an empty cache with the weights resident. An identical-build control at 4K differed by 2.7% on first passes and 2.4% on repeats.
 
-`.work/tmp/matrix.list` holds an identical-build control pair, three base/candidate, candidate/base, base/candidate pairs at 1K and 4K (`bench 32 4 512 2` against `bench 32 4 1024 2`), one 8K pair, three pairs each of `batchbench 1 5` and `batchbench 4 5` on the 2,500-ID fixture, and two pairs comparing the scratch-commit work in progress (the `wip:` commit) with `997eb064a` at 1K.
+| Prefill, tok/s | Base | Candidate | Gain per pair |
+| --- | --- | --- | --- |
+| 1K first | 256.9, 446.3, 534.0 | 432.2, 429.3, 524.9 | 1.68, 0.96, 0.98 |
+| 1K repeat | 692.4, 692.8, 694.2 | 1,994.9, 1,995.5, 1,995.1 | 2.88, 2.88, 2.87 |
+| 4K first | 594.6, 587.2, 563.7 | 1,521.2, 1,034.0, 992.3 | 2.56, 1.76, 1.76 |
+| 4K repeat | 620.4, 566.2, 542.4 | 1,911.0, 1,829.4, 1,913.2 | 3.08, 3.23, 3.53 |
+| 8K first (one pair) | 523.0 | 1,328.2 | 2.54 |
+| 8K repeat (one pair) | 535.8 | 1,651.3 | 3.08 |
+
+Batch decode on the 2,500-ID fixture is unchanged: `batchbench 1 5` medians were 19.916, 19.659, 19.670 ms on the base and 19.803, 19.759, 19.697 on the candidate, and `batchbench 4 5` were 39.823, 39.938, 40.042 and 39.848, 40.310, 39.614. Peak charged memory was at most 20.4 GB on the base and 19.3 GB on the candidate.
+
+The scratch-commit work in progress (`f0ff849e6`) is not integrated. Against `997eb064a` at 1K over two pairs, its first pass ran 1,113.8 and 1,187.6 tok/s against 491.2 and 1,075.3, and its repeat pass was equal. Two pairs with that spread do not establish a gain, and the commit has not run the test suite.
 
 ### Served sweeps
 
-Not run. The two- and four-agent sweeps were queued behind the GPU lock for the native build of `997eb064a` (`zig-out/native/bin/tensorfold-native`, 22,011,616 bytes) and were cancelled before their servers started when the campaign wound down. The next step above runs them.
+The sweeps ran `campaign/fx/sweep-subagents.sh` at 4,096 context on oQ4e, in the order base 2, candidate 2, candidate 4, base 4, one gated run a cell with no identical-build control. The base is main `8e07fdb6f`; the candidate is that tree with this lane merged. Both use the corrected reasoning-replay clients from `69651393c`, which the lane's own base predates, so the sweep must run from a merged tree.
+
+| Agents | Repetition | Base tok/s | Candidate tok/s | Gain | Base peak GB | Candidate peak GB |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2 | 1 | 36.18 | 50.52 | 1.40 | 20.91 | 20.59 |
+| 2 | 2 | 64.62 | 67.86 | 1.05 | 20.91 | 20.59 |
+| 4 | 1 | 40.65 | 57.48 | 1.41 | 21.92 | 21.60 |
+| 4 | 2 | 54.83 | 58.74 | 1.07 | 21.92 | 21.60 |
+
+Concurrent replies equalled their solo and serial replies at 1, 2 and 4 streams on both builds. The two builds generate different tokens (552 and 540 at two agents, 1,113 and 1,087 at four), so these rates are not identical work.
+
+Mean time to first token at four agents fell from 2,577 to 1,510 ms on repetition 1 and rose from 1,099 to 1,209 ms on repetition 2, where turn 2 reaches about 1,255 ms for all four agents against 516–902 ms on the base. Server-side service time still fell for every prefill size (for 90–119 uncached tokens, the median went from 436 to 310 ms), so the rise is in how requests overlap. Its cause is not traced.
+
+### Fidelity and quality
+
+These compare the merged tree with the pinned oMLX oracle over 3,015 positions. Fidelity is reported and does not gate.
+
+| Capture | Top-1 | Mean KL | Max KL |
+| --- | ---: | ---: | ---: |
+| Base, chunk 512 | 2,861 (94.89%) | 0.01951 | 8.01 |
+| Candidate, chunk 512 | 2,863 (94.96%) | 0.01950 | 14.25 |
+| Candidate, served chunk 1,024 | 2,858 (94.79%) | 0.01917 | 9.70 |
+
+On the oQ4e quality dev set the base scores 6/11 and the candidate 7/11. The candidate gains `retrieval-t01` and `retrieval-t02`, which the base runs to the 8,192-token limit, and loses `code-c02`. The three structured cases are refused on both builds and `retrieval-t05` exceeds the context cap. Neither build reaches the 8-case bar set for the fast profile, and `quality-qualify` refuses both runs because of the refused and excluded cases. Pi scores 7/8 on both builds with no parse errors; `read-and-answer` fails on both.
+
+The lost case is a repeatable model loop, not a crash. On `code-c02` the candidate's reasoning first differs from the base's 127 characters in, and two fresh servers then produced byte-identical output that ends in a 37-character cycle covering 10,323 of its 14,986 characters until the token limit. Decode kernels are unchanged, so the difference enters through prefill rounding.
+
+```sh
+make -C campaign quality-inkling2-mini-oq4e SET=dev BASELINE_WT="$TREE" BIN="$TREE/zig-out/native/bin/tensorfold-native"
+make -C campaign pi-harness-inkling2-mini-oq4e BIN="$TREE/zig-out/native/bin/tensorfold-native"
+```
 
 ### Verification on `997eb064a`
 

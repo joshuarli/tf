@@ -128,28 +128,56 @@ pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.B
     b.step("test-inkling2-loop-affine", "Compare affine dense and expert kernels with float64").dependOn(&affine_run.step);
     step.dependOn(&affine_run.step);
     test_step.dependOn(&affine_run.step);
-    const dflash_test = b.addTest(.{ .root_module = dflashModule(b, target, "zig/src/families/inkling2_loop/dflash_test.zig") });
+    const draft = draftEngine(b, target);
+    const dflash_test = b.addTest(.{ .root_module = dflashModule(b, target, draft, "zig/src/families/inkling2_loop/dflash_test.zig") });
     compile.dependOn(&dflash_test.step);
     const dflash_run = b.addRunArtifact(dflash_test);
     dflash_run.has_side_effects = true;
     b.step("test-inkling2-loop-dflash2", "Inkling 2 Mini's DFlash2 drafter: config refusals and greedy speculation against plain decoding").dependOn(&dflash_run.step);
     step.dependOn(&dflash_run.step);
     test_step.dependOn(&dflash_run.step);
+    const served_test = b.addTest(.{ .root_module = servedModule(b, target, draft), .filters = &.{ "inkling served speculation:", "the registry's open", "drafter bits", "copy drafts", "prefix reuse defaults", "a bad INKLING_LOAD_LIMIT_GB", "inkling host:" } });
+    compile.dependOn(&served_test.step);
+    const served_run = b.addRunArtifact(served_test);
+    served_run.has_side_effects = true;
+    b.step("test-inkling2-loop-served", "Inkling 2 Mini's served host with its DFlash2 drafter: replies equal draft-off replies").dependOn(&served_run.step);
+    step.dependOn(&served_run.step);
+    test_step.dependOn(&served_run.step);
 }
 
+const DraftEngine = struct { metal: *std.Build.Module, engine: *std.Build.Module, lanes: *std.Build.Module };
+
 /// The DFlash2 drafter reads the shared `qwen27/dflash` runtime, so its tests import the engine, not the family.
-fn dflashModule(b: *std.Build, target: std.Build.ResolvedTarget, root: []const u8) *std.Build.Module {
+fn draftEngine(b: *std.Build, target: std.Build.ResolvedTarget) DraftEngine {
     const ids = b.addWriteFiles();
     _ = ids.addCopyFile(b.path("zig/src/families/nemotron/draft_ids.txt"), "draft_ids.txt");
     const draft_ids = b.createModule(.{ .root_source_file = ids.add("draft_ids.zig", "pub const text = @embedFile(\"draft_ids.txt\");\n") });
     const mods = @import("metal_targets.zig").metalEngineModules(b, target, .fast, draft_ids);
     mods.sources.addAnonymousImport("nemotron_packed_metallib", .{ .root_source_file = b.addWriteFiles().add("inkling-dflash2-unused.zig", "pub const bytes = \"\";\n") });
+    return .{ .metal = mods.metal, .engine = mods.engine, .lanes = mods.lanes };
+}
+
+fn dflashModule(b: *std.Build, target: std.Build.ResolvedTarget, draft: DraftEngine, root: []const u8) *std.Build.Module {
     return b.createModule(.{
         .root_source_file = b.path(root),
         .target = target,
         .optimize = .fast,
         .link_libc = true,
-        .imports = &.{ .{ .name = "metal", .module = mods.metal }, .{ .name = "tensorfold", .module = mods.engine } },
+        .imports = &.{ .{ .name = "metal", .module = draft.metal }, .{ .name = "tensorfold", .module = draft.engine } },
+    });
+}
+
+fn servedModule(b: *std.Build, target: std.Build.ResolvedTarget, draft: DraftEngine) *std.Build.Module {
+    const api = b.createModule(.{ .root_source_file = b.path("zig/src/core/engine_api.zig"), .target = target, .optimize = .fast, .link_libc = true, .imports = &.{.{ .name = "lanes", .module = draft.lanes }} });
+    const fixtures = b.addWriteFiles();
+    _ = fixtures.addCopyFile(b.path("zig/src/families/inkling2_loop/fixtures/prompts.json"), "prompts.json");
+    const prompts = b.createModule(.{ .root_source_file = fixtures.add("inkling_prompts.zig", "pub const text = @embedFile(\"prompts.json\");\n") });
+    return b.createModule(.{
+        .root_source_file = b.path("zig/src/native/inkling2_loop_spec_test.zig"),
+        .target = target,
+        .optimize = .fast,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "metal", .module = draft.metal }, .{ .name = "tensorfold", .module = draft.engine }, .{ .name = "engine_api", .module = api }, .{ .name = "inkling_prompts", .module = prompts } },
     });
 }
 

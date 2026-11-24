@@ -4,6 +4,7 @@ const api = @import("engine_api");
 const tf = @import("tensorfold");
 const inkling = tf.inkling2_loop;
 const host_mod = @import("inkling2_loop_host.zig");
+const spec = @import("inkling2_loop_spec.zig");
 
 pub const model_type = inkling.model_type;
 pub const formats = inkling.formats;
@@ -16,6 +17,13 @@ fn copyDrafts(text: ?[]const u8) error{BadCopyDrafts}!bool {
     if (std.mem.eql(u8, value, "0")) return false;
     if (std.mem.eql(u8, value, "1")) return true;
     return error.BadCopyDrafts;
+}
+
+fn drafterBits(text: ?[]const u8) error{BadDrafterBits}!u8 {
+    const value = text orelse return 4;
+    if (std.mem.eql(u8, value, "4")) return 4;
+    if (std.mem.eql(u8, value, "0")) return 0;
+    return error.BadDrafterBits;
 }
 
 fn prefixReuse(text: ?[]const u8) error{BadPrefixReuse}!bool {
@@ -58,9 +66,16 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
         return null;
     }
     if (o.drafts and o.drafter != null) {
-        problem.* = "Inkling 2 Mini has no served drafter in this campaign (its mtp.safetensors head is not wired); run mode ar";
+        problem.* = "Inkling 2 Mini serves its DFlash2 drafter from INKLING_DRAFTER, not --drafter";
         return null;
     }
+    const drafter_env: ?[]const u8 = if (std.c.getenv("INKLING_DRAFTER")) |v| std.mem.span(v) else null;
+    const drafter: ?[]const u8 = if (drafter_env) |dir| (if (o.drafts and dir.len > 0) dir else null) else null;
+    const bits_env: ?[]const u8 = if (std.c.getenv("INKLING_DRAFTER_BITS")) |v| std.mem.span(v) else null;
+    const bits = drafterBits(bits_env) catch {
+        problem.* = "INKLING_DRAFTER_BITS must be 4 (prepared q4) or 0 (bf16)";
+        return null;
+    };
     const profile_env: ?[]const u8 = if (std.c.getenv("INKLING_PROFILE")) |v| std.mem.span(v) else null;
     _ = inkling.profile(profile_env) catch {
         problem.* = "INKLING_PROFILE must be f32 or fast";
@@ -128,32 +143,43 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
         problem.* = "--parallel must be between 1 and 8";
         return null;
     }
+    const draft: ?*spec.Draft = if (drafter) |dir| spec.Draft.open(gpa, io, m, dir, bits, count, inkling.default_chunk) catch |err| {
+        problem.* = try std.fmt.allocPrint(a, "INKLING_DRAFTER: the DFlash2 drafter in {s} cannot serve this checkpoint ({s})", .{ dir, @errorName(err) });
+        m.deinit();
+        return null;
+    } else null;
+    errdefer if (draft) |d| d.deinit();
+    const drafted: u64 = if (draft) |d| try d.bytes() else 0;
     const rollback: u64 = if (prefix_reuse) count *| inkling.Cache.rollbackBytes(&m.config, rollback_rows) else 0;
     const forks: u64 = if (prefix_reuse) count *| ((fork_window + fork_interval - 1) / fork_interval) *| inkling.Cache.rollbackBytes(&m.config, fork_window) else 0;
     const gib = o.prompt_cache_gib orelse 2;
     if (!std.math.isFinite(gib) or gib < 0 or gib > 1024) {
+        if (draft) |d| d.deinit();
         m.deinit();
         problem.* = "--prompt-cache-gib must be between 0 and 1024";
         return null;
     }
     const store_budget: u64 = if (prefix_reuse) @intFromFloat(gib * (1 << 30)) else 0;
-    const budget = if (limit > resident +| load_margin +| rollback +| forks +| store_budget) limit - resident - load_margin - rollback - forks - store_budget else 0;
+    const budget = if (limit > resident +| load_margin +| rollback +| forks +| store_budget +| drafted) limit - resident - load_margin - rollback - forks - store_budget - drafted else 0;
     const most: usize = m.config.text.max_context;
     const fits = inkling.Cache.longestFitting(&m.config, budget / count, most);
     const window: i64 = o.context orelse @intCast(fits);
     if (window < 1 or window > fits) {
         const requested: u64 = if (window > 0) @intCast(window) else 0;
-        const total = resident +| load_margin +| rollback +| forks +| store_budget +| (count *| (inkling.Cache.fixedBytes(&m.config) +| (requested *| inkling.Cache.bytesPerToken(&m.config))));
+        const total = resident +| load_margin +| rollback +| forks +| store_budget +| drafted +| (count *| (inkling.Cache.fixedBytes(&m.config) +| (requested *| inkling.Cache.bytesPerToken(&m.config))));
         problem.* = try std.fmt.allocPrint(a, "--parallel {d} --context {d}: Inkling needs {d} bytes including caches and reserves under a {d}-byte load limit; each session fits at most {d} tokens", .{ count, window, total, limit, fits });
+        if (draft) |d| d.deinit();
         m.deinit();
         return null;
     }
     const per_slot = inkling.Cache.fixedBytes(&m.config) + @as(usize, @intCast(window)) * inkling.Cache.bytesPerToken(&m.config);
     std.log.info("inkling2_loop: {d} session caches, {d:.3} GiB per slot, {d:.3} GiB total rollback, context {d}", .{ count, @as(f64, @floatFromInt(per_slot)) / (1 << 30), @as(f64, @floatFromInt(rollback)) / (1 << 30), window });
+    if (draft != null) std.log.info("inkling2_loop: DFlash2 drafter {s}, {s}, {d:.3} GiB with {d} lane contexts; greedy speculation while one lane decodes", .{ drafter.?, if (bits == 4) "prepared q4" else "bf16", @as(f64, @floatFromInt(drafted)) / (1 << 30), count });
     const eos = readEos(a, io, o.dir, m.config.eos);
-    const h = host_mod.openHost(gpa, io, m, @intCast(window), count, eos, limit, copy_drafts, prefix_reuse, rollback_rows, fork_window, fork_interval, store_budget) catch |err| {
-        m.deinit();
+    const h = host_mod.openHost(gpa, io, m, @intCast(window), count, eos, limit, copy_drafts, prefix_reuse, rollback_rows, fork_window, fork_interval, store_budget, draft) catch |err| {
         problem.* = try std.fmt.allocPrint(a, "the native Inkling 2 Mini engine cannot hold {d} sessions of {d} tokens ({s})", .{ count, window, @errorName(err) });
+        if (draft) |d| d.deinit();
+        m.deinit();
         return null;
     };
     return .{ .engine = h.engine(), .close = host_mod.closeHost, .ctx = h };
@@ -166,11 +192,18 @@ test "the registry's open refuses --vision by name before any weight is read" {
     try std.testing.expectEqualStrings(tf.inkling2_loop_refuse.vision, problem);
 }
 
-test "the registry's open refuses a drafter by name before any weight is read" {
+test "the registry's open refuses --drafter by name before any weight is read" {
     var problem: []const u8 = "";
     const o = api.Open{ .dir = "no-weights", .model_type = "inkling2_loop", .drafter = "no-head" };
     try std.testing.expectEqual(null, try open(std.testing.allocator, std.testing.allocator, std.testing.io, o, &problem));
-    try std.testing.expect(std.mem.indexOf(u8, problem, "no served drafter") != null);
+    try std.testing.expect(std.mem.indexOf(u8, problem, "INKLING_DRAFTER") != null);
+}
+
+test "drafter bits default to prepared q4 and take only 4 or 0" {
+    try std.testing.expectEqual(@as(u8, 4), try drafterBits(null));
+    try std.testing.expectEqual(@as(u8, 4), try drafterBits("4"));
+    try std.testing.expectEqual(@as(u8, 0), try drafterBits("0"));
+    try std.testing.expectError(error.BadDrafterBits, drafterBits("8"));
 }
 
 test "a bad INKLING_LOAD_LIMIT_GB names the variable" {

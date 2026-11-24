@@ -5,6 +5,7 @@ const tf = @import("tensorfold");
 const inkling = tf.inkling2_loop;
 const cache_fit = @import("cache_fit.zig");
 const prefix = @import("inkling2_loop_prefix.zig");
+const spec = @import("inkling2_loop_spec.zig");
 const Allocator = std.mem.Allocator;
 
 const Job = struct {
@@ -19,6 +20,13 @@ const Job = struct {
     rounds: u64 = 0,
     reused: usize = 0,
     saved: bool = false,
+    spec_rounds: u64 = 0,
+    drafted: u64 = 0,
+    accepted: u64 = 0,
+    min_rows: u32 = 0,
+    draft_ns: u64 = 0,
+    verify_ns: u64 = 0,
+    commit_ns: u64 = 0,
 };
 
 pub const sampling_refusal = "Inkling 2 Mini decodes greedily only: send temperature 0 or leave it out";
@@ -47,6 +55,7 @@ const Entry = struct {
     cache: inkling.Cache,
     bytes: u64,
     last_used: u64,
+    taps: spec.Rows = .{},
 };
 
 pub const Host = struct {
@@ -80,6 +89,7 @@ pub const Host = struct {
     prefill_rate: f64 = 0,
     prefill_at: i96 = 0,
     prefilling: bool = false,
+    draft: ?*spec.Draft = null,
     const Mark = struct { at: i96, tokens: u64 };
     const window_ns: i96 = 2 * std.time.ns_per_s;
 
@@ -109,6 +119,7 @@ pub const Host = struct {
         for (h.entries.items) |*entry| {
             entry.cache.deinit();
             h.gpa.free(entry.tokens);
+            entry.taps.deinit(h.gpa);
         }
         h.entries.deinit(h.gpa);
         for (h.slots) |*slot| {
@@ -120,6 +131,7 @@ pub const Host = struct {
         h.gpa.free(h.slots);
         h.batch.deinit();
         h.gpa.free(h.batch_logits);
+        if (h.draft) |d| d.deinit();
     }
     fn self(ctx: *anyopaque) *Host {
         return @ptrCast(@alignCast(ctx));
@@ -295,7 +307,10 @@ pub const Host = struct {
             }
         }
         std.debug.print("inkling prefix: reused {d} of {d} prompt tokens\n", .{ job.reused, job.request.prompt.len });
-        const stats: api.Stats = .{ .rounds = job.rounds, .drafted = 0, .accepted = 0, .min_rows = 1, .prefill_seconds = job.prefill_seconds, .queued_seconds = @as(f64, @floatFromInt(@max(0, job.began - job.queued))) / 1e9 };
+        var line: [192]u8 = undefined;
+        const telemetry: []const u8 = if (job.spec_rounds == 0) "" else std.fmt.bufPrint(&line, "{{\"kind\":\"DFlash2\",\"rounds\":{d},\"draft_ms\":{d:.3},\"verify_ms\":{d:.3},\"commit_ms\":{d:.3}}}", .{ job.spec_rounds, ms(job.draft_ns), ms(job.verify_ns), ms(job.commit_ns) }) catch "";
+        const narrowest: u32 = if (job.min_rows == 0 or job.rounds > job.spec_rounds) 1 else job.min_rows;
+        const stats: api.Stats = .{ .rounds = job.rounds, .drafted = job.drafted, .accepted = job.accepted, .min_rows = narrowest, .prefill_seconds = job.prefill_seconds, .queued_seconds = @as(f64, @floatFromInt(@max(0, job.began - job.queued))) / 1e9, .telemetry_json = telemetry };
         h.lock();
         if (!restored) slot.points = @splat(0);
         prefix.release(slot, restored);
@@ -303,6 +318,14 @@ pub const Host = struct {
         h.unlock();
         _ = h.invalidated.swap(false, .acq_rel);
         h.finish(job, reason, stats, message);
+    }
+
+    fn ms(ns: u64) f64 {
+        return @as(f64, @floatFromInt(ns)) / 1e6;
+    }
+
+    fn lane(h: *const Host, slot: *const Slot) usize {
+        return (@intFromPtr(slot) - @intFromPtr(h.slots.ptr)) / @sizeOf(Slot);
     }
 
     fn argmax(logits: []const f32) u32 {
@@ -345,7 +368,8 @@ pub const Host = struct {
             h.entries.items[i].last_used = h.sequence;
             return;
         }
-        const bytes = inkling.Cache.fixedBytes(&h.model.config) +| slot.cache.len *| inkling.Cache.bytesPerToken(&h.model.config) +| tokens.len *| @sizeOf(u32);
+        const taps: usize = if (h.draft) |d| d.keepBytes(h.lane(slot), slot.cache.len) else 0;
+        const bytes = inkling.Cache.fixedBytes(&h.model.config) +| slot.cache.len *| inkling.Cache.bytesPerToken(&h.model.config) +| tokens.len *| @sizeOf(u32) +| taps;
         if (bytes > h.store_limit) return;
         while (prefix.eviction(h.entries.items, h.store_bytes, h.store_limit, bytes)) |i| {
             var old = h.entries.swapRemove(i);
@@ -353,13 +377,17 @@ pub const Host = struct {
             std.debug.print("inkling store: evict {d} tokens {d} bytes\n", .{ old.tokens.len, old.bytes });
             old.cache.deinit();
             h.gpa.free(old.tokens);
+            old.taps.deinit(h.gpa);
         }
         const ids = try h.gpa.dupe(u32, tokens);
         errdefer h.gpa.free(ids);
         var cache = try inkling.Cache.init(h.model.device, &h.model.config, slot.cache.len);
         errdefer cache.deinit();
         try cache.copyFrom(h.model.queue, &h.model.config, &slot.cache, slot.cache.len);
-        try h.entries.append(h.gpa, .{ .tokens = ids, .cache = cache, .bytes = bytes, .last_used = h.sequence });
+        var rows: spec.Rows = .{};
+        errdefer rows.deinit(h.gpa);
+        if (h.draft) |d| try d.keep(h.lane(slot), slot.cache.len, h.gpa, &rows);
+        try h.entries.append(h.gpa, .{ .tokens = ids, .cache = cache, .bytes = bytes, .last_used = h.sequence, .taps = rows });
         h.store_bytes += bytes;
         std.debug.print("inkling store: insert {d} tokens {d} bytes total {d}\n", .{ ids.len, bytes, h.store_bytes });
     }
@@ -395,6 +423,7 @@ pub const Host = struct {
             slot.resident.appendSliceAssumeCapacity(entry.tokens);
             job.reused = entry.tokens.len;
             entry.last_used = h.sequence;
+            if (h.draft) |d| d.restore(h.lane(slot), entry.taps, entry.tokens.len);
             std.debug.print("inkling store: hit {d} of {d} prompt tokens\n", .{ job.reused, r.prompt.len });
         } else if (fork) |f| {
             const source = &h.slots[f.source];
@@ -416,6 +445,7 @@ pub const Host = struct {
             slot.resident.clearRetainingCapacity();
             slot.resident.appendSliceAssumeCapacity(r.prompt[0..f.point]);
             job.reused = f.point;
+            if (h.draft) |d| d.restore(h.lane(slot), d.kept(f.source), f.point);
             h.store(slot) catch |e| {
                 h.retire(slot, .failed, @errorName(e));
                 return;
@@ -427,6 +457,9 @@ pub const Host = struct {
             slot.cache.len = 0;
             slot.resident.clearRetainingCapacity();
         }
+        if (h.draft) |d| if (hit == null and fork == null) {
+            if (job.reused > 0) d.restore(h.lane(slot), d.kept(h.lane(slot)), job.reused) else d.begin(h.lane(slot), 0);
+        };
         std.debug.print("inkling session: slot {d}\n", .{choice.index});
         const prefill_start = h.now();
         var at = job.reused;
@@ -458,7 +491,10 @@ pub const Host = struct {
             };
             const remaining = if (h.prefix_reuse and at < r.prompt.len - 1) r.prompt.len - 1 - at else r.prompt.len - at;
             const take = @min(h.prefill.chunk, @min(remaining, if (h.prefix_reuse and next > at) next - at else remaining));
-            inkling.prefillWant(h.model, &h.prefill, &slot.cache, r.prompt[at..][0..take], if (at + take == r.prompt.len) .last else .none) catch |e| {
+            h.prefill.taps = if (h.draft) |d| d.promptTaps() else null;
+            const filled = inkling.prefillWant(h.model, &h.prefill, &slot.cache, r.prompt[at..][0..take], if (at + take == r.prompt.len) .last else .none);
+            h.prefill.taps = null;
+            filled catch |e| {
                 if (e == error.HalfActivationOverflow and h.prefill.half) {
                     std.debug.print("inkling prefill: half activation overflow at {d} of {d} prompt tokens; refilling in f32\n", .{ at, r.prompt.len });
                     slot.cache.len = 0;
@@ -474,8 +510,13 @@ pub const Host = struct {
                 return;
             };
             slot.resident.appendSliceAssumeCapacity(r.prompt[at..][0..take]);
+            if (h.draft) |d| d.absorb(h.lane(slot), d.prompt.bytes(0, take), take);
             at += take;
         }
+        if (h.draft) |d| if (h.prefix_reuse) d.keepPrompt(h.lane(slot), slot.cache.len) catch |e| {
+            h.retire(slot, .failed, @errorName(e));
+            return;
+        };
         if (slot.rollback) |*rollback| {
             rollback.copyRows(h.model.queue, &h.model.config, &slot.cache, true, r.max_tokens -| 1) catch |e| {
                 h.retire(slot, .failed, @errorName(e));
@@ -563,21 +604,51 @@ pub const Host = struct {
                 }
             };
             if (count == 0) continue;
+            if (h.draft) |d| if (count == 1 and selected[0].job.?.request.drafts and d.ready(h.lane(selected[0]), selected[0].cache.len)) {
+                h.speculate(d, selected[0]);
+                continue;
+            };
             const vocab = h.model.config.text.unpadded_vocab;
-            inkling.batchStep(h.model, &h.batch, caches[0..count], ids[0..count], h.batch_logits[0 .. count * vocab]) catch |e| {
+            h.batch.rows.taps = if (h.draft) |d| d.stepTaps() else null;
+            const stepped = inkling.batchStep(h.model, &h.batch, caches[0..count], ids[0..count], h.batch_logits[0 .. count * vocab]);
+            h.batch.rows.taps = null;
+            stepped catch |e| {
                 for (selected[0..count]) |slot| h.retire(slot, .failed, @errorName(e));
                 continue;
             };
             for (selected[0..count], 0..) |slot, i| {
+                if (h.draft) |d| d.follow(h.lane(slot), i, slot.cache.len);
                 slot.job.?.rounds += 1;
                 if (h.cancelled(slot.job.?)) h.retire(slot, .cancelled, "") else h.token(slot, argmax(h.batch_logits[i * vocab ..][0..vocab]));
             }
         }
     }
 
+    fn speculate(h: *Host, d: *spec.Draft, slot: *Slot) void {
+        const job = slot.job.?;
+        const remaining = job.request.max_tokens - job.emitted.items.len;
+        const offered: u32 = @intCast(@min(@min(spec.depth, remaining - 1), (slot.cache.capacity -| slot.cache.len) -| 1));
+        const round = d.round(h.lane(slot), h.model, &h.batch, &slot.cache, job.emitted.items[job.emitted.items.len - 1], offered) catch |e| {
+            if (e != error.DrafterFailed) h.retire(slot, .failed, @errorName(e));
+            return;
+        };
+        job.rounds += 1;
+        job.spec_rounds += 1;
+        job.drafted += round.offered;
+        job.accepted += round.kept;
+        job.min_rows = if (job.min_rows == 0) round.offered + 1 else @min(job.min_rows, round.offered + 1);
+        job.draft_ns += round.draft_ns;
+        job.verify_ns += round.verify_ns;
+        job.commit_ns += round.commit_ns;
+        if (h.cancelled(job)) return h.retire(slot, .cancelled, "");
+        for (0..round.kept + 1) |j| {
+            h.token(slot, round.token(j));
+            if (slot.job != job) return;
+        }
+    }
 };
 
-pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usize, count: usize, eos: u32, load_limit: u64, copy_drafts: bool, prefix_reuse: bool, rollback_rows: usize, fork_window: usize, fork_interval: usize, store_limit: u64) !*Host {
+pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usize, count: usize, eos: u32, load_limit: u64, copy_drafts: bool, prefix_reuse: bool, rollback_rows: usize, fork_window: usize, fork_interval: usize, store_limit: u64, draft: ?*spec.Draft) !*Host {
     _ = copy_drafts;
     const h = try gpa.create(Host);
     errdefer gpa.destroy(h);
@@ -597,7 +668,7 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
             for (0..((fork_window + fork_interval - 1) / fork_interval)) |i| slot.snapshots[i] = try inkling.Cache.Rollback.initRows(model.device, &model.config, fork_window);
         }
     }
-    var batch = try inkling.BatchScratch.init(model.device, &model.config, count);
+    var batch = try inkling.BatchScratch.init(model.device, &model.config, if (draft != null) inkling.group.max_rows else count);
     errdefer batch.deinit();
     const batch_logits = try gpa.alloc(f32, count * model.config.text.unpadded_vocab);
     errdefer gpa.free(batch_logits);
@@ -618,6 +689,7 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
         .fork_window = fork_window,
         .fork_interval = fork_interval,
         .store_limit = store_limit,
+        .draft = draft,
         .info_ = .{
             .name = "inkling2-loop",
             .lanes = @intCast(count),
@@ -625,6 +697,7 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
             .context_fitted = true,
             .greedy_only = true,
             .reasoning = true,
+            .draft_sources = if (draft) |d| .{ .drafter = .{ .kind = "DFlash2", .name = d.name } } else .{},
             .vision = .{
                 .ctx = h,
                 .prepare = visionPrepare,
@@ -690,6 +763,7 @@ test "inkling scheduler: queued jobs, finish and cancellation leave other slots 
     h.prefilling = false;
     h.prefill_at = 0;
     h.prefill_rate = 0;
+    h.draft = null;
     defer {
         h.queued.deinit(h.gpa);
         h.cancels.deinit(h.gpa);

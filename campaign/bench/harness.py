@@ -47,8 +47,8 @@ MODEL_KEYS = {"flint": "flint-int4", "inkling2-mini": "inkling-2-mini", "inkling
 LOAD_LIMIT_VARS = {"flint-int4": "FLINT_LOAD_LIMIT_GB", **dict.fromkeys(INKLING_KEYS, "INKLING_LOAD_LIMIT_GB")}
 UNSUPPORTED_MODES = {
     key: {
-        "drafter": "Inkling 2 Mini has no served drafter in this campaign (its mtp.safetensors head is not wired); "
-                   "run mode ar",
+        "drafter": "bench.py's drafter mode passes Flint's --drafter, which Inkling 2 Mini refuses; its DFlash2 drafter "
+                   "serves from INKLING_DRAFTER (drafter_env): time it with campaign/kernels/inkling-sv1-serve-runs/run.py",
     }
     for key in INKLING_KEYS
 }
@@ -58,6 +58,8 @@ MODEL_SERVE_ARGS = {key: ["--temperature", "0"] for key in INKLING_KEYS}
 DEFAULT_SERVE_ARGS = {"flint-int4": [], **{key: ["--no-drafts"] for key in INKLING_KEYS}}
 # Inkling's copy drafts are opt-in through the environment, not a flag.
 COPY_DRAFT_ENV = {key: {"INKLING_COPY_DRAFTS": "1"} for key in INKLING_KEYS}
+# Inkling's DFlash2 drafter is named through the environment, not --drafter.
+DRAFTER_ENV = {key: ("INKLING_DRAFTER", "inkling-2-mini-dflash2", "Inkling-2-Mini-DFlash2") for key in INKLING_KEYS}
 
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
@@ -128,6 +130,17 @@ def drafter_path() -> Path | None:
         return None
     path = Path.home() / "models" / f"{REPO_NAMES[key]}@{entries[0]['version'][:12]}"
     return path if (path / "config.json").is_file() and (path / "model.safetensors").is_file() else None
+
+
+def drafter_env(key: str) -> dict[str, str]:
+    if key not in DRAFTER_ENV:
+        return {}
+    var, locked, repo = DRAFTER_ENV[key]
+    entries = [entry for entry in sources_lock()["inputs"] if entry["model"] == locked]
+    if not entries:
+        return {}
+    path = Path.home() / "models" / f"{repo}@{entries[0]['version'][:12]}"
+    return {var: str(path)} if (path / "config.json").is_file() and (path / "model.safetensors").is_file() else {}
 
 
 def load_limit_var(key: str = "flint-int4") -> str:

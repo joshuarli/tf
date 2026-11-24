@@ -1,0 +1,517 @@
+{
+  "agent": {
+    "rendered": {
+      "$schema": "https://pi.dev/schemas/models.schema.json",
+      "providers": {
+        "tensorfold": {
+          "api": "openai-completions",
+          "apiKey": "local",
+          "baseUrl": "http://127.0.0.1:62005/v1",
+          "models": [
+            {
+              "contextWindow": 32768,
+              "cost": {
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "input": 0,
+                "output": 0
+              },
+              "id": "Inkling-2-Mini-oQ4e-mtp@3eea042751cd",
+              "input": [
+                "text"
+              ],
+              "maxTokens": 8192,
+              "name": "Flint (local TensorFold)",
+              "reasoning": true
+            }
+          ],
+          "name": "TensorFold local"
+        }
+      }
+    },
+    "template": "agent/models.json",
+    "template_sha256": "9af3c76df90fa4d9e285895e167b6eddad5a4ebbfc1f1af63fbe756cbeb36851"
+  },
+  "completion": {
+    "checkers_passed": false,
+    "complete": true
+  },
+  "host": {
+    "context_tokens": 32768,
+    "efficiency_cores": 12,
+    "gpu_cores": 40,
+    "load_limit_gb": 26,
+    "memory_bytes": 51539607552,
+    "metal": "Metal 4",
+    "os": "macOS 26B123",
+    "performance_cores": 6,
+    "product": "Apple M5 Max",
+    "recommended_max_working_set_bytes": 40200896512
+  },
+  "model": {
+    "dir": "/Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd",
+    "hashes": {
+      "aggregate_sha256": "4496e94e73bcc7ea170c39e7cc19b2a71c3927c5f10adaf34486df849890d067",
+      "config": [
+        {
+          "name": "inkling-2-mini-oq4e-mtp/chat_template.jinja",
+          "sha256": "53a9035f3255945704b5857657cfb00c1165090c0641c4f782a0cbf268cc16dc",
+          "size": 6868
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/config.json",
+          "sha256": "748bb4b83536f53a6088efa7c227a0ff33a0177214b306d46e6659d0ffa058a4",
+          "size": 24033
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/generation_config.json",
+          "sha256": "a08737c07a65a8fdf69f7cf086576210e5aad4b241437090b26d7b0c4f7905f7",
+          "size": 98
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/model.safetensors.index.json",
+          "sha256": "b4004624596ed521094a7b2c054e12687d91a85082d5cb73e8b4935b96488e7d",
+          "size": 90429
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/processor_config.json",
+          "sha256": "d7350adce18c8be4b607f261c8f0f7eabbf720bb7aaf648a43d4f8372bbacc2d",
+          "size": 461
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/special_tokens_map.json",
+          "sha256": "c16f44b3594563d82743ddb0417a2be1bfe3e2000dfad2da4b8f32554593e1a0",
+          "size": 529
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/tokenizer.json",
+          "sha256": "7f332727f9a3f093dd452a39cc978e6757627e5dad1b0673aa4e75174f236dd6",
+          "size": 26178678
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/tokenizer_config.json",
+          "sha256": "bf09342d285139fd37ce10c70878af1d52cb390e9901e10248654293a80ee636",
+          "size": 13235
+        }
+      ],
+      "other": [
+        {
+          "name": "inkling-2-mini-oq4e-mtp/.gitattributes",
+          "sha256": "34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930",
+          "size": 1570
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/README.md",
+          "sha256": "0169fca4308aea7d0a972b65d654e0859276a6ed84c30cb60127395728169163",
+          "size": 2258
+        }
+      ],
+      "revision": "3eea042751cd296b7266628a8342c1749242e1fe",
+      "sources_lock_sha256": "5006581ae851ff7aaa2d8e9cbc923351c0a03761b721fa48d844c54adf204570",
+      "weights": [
+        {
+          "name": "inkling-2-mini-oq4e-mtp/model-00001-of-00004.safetensors",
+          "sha256": "373cb3fc7ac7062b26c5e0b7076ababf0a1e30e645559a5459bb02bc04a9c52d",
+          "size": 5077690550
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/model-00002-of-00004.safetensors",
+          "sha256": "707f7027e43c4c8fd44acc14a8809acbacea8096c13599461ab2df95367ed9fb",
+          "size": 5063799732
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/model-00003-of-00004.safetensors",
+          "sha256": "913fd1e825cc296957c77ae05e0fac846ce8359dd343a36cd4bd069f87c748dc",
+          "size": 5256611079
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/model-00004-of-00004.safetensors",
+          "sha256": "fefe61b2e58b41aabc44e1113c8d903aac0fb2472322eaba0bba78fc75de1ada",
+          "size": 813590578
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/mtp.safetensors",
+          "sha256": "7c3b651317f01f73bcf4e1dceba66ef8b7e1a1eac6bc171e882e690a4b10a1d2",
+          "size": 635801416
+        }
+      ]
+    },
+    "key": "inkling-2-mini-oq4e-mtp"
+  },
+  "pi": {
+    "context_tokens": 32768,
+    "flags": [
+      "--no-extensions",
+      "--no-mcp",
+      "--no-skills",
+      "-nc",
+      "--no-session",
+      "--mode",
+      "json"
+    ],
+    "model_id": "Inkling-2-Mini-oQ4e-mtp@3eea042751cd",
+    "path": "/Users/josh/.local/bin/pi",
+    "provider": "tensorfold",
+    "tools": "read,bash,edit,write"
+  },
+  "qualification": "run `pi-qualify --result <this file>`; completion alone does not pass checkers",
+  "recorded_at": "2026-11-24T21:26:58.070304+00:00",
+  "run_id": "inkling2-mini-oq4e-20261124T212658Z",
+  "schema": 1,
+  "server": {
+    "argv": [
+      "/Users/josh/repos/tf/campaign/.venv/bin/python",
+      "/Users/josh/repos/tf/campaign/heavy.py",
+      "--",
+      "/Users/josh/repos/tf/zig-out/native/bin/tensorfold-native",
+      "serve",
+      "/Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "62005",
+      "--parallel",
+      "1",
+      "--prompt-cache-gib",
+      "2",
+      "--no-update-check",
+      "--context",
+      "32768",
+      "--no-drafts",
+      "--temperature",
+      "0"
+    ],
+    "base": "http://127.0.0.1:62005",
+    "binary": {
+      "path": "/Users/josh/repos/tf/zig-out/native/bin/tensorfold-native",
+      "sha256": "8b6fa63062b1f956df052e168f1c92aeca3738c06f694328f7ced0baa4f8af9c"
+    },
+    "exit": null,
+    "identity": {
+      "model_ids": [
+        "Inkling-2-Mini-oQ4e-mtp@3eea042751cd"
+      ],
+      "models": [
+        {
+          "capabilities": {
+            "answer_limit": false,
+            "cache_salt": false,
+            "call_gates": false,
+            "context_fitted": true,
+            "decides": false,
+            "embeddings": false,
+            "greedy_only": true,
+            "logprobs": false,
+            "loop_guard": false,
+            "penalties": false,
+            "pictures": false,
+            "plain_only": false,
+            "prompt_cache": false,
+            "prompt_logprobs": false,
+            "readouts": false,
+            "reasoning": true,
+            "reasoning_optional": false,
+            "rerank": false,
+            "slide_conversations": false,
+            "speech": false,
+            "structures": false,
+            "text_generation": true,
+            "thinking_applicable": false,
+            "thinking_budget": true,
+            "thinking_switch": true,
+            "vision": true,
+            "warm_turns": false
+          },
+          "context_length": 32768,
+          "created": 1795555735,
+          "id": "Inkling-2-Mini-oQ4e-mtp@3eea042751cd",
+          "input_types": [
+            "text",
+            "image"
+          ],
+          "max_model_len": 32768,
+          "object": "model",
+          "owned_by": "tensorfold",
+          "reasoning": {
+            "default_enabled": true,
+            "supported_efforts": [
+              "max",
+              "xhigh",
+              "high",
+              "medium",
+              "low",
+              "minimal"
+            ]
+          }
+        }
+      ]
+    },
+    "owned": true,
+    "port": 62005
+  },
+  "tasks": [
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "add-function",
+      "timed_out": false,
+      "turn_latency_ms": [
+        3447,
+        2687,
+        3346,
+        3915,
+        3654
+      ],
+      "turn_output_tokens": [
+        65,
+        130,
+        166,
+        205,
+        199
+      ],
+      "turns": 5,
+      "wall_s": 18.62,
+      "workspace": "/Users/josh/repos/tf/.work/pi/add-function"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "bugfix-dedupe",
+      "timed_out": false,
+      "turn_latency_ms": [
+        1384,
+        1188,
+        2493,
+        1459
+      ],
+      "turn_output_tokens": [
+        44,
+        59,
+        141,
+        64
+      ],
+      "turns": 4,
+      "wall_s": 7.79,
+      "workspace": "/Users/josh/repos/tf/.work/pi/bugfix-dedupe"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "bugfix-intervals",
+      "timed_out": false,
+      "turn_latency_ms": [
+        1449,
+        3015,
+        1665
+      ],
+      "turn_output_tokens": [
+        48,
+        164,
+        86
+      ],
+      "turns": 3,
+      "wall_s": 7.3,
+      "workspace": "/Users/josh/repos/tf/.work/pi/bugfix-intervals"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "bugfix-window",
+      "timed_out": false,
+      "turn_latency_ms": [
+        1591,
+        5298,
+        2116
+      ],
+      "turn_output_tokens": [
+        49,
+        309,
+        93
+      ],
+      "turns": 3,
+      "wall_s": 10.35,
+      "workspace": "/Users/josh/repos/tf/.work/pi/bugfix-window"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "multifile-config",
+      "timed_out": false,
+      "turn_latency_ms": [
+        1602,
+        2867,
+        1033,
+        1705
+      ],
+      "turn_output_tokens": [
+        58,
+        156,
+        34,
+        93
+      ],
+      "turns": 4,
+      "wall_s": 8.38,
+      "workspace": "/Users/josh/repos/tf/.work/pi/multifile-config"
+    },
+    {
+      "checker": {
+        "detail": "dead_letter: 'backfill, ingest' != 'backfill,ingest'",
+        "pass": false
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "read-and-answer",
+      "timed_out": false,
+      "turn_latency_ms": [
+        1436,
+        8983,
+        1971,
+        2891
+      ],
+      "turn_output_tokens": [
+        40,
+        517,
+        83,
+        162
+      ],
+      "turns": 4,
+      "wall_s": 16.39,
+      "workspace": "/Users/josh/repos/tf/.work/pi/read-and-answer"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "refactor-preserve",
+      "timed_out": false,
+      "turn_latency_ms": [
+        1347,
+        946,
+        7364,
+        2911
+      ],
+      "turn_output_tokens": [
+        44,
+        33,
+        436,
+        137
+      ],
+      "turns": 4,
+      "wall_s": 13.67,
+      "workspace": "/Users/josh/repos/tf/.work/pi/refactor-preserve"
+    },
+    {
+      "checker": {
+        "detail": "",
+        "pass": true
+      },
+      "completed": true,
+      "exit_code": 0,
+      "parse_errors": {
+        "metrics_malformed": 0,
+        "metrics_unoffered": 0,
+        "pi_events": 0,
+        "total": 0
+      },
+      "pi_event_errors": [],
+      "task": "shell-inspect",
+      "timed_out": false,
+      "turn_latency_ms": [
+        1417,
+        1784,
+        1520,
+        1841,
+        2807
+      ],
+      "turn_output_tokens": [
+        48,
+        87,
+        79,
+        94,
+        137
+      ],
+      "turns": 5,
+      "wall_s": 10.5,
+      "workspace": "/Users/josh/repos/tf/.work/pi/shell-inspect"
+    }
+  ],
+  "totals": {
+    "checker_passed": 7,
+    "completed": 8,
+    "parse_errors": 0,
+    "server_log_parse_errors": 0,
+    "tasks": 8
+  }
+}

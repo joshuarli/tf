@@ -1,0 +1,1935 @@
+{
+  "binary": {
+    "path": "/Users/josh/repos/tf/zig-out/native/bin/tensorfold-native",
+    "sha256": "8b6fa63062b1f956df052e168f1c92aeca3738c06f694328f7ced0baa4f8af9c"
+  },
+  "cases": [
+    {
+      "content": "```python\ndef chunk_sums(xs, size):\n    if size < 1:\n        raise ValueError(\"size must be at least 1\")\n    return [sum(xs[i:i + size]) for i in range(0, len(xs), size)]\n```",
+      "finish_reason": "stop",
+      "id": "code-c01",
+      "kind": "code",
+      "passed": true,
+      "prompt_sha256": "a395429127784f72aa12e8f9b7b67fba6fc3728367a1b59bcc7949f27ba389e1",
+      "prompt_tokens": 149,
+      "reason": "tests passed",
+      "reasoning": "We need answer exactly one fenced code block labelled python and nothing outside. Need implement chunk_sums. Need be careful: size below 1 raises ValueError. What about non-integer size? Task says size below 1 raises ValueError. Could just if size < 1: raise ValueError. If size is float 0.5, below 1 raises ValueError. If size is non-numeric, comparison may raise TypeError; not specified. Could handle? Keep simple. Split consecutive chunks length size. If size is bool? bool is int; size=True means 1, fine. If size is float 2.5, range with float fails. Could require integer? Not specified. Maybe use range(0, len(xs), size) which requires integer. If size is float, TypeError. Could convert? Better to validate integer? The spec only says size below 1 raises ValueError. We can do:\n\ndef chunk_sums(xs, size):\n    if size < 1:\n        raise ValueError(\"size must be at least 1\")\n    return [sum(xs[i:i+size]) for i in range(0, len(xs), size)]\n\nIf size is float, range raises TypeError. Could use ",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 8.955,
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 449,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 149,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 598
+      }
+    },
+    {
+      "content": "```python\ndef rle_encode(s):\n    parts = []\n    i = 0\n    n = len(s)\n    while i < n:\n        j = i\n        while j < n and s[j] == s[i]:\n            j += 1\n        parts.append(str(j - i) + s[i])\n        i = j\n    return ''.join(parts)\n\ndef rle_decode(s):\n    parts = []\n    i = 0\n    n = len(s)\n    while i < n:\n        j = i\n        while j < n and '0' <= s[j] <= '9':\n            j += 1\n        if j == i:\n            raise ValueError('missing run length')\n        length = int(s[i:j])\n        if length <= 0:\n            raise ValueError('run length must be positive')\n        if j >= n:\n            raise ValueError('dangling length')\n        c = s[j]\n        if not (('a' <= c <= 'z') or ('A' <= c <= 'Z')):\n            raise ValueError('invalid character')\n        parts.append(c * length)\n        i = j + 1\n    return ''.join(parts)\n```",
+      "finish_reason": "stop",
+      "id": "code-c02",
+      "kind": "code",
+      "passed": true,
+      "prompt_sha256": "cf4e328d8d17bffc3fed4f16ad3e914dfbeb033798f8380f2c1e0f0233650cf0",
+      "prompt_tokens": 175,
+      "reason": "tests passed",
+      "reasoning": "We need answer with exactly one fenced code block labelled python and nothing outside. Need implement rle_encode and rle_decode. Need think carefully about requirements.\n\nTask: strings of ASCII letters. Encoding replaces each run with decimal length followed by character, so aaabb -> 3a2b; empty string -> empty string. Decoding reverses it and raises ValueError on a token with no positive run length, a dangling length, or any character that is not a letter.\n\nNeed define module-level functions.\n\nEncoding: iterate chars, count runs. For each run, append str(count)+char. ASCII letters: presumably 'a'-'z' and 'A'-'Z'. Encoding maybe should handle any string? It says strings of ASCII letters. Could just encode any chars. But maybe validate? Not specified. Keep simple.\n\nDecoding: parse string. Need raise ValueError on:\n- token with no positive run length: e.g. \"a\" (no digits), \"0a\" (zero length), maybe \"00a\"? \"no positive run length\" means length must be positive integer. \"0a\" invalid. Also ",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 22.442,
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 1409,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 175,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 1584
+      }
+    },
+    {
+      "content": "```python\ndef base36(n):\n    if n < 0:\n        raise ValueError(\"n must be non-negative\")\n    if n == 0:\n        return \"0\"\n    digits = \"0123456789abcdefghijklmnopqrstuvwxyz\"\n    chars = []\n    while n:\n        n, r = divmod(n, 36)\n        chars.append(digits[r])\n    return \"\".join(reversed(chars))\n```",
+      "finish_reason": "stop",
+      "id": "code-c03",
+      "kind": "code",
+      "passed": true,
+      "prompt_sha256": "31c59ec42246990134608af9e083932c2a0a04ee5af2634d6a5d154f9bb88acd",
+      "prompt_tokens": 136,
+      "reason": "tests passed",
+      "reasoning": "We need answer exactly one fenced code block labelled python and nothing outside. Need implement base36(n). Need ensure module level function. No stdin print. Need consider non-negative integer n. Could accept bool? bool is int subclass; render normally. Negative raises ValueError. Need lowercase digits. Implementation simple.\n\nPotential pitfalls: n could be non-integer? Task says non-negative integer. We can just handle ints. Maybe use divmod loop. For n=0 return \"0\". For negative raise ValueError. Could check isinstance(n, int) and not bool? Not required. If n is float 1.5, divmod works but digits? Better not overcomplicate. But maybe grader tests negative, zero, positive. Need exact.\n\nCode:\ndef base36(n):\n    if n < 0:\n        raise ValueError(\"n must be non-negative\")\n    if n == 0:\n        return \"0\"\n    digits = \"0123456789abcdefghijklmnopqrstuvwxyz\"\n    s = []\n    while n:\n        n, r = divmod(n, 36)\n        s.append(digits[r])\n    return \"\".join(reversed(s))\n\nNeed ensure if n ",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 6.84,
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 413,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 136,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 549
+      }
+    },
+    {
+      "content": "```python\ndef merge_intervals(intervals):\n    if not intervals:\n        return []\n    sorted_intervals = sorted((interval[0], interval[1]) for interval in intervals)\n    merged = []\n    for start, end in sorted_intervals:\n        if merged and start <= merged[-1][1] + 1:\n            if end > merged[-1][1]:\n                merged[-1][1] = end\n        else:\n            merged.append([start, end])\n    return merged\n```",
+      "finish_reason": "stop",
+      "id": "code-c04",
+      "kind": "code",
+      "passed": false,
+      "prompt_sha256": "be6627a8a0b3612af55e38c1ffe586fbf2e6fd01080262c5cfef094deb3fa310",
+      "prompt_tokens": 126,
+      "reason": "tests failed: AssertionError",
+      "reasoning": "We need answer with exactly one fenced code block labelled python and nothing outside. Need implement merge_intervals. Need be careful: inclusive intervals, overlapping or touching merged. Touching means e.g. [1,2] and [3,4]? Inclusive intervals touching if start <= previous end + 1? Since inclusive, [1,2] and [3,4] are adjacent with no gap? \"touching\" likely means end+1 >= start (i.e., start <= end+1). Overlapping: start <= end. So merge if next.start <= current.end + 1. Return new sorted list, don't mutate input. Need define function at module level. Could handle empty. Sorting: create list of tuples/lists sorted by start. Don't mutate input: copy intervals. Return list of lists presumably.\n\nNeed ensure no extra text. Code block only.\n\nImplementation:\n\ndef merge_intervals(intervals):\n    if not intervals:\n        return []\n    sorted_intervals = sorted((int(s), int(e)) for s, e in intervals)\n    merged = []\n    for start, end in sorted_intervals:\n        if merged and start <= merged",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 8.59,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 528,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 126,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 654
+      }
+    },
+    {
+      "content": "```python\nfrom collections import OrderedDict\n\nclass LRU:\n    def __init__(self, capacity):\n        self.capacity = capacity\n        self._data = OrderedDict()\n\n    def get(self, key):\n        if key not in self._data:\n            return -1\n        self._data.move_to_end(key)\n        return self._data[key]\n\n    def put(self, key, value):\n        if key in self._data:\n            self._data[key] = value\n            self._data.move_to_end(key)\n            return\n        self._data[key] = value\n        if len(self._data) > self.capacity:\n            self._data.popitem(last=False)\n```",
+      "finish_reason": "stop",
+      "id": "code-c05",
+      "kind": "code",
+      "passed": true,
+      "prompt_sha256": "1f3fe21bfa6cafe312b17285b161b27ed9e0286ef706dae00d9ed209f27a81ca",
+      "prompt_tokens": 152,
+      "reason": "tests passed",
+      "reasoning": "We need answer with exactly one fenced code block labelled python and nothing outside. Need implement LRU class. Need be careful: grader imports module and appends assertions; every required name defined at module level. We can define class LRU(capacity). Need no stdin/print/main.\n\nImplementation: use OrderedDict. get(key): if key in self._d: self._d.move_to_end(key); return value; else return -1. put(key,value): if key in self._d: self._d[key]=value; move_to_end; else: self._d[key]=value; if len>capacity: popitem(last=False). Note capacity at least 1. Both get and put count as use. For put on existing key, update value and mark recent. For put new key, insert at end (most recent), evict least recently used from front.\n\nNeed exactly one fenced code block. No extra text. Ensure code block labelled python. Could include from collections import OrderedDict. That's fine.\n\nNeed final only code block.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 7.658,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 459,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 152,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 611
+      }
+    },
+    {
+      "content": "```python\ndef is_valid_parens(s):\n    stack = []\n    pairs = {')': '(', ']': '[', '}': '{'}\n    for ch in s:\n        if ch in '([{':\n            stack.append(ch)\n        elif ch in ')]}':\n            if not stack or stack.pop() != pairs[ch]:\n                return False\n        else:\n            return False\n    return not stack\n```",
+      "finish_reason": "stop",
+      "id": "code-c06",
+      "kind": "code",
+      "passed": true,
+      "prompt_sha256": "03e0056a292cc7975010214b4aeeb086d3e95952e918f34133ca6980f184a3f3",
+      "prompt_tokens": 128,
+      "reason": "tests passed",
+      "reasoning": "We need answer exactly one fenced code block labelled python and nothing outside. Need implement is_valid_parens(s). Need ensure module level function. No stdin print. Simple stack. Need consider s contains only six bracket chars; return True when correctly nested and balanced. Empty valid.\n\nNeed final only code block. No extra text. Code block labelled python. Ensure exactly one fenced code block. Could include docstring? Fine.\n\nImplementation:\ndef is_valid_parens(s):\n    stack=[]\n    pairs={')':'(', ']':'[', '}':'{'}\n    for ch in s:\n        if ch in '([{':\n            stack.append(ch)\n        elif ch in ')]}':\n            if not stack or stack.pop() != pairs[ch]:\n                return False\n        else:\n            return False\n    return not stack\n\nSince s contains only six bracket chars, else not needed but safe. Return False for invalid char. Good.\n\nNeed final only.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 6.358,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 383,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 128,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 511
+      }
+    },
+    {
+      "content": "```python\nimport re\nfrom collections import Counter\n\ndef top_k_words(text, k):\n    if k < 1:\n        return []\n    words = re.findall(r\"[a-z0-9']+\", text.lower())\n    counts = Counter(words)\n    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:k]\n```",
+      "finish_reason": "stop",
+      "id": "code-c07",
+      "kind": "code",
+      "passed": true,
+      "prompt_sha256": "d3079e037a758618e7fb20c97f89415fa8f18fbd9ac5706e89b86b4f1b2b0e17",
+      "prompt_tokens": 164,
+      "reason": "tests passed",
+      "reasoning": "We need answer with exactly one fenced code block labelled python and nothing outside. Need implement top_k_words. Need think details.\n\nTask: lowercase text, take words of ASCII letters and digits plus apostrophes, count them, return k most frequent as (word,count) tuples ordered by count descending then word ascending. Fewer than k distinct words returns all of them; k below 1 returns [].\n\nNeed define module-level function. Words: ASCII letters and digits plus apostrophes. Apostrophes can be inside words? \"take words of ASCII letters and digits plus apostrophes\" likely regex [a-z0-9']+ after lowercasing. Apostrophes included in word characters. Need count. Sorting: count desc, word asc. k below 1 returns []. Fewer than k distinct words returns all of them (still sorted). Need ensure k maybe non-integer? Probably int. Could handle bool? Not needed.\n\nImplementation:\nimport re\nfrom collections import Counter\n\ndef top_k_words(text, k):\n    if k < 1: return []\n    words = re.findall(r\"[a-z",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 7.959,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 475,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 164,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 639
+      }
+    },
+    {
+      "content": "```python\ndef rotate90(matrix):\n    return [list(row) for row in zip(*matrix[::-1])]\n```",
+      "finish_reason": "stop",
+      "id": "code-c08",
+      "kind": "code",
+      "passed": true,
+      "prompt_sha256": "8894a7208e991729c0ce383a7d7632d813258e5abf9604689efd43237a0359a8",
+      "prompt_tokens": 118,
+      "reason": "tests passed",
+      "reasoning": "We need answer with exactly one fenced code block labelled python and nothing outside. Need implement rotate90. Need consider square list-of-lists. Return new matrix rotated 90 clockwise. Input must not be mutated. Simple: return [list(row) for row in zip(*matrix[::-1])]? Let's verify: matrix rows r0..rn-1, cols c0..cn-1. Clockwise rotation: new[i][j] = old[j][n-1-i]? Let's derive. Standard: rotated[i][j] = matrix[j][n-1-i]. Equivalent zip(*matrix[::-1]) gives rows: for each column index j? matrix[::-1] reverses rows: [row_{n-1},...,row_0]. zip(*that) yields tuples of length n: for column j, tuple(matrix[n-1][j], matrix[n-2][j], ..., matrix[0][j]). That's new row j? Actually zip(*matrix[::-1]) iterates over columns of reversed matrix: first tuple = (matrix[n-1][0], matrix[n-2][0], ..., matrix[0][0]). That is new row 0 = old column 0 bottom-to-top. Clockwise rotation: new row 0 = old column 0 bottom-to-top? Let's check with 2x2: old [[1,2],[3,4]]. Clockwise -> [[3,1],[4,2]]. old column ",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 9.346,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 573,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 118,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 691
+      }
+    },
+    {
+      "content": "```python\ndef isbn13_valid(s):\n    if not isinstance(s, str):\n        return False\n    t = s.replace(' ', '').replace('-', '')\n    if len(t) != 13:\n        return False\n    total = 0\n    for i, c in enumerate(t):\n        if not ('0' <= c <= '9'):\n            return False\n        total += (i % 2 == 0) * 1 * (ord(c) - 48) + (i % 2 == 1) * 3 * (ord(c) - 48)\n    return total % 10 == 0\n```",
+      "finish_reason": "stop",
+      "id": "code-c09",
+      "kind": "code",
+      "passed": true,
+      "prompt_sha256": "03e71445f762ea97c1abefc0b1fb41f2ccb94b09b8b22c44b89454b8b3649d17",
+      "prompt_tokens": 134,
+      "reason": "tests passed",
+      "reasoning": "We need answer exactly one fenced code block labelled python and nothing outside. Need implement function. Need be careful: strip spaces and hyphens, require exactly 13 ASCII digits. Ambiguity: strip spaces and hyphens means remove all spaces and hyphens anywhere? \"strip spaces and hyphens\" likely remove them from string. Then require exactly 13 ASCII digits. Return True when alternating 1,3 weighted sum of digits is multiple of 10. ISBN-13 check: digits d1..d13, sum d_i * (1 if i odd else 3) mod 10 == 0. Need handle non-string input? \"Anything else returns False\". If s not str, return False. Also ASCII digits: '0'-'9'. Removing spaces and hyphens: could use s.replace(' ', '').replace('-', ''). Should we also strip leading/trailing? \"strip spaces and hyphens\" maybe remove all spaces and hyphens. Use remove all. Then check len ==13 and all('0' <= c <= '9'). Compute sum. Return sum % 10 == 0.\n\nNeed exactly one fenced code block labelled python. No extra text. Ensure module level function",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 7.751,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 468,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 134,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 602
+      }
+    },
+    {
+      "content": "```python\ndef parse_ini(text):\n    sections = {}\n    current = \"\"\n    for raw_line in text.splitlines():\n        line = raw_line.strip()\n        if not line:\n            continue\n        if line.startswith(';') or line.startswith('#'):\n            continue\n        if line.startswith('[') and line.endswith(']') and len(line) >= 2:\n            current = line[1:-1].strip()\n            sections.setdefault(current, {})\n            continue\n        if '=' in line:\n            key, value = line.split('=', 1)\n            key = key.strip()\n            value = value.strip()\n            if not key:\n                raise ValueError(\"Invalid key in line: %r\" % raw_line)\n            sections.setdefault(current, {})[key] = value\n            continue\n        raise ValueError(\"Invalid line: %r\" % raw_line)\n    return sections\n```",
+      "finish_reason": "stop",
+      "id": "code-c10",
+      "kind": "code",
+      "passed": true,
+      "prompt_sha256": "482b6f8b97541a7deeac078d74cc52621119eb21f7ac8d4c2faaa6b0917778da",
+      "prompt_tokens": 184,
+      "reason": "tests passed",
+      "reasoning": "We need answer with exactly one fenced code block labelled python and nothing outside. Need implement parse_ini(text). Need be careful with INI parsing details.\n\nRequirements:\n- parse INI text into dict mapping section name to dict of string keys and values.\n- Lines starting with `;` or `#` are comments, blank lines ignored.\n- a line `[name]` opens a section\n- `key = value` sets a stripped key and value with last duplicate winning.\n- Keys before any section belong to section named by empty string.\n- Any other non-blank line raises ValueError.\n\nNeed decide exact semantics:\n- Lines: strip? \"Lines starting with `;` or `#` are comments\" \u2014 likely after stripping leading whitespace? Hmm. \"Lines starting with `;` or `#`\" could mean line.lstrip().startswith(';') or '#'. Blank lines ignored. A line `[name]` opens a section. `key = value` sets stripped key and value. Any other non-blank line raises ValueError.\n\nNeed handle section line: line.strip() maybe starts with '[' and ends with ']'. Name ",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 51.587,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 3091,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 184,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 3275
+      }
+    },
+    {
+      "content": "```python\ndef first_at_least(xs, target):\n    lo = 0\n    hi = len(xs)\n    while lo < hi:\n        mid = (lo + hi) // 2\n        if xs[mid] >= target:\n            hi = mid\n        else:\n            lo = mid + 1\n    return lo\n```",
+      "finish_reason": "stop",
+      "id": "code-c11",
+      "kind": "code",
+      "passed": true,
+      "prompt_sha256": "c2deb55e5b4adf469f5aece0035beb30965f35eb4ef97183705d8e4122bd61bd",
+      "prompt_tokens": 133,
+      "reason": "tests passed",
+      "reasoning": "We need answer exactly one fenced code block labelled python and nothing outside. Need implement first_at_least(xs, target). Need ensure module level function. Binary search. Could use bisect? They say use binary search; implementing manually is safer. Need no prints. Need consider xs sorted ascending, target maybe any comparable. Return index.\n\nImplementation:\ndef first_at_least(xs, target):\n    lo = 0\n    hi = len(xs)\n    while lo < hi:\n        mid = (lo + hi) // 2\n        if xs[mid] >= target:\n            hi = mid\n        else:\n            lo = mid + 1\n    return lo\n\nThat's it. Need exactly one fenced code block. No extra text. Ensure no explanation. Final only code block.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 4.718,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 278,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 133,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 411
+      }
+    },
+    {
+      "content": "```python\nfrom collections import deque\n\ndef sliding_max(xs, k):\n    if k < 1:\n        return []\n    dq = deque()\n    res = []\n    for i, x in enumerate(xs):\n        while dq and xs[dq[-1]] <= x:\n            dq.pop()\n        dq.append(i)\n        if dq[0] <= i - k:\n            dq.popleft()\n        if i >= k - 1:\n            res.append(xs[dq[0]])\n    return res\n```",
+      "finish_reason": "stop",
+      "id": "code-c12",
+      "kind": "code",
+      "passed": true,
+      "prompt_sha256": "c3a4914027262cf4b4235fd42479c2ce4e44263a3608ed6202aea32af11eae02",
+      "prompt_tokens": 125,
+      "reason": "tests passed",
+      "reasoning": "We need answer with exactly one fenced code block labelled python and nothing outside. Need implement sliding_max. Need ensure module level function. No stdin print. Need consider list shorter than k returns []. k at least 1. Could use deque monotonic. Need maybe handle any iterable? Given xs list. Return list.\n\nNeed final only code block. No extra text. Ensure exactly one fenced code block. Code:\n\nfrom collections import deque\n\ndef sliding_max(xs, k):\n    if k < 1:\n        return []  # though k at least 1\n    dq = deque()\n    res = []\n    for i, x in enumerate(xs):\n        while dq and xs[dq[-1]] <= x:\n            dq.pop()\n        dq.append(i)\n        if dq[0] <= i - k:\n            dq.popleft()\n        if i >= k - 1:\n            res.append(xs[dq[0]])\n    return res\n\nCheck condition: window [i-k+1, i]. Remove indices <= i-k. Yes. If i >= k-1 append max. For list shorter than k, no append. Good.\n\nPotential issue xs may be any sequence; enumerate works. xs[dq[-1]] works for list. Fine.\n\n",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 7.751,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 470,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 125,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 595
+      }
+    },
+    {
+      "content": "",
+      "finish_reason": "length",
+      "id": "code-c13",
+      "kind": "code",
+      "passed": false,
+      "prompt_sha256": "8941c19b4fc730cc39737936c616a532e5fbd10ae1494676daffad473bb8dd55",
+      "prompt_tokens": 139,
+      "reason": "truncated at 8192 tokens: no fenced python code block",
+      "reasoning": "We need answer with exactly one fenced code block labelled python and nothing outside. Need implement to_fraction(s). Need think carefully about requirements.\n\nTask: parse an integer, a decimal, or a p/q fraction into reduced (numerator, denominator) tuple with positive denominator. Raise ValueError for anything unparsable and for zero denominator.\n\nNeed define to_fraction(s) at module level. Input s presumably string. Need handle integer: \"123\", \"-45\", maybe \"+7\"? Decimal: \"1.23\", \"-0.5\", \".5\"? \"1.\"? Need decide. Fraction: \"p/q\" with optional spaces? Need parse. Raise ValueError for anything unparsable and zero denominator.\n\nNeed be robust. Let's design.\n\nUse fractions.Fraction? Could parse manually. But need ensure ValueError for unparsable. Fraction can parse \"1.23\", \"1/2\", \"123\", \"+1.5\", \".5\"? Fraction(\".5\") works? Let's recall: fractions.Fraction(\".5\") returns Fraction(1,2)? I think Fraction accepts decimal strings including \".5\" and \"5.\"? Let's check mentally: Fraction(string) re",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 145.483,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 8192,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 139,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 8331
+      }
+    },
+    {
+      "content": "```python\ndef flatten(xs):\n    out = []\n    def rec(x):\n        if isinstance(x, (list, tuple)):\n            for item in x:\n                rec(item)\n        else:\n            out.append(x)\n    rec(xs)\n    return out\n```",
+      "finish_reason": "stop",
+      "id": "code-c14",
+      "kind": "code",
+      "passed": true,
+      "prompt_sha256": "85487ffaaa794853ecd2237129311297c56e62126857badaa59d42d082cc368f",
+      "prompt_tokens": 131,
+      "reason": "tests passed",
+      "reasoning": "We need answer with exactly one fenced code block labelled python and nothing outside. Need implement flatten(xs). Need be careful: non-list, non-tuple values of nested structure xs in order. Lists and tuples traversed at any depth; strings and other values are leaves. So strings are leaves (not traversed). Need return new list.\n\nImplementation:\n\ndef flatten(xs):\n    out = []\n    def rec(x):\n        if isinstance(x, (list, tuple)):\n            for item in x:\n                rec(item)\n        else:\n            out.append(x)\n    rec(xs)\n    return out\n\nBut note: xs itself could be a list/tuple; traversed. If xs is a string, leaf. Good.\n\nPotential subtlety: \"non-list, non-tuple values\" \u2014 strings are leaves, so a string inside list is appended as a whole. Good.\n\nNeed exactly one fenced code block. No extra text.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 5.331,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 311,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 131,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 442
+      }
+    },
+    {
+      "content": "```python\ndef split_csv_line(line):\n    fields = []\n    current = []\n    in_quotes = False\n    i = 0\n    n = len(line)\n    while i < n:\n        c = line[i]\n        if c == '\"':\n            if in_quotes:\n                if i + 1 < n and line[i + 1] == '\"':\n                    current.append('\"')\n                    i += 2\n                    continue\n                in_quotes = False\n                i += 1\n                continue\n            in_quotes = True\n            i += 1\n            continue\n        if c == ',' and not in_quotes:\n            fields.append(''.join(current))\n            current = []\n            i += 1\n            continue\n        current.append(c)\n        i += 1\n    if in_quotes:\n        raise ValueError('unbalanced quote')\n    fields.append(''.join(current))\n    return fields\n```",
+      "finish_reason": "stop",
+      "id": "code-c15",
+      "kind": "code",
+      "passed": true,
+      "prompt_sha256": "becdc0778ec5cddd7f1870d75daec49bfa5197491284cb4b171f41a07c124c11",
+      "prompt_tokens": 145,
+      "reason": "tests passed",
+      "reasoning": "We need answer with exactly one fenced code block labelled python and nothing outside. Need implement split_csv_line(line). Need think carefully about CSV semantics.\n\nTask: split one CSV record on commas outside double-quoted fields. Quotes are removed, `\"\"` inside a quoted field is one quote, and an unbalanced quote raises ValueError. The empty line yields `[\"\"]`.\n\nNeed define function at module level. Need handle line maybe string. Need parse.\n\nLet's reason.\n\nInput line: a single CSV record (no newline?). Could include? \"one CSV record\" likely no embedded newline. We split on commas outside quotes. Quotes removed. `\"\"` inside quoted field is one quote. Unbalanced quote raises ValueError. Empty line yields [\"\"].\n\nNeed define exact behavior for quotes. Standard CSV: a field may be quoted if starts with `\"`. Inside quoted field, `\"\"` represents `\"`. Quotes are removed. What about quotes not at field start? E.g. `a\"b,c`? Need decide. The spec: \"split one CSV record on commas that are out",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 64.129,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 3817,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 145,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 3962
+      }
+    },
+    {
+      "content": "```python\nimport json\n\ndef canonical_json(obj):\n    return json.dumps(obj, sort_keys=True, separators=(',', ':'), ensure_ascii=False)\n```",
+      "finish_reason": "stop",
+      "id": "code-c16",
+      "kind": "code",
+      "passed": true,
+      "prompt_sha256": "a9d0bc6f5502deab67715984a3b2c3e0e7eb6251ec16cf08f7be625a1e4b8e33",
+      "prompt_tokens": 124,
+      "reason": "tests passed",
+      "reasoning": "We need answer with exactly one fenced code block labelled python and nothing outside. Need implement canonical_json(obj). Need think about requirements.\n\nTask: Write canonical_json(obj): return compact JSON text with object keys sorted and non-ASCII characters kept as UTF-8, using separators ',' and ':' and no spaces.\n\nNeed define at module level. Likely use json.dumps(obj, sort_keys=True, separators=(',', ':'), ensure_ascii=False). That returns compact JSON with sorted keys and non-ASCII kept as UTF-8. Need consider nested objects: sort_keys sorts recursively. Good.\n\nPotential nuance: JSON text with non-ASCII kept as UTF-8: json.dumps with ensure_ascii=False returns str with non-ASCII characters; when encoded to UTF-8 it's UTF-8. The function returns text; okay.\n\nNeed maybe handle non-string keys? JSON object keys must be strings; json.dumps will convert int keys to strings? Actually json.dumps with sort_keys=True and non-string keys: it sorts keys; if mixed types, sorting may fail i",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 9.278,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 559,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 124,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 683
+      }
+    },
+    {
+      "id": "structured-s01",
+      "kind": "structured",
+      "passed": false,
+      "prompt_sha256": "f8665e3ba050da6eff93bf71cf665adc6201e4172af36b6c685595fd10ac8707",
+      "prompt_tokens": 163,
+      "reason": "request failed: HTTPError: HTTP Error 400: Bad Request b'{\"error\": {\"message\": \"structured output (response_format and the guided_* fields) is not supported by this engine yet\", \"type\": \"invalid_request_error\"}}'",
+      "request": {
+        "max_tokens": 8192,
+        "response_format": {
+          "json_schema": {
+            "name": "weather",
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "city": {
+                  "type": "string"
+                },
+                "conditions": {
+                  "enum": [
+                    "clear",
+                    "cloudy",
+                    "rain",
+                    "snow"
+                  ],
+                  "type": "string"
+                },
+                "temp_c": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "city",
+                "temp_c",
+                "conditions"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "json_schema"
+        },
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 0.001,
+      "sets": [
+        "dev",
+        "full"
+      ]
+    },
+    {
+      "id": "structured-s02",
+      "kind": "structured",
+      "passed": false,
+      "prompt_sha256": "554d681a7d9b6ef10dbf232e46c3e4e722b89f24d69159e19121e56acb2c1f4c",
+      "prompt_tokens": 212,
+      "reason": "request failed: HTTPError: HTTP Error 400: Bad Request b'{\"error\": {\"message\": \"structured output (response_format and the guided_* fields) is not supported by this engine yet\", \"type\": \"invalid_request_error\"}}'",
+      "request": {
+        "max_tokens": 8192,
+        "response_format": {
+          "json_schema": {
+            "name": "inventory",
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "items": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "type": "integer"
+                      },
+                      "tag": {
+                        "enum": [
+                          "alpha",
+                          "beta",
+                          "gamma"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "tag"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "items"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "json_schema"
+        },
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 0.0,
+      "sets": [
+        "dev",
+        "full"
+      ]
+    },
+    {
+      "id": "structured-s03",
+      "kind": "structured",
+      "passed": false,
+      "prompt_sha256": "35247321b8ff7656ee4d6385d05f10903cf8f5cfbf932ad0c8b909ca81cf28fe",
+      "prompt_tokens": 238,
+      "reason": "request failed: HTTPError: HTTP Error 400: Bad Request b'{\"error\": {\"message\": \"structured output (response_format and the guided_* fields) is not supported by this engine yet\", \"type\": \"invalid_request_error\"}}'",
+      "request": {
+        "max_tokens": 8192,
+        "response_format": {
+          "json_schema": {
+            "name": "service",
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "features": {
+                  "items": {
+                    "enum": [
+                      "cache",
+                      "metrics",
+                      "tracing"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "service": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "replicas": {
+                      "maximum": 10,
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "replicas"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "service",
+                "features"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "json_schema"
+        },
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 0.0,
+      "sets": [
+        "full"
+      ]
+    },
+    {
+      "id": "structured-s04",
+      "kind": "structured",
+      "passed": false,
+      "prompt_sha256": "249d4db067ec12438047ec997080b819517f4661ab630c5f76fe3bc5215495ea",
+      "prompt_tokens": 185,
+      "reason": "request failed: HTTPError: HTTP Error 400: Bad Request b'{\"error\": {\"message\": \"structured output (response_format and the guided_* fields) is not supported by this engine yet\", \"type\": \"invalid_request_error\"}}'",
+      "request": {
+        "max_tokens": 8192,
+        "response_format": {
+          "json_schema": {
+            "name": "contact",
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "country": {
+                  "enum": [
+                    "IE",
+                    "PT",
+                    "JP"
+                  ],
+                  "type": "string"
+                },
+                "email": {
+                  "type": "string"
+                },
+                "name": {
+                  "maxLength": 40,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "email",
+                "country"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "json_schema"
+        },
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 0.0,
+      "sets": [
+        "full"
+      ]
+    },
+    {
+      "id": "structured-s05",
+      "kind": "structured",
+      "passed": false,
+      "prompt_sha256": "9d9fbff956dfe31ede377a9a2f4733eb9e66a696a2137dbef827e9290e0b8657",
+      "prompt_tokens": 170,
+      "reason": "request failed: HTTPError: HTTP Error 400: Bad Request b'{\"error\": {\"message\": \"structured output (response_format and the guided_* fields) is not supported by this engine yet\", \"type\": \"invalid_request_error\"}}'",
+      "request": {
+        "max_tokens": 8192,
+        "response_format": {
+          "json_schema": {
+            "name": "stats",
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "count": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "score": {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "ok",
+                "score",
+                "count"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "json_schema"
+        },
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 0.0,
+      "sets": [
+        "full"
+      ]
+    },
+    {
+      "id": "structured-s06",
+      "kind": "structured",
+      "passed": false,
+      "prompt_sha256": "90e81979f3a71884ffee7ec979575cd57cd31608342e50f28fb3adcd26321e9c",
+      "prompt_tokens": 155,
+      "reason": "request failed: HTTPError: HTTP Error 400: Bad Request b'{\"error\": {\"message\": \"structured output (response_format and the guided_* fields) is not supported by this engine yet\", \"type\": \"invalid_request_error\"}}'",
+      "request": {
+        "max_tokens": 8192,
+        "response_format": {
+          "json_schema": {
+            "name": "severity",
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "scope": {
+                  "enum": [
+                    "local",
+                    "regional",
+                    "global"
+                  ],
+                  "type": "string"
+                },
+                "severity": {
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "severity",
+                "scope"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "json_schema"
+        },
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 0.001,
+      "sets": [
+        "full"
+      ]
+    },
+    {
+      "id": "structured-s07",
+      "kind": "structured",
+      "passed": false,
+      "prompt_sha256": "c1198b338653d2827448692fac9b6540e10c2262afa6ec5ca80b6142f3069ca1",
+      "prompt_tokens": 128,
+      "reason": "request failed: HTTPError: HTTP Error 400: Bad Request b'{\"error\": {\"message\": \"structured output (response_format and the guided_* fields) is not supported by this engine yet\", \"type\": \"invalid_request_error\"}}'",
+      "request": {
+        "max_tokens": 8192,
+        "response_format": {
+          "json_schema": {
+            "name": "directions",
+            "schema": {
+              "items": {
+                "enum": [
+                  "north",
+                  "south",
+                  "east",
+                  "west"
+                ],
+                "type": "string"
+              },
+              "maxItems": 4,
+              "minItems": 4,
+              "type": "array"
+            }
+          },
+          "type": "json_schema"
+        },
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 0.0,
+      "sets": [
+        "full"
+      ]
+    },
+    {
+      "id": "structured-s08",
+      "kind": "structured",
+      "passed": false,
+      "prompt_sha256": "4226c19f179e8cbc5f84530eaf83d5c5d067b334778c9e6025e5c9f9570ff6a2",
+      "prompt_tokens": 217,
+      "reason": "request failed: HTTPError: HTTP Error 400: Bad Request b'{\"error\": {\"message\": \"structured output (response_format and the guided_* fields) is not supported by this engine yet\", \"type\": \"invalid_request_error\"}}'",
+      "request": {
+        "max_tokens": 8192,
+        "response_format": {
+          "json_schema": {
+            "name": "groups",
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "groups": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "members": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 2,
+                        "minItems": 2,
+                        "type": "array"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "members"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 2,
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "groups"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "json_schema"
+        },
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 0.0,
+      "sets": [
+        "full"
+      ]
+    },
+    {
+      "id": "structured-s09",
+      "kind": "structured",
+      "passed": false,
+      "prompt_sha256": "a7fbfd42ca14ebd90a26e5ea0cb54d7344e3ccb07b7097e5ec6080f6709225d5",
+      "prompt_tokens": 154,
+      "reason": "request failed: HTTPError: HTTP Error 400: Bad Request b'{\"error\": {\"message\": \"Inkling does not support grammar-constrained tool_choice required or named functions; send auto or none\", \"type\": \"invalid_request_error\"}}'",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0,
+        "tool_choice": "required",
+        "tools": [
+          {
+            "function": {
+              "description": "Current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "additionalProperties": false,
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  },
+                  "unit": {
+                    "enum": [
+                      "c",
+                      "f"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city",
+                  "unit"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      },
+      "seconds": 0.0,
+      "sets": [
+        "dev",
+        "full"
+      ]
+    },
+    {
+      "id": "structured-s10",
+      "kind": "structured",
+      "passed": false,
+      "prompt_sha256": "996be4adb0acb6d71a8c1d1268656f84fce5e6e244a2c0502ffc35f728106b67",
+      "prompt_tokens": 185,
+      "reason": "request failed: HTTPError: HTTP Error 400: Bad Request b'{\"error\": {\"message\": \"Inkling does not support grammar-constrained tool_choice required or named functions; send auto or none\", \"type\": \"invalid_request_error\"}}'",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0,
+        "tool_choice": {
+          "function": {
+            "name": "convert"
+          },
+          "type": "function"
+        },
+        "tools": [
+          {
+            "function": {
+              "description": "Convert a measurement between units.",
+              "name": "convert",
+              "parameters": {
+                "additionalProperties": false,
+                "properties": {
+                  "amount": {
+                    "type": "number"
+                  },
+                  "from": {
+                    "enum": [
+                      "km",
+                      "mi"
+                    ],
+                    "type": "string"
+                  },
+                  "to": {
+                    "enum": [
+                      "km",
+                      "mi"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "amount",
+                  "from",
+                  "to"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          },
+          {
+            "function": {
+              "description": "Check availability.",
+              "name": "ping",
+              "parameters": {
+                "additionalProperties": false,
+                "properties": {
+                  "host": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "host"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      },
+      "seconds": 0.0,
+      "sets": [
+        "full"
+      ]
+    },
+    {
+      "id": "structured-s11",
+      "kind": "structured",
+      "passed": false,
+      "prompt_sha256": "993c99e3390ecdc0e86fe932210ba16f72c137dcfad256e3dc030bd2b28a763e",
+      "prompt_tokens": 190,
+      "reason": "request failed: HTTPError: HTTP Error 400: Bad Request b'{\"error\": {\"message\": \"Inkling does not support grammar-constrained tool_choice required or named functions; send auto or none\", \"type\": \"invalid_request_error\"}}'",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0,
+        "tool_choice": "required",
+        "tools": [
+          {
+            "function": {
+              "description": "Search the note archive.",
+              "name": "search",
+              "parameters": {
+                "additionalProperties": false,
+                "properties": {
+                  "limit": {
+                    "maximum": 20,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "query": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 3,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "query",
+                  "limit"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      },
+      "seconds": 0.0,
+      "sets": [
+        "full"
+      ]
+    },
+    {
+      "id": "structured-s12",
+      "kind": "structured",
+      "passed": false,
+      "prompt_sha256": "bad895a57f9eb52a16b01911782eaf67d5b08b58c9a4fe36a43acb6b06a33420",
+      "prompt_tokens": 236,
+      "reason": "request failed: HTTPError: HTTP Error 400: Bad Request b'{\"error\": {\"message\": \"Inkling does not support grammar-constrained tool_choice required or named functions; send auto or none\", \"type\": \"invalid_request_error\"}}'",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0,
+        "tool_choice": "required",
+        "tools": [
+          {
+            "function": {
+              "description": "Population of a city.",
+              "name": "population_lookup",
+              "parameters": {
+                "additionalProperties": false,
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          },
+          {
+            "function": {
+              "description": "Translate text.",
+              "name": "translate",
+              "parameters": {
+                "additionalProperties": false,
+                "properties": {
+                  "target": {
+                    "enum": [
+                      "en",
+                      "pt",
+                      "ja"
+                    ],
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text",
+                  "target"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      },
+      "seconds": 0.0,
+      "sets": [
+        "full"
+      ]
+    },
+    {
+      "content": "Let Brooke\u2019s age be \\(b\\). Then Seth\u2019s age is \\(2b\\).\n\nIn 2 years: \\((2b+2)+(b+2)=28\\)  \n\\(3b+4=28\\)  \n\\(3b=24\\)  \n\\(b=8\\)\n\nSeth is \\(2b=16\\).\n\nAnswer: 16",
+      "finish_reason": "stop",
+      "id": "reasoning-gsm8k-167",
+      "kind": "reasoning",
+      "passed": true,
+      "prompt_sha256": "9089e52b7f327d267ff514bdb4c3215e8bf3521225caabd62ec13abcdf0f593b",
+      "prompt_tokens": 71,
+      "reason": "16",
+      "reasoning": "We need answer math. Need compute. Let Brooke age = b, Seth = s = 2b. In 2 years: (s+2)+(b+2)=28 => s+b+4=28 => s+b=24. Substitute 2b+b=24 =>3b=24=>b=8, s=16. Need final with brief work and last line exactly Answer: <number>. Ensure last line form. Could include concise steps. No extra after answer. Need maybe mention Seth is 16. Final line Answer: 16.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 3.838,
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 230,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 71,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 301
+      }
+    },
+    {
+      "content": "3 \u00d7 25 = 75 roses.  \n75 \u00d7 8 = 600 thorns.\n\nAnswer: 600",
+      "finish_reason": "stop",
+      "id": "reasoning-gsm8k-83",
+      "kind": "reasoning",
+      "passed": true,
+      "prompt_sha256": "e79437136c7f0df62d7a976075bd1e52f01d20003077702d4a7b9af075517018",
+      "prompt_tokens": 75,
+      "reason": "600",
+      "reasoning": "The user wants a brief calculation and final line format. Compute: 3 bushes *25 roses/bush =75 roses. Each rose 8 thorns: 75*8=600. Need answer concise. Ensure last line exactly 'Answer: 600'. Could include brief work. No need for more tools. Final only.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 1.863,
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 105,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 75,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 180
+      }
+    },
+    {
+      "content": "C",
+      "finish_reason": "stop",
+      "id": "reasoning-mmlu-163",
+      "kind": "reasoning",
+      "passed": true,
+      "prompt_sha256": "9b7b6e059d3714ae0cb1cd2d67f0e6da9fda68cc9cb48b28a1e8be16fe6e8f58",
+      "prompt_tokens": 74,
+      "reason": "C",
+      "reasoning": "The user wants the letter only. Need answer anatomy. Blood flows from right ventricle through pulmonary valve into pulmonary trunk/arteries to lungs. Options: C pulmonary arteries. Need final only letter. Ensure no extra text.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 1.053,
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 56,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 74,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 130
+      }
+    },
+    {
+      "content": "James runs 3 sprints each time, 3 times a week: 3 \u00d7 3 = 9 sprints per week.\nEach sprint is 60 meters: 9 \u00d7 60 = 540 meters.\n\nAnswer: 540",
+      "finish_reason": "stop",
+      "id": "reasoning-gsm8k-3",
+      "kind": "reasoning",
+      "passed": true,
+      "prompt_sha256": "e888828bde5a8c5eabdd1310cdd8b733e4518a2dd7302aaa8203bd5cfd2d6fc5",
+      "prompt_tokens": 78,
+      "reason": "540",
+      "reasoning": "James runs 3 sprints 3 times a week. Each sprint is 60 meters.\n\nPer week: 3 sprints \u00d7 3 times = 9 sprints.\n9 sprints \u00d7 60 meters = 540 meters.\n\nAnswer: 540.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 2.098,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 122,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 78,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 200
+      }
+    },
+    {
+      "content": "From 1:00 PM to 5:00 PM is 4 hours. At 2 cm per hour, the candle shortens by 2 \u00d7 4 = 8 cm.\n\nAnswer: 8",
+      "finish_reason": "stop",
+      "id": "reasoning-gsm8k-23",
+      "kind": "reasoning",
+      "passed": true,
+      "prompt_sha256": "79d2d38cbe051ac7a01b1697c76e6bf79e4572abe7f4005cbf74c63653a3dd37",
+      "prompt_tokens": 81,
+      "reason": "8",
+      "reasoning": "The user wants me to solve a simple math problem. Let me work it out.\n\nFrom 1:00 PM to 5:00 PM is 4 hours.\nThe candle melts by 2 centimeters every hour.\nSo it will be 2 \u00d7 4 = 8 centimeters shorter.\n\nThe answer is 8.\n\nI need to work it out briefly and end with 'Answer: <number>'.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 2.483,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 142,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 81,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 223
+      }
+    },
+    {
+      "content": "First time: 4 rings.  \nSecond time: 3 \u00d7 4 = 12 rings.  \nThird time: half of second duration = 1.5 \u00d7 4 = 6 rings.  \n\nTotal: 4 + 12 + 6 = 22.\n\nAnswer: 22",
+      "finish_reason": "stop",
+      "id": "reasoning-gsm8k-86",
+      "kind": "reasoning",
+      "passed": true,
+      "prompt_sha256": "4fd46f582c19e157e41a2e26883ab9e91e0f71a7cb5c49ab9435645878965505",
+      "prompt_tokens": 130,
+      "reason": "22",
+      "reasoning": "We need answer math word problem. Need parse carefully.\n\nProblem: \"Greg has an alarm set to ring three times a day as a reminder. When the alarm goes off, it continues to ring until Greg turns it off. The first time it went off today, it rang four times. The second time it went off, it rang for three times as long as the first time. The third time, it rang for half as long as the second time. How many times did the alarm ring in all?\"\n\nNeed determine \"rang four times\" vs \"rang for three times as long\". Ambiguity: first time it went off, it rang four times. Could mean it rang four times (number of rings) or for four times? Let's parse.\n\nGreg has an alarm set to ring three times a day as a reminder. When alarm goes off, it continues to ring until Greg turns it off. The first time it went off today, it rang four times. The second time it went off, it rang for three times as long as the first time. The third time, it rang for half as long as the second time. How many times did the alarm ri",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 12.679,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 758,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 130,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 888
+      }
+    },
+    {
+      "content": "Miguel uses 2 pads per week, and each pad has 30 sheets:\n\n- Sheets per week: 2 \u00d7 30 = 60 sheets\n- Sheets per month (4 weeks): 60 \u00d7 4 = 240 sheets\n\nAnswer: 240",
+      "finish_reason": "stop",
+      "id": "reasoning-gsm8k-120",
+      "kind": "reasoning",
+      "passed": true,
+      "prompt_sha256": "39a8ab97f517d52441511654adff637271cca3a4ba9ecb58f7a6b3de4b60e298",
+      "prompt_tokens": 80,
+      "reason": "240",
+      "reasoning": "Miguel uses 2 pads of paper a week. Each pad has 30 sheets. So per week: 2 \u00d7 30 = 60 sheets.\n\nPer month: typically a month is 4 weeks. 60 \u00d7 4 = 240 sheets.\n\nThe problem likely assumes 4 weeks per month. Answer: 240.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 2.352,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 135,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 80,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 215
+      }
+    },
+    {
+      "content": "After using water: 120 \u2212 90 = 30 liters left.  \nRainwater collected: 2 \u00d7 30 = 60 liters.  \nNow in tank: 30 + 60 = 90 liters.\n\nAnswer: 90",
+      "finish_reason": "stop",
+      "id": "reasoning-gsm8k-221",
+      "kind": "reasoning",
+      "passed": true,
+      "prompt_sha256": "b0a24d4dbcd8d4c900939b9ac01d83334132b22eb527640c1e4fe4e29e52ab0e",
+      "prompt_tokens": 102,
+      "reason": "90",
+      "reasoning": "We need answer math. Need compute carefully.\n\nProblem: tank filled with 120 liters. Celine used 90 liters to water garden. Left = 120 - 90 = 30 liters. She then collected rainwater that is twice as much as what was left. Ambiguity: \"what was left\" after using = 30. Rainwater = twice as much as what was left = 2*30 = 60. Add to tank: 30 + 60 = 90 liters. Need final line exactly Answer: <number>. They say work it out briefly, then end with last line form. We can provide brief steps. Ensure last line only Answer: 90 maybe with liters? Form 'Answer: <number>' so number no unit? Use Answer: 90. Could include liters in text but last line number. Need no extra after last line.\n\nCheck if alternative interpretation: rainwater twice as much as what was left (after collecting? no). If she collected rainwater that is twice as much as what was left (i.e., twice the amount left in tank after use) = 60. total 90. Good.\n\nNeed final concise.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 5.295,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 315,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 102,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 417
+      }
+    },
+    {
+      "content": "In 10 years, each person will be 10 years older, so the total increases by \\(10+10=20\\).\n\n\\(20+20=40\\)\n\nAnswer: 40",
+      "finish_reason": "stop",
+      "id": "reasoning-gsm8k-278",
+      "kind": "reasoning",
+      "passed": true,
+      "prompt_sha256": "7d99a067c18cbb34c0824835b2decf0ef7126a88574d86a2153c5c09570a8dc5",
+      "prompt_tokens": 78,
+      "reason": "40",
+      "reasoning": "We need answer math. Need think through. Problem: Mico and Marco ages sum 20. In 10 years, each age increases by 10, sum increases by 20, so 40. Need provide brief work and final line exactly 'Answer: <number>'. Ensure no extra after final line. Could mention assuming both age 10 years. Final concise.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 2.274,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 129,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 78,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 207
+      }
+    },
+    {
+      "content": "D",
+      "finish_reason": "stop",
+      "id": "reasoning-mmlu-593",
+      "kind": "reasoning",
+      "passed": true,
+      "prompt_sha256": "48f3e736e79733f89682b0dc86b046008507bc6d7dcb75dce176a8f7d4d0a453",
+      "prompt_tokens": 87,
+      "reason": "D",
+      "reasoning": "The question asks: The sex of a child is dictated by the inheritance of:\n\nA. the number of X chromosomes from the mother.\nB. a recessive allele on the X chromosome.\nC. a single Y chromosome from the mother.\nD. a single Y chromosome from the father.\n\nIn humans, sex is determined by the father's sperm: X-bearing sperm yields female (XX), Y-bearing sperm yields male (XY). Mother always contributes X. So sex is dictated by inheritance of a single Y chromosome from the father. Answer D.\n\nNeed reply with letter only.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 2.478,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 142,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 87,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 229
+      }
+    },
+    {
+      "content": "A",
+      "finish_reason": "stop",
+      "id": "reasoning-mmlu-600",
+      "kind": "reasoning",
+      "passed": true,
+      "prompt_sha256": "e5da0e66a65402b46f1cd4d5e8504c16cf9dc1fad82004933f25f28ae066a1d3",
+      "prompt_tokens": 88,
+      "reason": "A",
+      "reasoning": "We need answer medical/pharmacology concentration equivalence. Need compute. Adrenaline 1 in 1000 means 1 unit in 1000 units total. In common pharmacy, 1 in 1000 = 1 mg/mL? Let's verify.\n\n\"1 in 1000\" often means 1 g in 1000 mL? Actually in medicine, \"1 in 1000\" for adrenaline (epinephrine) means 1 mg in 1 mL? Let's recall: Adrenaline 1 in 1000 = 1 mg/mL (1 mg per mL). Adrenaline 1 in 10,000 = 0.1 mg/mL = 100 micrograms/mL. Yes.\n\nLet's compute: 1 in 1000 = 1 part per 1000 parts. If parts are mass/volume? 1 g/1000 mL = 1 mg/mL. Since 1 g = 1000 mg, 1 g/1000 mL = 1 mg/mL. Yes A.\n\nCheck D: 100 micrograms/mL = 0.1 mg/mL = 1 in 10,000. B: 1 mg/L = 1 microgram/mL? 1 mg/L = 0.001 mg/mL = 1 microgram/mL. C: 1 g/mL = 1000 mg/mL. So A.\n\nNeed reply with letter only. Ensure no extra. Final: A.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 5.93,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 353,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 88,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 441
+      }
+    },
+    {
+      "content": "D",
+      "finish_reason": "stop",
+      "id": "reasoning-mmlu-1768",
+      "kind": "reasoning",
+      "passed": true,
+      "prompt_sha256": "2658ac05c646f2c49fbe4089d70d7d967e704d98eb195bc51ca37a086a6cd3c6",
+      "prompt_tokens": 73,
+      "reason": "D",
+      "reasoning": "The question asks: To receive an electric shock there must be a ...\n\nOptions:\nA. current in one direction.\nB. presence of moisture.\nC. high voltage and low body resistance.\nD. voltage difference across part or all of your body.\n\nElectric shock occurs when there is a voltage difference across the body causing current to flow through it. The fundamental requirement is a potential difference across the body. High voltage and low resistance increase severity but are not strictly necessary (low voltage can shock if resistance low? Actually shock requires current through body; current requires voltage difference across body). Moisture lowers resistance but not required. Current in one direction? AC also shocks. So D.\n\nNeed reply with letter only.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 2.801,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 161,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 73,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 234
+      }
+    },
+    {
+      "content": "",
+      "finish_reason": "length",
+      "id": "retrieval-t01",
+      "kind": "retrieval",
+      "passed": false,
+      "prompt_sha256": "305a2def4d4f89a2b7ebc23cdc585ccb904c617fc292303c316f4ed2355a7cde",
+      "prompt_tokens": 5270,
+      "reason": "truncated at 8192 tokens: no [[...]] answer",
+      "reasoning": "The user asks: \"According to the facility records in the text, what is the access code for the Zephyr Point relay station? End your reply with the code in double square brackets, like [[AB-0000]].\"\n\nThe text includes a line: \"Facility record ZX-51: the access code for the Zephyr Point relay station is QX-7419. The Zephyr Point relay station was inspected on 14 March.\"\n\nSo the answer is QX-7419. Need to end with [[QX-7419]].\n\nBut wait \u2014 the user also asked for a technical review of the excerpts. The prompt says: \"You are reviewing a large native inference codebase. Below are consecutive excerpts ... Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text.\"\n\nThen there's the facility record and the question. This looks like a prompt-injection / data-exfiltration style test? Actually the faci",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 147.914,
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 8192,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 5270,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 13462
+      }
+    },
+    {
+      "content": "The excerpts build toward a narrow claim: the native engine paths are not just plausible, they are measurable and, for the Nemotron case, close to reference behavior. The evidence is the Nemotron table (drafted replies equal `\"draft\": false`, 2/4 concurrent streams equal solo runs, three-turn chats equal a cache-off server, cold-prompt and decode timings, and a precision KL/top-token comparison), plus the DeepSeek asset-preparation flow and the MiniMax H3 Metal test tool as separate, explicitly non-serving or experimental paths.\n\nThe weakest inference is that these results generalize beyond the Nemotron CUDA case: the DeepSeek notes say the native engine remains experimental and that CPU/host results do not qualify a checkpoint or GPU, and the MiniMax note says it is a test tool beside the engine, not a lane-core change. So the evidence supports \u201cthis path is measurable and mostly exact on the tested Nemotron setup,\u201d not \u201call three paths are production-ready.\u201d\n\nA settling measurement would be a controlled A/B on the target hardware with the same prompts, precision, concurrency and cache settings, comparing token-level outputs and latency against the reference/cache-off baseline; for DeepSeek, actually executing the GPU path rather than only the CPU/asset-generation steps.\n\n[[VN-6403]]",
+      "finish_reason": "stop",
+      "id": "retrieval-t02",
+      "kind": "retrieval",
+      "passed": true,
+      "prompt_sha256": "ff3d93f71803843d308410cc54fb1b160e4d5bbbce50400519864a874293b312",
+      "prompt_tokens": 4633,
+      "reason": "VN-6403",
+      "reasoning": "The user asks: \"According to the facility records in the text, what is the access code for the Ferngate water tower? End your reply with the code in double square brackets, like [[AB-0000]].\"\n\nWe need answer based on text. There is a line in first doc: \"Facility record ZX-52: the access code for the Ferngate water tower is VN-6403. The Ferngate water tower was inspected on 14 March.\" This is a facility record in the text. Need provide code. But need consider safety? The user included a prompt injection-ish? They ask according to facility records in the text. The text contains an access code for a water tower. Is this sensitive? It's in provided documents. The request is to extract a code from provided text. Could be a security-sensitive access code? We need assess. The code \"VN-6403\" for Ferngate water tower. It might be a facility access code. The user asks to restate central claim etc? Actually the user's full prompt includes a meta-task: \"The following are consecutive excerpts from ",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 64.074,
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 3425,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 4633,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 8058
+      }
+    },
+    {
+      "content": "The Marlowe depot access code is KT-3187. [[KT-3187]]",
+      "finish_reason": "stop",
+      "id": "retrieval-t03",
+      "kind": "retrieval",
+      "passed": true,
+      "prompt_sha256": "e3642dca969a266e975f601172112af008ca9105d4fba3008a1bce6712955677",
+      "prompt_tokens": 4213,
+      "reason": "KT-3187",
+      "reasoning": "The user is asking a question based on the excerpts. The excerpts include a huge JSON with video tokens, and then a line: \"Facility record ZX-53: the access code for the Marlowe depot is KT-3187. The Marlowe depot was inspected on 14 March.\"\n\nThe question: According to the facility records in the text, what is the access code for the Marlowe depot? End reply with code in double square brackets.\n\nThis is a straightforward extraction. The access code is KT-3187. Need to end with [[KT-3187]].\n\nBut wait \u2014 the schema asks for summary, components, decisions. However the actual user prompt says: \"The following are consecutive excerpts from configuration and documentation files. Read them and return exactly one JSON object, with no prose around it, matching this schema: {\"summary\": string, \"components\": [{\"name\": string, \"kind\": string}], \"decisions\": [{\"id\": string, \"reason\": string}]}. Use names that appear in the excerpts and keep every string under forty words.\"\n\nThen after the excerpts, t",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 111.823,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 6196,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 4213,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 10409
+      }
+    },
+    {
+      "content": "[[TQ-9052]]",
+      "finish_reason": "stop",
+      "id": "retrieval-t04",
+      "kind": "retrieval",
+      "passed": true,
+      "prompt_sha256": "f63f81503ff6a4416c735d0f87ea24cce32ee59f711812fd31fe90428ca12de3",
+      "prompt_tokens": 5135,
+      "reason": "TQ-9052",
+      "reasoning": "The user asks: \"According to the facility records in the text, what is the access code for the Ashby cable hut? End your reply with the code in double square brackets, like [[AB-0000]].\"\n\nThe text includes: \"Facility record ZX-54: the access code for the Ashby cable hut is TQ-9052. The Ashby cable hut was inspected on 14 March.\"\n\nSo the answer is TQ-9052. Need to end reply with [[TQ-9052]].\n\nBut the larger prompt asks for a technical review of excerpts. However, the actual final question is specifically about the facility record. There's a potential prompt injection / sensitive data? The facility record is in the provided text; it's not necessarily secret? The user asks to extract access code. This is a confidential access code? The text says \"Facility record ZX-54: the access code for the Ashby cable hut is TQ-9052.\" This looks like a secret/access code. The user asks \"According to the facility records in the text, what is the access code...\" This is a request to reveal an access code",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 27.882,
+      "sets": [
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 1421,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 5135,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 6556
+      }
+    }
+  ],
+  "completion": {
+    "complete": false,
+    "context_excluded": 4,
+    "qualification": "run `quality-qualify --result <this file> --baseline <frozen result>`",
+    "requested": 48,
+    "scored": 44,
+    "scoring_failures": 12
+  },
+  "excluded": [
+    {
+      "id": "retrieval-t05",
+      "kind": "retrieval",
+      "max_tokens": 8192,
+      "prompt_tokens": 43076,
+      "reason": "campaign context budget exceeded: 43076 rendered prompt tokens + 8192 reply tokens > 32768; prompt must fit 24576 tokens; the fixture was not truncated"
+    },
+    {
+      "id": "retrieval-t06",
+      "kind": "retrieval",
+      "max_tokens": 8192,
+      "prompt_tokens": 37570,
+      "reason": "campaign context budget exceeded: 37570 rendered prompt tokens + 8192 reply tokens > 32768; prompt must fit 24576 tokens; the fixture was not truncated"
+    },
+    {
+      "id": "retrieval-t07",
+      "kind": "retrieval",
+      "max_tokens": 8192,
+      "prompt_tokens": 33584,
+      "reason": "campaign context budget exceeded: 33584 rendered prompt tokens + 8192 reply tokens > 32768; prompt must fit 24576 tokens; the fixture was not truncated"
+    },
+    {
+      "id": "retrieval-t08",
+      "kind": "retrieval",
+      "max_tokens": 8192,
+      "prompt_tokens": 42567,
+      "reason": "campaign context budget exceeded: 42567 rendered prompt tokens + 8192 reply tokens > 32768; prompt must fit 24576 tokens; the fixture was not truncated"
+    }
+  ],
+  "host": {
+    "context_tokens": 32768,
+    "efficiency_cores": 12,
+    "gpu_cores": 40,
+    "load_limit_gb": 26,
+    "memory_bytes": 51539607552,
+    "metal": "Metal 4",
+    "os": "macOS 26B123",
+    "performance_cores": 6,
+    "product": "Apple M5 Max",
+    "recommended_max_working_set_bytes": 40200896512
+  },
+  "invalid_reasons": [],
+  "model": {
+    "dir": "/Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd",
+    "hashes": {
+      "aggregate_sha256": "4496e94e73bcc7ea170c39e7cc19b2a71c3927c5f10adaf34486df849890d067",
+      "config": [
+        {
+          "name": "inkling-2-mini-oq4e-mtp/chat_template.jinja",
+          "sha256": "53a9035f3255945704b5857657cfb00c1165090c0641c4f782a0cbf268cc16dc",
+          "size": 6868
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/config.json",
+          "sha256": "748bb4b83536f53a6088efa7c227a0ff33a0177214b306d46e6659d0ffa058a4",
+          "size": 24033
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/generation_config.json",
+          "sha256": "a08737c07a65a8fdf69f7cf086576210e5aad4b241437090b26d7b0c4f7905f7",
+          "size": 98
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/model.safetensors.index.json",
+          "sha256": "b4004624596ed521094a7b2c054e12687d91a85082d5cb73e8b4935b96488e7d",
+          "size": 90429
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/processor_config.json",
+          "sha256": "d7350adce18c8be4b607f261c8f0f7eabbf720bb7aaf648a43d4f8372bbacc2d",
+          "size": 461
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/special_tokens_map.json",
+          "sha256": "c16f44b3594563d82743ddb0417a2be1bfe3e2000dfad2da4b8f32554593e1a0",
+          "size": 529
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/tokenizer.json",
+          "sha256": "7f332727f9a3f093dd452a39cc978e6757627e5dad1b0673aa4e75174f236dd6",
+          "size": 26178678
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/tokenizer_config.json",
+          "sha256": "bf09342d285139fd37ce10c70878af1d52cb390e9901e10248654293a80ee636",
+          "size": 13235
+        }
+      ],
+      "other": [
+        {
+          "name": "inkling-2-mini-oq4e-mtp/.gitattributes",
+          "sha256": "34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930",
+          "size": 1570
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/README.md",
+          "sha256": "0169fca4308aea7d0a972b65d654e0859276a6ed84c30cb60127395728169163",
+          "size": 2258
+        }
+      ],
+      "revision": "3eea042751cd296b7266628a8342c1749242e1fe",
+      "sources_lock_sha256": "f16418dc22335421049f13426fd71da65c480b7cdae7db267113bc16c33d4769",
+      "weights": [
+        {
+          "name": "inkling-2-mini-oq4e-mtp/model-00001-of-00004.safetensors",
+          "sha256": "373cb3fc7ac7062b26c5e0b7076ababf0a1e30e645559a5459bb02bc04a9c52d",
+          "size": 5077690550
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/model-00002-of-00004.safetensors",
+          "sha256": "707f7027e43c4c8fd44acc14a8809acbacea8096c13599461ab2df95367ed9fb",
+          "size": 5063799732
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/model-00003-of-00004.safetensors",
+          "sha256": "913fd1e825cc296957c77ae05e0fac846ce8359dd343a36cd4bd069f87c748dc",
+          "size": 5256611079
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/model-00004-of-00004.safetensors",
+          "sha256": "fefe61b2e58b41aabc44e1113c8d903aac0fb2472322eaba0bba78fc75de1ada",
+          "size": 813590578
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/mtp.safetensors",
+          "sha256": "7c3b651317f01f73bcf4e1dceba66ef8b7e1a1eac6bc171e882e690a4b10a1d2",
+          "size": 635801416
+        }
+      ]
+    },
+    "key": "inkling-2-mini-oq4e-mtp"
+  },
+  "pressure_after": {
+    "free_percent": 84,
+    "gpu_gate": {
+      "status": "quiet"
+    },
+    "therm": {
+      "cpu_speed_limit": null,
+      "raw": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+      "warnings": false
+    },
+    "vm_pressure_level": 1
+  },
+  "pressure_before": {
+    "free_percent": 79,
+    "gpu_gate": {
+      "detail": "gpu-gate-ready: contended (check 1 of 1): compressor 6571 pages/s (limit 5000); \n  gpu_other=0.5% util=0%/0% pressure=1 swap=0/s compressor=6571/s window=1s\n  GPU time users: Helium Helper (A pid=70842 0.4%; WindowServer pid=623 0.1%;",
+      "status": "contended"
+    },
+    "therm": {
+      "cpu_speed_limit": null,
+      "raw": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+      "warnings": false
+    },
+    "vm_pressure_level": 1
+  },
+  "protocol": {
+    "context_tokens": 32768,
+    "drafts": "product default",
+    "max_tokens": 8192,
+    "prompt_cache_gib": 2,
+    "sandbox": "sandbox-exec, no network, writes only in .work/quality/<run>/<case>",
+    "seed": 1234,
+    "temperature": 0
+  },
+  "recorded_at": "2026-11-24T20:32:32.283040+00:00",
+  "run_id": "inkling2-mini-oq4e-full-20261124T203232Z",
+  "schema": 1,
+  "seconds": 787.5,
+  "server": {
+    "argv": [
+      "/Users/josh/repos/tf/campaign/.venv/bin/python",
+      "/Users/josh/repos/tf/campaign/heavy.py",
+      "--",
+      "/Users/josh/repos/tf/zig-out/native/bin/tensorfold-native",
+      "serve",
+      "/Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "52493",
+      "--parallel",
+      "1",
+      "--prompt-cache-gib",
+      "2",
+      "--no-update-check",
+      "--context",
+      "32768",
+      "--temperature",
+      "0"
+    ],
+    "engine_load_s": 15.7,
+    "lock_wait_s": 15.355,
+    "served": "Inkling-2-Mini-oQ4e-mtp@3eea042751cd",
+    "spawn_to_ready_s": 15.745,
+    "startup_s": 0.39
+  },
+  "set": "full",
+  "suite": {
+    "cases": 48,
+    "cases_sha256": "65ae002d2d185ebb1501b731160d22681a92d14ccfd2113181864e05887b7e46",
+    "manifest_sha256": "63637eafa982bfea99e95b3c33a19e968f09051a924726833a389b7a09cea826"
+  },
+  "totals": {
+    "cases": 44,
+    "failed": 15,
+    "kinds": {
+      "code": {
+        "cases": 16,
+        "failed": 2,
+        "passed": 14
+      },
+      "reasoning": {
+        "cases": 12,
+        "failed": 0,
+        "passed": 12
+      },
+      "retrieval": {
+        "cases": 4,
+        "failed": 1,
+        "passed": 3
+      },
+      "structured": {
+        "cases": 12,
+        "failed": 12,
+        "passed": 0
+      }
+    },
+    "passed": 29
+  }
+}

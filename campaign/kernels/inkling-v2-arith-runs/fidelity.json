@@ -1,0 +1,67 @@
+{
+  "reference": "/Users/josh/repos/tf/.work/parity/inkling2-mini/omlx-ref",
+  "against_reference": {
+    "before-w1": {
+      "positions": 3015,
+      "top1": 2865,
+      "top1_percent": 95.02487562189054,
+      "mean_kl": 0.020887546642720155,
+      "row_mean_kl": 0.0740773888664609,
+      "max_kl": 14.746550064526303,
+      "max_abs_p50": 1.2730517387390137,
+      "max_abs_p90": 5.430461549758911,
+      "max_abs_p99": 16.5133526802063,
+      "max_abs_max": 26.4927459359169
+    },
+    "after-w1": {
+      "positions": 3015,
+      "top1": 2865,
+      "top1_percent": 95.02487562189054,
+      "mean_kl": 0.020887546642720155,
+      "row_mean_kl": 0.0740773888664609,
+      "max_kl": 14.746550064526303,
+      "max_abs_p50": 1.2730517387390137,
+      "max_abs_p90": 5.430461549758911,
+      "max_abs_p99": 16.5133526802063,
+      "max_abs_max": 26.4927459359169
+    },
+    "before-w8": {
+      "positions": 3015,
+      "top1": 2865,
+      "top1_percent": 95.02487562189054,
+      "mean_kl": 0.020887546642720155,
+      "row_mean_kl": 0.0740773888664609,
+      "max_kl": 14.746550064526303,
+      "max_abs_p50": 1.2730517387390137,
+      "max_abs_p90": 5.430461549758911,
+      "max_abs_p99": 16.5133526802063,
+      "max_abs_max": 26.4927459359169
+    },
+    "after-w8": {
+      "positions": 3015,
+      "top1": 2865,
+      "top1_percent": 95.02487562189054,
+      "mean_kl": 0.020887546642720155,
+      "row_mean_kl": 0.0740773888664609,
+      "max_kl": 14.746550064526303,
+      "max_abs_p50": 1.2730517387390137,
+      "max_abs_p90": 5.430461549758911,
+      "max_abs_p99": 16.5133526802063,
+      "max_abs_max": 26.4927459359169
+    }
+  },
+  "bit_equal": {
+    "after-w1=before-w1": {
+      "rows": 3015,
+      "bit_equal_rows": 3015
+    },
+    "after-w8=after-w1": {
+      "rows": 3015,
+      "bit_equal_rows": 3015
+    },
+    "before-w8=before-w1": {
+      "rows": 3015,
+      "bit_equal_rows": 3015
+    }
+  }
+}

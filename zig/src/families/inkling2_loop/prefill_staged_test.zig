@@ -92,7 +92,7 @@ test "oQ4e fused prefill keeps the unfused logits and cache state byte for byte"
             try t.expect(!staged.place(&sources, &parts, 8600 * 2304 * 2 - 1, &rows));
         }
     }
-    for ([_][]const usize{ &.{ 137, 163, 9 }, &.{ 9, 137, 163 } }) |chunks| {
+    for ([_][]const usize{ &.{ 137, 163, 9 }, &.{ 9, 137, 163 }, &.{ 163, 137, 5, 1, 3 } }) |chunks| {
         ps.fuse = true;
         const fused = try fill(m, &ps, &ids, chunks);
         defer fused.deinit();

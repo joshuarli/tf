@@ -123,3 +123,50 @@ inline float i2pr_part(float v) {
     VH[at + lane + 32u * s] = VC[at + lane + 32u * s] * inv;
   }
 }
+
+struct i2pr_ring_args { uint channels, ring, base, rows, tail; };
+
+[[kernel]] void i2pr_ring_store(const device float* X [[buffer(0)]], device float* RING [[buffer(1)]],
+    constant i2pr_ring_args& a [[buffer(2)]], uint2 p [[thread_position_in_grid]]) {
+  if (p.x >= a.channels || p.y >= a.tail) return;
+  const uint y = a.rows - a.tail + p.y;
+  RING[((a.base + y) % a.ring) * a.channels + p.x] = X[(size_t)y * a.channels + p.x];
+}
+
+struct i2pr_kv_args { uint count, base, rows, wring; };
+
+[[kernel]] void i2pr_kv_store(const device half4* K [[buffer(0)]], const device half4* V [[buffer(1)]],
+    device half4* KEYS [[buffer(2)]], device half4* VALUES [[buffer(3)]], constant i2pr_kv_args& a [[buffer(4)]],
+    uint2 p [[thread_position_in_grid]]) {
+  const uint quads = a.count / 4u;
+  if (p.x >= quads || p.y >= a.rows) return;
+  if (a.wring && p.y + a.wring < a.rows) return;
+  const uint r = a.wring ? (a.base + p.y) % a.wring : a.base + p.y;
+  KEYS[(size_t)r * quads + p.x] = K[(size_t)p.y * quads + p.x];
+  VALUES[(size_t)r * quads + p.x] = V[(size_t)p.y * quads + p.x];
+}
+
+struct i2pr_conv_args { uint channels, heads, ring, base, rows, layout; float norm; uint out; };
+
+[[kernel]] void i2pr_conv_add(const device float* X [[buffer(0)]], const device float* RING [[buffer(1)]],
+    const device bfloat* W [[buffer(2)]], constant i2pr_conv_args& a [[buffer(3)]], device float* O [[buffer(4)]],
+    device float* RES [[buffer(5)]], uint2 p [[thread_position_in_grid]]) {
+  if (p.x >= a.channels || p.y >= a.rows) return;
+  const uint c = p.x, t = p.y, pos = a.base + t;
+  const device float* x = X + (size_t)t * a.channels;
+  float sum = x[c];
+  for (uint k = 0; k < 4u; ++k) {
+    const int at = int(pos) + int(k) - 3;
+    if (at < 0) continue;
+    float v;
+    if (at == int(pos)) v = x[c];
+    else if ((uint)at >= a.base) v = X[(size_t)((uint)at - a.base) * a.channels + c];
+    else v = RING[((uint)at % a.ring) * a.channels + c];
+    const size_t tap = a.layout ? (size_t)(3u - k) * a.channels + c : (size_t)c * 4u + k;
+    sum = fma(v, float(W[tap]), sum);
+  }
+  const float value = sum * a.norm;
+  const size_t at = (size_t)t * a.channels + c;
+  if (a.out) O[at] = value;
+  RES[at] = RES[at] + value;
+}

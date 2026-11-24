@@ -12,20 +12,36 @@ const max_norms = 3;
 pub const Pipes = struct {
     mix: mtl.Pipeline,
     clips: mtl.Pipeline,
+    ring: mtl.Pipeline,
+    kv: mtl.Pipeline,
+    conv_add: mtl.Pipeline,
 
     pub fn init(device: mtl.Device) !Pipes {
         const lib = try mtl.Library.fromSource(device, source, mtl.CompileOptions.mlx());
         defer lib.deinit();
         const mix = try mtl.Pipeline.init(device, lib, "i2pr_mix_norm", false);
         errdefer mix.deinit();
-        return .{ .mix = mix, .clips = try mtl.Pipeline.init(device, lib, "i2pr_clips", false) };
+        const clips = try mtl.Pipeline.init(device, lib, "i2pr_clips", false);
+        errdefer clips.deinit();
+        const ring = try mtl.Pipeline.init(device, lib, "i2pr_ring_store", false);
+        errdefer ring.deinit();
+        const kv = try mtl.Pipeline.init(device, lib, "i2pr_kv_store", false);
+        errdefer kv.deinit();
+        return .{ .mix = mix, .clips = clips, .ring = ring, .kv = kv, .conv_add = try mtl.Pipeline.init(device, lib, "i2pr_conv_add", false) };
     }
 
     pub fn deinit(p: Pipes) void {
         p.mix.deinit();
         p.clips.deinit();
+        p.ring.deinit();
+        p.kv.deinit();
+        p.conv_add.deinit();
     }
 };
+
+pub const RingArgs = extern struct { channels: u32, ring: u32, base: u32, rows: u32, tail: u32 };
+pub const KvArgs = extern struct { count: u32, base: u32, rows: u32, wring: u32 };
+pub const ConvArgs = extern struct { channels: u32, heads: u32, ring: u32, base: u32, rows: u32, layout: u32, norm: f32, out: u32 };
 
 pub const ClipArgs = extern struct { heads: u32, kv: u32, items: u32, q_threshold: f32, rel_threshold: f32, eps: f32 };
 

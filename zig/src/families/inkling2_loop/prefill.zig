@@ -1000,13 +1000,38 @@ const Chunk = struct {
         }
         c.setP(c.s.pipes.conv, ConvB{ .channels = channels, .heads = conv_heads, .ring = st.ring, .base = c.base, .rows = c.n, .layout = layout, .norm = norm }, &.{ x, ring, t(weight), if (dyn != null) dyn_out else A, A, out });
         c.enc.dispatchThreads(mtl.Size.of(channels, c.n, 1), mtl.Size.of(256, 1, 1));
-        c.setP(c.s.pipes.cstore, CStore{ .channels = channels, .ring = st.ring, .base = c.base, .rows = c.n }, &.{ x, ring, A });
-        c.enc.dispatchThreads(mtl.Size.of(channels, c.n, 1), mtl.Size.of(256, 1, 1));
+        c.ringStore(x, ring, channels);
         if (c.s.verify_conv) |capture| c.copyN(x, bo(capture.buffer, capture.offset(slot, site, 0)), @as(usize, c.n) * channels);
+    }
+
+    fn ringStore(c: Chunk, x: B, ring: B, channels: u32) void {
+        if (!c.s.fuse) {
+            c.setP(c.s.pipes.cstore, CStore{ .channels = channels, .ring = st.ring, .base = c.base, .rows = c.n }, &.{ x, ring, A });
+            c.enc.dispatchThreads(mtl.Size.of(channels, c.n, 1), mtl.Size.of(256, 1, 1));
+            return;
+        }
+        const tail: u32 = @min(c.n, st.ring);
+        c.setP(c.s.pipes.rows.ring, rows_mod.RingArgs{ .channels = channels, .ring = st.ring, .base = c.base, .rows = c.n, .tail = tail }, &.{ x, ring, A });
+        c.enc.dispatchThreads(mtl.Size.of(channels, tail, 1), mtl.Size.of(256, 1, 1));
+    }
+
+    fn convolveAdd(c: Chunk, x: B, out: ?B, weight: Tensor, ring: B, slot: u32, site: ConvSite, residual: B) bool {
+        if (c.batch != null or !c.s.fuse) return false;
+        const norm: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(cfg.conv_taps + 1)));
+        c.setP(c.s.pipes.rows.conv_add, rows_mod.ConvArgs{ .channels = c.h, .heads = 0, .ring = st.ring, .base = c.base, .rows = c.n, .layout = 0, .norm = norm, .out = @intFromBool(out != null) }, &.{ x, ring, t(weight), A, out orelse residual, residual });
+        c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
+        c.ringStore(x, ring, c.h);
+        if (c.s.verify_conv) |capture| c.copyN(x, bo(capture.buffer, capture.offset(slot, site, 0)), @as(usize, c.n) * c.h);
+        return true;
     }
 
     fn kvStore(c: Chunk, slot: u32) void {
         const at = c.slotBase(slot);
+        if (c.s.fuse and c.kvw % 4 == 0) {
+            c.setP(c.s.pipes.rows.kv, rows_mod.KvArgs{ .count = c.kvw, .base = c.base, .rows = c.n, .wring = c.slotRing(slot) }, &.{ b(c.s.kh), b(c.s.vh), bo(c.cache.keys, at), bo(c.cache.values, at), A });
+            c.enc.dispatchThreads(mtl.Size.of(c.kvw / 4, c.n, 1), mtl.Size.of(256, 1, 1));
+            return;
+        }
         c.setP(c.s.pipes.kv, KvB{ .count = c.kvw, .base = c.base, .rows = c.n, .wring = c.slotRing(slot) }, &.{ b(c.s.kh), b(c.s.vh), bo(c.cache.keys, at), bo(c.cache.values, at), A });
         c.enc.dispatchThreads(mtl.Size.of(c.kvw, c.n, 1), mtl.Size.of(256, 1, 1));
     }
@@ -1168,7 +1193,7 @@ const Chunk = struct {
         }, inputs);
     }
 
-    fn attention(c: Chunk, lay: *const Layer, slot: u32, full: bool, ins: [3]In) void {
+    fn attention(c: Chunk, lay: *const Layer, slot: u32, full: bool, ins: [3]In, push: bool) bool {
         const s = c.s;
         const text = &c.m.config.text;
         const extent: u32 = if (full) text.rel_extent else text.window;
@@ -1227,7 +1252,9 @@ const Chunk = struct {
             c.flat(.sig_mul, Pair{ .count = c.qw * c.n }, &.{ b(s.attn), b(s.gate), A, b(s.attn) }, @as(usize, c.qw) * c.n);
             c.lin(lay.attn.o, .{ .buf = b(s.attn), .xs = 1, .xb = 0 }, b(s.projout));
         }
+        if (!push and c.convolveAdd(b(s.projout), if (s.capture != null) b(s.o) else null, lay.attn_post, ring[2], slot, .attention, b(s.x))) return true;
         c.convolve(b(s.projout), b(s.o), lay.attn_post, null, undefined, b(s.projout), ring[2], c.h, 0, 0, slot, .attention, false);
+        return false;
     }
 
     fn experts(c: Chunk, lay: *const Layer, input: B, slot: u32) void {
@@ -1487,11 +1514,12 @@ const Chunk = struct {
         }
 
         for (0..3) |j| c.record(slot, 3 + j, ins[j]);
-        c.attention(lay, slot, full, ins);
+        const push = ip % text.block == 0;
+        const added = c.attention(lay, slot, full, ins, push);
         c.record(slot, 6, .{ .buf = b(s.o), .xs = 1, .xb = 0 });
-        if (ip % text.block == 0) {
+        if (push) {
             c.pushBlock();
-        } else c.addN(b(s.x), b(s.o), @as(usize, c.n) * c.h);
+        } else if (!added) c.addN(b(s.x), b(s.o), @as(usize, c.n) * c.h);
 
         c.record(slot, 7, .{ .buf = b(s.x), .xs = 1, .xb = 0 });
         const mlp_query = m.weights.mlp_queries[index];
@@ -1504,8 +1532,10 @@ const Chunk = struct {
         if (!mlp_fused) c.rmsW(.{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, t(lay.mlp_norm), b(s.m0), 1, 0, c.h, text.eps);
         c.experts(lay, b(s.m0), slot);
         const slots = c.rings(slot);
-        c.convolve(b(s.moe), b(s.aconv), lay.mlp_post, null, undefined, b(s.moe), slots[3], c.h, 0, 0, slot, .mlp, false);
-        if (c.batch == null) c.addN(b(s.x), b(s.aconv), @as(usize, c.n) * c.h);
+        if (!c.convolveAdd(b(s.moe), null, lay.mlp_post, slots[3], slot, .mlp, b(s.x))) {
+            c.convolve(b(s.moe), b(s.aconv), lay.mlp_post, null, undefined, b(s.moe), slots[3], c.h, 0, 0, slot, .mlp, false);
+            if (c.batch == null) c.addN(b(s.x), b(s.aconv), @as(usize, c.n) * c.h);
+        }
         c.record(slot, 8, .{ .buf = b(s.x), .xs = 1, .xb = 0 });
     }
 

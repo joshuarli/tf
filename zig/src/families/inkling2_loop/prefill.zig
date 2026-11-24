@@ -71,7 +71,6 @@ const Pair = extern struct { count: u32 };
 const AffineBatchControl = extern struct { k: u32, m0: u32, m1: u32, h: u32, cxs: u32, cxb: u32, mxs: u32, mxb: u32, ys: u32, yb: u32 };
 const RmsPair = extern struct { width: u32, xs0: u32, xb0: u32, xs1: u32, xb1: u32, eps: f32 };
 const AffineProjections = extern struct { k: u32, full: u32, m: [8]u32 };
-const SharedProjections = extern struct { k: u32, full: u32, rows: u32, m: [8]u32 };
 const AffineDense = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32, bits: u32, cap: f32 };
 
 const B = struct { buf: mtl.Buffer, off: usize = 0, args: bool = false };
@@ -783,10 +782,6 @@ const Chunk = struct {
                 c.setP(c.s.pipes.affine_half_rows.?, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out, b(c.s.half_overflow.?) });
                 c.enc.dispatchGroups(mtl.Size.of((n + 63) / 64, (rows + 31) / 32, 1), mtl.Size.of(256, 1, 1));
                 return;
-            } else if (rows >= 2 and rows <= 8) {
-                c.setP(p.dense_shared, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out });
-                c.enc.dispatchGroups(mtl.Size.of((n + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
-                return;
             } else {
                 c.setP(p.dense, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out });
             }
@@ -812,18 +807,12 @@ const Chunk = struct {
         const ms: [8]u32 = .{ @intCast(nrows(a.q)), @intCast(nrows(a.k)), @intCast(nrows(a.v)), @intCast(nrows(a.r)), @intCast(nrows(a.gate)), @intCast(nrows(a.sink)), if (full) @intCast(nrows(a.k_dyn.?)) else 0, if (full) @intCast(nrows(a.v_dyn.?)) else 0 };
         var total: usize = 0;
         for (ms) |n| total += n;
-        const bufs = [_]B{
+        c.setP(c.m.affine_pipes.?.batch_projections, AffineProjections{ .k = @intCast(width(a.q)), .full = @intFromBool(full), .m = ms }, &.{
             inputs[0].buf, inputs[1].buf, inputs[2].buf, t(a.q), bo(qf.scales, qf.scale_offset), bo(qf.biases, qf.bias_offset),
             t(k), bo(kf.scales, kf.scale_offset), bo(kf.biases, kf.bias_offset),
             t(v), bo(vf.scales, vf.scale_offset), bo(vf.biases, vf.bias_offset),
             b(s.q), b(s.k), b(s.v), b(s.r), b(s.gate), b(s.sink), b(s.kdyn), b(s.vdyn), A,
-        };
-        if (c.n >= 2) {
-            c.setP(c.m.affine_pipes.?.shared_projections, SharedProjections{ .k = @intCast(width(a.q)), .full = @intFromBool(full), .rows = c.n, .m = ms }, &bufs);
-            c.enc.dispatchGroups(mtl.Size.of((total + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
-            return;
-        }
-        c.setP(c.m.affine_pipes.?.batch_projections, AffineProjections{ .k = @intCast(width(a.q)), .full = @intFromBool(full), .m = ms }, &bufs);
+        });
         c.enc.dispatchGroups(mtl.Size.of((total + 7) / 8, c.n, 1), mtl.Size.of(256, 1, 1));
     }
 

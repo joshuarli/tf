@@ -79,63 +79,6 @@ inline float i2a_dot(const device float* x, const device uint* w, const device b
   return simd_sum(acc);
 }
 
-// Weight row `row` against `rows` inputs `stride` floats apart: each word and its scale and bias read once, each
-// input's sum in i2a_dot's order.
-inline void i2a_dot_rows(const device float* x, size_t stride, uint rows, const device uint* w,
-                         const device bfloat* s, const device bfloat* b, size_t row, uint width, uint bits,
-                         uint lane, thread float (&acc)[8]) {
-  const uint per = 32u / bits;
-  const uint mask = (1u << bits) - 1u;
-  const uint words = width / per;
-  const uint4 shift = uint4(0u, bits, bits * 2u, bits * 3u);
-  for (uint r = 0; r < 8u; ++r) acc[r] = 0.0f;
-  uint word = lane;
-  while (word < words) {
-    const uint count = word + 96u < words ? 4u : 1u;
-    uint packed[4];
-    float scale[4], bias[4];
-#pragma unroll
-    for (uint i = 0; i < 4u; ++i) {
-      if (i >= count) break;
-      const uint at = word + 32u * i;
-      packed[i] = w[row * words + at];
-      const size_t group = row * (width / 64u) + (at * per) / 64u;
-      scale[i] = float(s[group]);
-      bias[i] = float(b[group]);
-    }
-#pragma unroll
-    for (uint i = 0; i < 4u; ++i) {
-      if (i >= count) break;
-      const uint at = word + 32u * i;
-      const float4 code0 = float4((uint4(packed[i]) >> shift) & mask);
-      const float4 value0 = fma(code0, float4(scale[i]), float4(bias[i]));
-      const float4 code1 = float4((uint4(packed[i] >> 16u) >> shift) & mask);
-      const float4 value1 = fma(code1, float4(scale[i]), float4(bias[i]));
-      for (uint r = 0; r < 8u; ++r) {
-        if (r >= rows) break;
-        const device float* xr = x + r * stride + at * per;
-        const float4 input0 = float4(*reinterpret_cast<const device packed_float4*>(xr));
-        acc[r] = fma(input0.x, value0.x, acc[r]);
-        acc[r] = fma(input0.y, value0.y, acc[r]);
-        acc[r] = fma(input0.z, value0.z, acc[r]);
-        acc[r] = fma(input0.w, value0.w, acc[r]);
-        if (bits == 4u) {
-          const float4 input1 = float4(*reinterpret_cast<const device packed_float4*>(xr + 4u));
-          acc[r] = fma(input1.x, value1.x, acc[r]);
-          acc[r] = fma(input1.y, value1.y, acc[r]);
-          acc[r] = fma(input1.z, value1.z, acc[r]);
-          acc[r] = fma(input1.w, value1.w, acc[r]);
-        }
-      }
-    }
-    word += 32u * count;
-  }
-  for (uint r = 0; r < 8u; ++r) {
-    if (r >= rows) break;
-    acc[r] = simd_sum(acc[r]);
-  }
-}
-
 [[kernel]] void i2a_embed(const device uint* ids [[buffer(0)]], const device uint* w [[buffer(1)]],
     const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
     const device bfloat* norm [[buffer(4)]], constant i2a_embed_args& a [[buffer(5)]],
@@ -209,22 +152,6 @@ inline void i2a_dot_rows(const device float* x, size_t stride, uint rows, const 
   const device float* input = x + (size_t)(row * a.xs + a.xb) * a.k;
   const float acc = i2a_dot(input, w, s, b, col, a.k, a.bits, lane);
   if (lane == 0u) y[(size_t)row * a.n + col] = a.cap > 0.0f ? a.cap * precise::tanh(acc / a.cap) : acc;
-}
-
-// i2a_dense for up to eight rows sharing each weight read.
-[[kernel]] void i2a_dense_shared(const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]],
-    const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
-    constant i2a_dense_args& a [[buffer(4)]], device float* y [[buffer(5)]],
-    uint group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
-  const uint col = group * 8u + tid / 32u;
-  const uint lane = tid % 32u;
-  if (col >= a.n) return;
-  float acc[8];
-  i2a_dot_rows(x + (size_t)a.xb * a.k, (size_t)a.xs * a.k, a.rows, w, s, b, col, a.k, a.bits, lane, acc);
-  if (lane == 0u) for (uint r = 0; r < 8u; ++r) {
-    if (r >= a.rows) break;
-    y[(size_t)r * a.n + col] = a.cap > 0.0f ? a.cap * precise::tanh(acc[r] / a.cap) : acc[r];
-  }
 }
 
 [[kernel]] void i2a_float_control(const device float* x [[buffer(0)]], const device float* gain [[buffer(1)]],
@@ -367,52 +294,6 @@ struct i2a_batch_control_args { uint k, m0, m1, h, cxs, cxb, mxs, mxb, ys, yb; }
       : which == 4u ? og : which == 5u ? os : which == 6u ? okd : ovd;
   const float result = i2a_dot(x, w, s, b, row + offset, a.k, 8u, lane);
   if (lane == 0u) out[(size_t)group.y * a.m[which] + row] = result;
-}
-
-struct i2a_shared_projection_args { uint k, full, rows; uint m[8]; };
-
-// i2a_batch_projections for up to eight rows sharing each weight read.
-[[kernel]] void i2a_shared_projections(const device float* xq [[buffer(0)]], const device float* xk [[buffer(1)]],
-    const device float* xv [[buffer(2)]], const device uint* wq [[buffer(3)]],
-    const device bfloat* sq [[buffer(4)]], const device bfloat* bq [[buffer(5)]],
-    const device uint* wk [[buffer(6)]], const device bfloat* sk [[buffer(7)]],
-    const device bfloat* bk [[buffer(8)]], const device uint* wv [[buffer(9)]],
-    const device bfloat* sv [[buffer(10)]], const device bfloat* bv [[buffer(11)]],
-    device float* oq [[buffer(12)]], device float* ok [[buffer(13)]], device float* ov [[buffer(14)]],
-    device float* orl [[buffer(15)]], device float* og [[buffer(16)]], device float* os [[buffer(17)]],
-    device float* okd [[buffer(18)]], device float* ovd [[buffer(19)]],
-    constant i2a_shared_projection_args& a [[buffer(20)]], uint group [[threadgroup_position_in_grid]],
-    uint tid [[thread_index_in_threadgroup]]) {
-  uint row = group * 8u + tid / 32u;
-  const uint lane = tid % 32u;
-  uint which = 0u;
-  for (; which < 8u; ++which) {
-    if (row < a.m[which]) break;
-    row -= a.m[which];
-  }
-  if (which == 8u) return;
-  const bool key = which == 1u || which == 6u;
-  const bool val = which == 2u || which == 7u;
-  const device float* x = key ? xk : val ? xv : xq;
-  const device uint* w = a.full && key ? wk : a.full && val ? wv : wq;
-  const device bfloat* s = a.full && key ? sk : a.full && val ? sv : sq;
-  const device bfloat* b = a.full && key ? bk : a.full && val ? bv : bq;
-  uint offset = 0u;
-  if (which == 1u) offset = a.full ? 0u : a.m[0];
-  if (which == 2u) offset = a.full ? 0u : a.m[0] + a.m[1];
-  if (which == 3u) offset = a.m[0] + (a.full ? 0u : a.m[1] + a.m[2]);
-  if (which == 4u) offset = a.m[0] + (a.full ? 0u : a.m[1] + a.m[2]) + a.m[3];
-  if (which == 5u) offset = a.m[0] + (a.full ? 0u : a.m[1] + a.m[2]) + a.m[3] + a.m[4];
-  if (which == 6u) offset = a.m[1];
-  if (which == 7u) offset = a.m[2];
-  device float* out = which == 0u ? oq : which == 1u ? ok : which == 2u ? ov : which == 3u ? orl
-      : which == 4u ? og : which == 5u ? os : which == 6u ? okd : ovd;
-  float acc[8];
-  i2a_dot_rows(x, a.k, a.rows, w, s, b, row + offset, a.k, 8u, lane, acc);
-  if (lane == 0u) for (uint r = 0; r < 8u; ++r) {
-    if (r >= a.rows) break;
-    out[(size_t)r * a.m[which] + row] = acc[r];
-  }
 }
 
 [[kernel]] void i2a_dense_rows(const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]],

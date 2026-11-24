@@ -309,9 +309,9 @@ pub const Plan = struct {
     const sibling_cap: f64 = 0.98;
     const Count = struct { hits: f64, trials: f64 };
 
-    /// V2's rested 1K verify, rows 1-8, and this lane's 16-row tiles past them.
-    pub const default_verify_ms = [max_rows + 1]f64{ 0, 16.1, 19.9, 22.8, 25.7, 27.9, 30.0, 32.2, 34.3, 36.0, 37.7, 39.4, 41.1, 42.8, 44.5, 46.2, 47.9 };
-    pub const default_draft_ms: f64 = 4.2;
+    /// DF2b's measured verify at 1, 2, 4, 8, 12 and 16 rows (1K and 4K), the wider tiles' fixed step at nine rows.
+    pub const default_verify_ms = [max_rows + 1]f64{ 0.0, 17.9, 21.8, 24.9, 28.0, 30.2, 32.4, 34.5, 36.7, 47.2, 49.5, 51.8, 54.0, 56.2, 58.5, 60.8, 63.0 };
+    pub const default_draft_ms: f64 = 4.5;
 
     pub fn init() Plan {
         var p = Plan{};

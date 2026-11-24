@@ -215,7 +215,7 @@ test "a plan verifies few rows for unlikely drafts and all of a long likely chai
     try std.testing.expectEqual(@as(usize, 16), strong.rows);
     try std.testing.expectEqual(@as(u8, 15), strong.depth[15]);
     try expectParentsFirst(&strong);
-    try std.testing.expectEqual(@as(usize, 9), plan.build(9, null, &chain, 40, 9).rows);
+    try std.testing.expectEqual(@as(usize, 6), plan.build(9, null, &chain, 40, 6).rows);
     plan.most = 8;
     try std.testing.expectEqual(@as(usize, 8), plan.build(9, null, &chain, 40, 16).rows);
 }

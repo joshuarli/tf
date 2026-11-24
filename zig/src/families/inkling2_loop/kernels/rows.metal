@@ -50,74 +50,88 @@ inline float2 i2t_tree(thread float2 (&v)[N]) {
   return v[0];
 }
 
-template <uint SG, uint T>
+template <uint SG, uint CL, uint N>
+inline void i2t_partials(thread float2 (&acc)[CL][N], threadgroup float2* part, uint sg, uint lane) {
+#pragma unroll
+  for (uint n = 0; n < N; ++n) {
+    float2 v[CL];
+#pragma unroll
+    for (uint l = 0; l < CL; ++l) v[l] = acc[l][n];
+    part[(sg * N + n) * 32u + lane] = i2t_tree(v);
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+}
+
+template <uint SG, uint N>
+inline float2 i2t_total(threadgroup const float2* part, uint n, uint lane) {
+  float2 v[SG];
+#pragma unroll
+  for (uint i = 0; i < SG; ++i) v[i] = part[(i * N + n) * 32u + lane];
+  return i2t_tree(v);
+}
+
+template <uint SG, uint T, uint G>
 inline void i2t_affine(const device float* x, size_t step, uint rows, const device uint* w, const device bfloat* s,
-    const device bfloat* b, uint row0, uint last, uint k, uint sg, uint lane, threadgroup float2 (&part)[SG][T][32],
-    thread float2 (&out)[T]) {
+    const device bfloat* b, uint row0, uint last, uint k, uint sg, uint lane, threadgroup float2* part,
+    thread float2 (&out)[G][T]) {
   constexpr uint CL = 32u / SG;
   uint fm, fn;
   i2t_lane(lane, fm, fn);
   const uint words = k / 4u, groups = k / 64u, chunks = words / 64u;
   const uint half_word = 32u * (fn >> 2), shift = 8u * (fn & 3u), half_k = 128u * (fm >> 2) + (fm & 3u);
-  const bool live0 = fn < rows, live1 = fn + 1u < rows;
-  const device float* x0 = x + (live0 ? fn : 0u) * step;
-  const device float* x1 = x + (live1 ? fn + 1u : 0u) * step;
+  bool live[2u * G];
+  const device float* xr[2u * G];
+#pragma unroll
+  for (uint i = 0; i < 2u * G; ++i) {
+    live[i] = 8u * (i / 2u) + fn + i % 2u < rows;
+    xr[i] = x + (live[i] ? 8u * (i / 2u) + fn + i % 2u : 0u) * step;
+  }
   size_t row[T];
 #pragma unroll
   for (uint t = 0; t < T; ++t) row[t] = min(row0 + t * 8u + fm, last);
-  float2 acc[CL][T];
-#pragma unroll
-  for (uint l = 0; l < CL; ++l)
-#pragma unroll
-    for (uint t = 0; t < T; ++t) acc[l][t] = float2(0.0f);
+  float2 acc[CL][G * T] = {};
   for (uint c = 0; c < chunks; ++c) {
     const uint lead = sg * CL + 64u * c;
-    const uint g = (lead + half_word) / 16u;
+    const uint gi = (lead + half_word) / 16u;
     float scale[T], bias[T];
 #pragma unroll
     for (uint t = 0; t < T; ++t) {
-      scale[t] = float(s[row[t] * groups + g]);
-      bias[t] = float(b[row[t] * groups + g]);
+      scale[t] = float(s[row[t] * groups + gi]);
+      bias[t] = float(b[row[t] * groups + gi]);
     }
 #pragma unroll
     for (uint l = 0; l < CL; ++l) {
       const uint kk = 4u * (lead + l) + half_k;
-      const float2 bx = float2(live0 ? x0[kk] : 0.0f, live1 ? x1[kk] : 0.0f);
+      float2 bx[G];
+#pragma unroll
+      for (uint g = 0; g < G; ++g) bx[g] = float2(live[2u * g] ? xr[2u * g][kk] : 0.0f, live[2u * g + 1u] ? xr[2u * g + 1u][kk] : 0.0f);
 #pragma unroll
       for (uint t = 0; t < T; ++t) {
         const uint packed = w[row[t] * words + lead + l + half_word];
         const float2 code = float2(float((packed >> shift) & 255u), float((packed >> (shift + 8u)) & 255u));
-        i2t_mma(acc[l][t], fma(code, float2(scale[t]), float2(bias[t])), bx);
+        const float2 weight = fma(code, float2(scale[t]), float2(bias[t]));
+#pragma unroll
+        for (uint g = 0; g < G; ++g) i2t_mma(acc[l][g * T + t], weight, bx[g]);
       }
     }
   }
+  i2t_partials<SG, CL, G * T>(acc, part, sg, lane);
 #pragma unroll
-  for (uint t = 0; t < T; ++t) {
-    float2 v[CL];
+  for (uint g = 0; g < G; ++g)
 #pragma unroll
-    for (uint l = 0; l < CL; ++l) v[l] = acc[l][t];
-    part[sg][t][lane] = i2t_tree(v);
-  }
-  threadgroup_barrier(mem_flags::mem_threadgroup);
-#pragma unroll
-  for (uint t = 0; t < T; ++t) {
-    float2 v[SG];
-#pragma unroll
-    for (uint i = 0; i < SG; ++i) v[i] = part[i][t][lane];
-    out[t] = i2t_tree(v);
-  }
+    for (uint t = 0; t < T; ++t) out[g][t] = i2t_total<SG, G * T>(part, g * T + t, lane);
 }
 
-template <uint SG, uint T>
+template <uint SG, uint T, uint G>
 [[kernel]] void i2t_dense(const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]],
     const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
     constant i2t_dense_args& a [[buffer(4)]], device float* y [[buffer(5)]],
     uint group [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]]) {
-  threadgroup float2 part[SG][T][32];
+  threadgroup float2 part[SG * G * T * 32];
   const uint row0 = group * 8u * T;
-  float2 out[T];
-  i2t_affine<SG, T>(x + (size_t)a.xb * a.k, (size_t)a.xs * a.k, a.rows, w, s, b, row0, a.n - 1u, a.k, sg, lane, part,
+  float2 out[G][T];
+  i2t_affine<SG, T, G>(x + (size_t)a.xb * a.k, (size_t)a.xs * a.k, a.rows, w, s, b, row0, a.n - 1u, a.k, sg, lane, part,
       out);
   if (sg != 0u) return;
   uint fm, fn;
@@ -126,26 +140,29 @@ template <uint SG, uint T>
   for (uint t = 0; t < T; ++t) {
     const uint col = row0 + t * 8u + fm;
     if (col >= a.n) break;
-    float2 v = out[t];
-    if (a.cap > 0.0f) v = float2(a.cap * precise::tanh(v.x / a.cap), a.cap * precise::tanh(v.y / a.cap));
-    if (fn < a.rows) y[(size_t)fn * a.n + col] = v.x;
-    if (fn + 1u < a.rows) y[(size_t)(fn + 1u) * a.n + col] = v.y;
+#pragma unroll
+    for (uint g = 0; g < G; ++g) {
+      float2 v = out[g][t];
+      if (a.cap > 0.0f) v = float2(a.cap * precise::tanh(v.x / a.cap), a.cap * precise::tanh(v.y / a.cap));
+      if (8u * g + fn < a.rows) y[(size_t)(8u * g + fn) * a.n + col] = v.x;
+      if (8u * g + fn + 1u < a.rows) y[(size_t)(8u * g + fn + 1u) * a.n + col] = v.y;
+    }
   }
 }
 
-template <uint SG, uint T>
-[[kernel]] void i2t_projections(const device float* xq [[buffer(0)]], const device float* xk [[buffer(1)]],
-    const device float* xv [[buffer(2)]], const device uint* wq [[buffer(3)]],
-    const device bfloat* sq [[buffer(4)]], const device bfloat* bq [[buffer(5)]],
-    const device uint* wk [[buffer(6)]], const device bfloat* sk [[buffer(7)]],
-    const device bfloat* bk [[buffer(8)]], const device uint* wv [[buffer(9)]],
-    const device bfloat* sv [[buffer(10)]], const device bfloat* bv [[buffer(11)]],
-    device float* oq [[buffer(12)]], device float* ok [[buffer(13)]], device float* ov [[buffer(14)]],
-    device float* orl [[buffer(15)]], device float* og [[buffer(16)]], device float* os [[buffer(17)]],
-    device float* okd [[buffer(18)]], device float* ovd [[buffer(19)]],
-    constant i2t_projection_args& a [[buffer(20)]], uint group [[threadgroup_position_in_grid]],
-    uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
-  threadgroup float2 part[SG][T][32];
+#define I2T_PROJECTION_ARGS const device float* xq [[buffer(0)]], const device float* xk [[buffer(1)]], \
+    const device float* xv [[buffer(2)]], const device uint* wq [[buffer(3)]], const device bfloat* sq [[buffer(4)]], \
+    const device bfloat* bq [[buffer(5)]], const device uint* wk [[buffer(6)]], const device bfloat* sk [[buffer(7)]], \
+    const device bfloat* bk [[buffer(8)]], const device uint* wv [[buffer(9)]], const device bfloat* sv [[buffer(10)]], \
+    const device bfloat* bv [[buffer(11)]], device float* oq [[buffer(12)]], device float* ok [[buffer(13)]], \
+    device float* ov [[buffer(14)]], device float* orl [[buffer(15)]], device float* og [[buffer(16)]], \
+    device float* os [[buffer(17)]], device float* okd [[buffer(18)]], device float* ovd [[buffer(19)]], \
+    constant i2t_projection_args& a [[buffer(20)]], uint group [[threadgroup_position_in_grid]], \
+    uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]
+
+template <uint SG, uint T, uint G>
+[[kernel]] void i2t_projections(I2T_PROJECTION_ARGS) {
+  threadgroup float2 part[SG * G * T * 32];
   uint which = 0u, first = group;
   for (; which < 8u; ++which) {
     const uint span = (a.m[which] + 8u * T - 1u) / (8u * T);
@@ -164,8 +181,8 @@ template <uint SG, uint T>
   if (which == 6u) offset = a.m[1];
   if (which == 7u) offset = a.m[2];
   const uint m = a.m[which], row0 = first * 8u * T;
-  float2 out[T];
-  i2t_affine<SG, T>(key ? xk : val ? xv : xq, a.k, a.rows, a.full && key ? wk : a.full && val ? wv : wq,
+  float2 out[G][T];
+  i2t_affine<SG, T, G>(key ? xk : val ? xv : xq, a.k, a.rows, a.full && key ? wk : a.full && val ? wv : wq,
       a.full && key ? sk : a.full && val ? sv : sq, a.full && key ? bk : a.full && val ? bv : bq, offset + row0,
       offset + m - 1u, a.k, sg, lane, part, out);
   if (sg != 0u) return;
@@ -177,30 +194,29 @@ template <uint SG, uint T>
   for (uint t = 0; t < T; ++t) {
     const uint row = row0 + t * 8u + fm;
     if (row >= m) break;
-    if (fn < a.rows) y[(size_t)fn * m + row] = out[t].x;
-    if (fn + 1u < a.rows) y[(size_t)(fn + 1u) * m + row] = out[t].y;
+#pragma unroll
+    for (uint g = 0; g < G; ++g) {
+      if (8u * g + fn < a.rows) y[(size_t)(8u * g + fn) * m + row] = out[g][t].x;
+      if (8u * g + fn + 1u < a.rows) y[(size_t)(8u * g + fn + 1u) * m + row] = out[g][t].y;
+    }
   }
 }
 
-#define I2T_DENSE(sgs, t) \
-  template [[host_name("i2t_dense_" #sgs "_" #t)]] [[kernel]] void i2t_dense<sgs, t>( \
+#define I2T_DENSE(name, sgs, t, g) \
+  template [[host_name(#name)]] [[kernel]] void i2t_dense<sgs, t, g>( \
       const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]], const device bfloat* s [[buffer(2)]], \
       const device bfloat* b [[buffer(3)]], constant i2t_dense_args& a [[buffer(4)]], device float* y [[buffer(5)]], \
       uint group [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]], \
       uint lane [[thread_index_in_simdgroup]]);
 
-I2T_DENSE(8, 2)
+I2T_DENSE(i2t_dense_8_2, 8, 2, 1)
+I2T_DENSE(i2t_dense16_8_2, 8, 2, 2)
 
-template [[host_name("i2t_projections_8_2")]] [[kernel]] void i2t_projections<8, 2>(
-    const device float* xq [[buffer(0)]], const device float* xk [[buffer(1)]], const device float* xv [[buffer(2)]],
-    const device uint* wq [[buffer(3)]], const device bfloat* sq [[buffer(4)]], const device bfloat* bq [[buffer(5)]],
-    const device uint* wk [[buffer(6)]], const device bfloat* sk [[buffer(7)]], const device bfloat* bk [[buffer(8)]],
-    const device uint* wv [[buffer(9)]], const device bfloat* sv [[buffer(10)]], const device bfloat* bv [[buffer(11)]],
-    device float* oq [[buffer(12)]], device float* ok [[buffer(13)]], device float* ov [[buffer(14)]],
-    device float* orl [[buffer(15)]], device float* og [[buffer(16)]], device float* os [[buffer(17)]],
-    device float* okd [[buffer(18)]], device float* ovd [[buffer(19)]], constant i2t_projection_args& a [[buffer(20)]],
-    uint group [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
-    uint lane [[thread_index_in_simdgroup]]);
+#define I2T_PROJECTIONS(name, sgs, t, g) \
+  template [[host_name(#name)]] [[kernel]] void i2t_projections<sgs, t, g>(I2T_PROJECTION_ARGS);
+
+I2T_PROJECTIONS(i2t_projections_8_2, 8, 2, 1)
+I2T_PROJECTIONS(i2t_projections16_8_2, 8, 2, 2)
 
 inline float i2t_e4m3(uchar c) {
   if ((c & 127u) == 127u) return NAN;
@@ -215,24 +231,25 @@ inline float i2t_situ(float g, float u, float gate_cap, float up_cap) {
   return gate * up;
 }
 
-inline uint i2t_members(const device int* PICKS, uint slots, int e, uint lane, thread uint (&member)[8]) {
-  const bool lo = lane < slots && PICKS[lane] == e;
-  const bool hi = lane + 32u < slots && PICKS[lane + 32u] == e;
-  uint ml = uint(ulong(simd_vote::vote_t(simd_ballot(lo))));
-  uint mh = uint(ulong(simd_vote::vote_t(simd_ballot(hi))));
+template <uint M>
+inline uint i2t_members(const device int* PICKS, uint slots, int e, uint lane, thread uint (&member)[M]) {
+  constexpr uint Q = M / 4u, none = 32u * Q;
+  uint mask[Q];
+#pragma unroll
+  for (uint q = 0; q < Q; ++q) mask[q] = uint(ulong(simd_vote::vote_t(simd_ballot(lane + 32u * q < slots && PICKS[lane + 32u * q] == e))));
   uint count = 0u;
 #pragma unroll
-  for (uint i = 0; i < 8u; ++i) {
-    uint s = 64u;
-    if (ml != 0u) {
-      s = ctz(ml);
-      ml &= ml - 1u;
-    } else if (mh != 0u) {
-      s = 32u + ctz(mh);
-      mh &= mh - 1u;
+  for (uint i = 0; i < M; ++i) {
+    uint s = none;
+#pragma unroll
+    for (uint q = 0; q < Q; ++q) {
+      if (s == none && mask[q] != 0u) {
+        s = 32u * q + ctz(mask[q]);
+        mask[q] &= mask[q] - 1u;
+      }
     }
     member[i] = s;
-    count += s < 64u ? 1u : 0u;
+    count += s < none ? 1u : 0u;
   }
   return count;
 }
@@ -327,22 +344,95 @@ inline void i2t_rows(const device uchar* We, uint first, uint n, uint stride, ui
   }
 }
 
-template <bool GU, uint SG, uint T>
-[[kernel]] void i2t_experts(const device float* X [[buffer(0)]], const device uchar* W [[buffer(1)]],
-    const device uchar* S [[buffer(2)]], const device float* amax [[buffer(3)]],
-    const device float* den [[buffer(4)]], const device int* PICKS [[buffer(5)]],
-    constant i2t_moe& a [[buffer(6)]], device float* Y [[buffer(7)]], const device float* CODES [[buffer(8)]],
-    uint2 tg [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
-    uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+template <bool GU, uint SG, uint T, uint G>
+inline void i2t_tiles(const device float* X, const device uchar* We, const device uchar* Se, threadgroup const float* lut,
+    threadgroup const float* scales, threadgroup float2* part, const thread uint* member, uint count, uint r0,
+    uint wrows, uint groups, uint stride, float global, constant i2t_moe& a, device float* Y, uint sg, uint lane) {
   constexpr uint CL = 32u / SG;
+  uint fm, fn;
+  i2t_lane(lane, fm, fn);
+  bool live[2u * G];
+  const device float* xr[2u * G];
+#pragma unroll
+  for (uint i = 0; i < 2u * G; ++i) {
+    const uint m = 8u * (i / 2u) + fn + i % 2u;
+    live[i] = m < count;
+    xr[i] = X + (size_t)(live[i] ? (GU ? member[m] / a.topk : member[m]) : 0u) * a.k;
+  }
+  float2 acc[CL][G * T] = {};
+  size_t row[T];
+#pragma unroll
+  for (uint t = 0; t < T; ++t) row[t] = min(r0 + t * 8u + fm, wrows - 1u);
+  const uint nb = fn >> 1;
+  for (uint base = sg * CL; base < groups; base += 32u) {
+#pragma unroll
+    for (uint l = 0; l < CL; ++l) {
+      const uint gi = base + l;
+      if (gi >= groups) break;
+      const uint k0 = gi * 16u + fm;
+      float2 b0[G], b1[G];
+#pragma unroll
+      for (uint g = 0; g < G; ++g) {
+        b0[g] = float2(live[2u * g] ? xr[2u * g][k0] : 0.0f, live[2u * g + 1u] ? xr[2u * g + 1u][k0] : 0.0f);
+        b1[g] = float2(live[2u * g] ? xr[2u * g][k0 + 8u] : 0.0f, live[2u * g + 1u] ? xr[2u * g + 1u][k0 + 8u] : 0.0f);
+      }
+#pragma unroll
+      for (uint t = 0; t < T; ++t) {
+        const ulong word = *(const device ulong*)(We + row[t] * stride + gi * 8u);
+        const uint c0 = uint(word >> (8u * nb)) & 255u, c1 = uint(word >> (8u * (4u + nb))) & 255u;
+        const float2 a0 = float2(lut[c0 & 15u], lut[c0 >> 4u]), a1 = float2(lut[c1 & 15u], lut[c1 >> 4u]);
+        const float2 scale = float2(scales[Se[row[t] * groups + gi]]);
+#pragma unroll
+        for (uint g = 0; g < G; ++g) {
+          float2 p = float2(0.0f);
+          i2t_mma(p, a0, b0[g]);
+          i2t_mma(p, a1, b1[g]);
+          acc[l][g * T + t] = fma(scale, p, acc[l][g * T + t]);
+        }
+      }
+    }
+  }
+  i2t_partials<SG, CL, G * T>(acc, part, sg, lane);
+  if (sg != 0u) return;
+#pragma unroll
+  for (uint t = 0; t < T; ++t) {
+    const uint r = r0 + t * 8u + fm;
+#pragma unroll
+    for (uint g = 0; g < G; ++g) {
+      const float2 sum = i2t_total<SG, G * T>(part, g * T + t, lane);
+      const size_t y0 = (size_t)member[8u * g + fn] * a.n, y1 = (size_t)member[8u * g + fn + 1u] * a.n;
+      if (GU) {
+        const float2 up = float2(simd_shuffle_xor(sum.x, 2u), simd_shuffle_xor(sum.y, 2u));
+        if ((fm & 1u) == 0u && r < wrows) {
+          if (live[2u * g]) Y[y0 + r / 2u] = i2t_situ(sum.x * global, up.x * global, a.gate_cap, a.up_cap);
+          if (live[2u * g + 1u]) Y[y1 + r / 2u] = i2t_situ(sum.y * global, up.y * global, a.gate_cap, a.up_cap);
+        }
+      } else if (r < wrows) {
+        if (live[2u * g]) Y[y0 + r] = sum.x * global;
+        if (live[2u * g + 1u]) Y[y1 + r] = sum.y * global;
+      }
+    }
+  }
+}
+
+#define I2T_EXPERT_ARGS const device float* X [[buffer(0)]], const device uchar* W [[buffer(1)]], \
+    const device uchar* S [[buffer(2)]], const device float* amax [[buffer(3)]], const device float* den [[buffer(4)]], \
+    const device int* PICKS [[buffer(5)]], constant i2t_moe& a [[buffer(6)]], device float* Y [[buffer(7)]], \
+    const device float* CODES [[buffer(8)]], uint2 tg [[threadgroup_position_in_grid]], \
+    uint tid [[thread_index_in_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]], \
+    uint lane [[thread_index_in_simdgroup]]
+
+template <bool GU, uint SG, uint T, uint M>
+[[kernel]] void i2t_experts(I2T_EXPERT_ARGS) {
+  constexpr uint PT = (M / 8u) * T;
   threadgroup float lut[16];
   threadgroup float scales[256];
-  threadgroup float2 part[SG][T][32];
+  threadgroup float2 part[SG * PT * 32];
   const uint slot = tg.y;
   if (slot >= a.slots) return;
   const int e = PICKS[slot];
-  uint member[8];
-  const uint count = i2t_members(PICKS, a.slots, e, lane, member);
+  uint member[M];
+  const uint count = i2t_members<M>(PICKS, a.slots, e, lane, member);
   if (member[0] != slot) return;
   if (tid < 16u) lut[tid] = CODES[tid];
   for (uint i = tid; i < 256u; i += 32u * SG) scales[i] = i2t_e4m3(uchar(i));
@@ -383,86 +473,25 @@ template <bool GU, uint SG, uint T>
     }
     return;
   }
-  uint fm, fn;
-  i2t_lane(lane, fm, fn);
-  const bool live0 = fn < count, live1 = fn + 1u < count;
-  const device float* x0 = X + (size_t)(live0 ? (GU ? member[fn] / a.topk : member[fn]) : 0u) * a.k;
-  const device float* x1 = X + (size_t)(live1 ? (GU ? member[fn + 1u] / a.topk : member[fn + 1u]) : 0u) * a.k;
-  float2 acc[CL][T];
-#pragma unroll
-  for (uint l = 0; l < CL; ++l)
-#pragma unroll
-    for (uint t = 0; t < T; ++t) acc[l][t] = float2(0.0f);
-  size_t row[T];
-#pragma unroll
-  for (uint t = 0; t < T; ++t) row[t] = min(r0 + t * 8u + fm, wrows - 1u);
-  const uint nb = fn >> 1;
-  for (uint base = sg * CL; base < groups; base += 32u) {
-#pragma unroll
-    for (uint l = 0; l < CL; ++l) {
-      const uint g = base + l;
-      if (g >= groups) break;
-      const uint k0 = g * 16u + fm;
-      const float2 b0 = float2(live0 ? x0[k0] : 0.0f, live1 ? x1[k0] : 0.0f);
-      const float2 b1 = float2(live0 ? x0[k0 + 8u] : 0.0f, live1 ? x1[k0 + 8u] : 0.0f);
-#pragma unroll
-      for (uint t = 0; t < T; ++t) {
-        const ulong word = *(const device ulong*)(We + row[t] * stride + g * 8u);
-        const uint c0 = uint(word >> (8u * nb)) & 255u, c1 = uint(word >> (8u * (4u + nb))) & 255u;
-        float2 p = float2(0.0f);
-        i2t_mma(p, float2(lut[c0 & 15u], lut[c0 >> 4u]), b0);
-        i2t_mma(p, float2(lut[c1 & 15u], lut[c1 >> 4u]), b1);
-        acc[l][t] = fma(float2(scales[Se[row[t] * groups + g]]), p, acc[l][t]);
-      }
-    }
-  }
-#pragma unroll
-  for (uint t = 0; t < T; ++t) {
-    float2 v[CL];
-#pragma unroll
-    for (uint l = 0; l < CL; ++l) v[l] = acc[l][t];
-    part[sg][t][lane] = i2t_tree(v);
-  }
-  threadgroup_barrier(mem_flags::mem_threadgroup);
-  if (sg != 0u) return;
-#pragma unroll
-  for (uint t = 0; t < T; ++t) {
-    float2 v[SG];
-#pragma unroll
-    for (uint i = 0; i < SG; ++i) v[i] = part[i][t][lane];
-    const float2 sum = i2t_tree(v);
-    const uint r = r0 + t * 8u + fm;
-    if (GU) {
-      const float2 up = float2(simd_shuffle_xor(sum.x, 2u), simd_shuffle_xor(sum.y, 2u));
-      if ((fm & 1u) != 0u || r >= wrows) continue;
-      if (live0) Y[(size_t)member[fn] * a.n + r / 2u] = i2t_situ(sum.x * global, up.x * global, a.gate_cap, a.up_cap);
-      if (live1) Y[(size_t)member[fn + 1u] * a.n + r / 2u] = i2t_situ(sum.y * global, up.y * global, a.gate_cap, a.up_cap);
-    } else if (r < wrows) {
-      if (live0) Y[(size_t)member[fn] * a.n + r] = sum.x * global;
-      if (live1) Y[(size_t)member[fn + 1u] * a.n + r] = sum.y * global;
-    }
-  }
+  if (M > 8u && count > 8u) return i2t_tiles<GU, SG, T, 2>(X, We, Se, lut, scales, part, member, count, r0, wrows, groups, stride, global, a, Y, sg, lane);
+  i2t_tiles<GU, SG, T, 1>(X, We, Se, lut, scales, part, member, count, r0, wrows, groups, stride, global, a, Y, sg, lane);
 }
 
-#define I2T_EXPERTS(name, gu, sgs, t) \
-  template [[host_name(#name)]] [[kernel]] void i2t_experts<gu, sgs, t>(const device float* X [[buffer(0)]], \
-      const device uchar* W [[buffer(1)]], const device uchar* S [[buffer(2)]], const device float* amax [[buffer(3)]], \
-      const device float* den [[buffer(4)]], const device int* PICKS [[buffer(5)]], constant i2t_moe& a [[buffer(6)]], \
-      device float* Y [[buffer(7)]], const device float* CODES [[buffer(8)]], uint2 tg [[threadgroup_position_in_grid]], \
-      uint tid [[thread_index_in_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]], \
-      uint lane [[thread_index_in_simdgroup]]);
+#define I2T_EXPERTS(name, gu, sgs, t, m) \
+  template [[host_name(#name)]] [[kernel]] void i2t_experts<gu, sgs, t, m>(I2T_EXPERT_ARGS);
 
-I2T_EXPERTS(i2t_gate_up, true, 4, 2)
-I2T_EXPERTS(i2t_down, false, 8, 4)
+I2T_EXPERTS(i2t_gate_up, true, 4, 2, 8)
+I2T_EXPERTS(i2t_down, false, 8, 4, 8)
+I2T_EXPERTS(i2t_gate_up16, true, 4, 2, 16)
+I2T_EXPERTS(i2t_down16, false, 8, 4, 16)
 
-template <uint BITS, uint R, uint C, uint U>
+template <uint R, uint C, uint U>
 inline void i2r_dot_ahead(const device float* x, size_t step, uint rows, const device uint* w, const device bfloat* s,
     const device bfloat* b, uint col0, uint last, uint width, uint lane, thread float (&acc)[C][R]) {
-  constexpr uint per = 32u / BITS;
-  constexpr uint mask = (1u << BITS) - 1u;
+  constexpr uint per = 4u, mask = 255u;
   const uint words = width / per;
   const uint groups = width / 64u;
-  const uint4 shift = uint4(0u, BITS, BITS * 2u, BITS * 3u);
+  const uint4 shift = uint4(0u, 8u, 16u, 24u);
 #pragma unroll
   for (uint c = 0; c < C; ++c) {
 #pragma unroll
@@ -487,18 +516,13 @@ inline void i2r_dot_ahead(const device float* x, size_t step, uint rows, const d
 #pragma unroll
     for (uint u = 0; u < U; ++u) {
       const uint at = word + 32u * u;
-      float4 v0[C], v1[C];
+      float4 v0[C];
 #pragma unroll
-      for (uint c = 0; c < C; ++c) {
-        v0[c] = fma(float4((uint4(packed[c][u]) >> shift) & mask), float4(scale[c][u]), float4(bias[c][u]));
-        v1[c] = BITS == 4u ? fma(float4((uint4(packed[c][u] >> 16u) >> shift) & mask), float4(scale[c][u]), float4(bias[c][u])) : float4(0.0f);
-      }
+      for (uint c = 0; c < C; ++c) v0[c] = fma(float4((uint4(packed[c][u]) >> shift) & mask), float4(scale[c][u]), float4(bias[c][u]));
 #pragma unroll
       for (uint r = 0; r < R; ++r) {
         if (r >= rows) break;
-        const device float* xr = x + r * step + at * per;
-        const float4 in0 = float4(*reinterpret_cast<const device packed_float4*>(xr));
-        const float4 in1 = BITS == 4u ? float4(*reinterpret_cast<const device packed_float4*>(xr + 4u)) : float4(0.0f);
+        const float4 in0 = float4(*reinterpret_cast<const device packed_float4*>(x + r * step + at * per));
 #pragma unroll
         for (uint c = 0; c < C; ++c) {
           float a = acc[c][r];
@@ -506,34 +530,23 @@ inline void i2r_dot_ahead(const device float* x, size_t step, uint rows, const d
           a = fma(in0.y, v0[c].y, a);
           a = fma(in0.z, v0[c].z, a);
           a = fma(in0.w, v0[c].w, a);
-          if (BITS == 4u) {
-            a = fma(in1.x, v1[c].x, a);
-            a = fma(in1.y, v1[c].y, a);
-            a = fma(in1.z, v1[c].z, a);
-            a = fma(in1.w, v1[c].w, a);
-          }
           acc[c][r] = a;
         }
       }
     }
   }
   for (; word < words; word += 32u) {
-    float4 v0[C], v1[C];
+    float4 v0[C];
 #pragma unroll
     for (uint c = 0; c < C; ++c) {
       const size_t col = min(col0 + c, last);
-      const uint packed = w[col * words + word];
       const size_t group = col * groups + (word * per) / 64u;
-      const float scale = float(s[group]), bias = float(b[group]);
-      v0[c] = fma(float4((uint4(packed) >> shift) & mask), float4(scale), float4(bias));
-      v1[c] = BITS == 4u ? fma(float4((uint4(packed >> 16u) >> shift) & mask), float4(scale), float4(bias)) : float4(0.0f);
+      v0[c] = fma(float4((uint4(w[col * words + word]) >> shift) & mask), float4(float(s[group])), float4(float(b[group])));
     }
 #pragma unroll
     for (uint r = 0; r < R; ++r) {
       if (r >= rows) break;
-      const device float* xr = x + r * step + word * per;
-      const float4 in0 = float4(*reinterpret_cast<const device packed_float4*>(xr));
-      const float4 in1 = BITS == 4u ? float4(*reinterpret_cast<const device packed_float4*>(xr + 4u)) : float4(0.0f);
+      const float4 in0 = float4(*reinterpret_cast<const device packed_float4*>(x + r * step + word * per));
 #pragma unroll
       for (uint c = 0; c < C; ++c) {
         float a = acc[c][r];
@@ -541,12 +554,6 @@ inline void i2r_dot_ahead(const device float* x, size_t step, uint rows, const d
         a = fma(in0.y, v0[c].y, a);
         a = fma(in0.z, v0[c].z, a);
         a = fma(in0.w, v0[c].w, a);
-        if (BITS == 4u) {
-          a = fma(in1.x, v1[c].x, a);
-          a = fma(in1.y, v1[c].y, a);
-          a = fma(in1.z, v1[c].z, a);
-          a = fma(in1.w, v1[c].w, a);
-        }
         acc[c][r] = a;
       }
     }
@@ -570,7 +577,7 @@ template <uint R, uint C, uint U>
   const uint lane = tid % 32u;
   if (col0 >= a.n) return;
   float acc[C][R];
-  i2r_dot_ahead<8u, R, C, U>(x + (size_t)a.xb * a.k, (size_t)a.xs * a.k, a.rows, w, s, b, col0, a.n - 1u, a.k, lane, acc);
+  i2r_dot_ahead<R, C, U>(x + (size_t)a.xb * a.k, (size_t)a.xs * a.k, a.rows, w, s, b, col0, a.n - 1u, a.k, lane, acc);
   if (lane != 0u) return;
 #pragma unroll
   for (uint c = 0; c < C; ++c) {

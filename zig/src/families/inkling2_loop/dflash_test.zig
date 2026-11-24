@@ -311,3 +311,235 @@ test "a round whose latest tokens occurred only before the drafter's window draf
     };
     std.debug.print("dflash2 lookup: {d} of {d} rounds drafted from before the drafter's window and accepted {d} drafts; {d} tokens equal plain greedy and its caches\n", .{ lookups, rounds.items.len, accepted, got.items.len });
 }
+
+const TreeTally = struct {
+    rounds: usize = 0,
+    zero: usize = 0,
+    /// Rounds that verified more than eight rows, and rounds whose accepted path went past depth 7.
+    wide: usize = 0,
+    deep: usize = 0,
+    /// Rounds whose accepted path left the first draft's subtree, and those an EOS or the limit cut short.
+    branched: usize = 0,
+    cut: usize = 0,
+    looked: usize = 0,
+    looked_accepted: usize = 0,
+    most_accepted: usize = 0,
+    /// Rounds that offered fewer drafts than a tree holds: the output limit falls inside their tree.
+    short: usize = 0,
+
+    fn add(t: *TreeTally, rounds: []const spec.Round) void {
+        for (rounds) |r| {
+            t.rounds += 1;
+            t.most_accepted = @max(t.most_accepted, r.accepted);
+            if (r.offered < inkling.verify.max_drafts) t.short += 1;
+            if (r.offered > 0 and r.accepted == 0) t.zero += 1;
+            if (r.offered + 1 > 8) t.wide += 1;
+            if (r.accepted > dflash.depth) t.deep += 1;
+            if (r.emitted < r.accepted + 1) t.cut += 1;
+            t.looked += r.looked;
+            t.looked_accepted += r.looked_accepted;
+            if (r.accepted > 0) {
+                var first_child: usize = 0;
+                while (first_child < r.offered and r.parents[first_child] != 0) first_child += 1;
+                var on: usize = 0;
+                for (0..r.offered) |j| if ((r.hits >> @intCast(j)) & 1 != 0 and r.parents[j] == 0) {
+                    on = j;
+                    break;
+                };
+                if (on != first_child) t.branched += 1;
+            }
+        }
+    }
+};
+
+fn compareTree(s: *spec.Speculator, ids: []const u32, limit: usize, eos: []const u32, tally: *TreeTally, caches_equal: bool) !usize {
+    const a = std.testing.allocator;
+    const m = s.model;
+    var plain_cache = try inkling.Cache.init(m.device, &m.config, ids.len + limit + inkling.group.max_rows);
+    defer plain_cache.deinit();
+    var spec_cache = try inkling.Cache.init(m.device, &m.config, ids.len + limit + inkling.group.max_rows);
+    defer spec_cache.deinit();
+    var want: std.ArrayList(u32) = .empty;
+    defer want.deinit(a);
+    var got: std.ArrayList(u32) = .empty;
+    defer got.deinit(a);
+    var rounds: std.ArrayList(spec.Round) = .empty;
+    defer rounds.deinit(a);
+    var bs = try inkling.BatchScratch.init(m.device, &m.config, 1);
+    defer bs.deinit();
+    const first = try spec.prefillPlain(m, &s.prefill, &plain_cache, ids);
+    try want.append(a, first);
+    try spec.plain(m, &bs, &plain_cache, first, limit, eos, a, &want, null);
+    const started = try s.start(&spec_cache, ids);
+    try std.testing.expectEqual(first, started.first);
+    try got.append(a, started.first);
+    try s.run(&spec_cache, started.first, limit, eos, a, &got, &rounds);
+    try std.testing.expectEqualSlices(u32, want.items, got.items);
+    try std.testing.expectEqual(spec_cache.len, s.drafter.committed());
+    if (caches_equal) try expectSameCache(m, &plain_cache, &spec_cache);
+    for (rounds.items) |r| try std.testing.expectEqual(spec.Source.tree, r.source);
+    tally.add(rounds.items);
+    return want.items.len;
+}
+
+test "Inkling DFlash2 tree speculation with lookup chains emits plain greedy decoding's tokens and caches on real prompts" {
+    const loaded = try load(.{ .bits = 4 }) orelse return error.SkipZigTest;
+    defer loaded.model.deinit();
+    defer loaded.drafter.deinit();
+    const a = std.testing.allocator;
+    var s = try spec.Speculator.init(loaded.model, loaded.drafter, dflash.tap_ids);
+    defer s.deinit();
+    var lookup = spec.Lookup.init(a);
+    defer lookup.deinit();
+    s.lookup = &lookup;
+    s.mode = .tree;
+    try std.testing.expectEqual(inkling.group.max_rows, s.plan.most);
+    const parsed = try std.json.parseFromSlice([]const Prompt, a, prompts_json, .{});
+    defer parsed.deinit();
+    var tally: TreeTally = .{};
+    var tokens: usize = 0;
+    for (parsed.value) |p| tokens += try compareTree(&s, p.token_ids, 256, &.{}, &tally, true);
+    std.debug.print("dflash2 tree speculation: {d} prompts, {d} tokens and their caches equal plain greedy; {d} rounds, {d} past 8 rows, {d} accepted past depth 7, {d} took a later branch, {d} zero; {d} lookup rows, {d} accepted\n", .{ parsed.value.len, tokens, tally.rounds, tally.wide, tally.deep, tally.branched, tally.zero, tally.looked, tally.looked_accepted });
+    try std.testing.expect(tally.wide > 0 and tally.deep > 0 and tally.looked_accepted > 0);
+}
+
+/// A tree round's drafter tree from a known continuation, shaped by `shape`; scores make every draft likely.
+const TreeOracle = struct {
+    tokens: []const u32,
+    prompt: usize,
+    vocab: u32,
+    shape: Shape = .deep,
+    out_tokens: [inkling.verify.max_drafts]u32 = undefined,
+    out_parents: [inkling.verify.max_drafts]i32 = undefined,
+    out_scores: [inkling.verify.max_drafts]f64 = undefined,
+
+    const Shape = enum {
+        /// A wrong first draft, then the continuation 14 deep under the newest token.
+        deep,
+        /// Only wrong drafts.
+        none,
+        /// Two drafts under the newest token, the continuation under the second.
+        branch,
+    };
+
+    fn next(o: *const TreeOracle, at: usize, j: usize) u32 {
+        return if (at + 1 + j < o.tokens.len) o.tokens[at + 1 + j] else 0;
+    }
+
+    fn wrong(o: *const TreeOracle, token: u32) u32 {
+        return (token + 1) % o.vocab;
+    }
+
+    fn call(ptr: *anyopaque, pending: u32, position: u64) anyerror!inkling.verify.Drafted {
+        const o: *TreeOracle = @ptrCast(@alignCast(ptr));
+        const at: usize = @intCast(position - o.prompt);
+        if (o.tokens[at] != pending) return error.OraclePosition;
+        var n: usize = 0;
+        switch (o.shape) {
+            .deep, .none => {
+                o.out_tokens[0] = o.wrong(o.next(at, 0));
+                o.out_parents[0] = -1;
+                o.out_scores[0] = -0.05;
+                n = 1;
+                for (0..14) |j| {
+                    const t = o.next(at, j);
+                    o.out_tokens[n] = if (o.shape == .deep) t else o.wrong(o.wrong(t));
+                    o.out_parents[n] = if (j == 0) -1 else @intCast(n - 1);
+                    o.out_scores[n] = -0.001 * @as(f64, @floatFromInt(j + 1));
+                    n += 1;
+                }
+            },
+            .branch => {
+                o.out_tokens[0] = o.wrong(o.next(at, 0));
+                o.out_parents[0] = -1;
+                o.out_scores[0] = -0.01;
+                o.out_tokens[1] = o.next(at, 0);
+                o.out_parents[1] = -1;
+                o.out_scores[1] = -0.02;
+                o.out_tokens[2] = o.next(at, 1);
+                o.out_parents[2] = 0;
+                o.out_scores[2] = -0.03;
+                n = 3;
+                for (1..6) |j| {
+                    o.out_tokens[n] = o.next(at, j);
+                    o.out_parents[n] = if (j == 1) 1 else @intCast(n - 1);
+                    o.out_scores[n] = -0.02 - 0.001 * @as(f64, @floatFromInt(j));
+                    n += 1;
+                }
+            },
+        }
+        return .{ .tokens = o.out_tokens[0..n], .parents = o.out_parents[0..n], .scores = o.out_scores[0..n] };
+    }
+};
+
+test "forced trees accept a 15-row path, none or a later branch, stop at a limit or an EOS inside a tree, and keep plain's caches" {
+    const loaded = try load(.{}) orelse return error.SkipZigTest;
+    defer loaded.model.deinit();
+    defer loaded.drafter.deinit();
+    const a = std.testing.allocator;
+    const m = loaded.model;
+    var s = try spec.Speculator.init(m, loaded.drafter, dflash.tap_ids);
+    defer s.deinit();
+    s.mode = .tree;
+    s.plan.verify_ms = @splat(1);
+    const parsed = try std.json.parseFromSlice([]const Prompt, a, prompts_json, .{});
+    defer parsed.deinit();
+    const ids = parsed.value[1].token_ids;
+    var cache = try inkling.Cache.init(m.device, &m.config, ids.len + 400);
+    defer cache.deinit();
+    var want: std.ArrayList(u32) = .empty;
+    defer want.deinit(a);
+    try want.append(a, try spec.prefillPlain(m, &s.prefill, &cache, ids));
+    try spec.plain(m, &s.batch, &cache, want.items[0], 360, &.{}, a, &want, null);
+    var oracle = TreeOracle{ .tokens = want.items, .prompt = ids.len, .vocab = m.config.text.unpadded_vocab };
+    s.tree_proposer = .{ .ptr = &oracle, .call = TreeOracle.call };
+    var tally: TreeTally = .{};
+    try std.testing.expectEqual(@as(usize, 1 + 15 * 8), try compareTree(&s, ids, 1 + 15 * 8, &.{}, &tally, true));
+    try std.testing.expectEqual(inkling.verify.max_drafts - 1, tally.most_accepted);
+    try std.testing.expect(tally.deep >= 7 and tally.wide >= 7);
+    tally = .{};
+    try std.testing.expectEqual(@as(usize, 1 + 15 * 5 + 6), try compareTree(&s, ids, 1 + 15 * 5 + 6, &.{}, &tally, false));
+    try std.testing.expect(tally.deep >= 5 and tally.short >= 2);
+    oracle.shape = .none;
+    tally = .{};
+    _ = try compareTree(&s, ids, 30, &.{}, &tally, true);
+    try std.testing.expectEqual(tally.rounds, tally.zero + @as(usize, 1));
+    oracle.shape = .branch;
+    tally = .{};
+    _ = try compareTree(&s, ids, 1 + 7 * 10, &.{}, &tally, true);
+    try std.testing.expect(tally.branched >= 9);
+    oracle.shape = .deep;
+    var stop: usize = 20;
+    while (stop < 200 and (stop % 15 == 0 or std.mem.indexOfScalar(u32, want.items[0..stop], want.items[stop]) != null)) stop += 1;
+    try std.testing.expect(stop < 200);
+    tally = .{};
+    const n = try compareTree(&s, ids, 300, &.{want.items[stop]}, &tally, false);
+    try std.testing.expectEqual(stop + 1, n);
+    try std.testing.expectEqual(@as(usize, 1), tally.cut);
+    s.tree_proposer = null;
+    std.debug.print("dflash2 forced trees: a 15-row path, none, a later branch, a limit inside a tree and an EOS at {d} inside one, equal plain greedy and its caches\n", .{stop});
+}
+
+test "a tree round merges the lookup chain from before the drafter's window, as plain greedy decodes" {
+    const loaded = try load(.{ .bits = 4 }) orelse return error.SkipZigTest;
+    defer loaded.model.deinit();
+    defer loaded.drafter.deinit();
+    const a = std.testing.allocator;
+    const m = loaded.model;
+    var s = try spec.Speculator.init(m, loaded.drafter, dflash.tap_ids);
+    defer s.deinit();
+    var lookup = spec.Lookup.init(a);
+    defer lookup.deinit();
+    s.lookup = &lookup;
+    s.mode = .tree;
+    const parsed = try std.json.parseFromSlice([]const Prompt, a, prompts_json, .{});
+    defer parsed.deinit();
+    const agent = parsed.value[0].token_ids;
+    const repeated = 40;
+    const ids = try std.mem.concat(a, u32, &.{ agent, agent[0..repeated] });
+    defer a.free(ids);
+    var tally: TreeTally = .{};
+    const n = try compareTree(&s, ids, 128, &.{}, &tally, true);
+    std.debug.print("dflash2 tree lookup: {d} tokens and caches equal plain greedy in {d} rounds; {d} lookup rows, {d} accepted, {d} rounds accepted past depth 7\n", .{ n, tally.rounds, tally.looked, tally.looked_accepted, tally.deep });
+    try std.testing.expect(tally.looked_accepted > 0);
+}

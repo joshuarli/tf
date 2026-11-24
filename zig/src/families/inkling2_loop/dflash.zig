@@ -108,6 +108,13 @@ pub const Drafter = struct {
         @memcpy(out[0..n], tree.tokens);
     }
 
+    /// The selector's best-first tree of `nodes` drafts under `pending`, at most `children` under each.
+    pub fn proposeTree(d: *Drafter, pending: u32, nodes: u32, children: u32) !q.dflash.selector.Tree {
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
+        return d.model.proposeOptions(pending, .{ .nodes = nodes, .children = children, .edge = 1 });
+    }
+
     pub fn buffers(d: *Drafter, list: *std.ArrayList(mtl.Buffer)) !void {
         var it = d.model.checkpoint.tensors.valueIterator();
         while (it.next()) |t| try list.append(d.a, t.buffer);

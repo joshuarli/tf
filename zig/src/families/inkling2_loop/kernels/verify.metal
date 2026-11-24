@@ -1,8 +1,8 @@
-// Each kernel keeps the bits of the batch kernel it twins; a group's earlier rows come from captures, not the cache.
+// Each kernel keeps the bits of the batch kernel it twins; a row's ancestors come from captures, not the cache.
 
 inline float i2v_bf(const device bfloat* p, size_t i) { return float(p[i]); }
 
-struct i2v_conv_row { device float* ring; uint pos, first; };
+struct i2v_conv_row { device float* ring; uint pos, start; uchar back[4]; };
 struct i2v_conv_args { uint channels, heads, ring, pos, layout; float norm; uint residual; };
 
 [[kernel]] void i2v_conv(const device float* X [[buffer(0)]], const device bfloat* W [[buffer(1)]],
@@ -10,8 +10,8 @@ struct i2v_conv_args { uint channels, heads, ring, pos, layout; float norm; uint
     device float* O [[buffer(4)]], constant i2v_conv_row* rows [[buffer(5)]], device float* CAP [[buffer(6)]],
     uint2 p [[thread_position_in_grid]]) {
   if (p.x >= a.channels) return;
-  const uint c = p.x, pos = rows[p.y].pos, first = rows[p.y].first;
-  const uint start = pos - (p.y - first);
+  const uint c = p.x, pos = rows[p.y].pos, start = rows[p.y].start;
+  constant uchar* back = rows[p.y].back;
   device float* ring = rows[p.y].ring;
   const device float* x = X + (size_t)p.y * a.channels;
   float sum = x[c];
@@ -19,7 +19,7 @@ struct i2v_conv_args { uint channels, heads, ring, pos, layout; float norm; uint
     const int at = int(pos) + int(k) - 3;
     if (at < 0) continue;
     const float v = at == int(pos) ? x[c]
-      : (uint(at) >= start ? X[(size_t)(first + uint(at) - start) * a.channels + c] : ring[(uint(at) % a.ring) * a.channels + c]);
+      : (uint(at) >= start ? X[(size_t)back[pos - uint(at) - 1u] * a.channels + c] : ring[(uint(at) % a.ring) * a.channels + c]);
     const size_t tap = a.layout ? (size_t)(3u - k) * a.channels + c : (size_t)c * 4u + k;
     sum = fma(v, i2v_bf(W, tap), sum);
   }
@@ -28,7 +28,7 @@ struct i2v_conv_args { uint channels, heads, ring, pos, layout; float norm; uint
     for (uint lag = 0; lag < 4u; ++lag) {
       if (lag > pos) continue;
       const float v = lag == 0u ? x[c]
-        : (pos - lag >= start ? X[(size_t)(first + pos - lag - start) * a.channels + c] : ring[((pos - lag) % a.ring) * a.channels + c]);
+        : (pos - lag >= start ? X[(size_t)back[lag - 1u] * a.channels + c] : ring[((pos - lag) % a.ring) * a.channels + c]);
       sum = fma(v, D[(size_t)p.y * a.heads * 4u + head * 4u + lag], sum);
     }
   }
@@ -76,9 +76,9 @@ struct i2v_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; float 
   O[out] = sum * tau;
 }
 
-// i2_split_serial with positions from `gpos` on read from the group's captured rows, KH/VH row first + (j - gpos).
+// i2_split_serial with positions from `gpos` on read from the group's captured rows, KH/VH row path[j - gpos].
 inline void i2v_split_serial(const device float* Q, const device half* KEYS, const device half* VALUES,
-    const device half* KH, const device half* VH, uint first, uint gpos,
+    const device half* KH, const device half* VH, constant uchar* path, uint gpos,
     const device float* B, const device float* sink, constant i2_attn_parts& a, device float* PART,
     uint tgp, uint tid, uint sg, uint lane, uint nth, threadgroup float4* KB4, threadgroup float4* VB4) {
   const uint G = a.heads / a.kv;
@@ -106,7 +106,7 @@ inline void i2v_split_serial(const device float* Q, const device half* KEYS, con
     const uint col = min(a.pos - j, a.extent);
     const bool fresh = j >= gpos;
     const uint rj = a.window ? (j % a.window) : j;
-    const size_t at = fresh ? ((size_t)(first + j - gpos) * a.kv + kv) * D : ((size_t)rj * a.kv + kv) * D;
+    const size_t at = fresh ? ((size_t)path[j - gpos] * a.kv + kv) * D : ((size_t)rj * a.kv + kv) * D;
     const device half* kp = fresh ? KH : KEYS;
     const device half* vp = fresh ? VH : VALUES;
     const float bias = B[h * (a.extent + 1u) + col] - sk;
@@ -139,7 +139,7 @@ inline void i2v_split_serial(const device float* Q, const device half* KEYS, con
 
 // i2_split_blocks with the same source rule for each staged row.
 inline void i2v_split_blocks(const device float* Q, const device half* KEYS, const device half* VALUES,
-    const device half* KH, const device half* VH, uint first_row, uint gpos,
+    const device half* KH, const device half* VH, constant uchar* path, uint gpos,
     const device float* B, const device float* sink, constant i2_attn_parts& a, device float* PART,
     uint tgp, uint tid, uint sg, uint lane, threadgroup half4* KS4, threadgroup half4* VS4) {
   constexpr uint D = 128u, G = 3u, N = 96u, R = 32u, CELLS = (R * 32u + N - 1u) / N;
@@ -162,7 +162,7 @@ inline void i2v_split_blocks(const device float* Q, const device half* KEYS, con
       const uint r = min(e / 32u, n - 1u), j = first + r;
       const uint rj = a.window && j >= a.window ? j - a.window : j;
       const bool fresh = j0 + r >= gpos;
-      const size_t at = fresh ? ((size_t)(first_row + j0 + r - gpos) * a.kv + kv) * D : ((size_t)rj * a.kv + kv) * D;
+      const size_t at = fresh ? ((size_t)path[j0 + r - gpos] * a.kv + kv) * D : ((size_t)rj * a.kv + kv) * D;
       const device half* kr = (fresh ? KH : KEYS) + at + e % 32u;
       const device half* vr = (fresh ? VH : VALUES) + at + e % 32u;
       kc[i] = half4(kr[0], kr[32], kr[64], kr[96]);
@@ -234,7 +234,7 @@ inline void i2v_split_blocks(const device float* Q, const device half* KEYS, con
   for (uint u = 0; u < 4u; ++u) PART[base + 2u + lane + 32u * u] = acc[u];
 }
 
-struct i2v_row { device half* keys; device half* values; i2_attn_parts args; uint first, gpos; };
+struct i2v_row { device half* keys; device half* values; i2_attn_parts args; uint gpos; uchar path[16]; };
 
 [[kernel]] void i2v_split(const device float* Q [[buffer(0)]], const device float* B [[buffer(1)]],
     const device float* sink [[buffer(2)]], constant i2v_row* rows [[buffer(3)]], device float* PART [[buffer(4)]],
@@ -250,9 +250,10 @@ struct i2v_row { device half* keys; device half* values; i2_attn_parts args; uin
   B += size_t(tg.y) * a.heads * (a.extent + 1u);
   sink += size_t(tg.y) * a.heads;
   PART += size_t(tg.y) * a.heads * 16u * (a.dim + 2u);
-  const uint first = rows[tg.y].first, gpos = rows[tg.y].gpos;
-  if (i2_blocked(a, nth2.x)) i2v_split_blocks(Q, rows[tg.y].keys, rows[tg.y].values, KH, VH, first, gpos, B, sink, a, PART, tg.x, tid2.x, sg, lane, KS4, VS4);
-  else i2v_split_serial(Q, rows[tg.y].keys, rows[tg.y].values, KH, VH, first, gpos, B, sink, a, PART, tg.x, tid2.x, sg, lane, nth2.x, (threadgroup float4*)KS4, (threadgroup float4*)VS4);
+  const uint gpos = rows[tg.y].gpos;
+  constant uchar* path = rows[tg.y].path;
+  if (i2_blocked(a, nth2.x)) i2v_split_blocks(Q, rows[tg.y].keys, rows[tg.y].values, KH, VH, path, gpos, B, sink, a, PART, tg.x, tid2.x, sg, lane, KS4, VS4);
+  else i2v_split_serial(Q, rows[tg.y].keys, rows[tg.y].values, KH, VH, path, gpos, B, sink, a, PART, tg.x, tid2.x, sg, lane, nth2.x, (threadgroup float4*)KS4, (threadgroup float4*)VS4);
 }
 
 // Captures hold `stride` rows a slot: KV [slots][2][stride][kvw], CAP laid out as prefill.ConvCapture.
@@ -331,25 +332,42 @@ struct i2v_argmax_args { uint vocab; };
 
 struct i2v_stream { uint first, size; };
 
+// ACC: a stream's deepest accepted row (lowest-numbered matching child each step); KEEP: path rows; KEPT: its length.
 [[kernel]] void i2v_accept(const device uint* IDS [[buffer(0)]], const device uint* T [[buffer(1)]],
     constant i2v_stream* streams [[buffer(2)]], constant uint& count [[buffer(3)]], device uint* ACC [[buffer(4)]],
+    constant uint* PARENT [[buffer(5)]], device uint* KEEP [[buffer(6)]], device uint* KEPT [[buffer(7)]],
     uint i [[thread_position_in_grid]]) {
   if (i >= count) return;
-  const uint first = streams[i].first, size = streams[i].size;
-  uint n = 0u;
-  while (n + 1u < size && IDS[first + 1u + n] == T[first + n]) ++n;
-  ACC[i] = n;
+  const uint first = streams[i].first, end = first + streams[i].size;
+  for (uint r = first; r < end; ++r) KEEP[r] = 0u;
+  uint at = first, n = 0u;
+  KEEP[at] = 1u;
+  for (;;) {
+    uint next = 0xffffffffu;
+    for (uint c = at + 1u; c < end; ++c) {
+      if (PARENT[c] == at && IDS[c] == T[at]) {
+        next = c;
+        break;
+      }
+    }
+    if (next == 0xffffffffu) break;
+    at = next;
+    ++n;
+    KEEP[at] = 1u;
+  }
+  ACC[i] = at - first;
+  KEPT[i] = n + 1u;
 }
 
-struct i2v_round_row { device half* keys; device half* values; device float* conv[4]; uint pos, capacity, owner, j; };
+struct i2v_round_row { device half* keys; device half* values; device float* conv[4]; uint pos, capacity, owner, depth; };
 
 [[kernel]] void i2v_round_kv(const device half* KV [[buffer(0)]], constant i2v_commit_args& a [[buffer(1)]],
     constant i2v_round_row* rows [[buffer(2)]], constant i2v_commit_slot* slots [[buffer(3)]],
-    const device uint* ACC [[buffer(4)]], uint3 p [[thread_position_in_grid]]) {
+    const device uint* KEEP [[buffer(4)]], uint3 p [[thread_position_in_grid]]) {
   const uint i = p.x, row = p.y, slot = p.z / 2u, kind = p.z % 2u;
   if (i >= a.kvw || row >= a.rows) return;
   const i2v_round_row r = rows[row];
-  if (r.j >= ACC[r.owner] + 1u) return;
+  if (KEEP[row] == 0u) return;
   const i2v_commit_slot s = slots[slot];
   const size_t base = ((size_t)s.locals_before * a.window + (size_t)s.globals_before * r.capacity) * a.kvw;
   const size_t at = base + (size_t)(s.local ? r.pos % a.window : r.pos) * a.kvw + i;
@@ -358,13 +376,13 @@ struct i2v_round_row { device half* keys; device half* values; device float* con
 }
 
 [[kernel]] void i2v_round_conv(const device float* CAP [[buffer(0)]], constant i2v_commit_args& a [[buffer(1)]],
-    constant i2v_round_row* rows [[buffer(2)]], const device uint* ACC [[buffer(3)]], uint3 p [[thread_position_in_grid]]) {
+    constant i2v_round_row* rows [[buffer(2)]], const device uint* KEEP [[buffer(3)]],
+    const device uint* KEPT [[buffer(4)]], uint3 p [[thread_position_in_grid]]) {
   const uint c = p.x, row = p.y, slot = p.z / 4u, site = p.z % 4u;
   const uint width = site < 2u ? a.kvw : a.hidden;
   if (c >= width || row >= a.rows) return;
   const i2v_round_row r = rows[row];
-  const uint kept = ACC[r.owner] + 1u;
-  if (r.j >= kept || r.j + a.ring < kept) return;
+  if (KEEP[row] == 0u || r.depth + a.ring < KEPT[r.owner]) return;
   const uint site_at = site == 0u ? 0u : site == 1u ? a.kvw : site == 2u ? 2u * a.kvw : 2u * a.kvw + a.hidden;
   const size_t src = (size_t)slot * a.stride * (2u * a.kvw + 2u * a.hidden) + (size_t)site_at * a.stride + (size_t)row * width + c;
   r.conv[site][((size_t)slot * a.ring + r.pos % a.ring) * width + c] = CAP[src];

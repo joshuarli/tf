@@ -14,8 +14,20 @@ const Reply = struct {
     cached: u32 = 0,
     reason: ?api.Reason = null,
     stats: api.Stats = .{},
+    /// Lookup rows the reply's rounds verified and committed, from its telemetry.
+    lookup_rows: u64 = 0,
+    lookup_kept: u64 = 0,
     done: std.Io.Event = .unset,
 };
+
+fn telemetryField(json: []const u8, name: []const u8) u64 {
+    var key: [64]u8 = undefined;
+    const quoted = std.fmt.bufPrint(&key, "\"{s}\":", .{name}) catch return 0;
+    const at = std.mem.indexOf(u8, json, quoted) orelse return 0;
+    var end = at + quoted.len;
+    while (end < json.len and std.ascii.isDigit(json[end])) end += 1;
+    return std.fmt.parseInt(u64, json[at + quoted.len .. end], 10) catch 0;
+}
 
 const Board = struct {
     gpa: std.mem.Allocator,
@@ -33,6 +45,8 @@ const Board = struct {
             .finished => |f| {
                 r.reason = f.reason;
                 r.stats = f.stats;
+                r.lookup_rows = telemetryField(f.stats.telemetry_json, "lookup_rows");
+                r.lookup_kept = telemetryField(f.stats.telemetry_json, "lookup_kept");
                 r.stats.telemetry_json = "";
                 r.done.set(b.io);
             },
@@ -78,11 +92,11 @@ fn expectSame(on: *const Reply, off: *const Reply) !void {
 }
 
 fn expectDrafted(name: []const u8, r: *const Reply) !void {
-    std.debug.print("inkling served speculation: {s}: {d} tokens in {d} rounds, {d} drafted, {d} accepted, {d} cached\n", .{ name, r.tokens.items.len, r.stats.rounds, r.stats.drafted, r.stats.accepted, r.cached });
+    std.debug.print("inkling served speculation: {s}: {d} tokens in {d} rounds, {d} drafted, {d} accepted, {d} cached, {d} lookup rows, {d} kept\n", .{ name, r.tokens.items.len, r.stats.rounds, r.stats.drafted, r.stats.accepted, r.cached, r.lookup_rows, r.lookup_kept });
     if (r.stats.drafted == 0 or r.stats.accepted == 0 or r.stats.rounds >= r.tokens.items.len) return error.NoSpeculation;
 }
 
-test "inkling served speculation: replies with the DFlash2 drafter equal draft-off replies and a host without the drafter, through reuse, the store, a fork and two lanes" {
+test "inkling served speculation: tree rounds with lookup equal draft-off replies and a host without the drafter, through reuse, the store, a fork, two lanes and an EOS in a lookup round" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     const target = std.c.getenv("TF_INKLING2_LOOP_OQ4E_DIR") orelse return error.SkipZigTest;
@@ -169,6 +183,24 @@ test "inkling served speculation: replies with the DFlash2 drafter equal draft-o
         try expectSame(long_on, long_off);
         try expectSame(short_on, short_off);
         try expectDrafted("two lanes", long_on);
+
+        const repeat = try std.mem.concat(gpa, u32, &.{ agent, agent[0..40] });
+        defer gpa.free(repeat);
+        const repeat_on = try board.ask(repeat, 96, &.{}, true);
+        const repeat_off = try board.ask(repeat, 96, &.{}, false);
+        try expectSame(repeat_on, repeat_off);
+        try expectDrafted("lookup", repeat_on);
+        try std.testing.expect(repeat_on.lookup_kept > 0);
+        var lookup_stop: usize = 9;
+        while (lookup_stop < 90 and std.mem.indexOfScalar(u32, repeat_off.tokens.items[0..lookup_stop], repeat_off.tokens.items[lookup_stop]) != null) lookup_stop += 1;
+        try std.testing.expect(lookup_stop < 90);
+        const lookup_eos = [1]u32{repeat_off.tokens.items[lookup_stop]};
+        const repeat_cut_on = try board.ask(repeat, 96, &lookup_eos, true);
+        const repeat_cut_off = try board.ask(repeat, 96, &lookup_eos, false);
+        try expectSame(repeat_cut_on, repeat_cut_off);
+        try expectDrafted("lookup eos", repeat_cut_on);
+        try std.testing.expectEqual(lookup_stop + 1, repeat_cut_on.tokens.items.len);
+
         on = .{ .code = code_on, .agent = agent_on, .long = long_on, .short = short_on };
     }
     if (unsetenv("INKLING_DRAFTER") != 0) return error.SetEnv;

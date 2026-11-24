@@ -1,8 +1,9 @@
-//! Grouped verification: streams' newest tokens and drafts in one batch step, each row's bits a batch step's.
+//! Grouped verification: streams' trees of drafts in one batch step, each row's bits its path's one-row steps'.
 const std = @import("std");
 const mtl = @import("metal");
 const Model = @import("model.zig").Model;
 const Tensor = @import("model.zig").Tensor;
+const Config = @import("config.zig").Config;
 const state = @import("state.zig");
 const Cache = state.Cache;
 const prefill = @import("prefill.zig");
@@ -10,26 +11,30 @@ const batch_mod = @import("batch.zig");
 
 pub const source = @import("kernels.zig").attention ++ "\n" ++ @embedFile("kernels/verify.metal");
 
-/// The batch step's few-row kernels keep each row's arithmetic independent of the step's rows up to eight.
-pub const max_rows: usize = 8;
+/// The most rows one grouped verify takes: a stream's newest token and a tree of drafts under it.
+pub const max_rows: usize = 16;
+/// The most rows where not every projection is affine: past eight its batch step leaves the few-row kernels.
+pub const plain_rows: usize = 8;
+const none: u8 = 0xff;
 
 const DecodeParts = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, splits: u32, chunk: u32, scale: f32, floor: f32, alpha: f32 };
 const BatchRow = extern struct { keys: u64, values: u64, args: DecodeParts };
-const GroupRow = extern struct { keys: u64, values: u64, args: DecodeParts, first: u32, gpos: u32 };
+const GroupRow = extern struct { keys: u64, values: u64, args: DecodeParts, gpos: u32, path: [max_rows]u8 };
 const RelArgs = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, scale: f32, floor: f32, alpha: f32, eps: f32 };
-const ConvRow = extern struct { ring: u64, pos: u32, first: u32 };
+const ConvRow = extern struct { ring: u64, pos: u32, start: u32, back: [4]u8 };
 const ConvArgs = extern struct { channels: u32, heads: u32, ring: u32, pos: u32, layout: u32, norm: f32, residual: u32 };
 const CommitRow = extern struct { keys: u64, values: u64, conv: [4]u64, pos: u32, capacity: u32, keep: u32, conv_keep: u32 };
 const CommitSlot = extern struct { local: u32, locals_before: u32, globals_before: u32, pad: u32 = 0 };
 const CommitArgs = extern struct { kvw: u32, hidden: u32, rows: u32, stride: u32, slots: u32, window: u32, ring: u32 };
-const RoundRow = extern struct { keys: u64, values: u64, conv: [4]u64, pos: u32, capacity: u32, owner: u32, j: u32 };
+const RoundRow = extern struct { keys: u64, values: u64, conv: [4]u64, pos: u32, capacity: u32, owner: u32, depth: u32 };
 const Stream = extern struct { first: u32, size: u32 };
 
 const names = [_][:0]const u8{ "i2v_conv", "i2v_store_rel", "i2v_split", "i2v_commit_kv", "i2v_commit_conv", "i2v_argmax", "i2v_accept", "i2v_round_kv", "i2v_round_conv" };
 const Kernel = enum { conv, store_rel, split, commit_kv, commit_conv, argmax, accept, round_kv, round_conv };
 
 pub const Finish = enum { picks, commit };
-pub const Decided = struct { picks: []const u32, accepted: []const u32 };
+/// `last[i]`: stream i's deepest accepted row, counted from its first row; on a chain, its accepted drafts.
+pub const Decided = struct { picks: []const u32, last: []const u32 };
 
 pub const Verifier = struct {
     kernels: [names.len]mtl.Pipeline,
@@ -37,10 +42,14 @@ pub const Verifier = struct {
     conv: prefill.ConvCapture,
     targets: mtl.Buffer,
     accepted: mtl.Buffer,
+    keep: mtl.Buffer,
+    kept: mtl.Buffer,
     slots: [64]CommitSlot,
     slot_count: usize,
+    /// The most rows a group may hold: `max_rows` when every projection is affine, else `plain_rows`.
+    limit: usize,
 
-    pub fn init(device: mtl.Device, config: *const @import("config.zig").Config) !Verifier {
+    pub fn init(device: mtl.Device, config: *const Config) !Verifier {
         var v: Verifier = undefined;
         if (config.slots() > v.slots.len) return error.TooManySlots;
         const lib = try mtl.Library.fromSource(device, source, mtl.CompileOptions.mlx());
@@ -59,7 +68,12 @@ pub const Verifier = struct {
         v.targets = try device.buffer(max_rows * 4, mtl.ResourceOptions.shared);
         errdefer v.targets.deinit();
         v.accepted = try device.buffer(max_rows * 4, mtl.ResourceOptions.shared);
+        errdefer v.accepted.deinit();
+        v.keep = try device.buffer(max_rows * 4, mtl.ResourceOptions.shared);
+        errdefer v.keep.deinit();
+        v.kept = try device.buffer(max_rows * 4, mtl.ResourceOptions.shared);
         v.slot_count = config.slots();
+        v.limit = if (config.checkpoint == .mlx) max_rows else plain_rows;
         var locals: u32 = 0;
         var globals: u32 = 0;
         for (0..config.slots()) |s| {
@@ -76,27 +90,52 @@ pub const Verifier = struct {
         v.conv.deinit();
         v.targets.deinit();
         v.accepted.deinit();
+        v.keep.deinit();
+        v.kept.deinit();
     }
 
     fn pipe(v: *const Verifier, k: Kernel) mtl.Pipeline {
         return v.kernels[@intFromEnum(k)];
     }
 
+    /// Streams of chains: stream i's `sizes[i]` rows, its newest token and then each draft after the one before.
     pub fn group(v: *const Verifier, caches: []const *Cache, sizes: []const usize) !Group {
+        return v.tree(caches, sizes, null);
+    }
+
+    /// Streams of trees; `parents` concatenates each stream's row j + 1 parents (from its first row, below j + 1).
+    pub fn tree(v: *const Verifier, caches: []const *Cache, sizes: []const usize, parents: ?[]const u8) !Group {
         if (caches.len == 0 or caches.len != sizes.len) return error.BadGroup;
         var g = Group{ .verifier = v, .caches = caches, .sizes = sizes, .rows = 0 };
+        var given: usize = 0;
         for (caches, sizes, 0..) |cache, size, i| {
             if (size == 0) return error.BadGroup;
-            if (cache.len + size > cache.capacity) return error.ContextFull;
+            if (g.rows + size > v.limit) return error.BadGroup;
             for (caches[0..i]) |prior| if (prior == cache) return error.DuplicateCache;
+            const first = g.rows;
             for (0..size) |j| {
-                if (g.rows == max_rows) return error.BadGroup;
-                g.owner[g.rows] = @intCast(i);
-                g.pos[g.rows] = @intCast(cache.len + j);
-                g.first[g.rows] = @intCast(g.rows - j);
-                g.rows += 1;
+                const r = first + j;
+                var depth: usize = 0;
+                if (j > 0) {
+                    const p: usize = if (parents) |list| list[given] else j - 1;
+                    if (parents != null) given += 1;
+                    if (p >= j) return error.BadDraftParents;
+                    g.parent[r] = @intCast(first + p);
+                    depth = g.depth[first + p] + 1;
+                    @memcpy(g.path[r][0..depth], g.path[first + p][0..depth]);
+                } else g.parent[r] = none;
+                g.path[r][depth] = @intCast(r);
+                g.depth[r] = @intCast(depth);
+                g.owner[r] = @intCast(i);
+                g.first[r] = @intCast(first);
+                g.pos[r] = @intCast(cache.len + depth);
             }
+            var deepest: usize = 0;
+            for (first..first + size) |r| deepest = @max(deepest, g.depth[r]);
+            if (cache.len + deepest + 1 > cache.capacity) return error.ContextFull;
+            g.rows += size;
         }
+        if (parents) |list| if (given != list.len) return error.BadDraftParents;
         return g;
     }
 
@@ -108,11 +147,11 @@ pub const Verifier = struct {
     pub fn decide(v: *const Verifier, m: *const Model, batch: *batch_mod.BatchScratch, g: *const Group, ids: []const u32, finish: Finish) !Decided {
         if (ids.len != g.rows or ids.len > batch.rows.chunk) return error.BadGroup;
         try prefill.groupFinish(m, batch, g, ids, finish);
-        const accepted = v.accepted.slice(u32, g.caches.len);
-        if (finish == .commit) for (g.caches, accepted) |cache, a| {
-            cache.len += a + 1;
+        const last = v.accepted.slice(u32, g.caches.len);
+        if (finish == .commit) for (g.caches, last, 0..) |cache, end, i| {
+            cache.len += g.kept(i, end);
         };
-        return .{ .picks = v.targets.slice(u32, g.rows), .accepted = accepted };
+        return .{ .picks = v.targets.slice(u32, g.rows), .last = last };
     }
 
     pub fn encodeFinish(v: *const Verifier, enc: mtl.ComputeEncoder, m: *const Model, ids: mtl.Buffer, logits: mtl.Buffer, g: *const Group, finish: Finish) void {
@@ -128,12 +167,17 @@ pub const Verifier = struct {
             streams[i] = .{ .first = at, .size = @intCast(size) };
             at += @intCast(size);
         }
+        var parents: [max_rows]u32 = undefined;
+        for (0..g.rows) |r| parents[r] = if (g.parent[r] == none) std.math.maxInt(u32) else g.parent[r];
         enc.setPipeline(v.pipe(.accept));
         enc.setBuffer(ids, 0, 0);
         enc.setBuffer(v.targets, 0, 1);
         enc.setBytes(std.mem.sliceAsBytes(streams[0..g.caches.len]), 2);
         enc.setValue(@as(u32, @intCast(g.caches.len)), 3);
         enc.setBuffer(v.accepted, 0, 4);
+        enc.setBytes(std.mem.sliceAsBytes(parents[0..g.rows]), 5);
+        enc.setBuffer(v.keep, 0, 6);
+        enc.setBuffer(v.kept, 0, 7);
         enc.dispatchThreads(mtl.Size.of(g.caches.len, 1, 1), mtl.Size.of(32, 1, 1));
         const c = &m.config;
         var rows: [max_rows]RoundRow = undefined;
@@ -146,7 +190,7 @@ pub const Verifier = struct {
                 .pos = g.pos[r],
                 .capacity = @intCast(cache.capacity),
                 .owner = g.owner[r],
-                .j = @intCast(r - g.first[r]),
+                .depth = g.depth[r],
             };
         }
         const kvw: usize = c.text.local.kv * c.text.local.dim;
@@ -157,13 +201,14 @@ pub const Verifier = struct {
         enc.setValue(args, 1);
         enc.setBytes(std.mem.sliceAsBytes(rows[0..g.rows]), 2);
         enc.setBytes(std.mem.sliceAsBytes(v.slots[0..v.slot_count]), 3);
-        enc.setBuffer(v.accepted, 0, 4);
+        enc.setBuffer(v.keep, 0, 4);
         enc.dispatchThreads(mtl.Size.of(kvw, g.rows, v.slot_count * 2), mtl.Size.of(256, 1, 1));
         enc.setPipeline(v.pipe(.round_conv));
         enc.setBuffer(v.conv.buffer, 0, 0);
         enc.setValue(args, 1);
         enc.setBytes(std.mem.sliceAsBytes(rows[0..g.rows]), 2);
-        enc.setBuffer(v.accepted, 0, 3);
+        enc.setBuffer(v.keep, 0, 3);
+        enc.setBuffer(v.kept, 0, 4);
         enc.dispatchThreads(mtl.Size.of(@max(kvw, c.text.hidden), g.rows, v.slot_count * 4), mtl.Size.of(256, 1, 1));
     }
 
@@ -188,12 +233,13 @@ pub const Verifier = struct {
         return v.targets.slice(u32, rows);
     }
 
-    pub fn commit(v: *const Verifier, m: *const Model, g: *const Group, accepted: []const usize) !void {
+    /// Commits each stream's path to its row `last[i]` (from its first) where decoding it would have written.
+    pub fn commit(v: *const Verifier, m: *const Model, g: *const Group, last: []const usize) !void {
         const pool = mtl.objc.Pool.push();
         defer pool.pop();
         const cb = m.queue.commandBuffer();
         const enc = cb.compute(.serial);
-        try v.encodeCommit(enc, m, g, accepted);
+        try v.encodeCommit(enc, m, g, last);
         enc.end();
         cb.commit();
         cb.wait();
@@ -201,27 +247,27 @@ pub const Verifier = struct {
             std.log.err("inkling grouped commit: {s}", .{message});
             return error.GpuFailed;
         }
-        committed(g, accepted);
+        committed(g, last);
     }
 
-    pub fn encodeCommit(v: *const Verifier, enc: mtl.ComputeEncoder, m: *const Model, g: *const Group, accepted: []const usize) !void {
-        if (accepted.len != g.caches.len) return error.BadAcceptedPrefix;
-        for (accepted, g.sizes) |a, size| if (a >= size) return error.BadAcceptedPrefix;
+    pub fn encodeCommit(v: *const Verifier, enc: mtl.ComputeEncoder, m: *const Model, g: *const Group, last: []const usize) !void {
+        if (last.len != g.caches.len) return error.BadAcceptedPrefix;
+        for (last, g.sizes) |a, size| if (a >= size) return error.BadAcceptedPrefix;
         const c = &m.config;
         var rows: [max_rows]CommitRow = undefined;
         for (0..g.rows) |r| {
             const i = g.owner[r];
             const cache = g.caches[i];
-            const j = r - g.first[r];
-            const kept = accepted[i] + 1;
+            const end = g.first[r] + last[i];
+            const kept = g.depth[end] + 1;
             rows[r] = .{
                 .keys = cache.keys.gpuAddress(),
                 .values = cache.values.gpuAddress(),
                 .conv = .{ cache.k_conv.gpuAddress(), cache.v_conv.gpuAddress(), cache.attn_conv.gpuAddress(), cache.mlp_conv.gpuAddress() },
                 .pos = g.pos[r],
                 .capacity = @intCast(cache.capacity),
-                .keep = @intFromBool(j < kept),
-                .conv_keep = @intFromBool(j + state.ring >= kept),
+                .keep = @intFromBool(g.ancestor(r, end)),
+                .conv_keep = @intFromBool(g.depth[r] + state.ring >= kept),
             };
         }
         const kvw: usize = c.text.local.kv * c.text.local.dim;
@@ -241,8 +287,44 @@ pub const Verifier = struct {
     }
 };
 
-pub fn committed(g: *const Group, accepted: []const usize) void {
-    for (g.caches, accepted) |cache, a| cache.len += a + 1;
+pub fn committed(g: *const Group, last: []const usize) void {
+    for (g.caches, last, 0..) |cache, end, i| cache.len += g.kept(i, end);
+}
+
+/// A batch scratch for verifies of up to `max_rows` rows whose every width keeps the few-row kernels (`half` off).
+pub fn scratch(device: mtl.Device, config: *const Config) !batch_mod.BatchScratch {
+    const capacity = max_rows;
+    var rows = try prefill.PrefillScratch.init(device, config, capacity);
+    errdefer rows.deinit();
+    rows.half = false;
+    var decode = try state.Scratch.init(device, config);
+    errdefer decode.deinit();
+    const heads = @max(config.text.local.q, config.text.global.q);
+    const dim = @max(config.text.local.dim, config.text.global.dim);
+    const parts = try device.buffer(capacity * heads * state.attn_splits * (dim + 2) * 4, mtl.ResourceOptions.private);
+    errdefer parts.deinit();
+    const controls_input = try device.buffer(capacity * 3 * 2 * config.text.hidden * 4, mtl.ResourceOptions.private);
+    errdefer controls_input.deinit();
+    const controls_hidden = try device.buffer(capacity * 3 * config.loop.gate_rank * 4, mtl.ResourceOptions.private);
+    errdefer controls_hidden.deinit();
+    const lib = try mtl.Library.fromSource(device, @import("kernels.zig").attention, mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const split = try mtl.Pipeline.init(device, lib, "i2_batch_split", false);
+    errdefer split.deinit();
+    const combine = try mtl.Pipeline.init(device, lib, "i2_batch_combine", false);
+    errdefer combine.deinit();
+    const controls_norm = try mtl.Pipeline.init(device, lib, "i2_controls_norm", false);
+    errdefer controls_norm.deinit();
+    const controls_down = try mtl.Pipeline.init(device, lib, "i2_controls_down", false);
+    errdefer controls_down.deinit();
+    const controls_apply = try mtl.Pipeline.init(device, lib, "i2_controls_apply", false);
+    errdefer controls_apply.deinit();
+    const mix = try mtl.Pipeline.init(device, lib, "i2_batch_mix", false);
+    errdefer mix.deinit();
+    const mix4 = try mtl.Pipeline.init(device, lib, "i2_batch_mix4", false);
+    errdefer mix4.deinit();
+    const shared = try @import("rows.zig").Pipes.init(device);
+    return .{ .rows = rows, .decode = decode, .parts = parts, .split = split, .combine = combine, .controls_norm = controls_norm, .controls_down = controls_down, .controls_apply = controls_apply, .mix = mix, .mix4 = mix4, .shared = shared, .controls_input = controls_input, .controls_hidden = controls_hidden };
 }
 
 pub const Group = struct {
@@ -253,6 +335,32 @@ pub const Group = struct {
     owner: [max_rows]u8 = @splat(0),
     pos: [max_rows]u32 = @splat(0),
     first: [max_rows]u32 = @splat(0),
+    depth: [max_rows]u8 = @splat(0),
+    parent: [max_rows]u8 = @splat(none),
+    /// `path[r][d]`: row r's ancestor at depth d, and r itself at its own depth.
+    path: [max_rows][max_rows]u8 = undefined,
+
+    /// Whether row `a` lies on the path from its stream's first row to row `r`.
+    pub fn ancestor(g: *const Group, a: usize, r: usize) bool {
+        return g.owner[a] == g.owner[r] and g.depth[a] <= g.depth[r] and g.path[r][g.depth[a]] == a;
+    }
+
+    /// Rows a commit of stream `i` to its row `last` (counted from its first) keeps: the path's length.
+    pub fn kept(g: *const Group, i: usize, last: usize) usize {
+        var first: usize = 0;
+        for (g.sizes[0..i]) |size| first += size;
+        return @as(usize, g.depth[first + last]) + 1;
+    }
+
+    /// The rows from stream `i`'s first row to its row `last`, counted from the first, in depth order.
+    pub fn line(g: *const Group, i: usize, last: usize, out: []usize) []usize {
+        var first: usize = 0;
+        for (g.sizes[0..i]) |size| first += size;
+        const end = first + last;
+        const n = @as(usize, g.depth[end]) + 1;
+        for (out[0..n], g.path[end][0..n]) |*o, r| o.* = r - first;
+        return out[0..n];
+    }
 
     pub fn conv(g: *const Group, enc: mtl.ComputeEncoder, x: mtl.Buffer, x_off: usize, weight: Tensor, dyn: ?mtl.Buffer, dyn_off: usize, out: mtl.Buffer, out_off: usize, channels: u32, heads: u32, layout: u32, norm: f32, slot: u32, site: prefill.ConvSite) void {
         const v = g.verifier;
@@ -265,7 +373,12 @@ pub const Group = struct {
                 .attention => cache.attn_conv,
                 .mlp => cache.mlp_conv,
             };
-            rows[r] = .{ .ring = buf.gpuAddress() + cache.convAt(slot, channels), .pos = g.pos[r], .first = g.first[r] };
+            var back: [4]u8 = @splat(none);
+            const depth = g.depth[r];
+            for (1..state.ring) |k| if (k <= depth) {
+                back[k - 1] = g.path[r][depth - k];
+            };
+            rows[r] = .{ .ring = buf.gpuAddress() + cache.convAt(slot, channels), .pos = g.pos[r], .start = @intCast(cache.len), .back = back };
             enc.useResource(buf, mtl.ResourceUsage.read);
         }
         enc.setPipeline(v.pipe(.conv));
@@ -301,7 +414,7 @@ pub const Group = struct {
             const part = state.attnPartition(pos + 1 - lo);
             const parts = DecodeParts{ .heads = heads, .kv = kv, .dim = dim, .rel = text.d_rel, .extent = extent, .window = win, .pos = pos, .tau = @intFromBool(full), .splits = part.splits, .chunk = part.chunk, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(dim))), .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha };
             const base = cache.row(config, slot, 0);
-            rows[r] = .{ .keys = cache.keys.gpuAddress() + base, .values = cache.values.gpuAddress() + base, .args = parts, .first = g.first[r], .gpos = pos - (@as(u32, @intCast(r)) - g.first[r]) };
+            rows[r] = .{ .keys = cache.keys.gpuAddress() + base, .values = cache.values.gpuAddress() + base, .args = parts, .gpos = @intCast(cache.len), .path = g.path[r] };
             plain[r] = .{ .keys = rows[r].keys, .values = rows[r].values, .args = parts };
             positions[r] = pos;
             max_splits = @max(max_splits, part.splits);
@@ -344,6 +457,19 @@ pub fn acceptedDrafts(drafts: []const u32, targets: []const u32) usize {
     return n;
 }
 
+/// The deepest accepted row of one tree, as `i2v_accept` walks it; `parents[j]` is row j + 1's parent.
+pub fn walk(parents: []const u8, ids: []const u32, picks: []const u32) usize {
+    var at: usize = 0;
+    while (true) {
+        var next: ?usize = null;
+        for (at + 1..ids.len) |c| if (parents[c - 1] == at and ids[c] == picks[at]) {
+            next = c;
+            break;
+        };
+        at = next orelse return at;
+    }
+}
+
 test "the grouped verification kernels compile with the attention they twin" {
     const device = try mtl.Device.init();
     defer device.deinit();
@@ -360,4 +486,20 @@ test "drafts are accepted while each equals the target's pick before it" {
     try std.testing.expectEqual(@as(usize, 1), acceptedDrafts(&.{ 5, 6 }, &.{ 5, 7, 7 }));
     try std.testing.expectEqual(@as(usize, 2), acceptedDrafts(&.{ 5, 6 }, &.{ 5, 6, 7 }));
     try std.testing.expectEqual(@as(usize, 0), acceptedDrafts(&.{}, &.{9}));
+}
+
+test "a tree's accepted path follows the child whose token is its parent's pick, the lowest-numbered on a tie" {
+    const parents = [_]u8{ 0, 0, 1, 1, 3, 0, 4 };
+    const ids = [_]u32{ 9, 5, 6, 7, 8, 1, 6, 2 };
+    try std.testing.expectEqual(@as(usize, 4), walk(&parents, &ids, &.{ 5, 8, 0, 0, 0, 0, 0, 0 }));
+    try std.testing.expectEqual(@as(usize, 7), walk(&parents, &ids, &.{ 5, 8, 0, 0, 2, 0, 0, 0 }));
+    try std.testing.expectEqual(@as(usize, 2), walk(&parents, &ids, &.{ 6, 0, 0, 0, 0, 0, 0, 0 }));
+    try std.testing.expectEqual(@as(usize, 0), walk(&parents, &ids, &.{ 3, 0, 0, 0, 0, 0, 0, 0 }));
+    const chain = [_]u8{ 0, 1, 2 };
+    const drafts = [_]u32{ 4, 5, 6, 7 };
+    for (0..4) |n| {
+        var picks = [_]u32{ 5, 6, 7, 8 };
+        if (n < 3) picks[n] = 0;
+        try std.testing.expectEqual(acceptedDrafts(drafts[1..], &picks), walk(&chain, &drafts, &picks));
+    }
 }

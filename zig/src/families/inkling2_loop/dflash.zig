@@ -24,12 +24,13 @@ pub const Drafter = struct {
     config: cfg.Config,
     step_ms: f64 = 0,
 
-    pub const Options = struct { bits: u8 = 0, embed_norm: bool = true };
+    pub const Options = struct { bits: u8 = 0, embed_norm: bool = true, window: ?u32 = null };
 
     pub fn init(a: std.mem.Allocator, io: std.Io, target: *inkling.Model, dir: []const u8, options: Options) !*Drafter {
         const bits = options.bits;
         if (bits != 0 and bits != 4) return error.UnsupportedDraftBits;
-        const c = try admit(a, io, target, dir);
+        var c = try admit(a, io, target, dir);
+        if (options.window) |w| c.window = w;
         const embed = try affine8(target.weights.embed, target.config.text.vocab, target.config.text.hidden);
         const unembed = try affine8(target.weights.unembed, target.config.text.vocab, target.config.text.hidden);
         const d = try a.create(Drafter);

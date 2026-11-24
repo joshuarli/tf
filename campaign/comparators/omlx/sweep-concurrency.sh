@@ -3,7 +3,9 @@ set -eu
 root=$(git rev-parse --show-toplevel)
 main=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
 work="$root/.work"
-base="$work/tmp/omlx-concurrency-guarded-four"
+mtp="${OMLX_MTP:-off}"
+case "$mtp" in on) mtp_enabled=True ;; off) mtp_enabled=False ;; *) echo "OMLX_MTP must be on or off" >&2; exit 2 ;; esac
+base="$work/tmp/omlx-concurrency-guarded-four-mtp-$mtp"
 mkdir -p "$base/models" "$base/omlx" "$work/tmp"
 [ -L "$base/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd" ] || ln -s "$HOME/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd" "$base/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd"
 export PATH="$main/.work/venv-omlx/bin:$PATH"
@@ -11,11 +13,11 @@ export UV_CACHE_DIR="$main/.work/uv-cache" UV_PYTHON_INSTALL_DIR="$main/.work/uv
 export XDG_CACHE_HOME="$main/.work/xdg-cache" HF_HOME="$main/.work/hf-home" TMPDIR="$work/tmp"
 export PYTHONDONTWRITEBYTECODE=1 OMLX_WITH_CUSTOM_KERNEL=0 HF_HUB_OFFLINE=1
 export INKLING_LOAD_LIMIT_GB=26 GPU_GATE_MAX_GPU_PCT=60 GPU_GATE_MAX_UTIL_PCT=60
-python3 - "$base/omlx/model_settings.json" <<'PYSETTINGS'
+python3 - "$base/omlx/model_settings.json" "$mtp_enabled" <<'PYSETTINGS'
 import json
 import sys
 with open(sys.argv[1], 'w') as f:
-    json.dump({'version': 3, 'models': {'Inkling-2-Mini-oQ4e-mtp@3eea042751cd': {'mtp_enabled': False}}}, f)
+    json.dump({'version': 3, 'models': {'Inkling-2-Mini-oQ4e-mtp@3eea042751cd': {'mtp_enabled': sys.argv[2] == 'True'}}}, f)
 PYSETTINGS
 port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
 model='Inkling-2-Mini-oQ4e-mtp@3eea042751cd'

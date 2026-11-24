@@ -48,6 +48,49 @@ test "Inkling DFlash2 binds the oQ4e target and refuses another target or config
     }
 }
 
+test "a lookup takes the longest earlier suffix of three or more tokens, the most recent of that length" {
+    var l = spec.Lookup.init(std.testing.allocator);
+    defer l.deinit();
+    var out: [7]u32 = undefined;
+    try l.append(&.{ 5, 1, 2, 3, 10, 6, 1, 2, 3, 11, 5, 1, 2, 3 });
+    const longest = l.match().?;
+    try std.testing.expectEqual(spec.Lookup.Match{ .length = 4, .end = 3 }, longest);
+    try std.testing.expectEqualSlices(u32, &.{ 10, 6, 1, 2, 3, 11, 5 }, out[0..l.proposals(longest, &out)]);
+    l.reset();
+    try l.append(&.{ 1, 2, 3, 10, 1, 2, 3, 11, 1, 2, 3 });
+    const recent = l.match().?;
+    try std.testing.expectEqual(spec.Lookup.Match{ .length = 3, .end = 6 }, recent);
+    try std.testing.expectEqualSlices(u32, &.{ 11, 1, 2, 3 }, out[0..l.proposals(recent, &out)]);
+    l.reset();
+    try l.append(&.{ 1, 2, 3, 4, 2, 3 });
+    try std.testing.expectEqual(@as(?spec.Lookup.Match, null), l.match());
+    l.reset();
+    try std.testing.expectEqual(@as(?spec.Lookup.Match, null), l.match());
+    try std.testing.expectError(error.LookupToken, l.append(&.{1 << 21}));
+}
+
+test "a lookup finds the longest match behind hundreds of shorter recent ones, as repetitive prompts hold" {
+    var l = spec.Lookup.init(std.testing.allocator);
+    defer l.deinit();
+    try l.append(&.{ 9, 8, 7, 1, 2, 3, 4 });
+    for (0..300) |i| try l.append(&.{ @intCast(500 + i), 1, 2, 3, 5 });
+    try l.append(&.{ 9, 8, 7, 1, 2, 3 });
+    try std.testing.expectEqual(spec.Lookup.Match{ .length = 6, .end = 5 }, l.match().?);
+}
+
+test "a lookup drafts only from an occurrence that ends before a drafter's window" {
+    var l = spec.Lookup.init(std.testing.allocator);
+    defer l.deinit();
+    try l.append(&.{ 7, 8, 9, 4 });
+    for (0..12) |i| try l.append(&.{@intCast(100 + i)});
+    try l.append(&.{ 7, 8, 9 });
+    const m = l.match().?;
+    try std.testing.expectEqual(@as(u32, 2), m.end);
+    try std.testing.expectEqual(@as(usize, 18), l.tokens.items.len - 1);
+    try std.testing.expectEqual(m, l.beyondWindow(16).?);
+    try std.testing.expectEqual(@as(?spec.Lookup.Match, null), l.beyondWindow(17));
+}
+
 const Loaded = struct { model: *inkling.Model, drafter: *dflash.Drafter };
 
 fn load(options: dflash.Drafter.Options) !?Loaded {
@@ -215,4 +258,56 @@ test "forced drafts accept all, none or a prefix, stop at a limit or an EOS insi
     try std.testing.expectEqual(@as(usize, 1), tally.cut);
     s.proposer = null;
     std.debug.print("dflash2 forced drafts: full, zero and partial acceptance, a limit at token {d} and an EOS at {d} inside a block, equal plain greedy and its caches\n", .{ 1 + 8 * 9 + 3, stop });
+}
+
+test "a round whose latest tokens occurred only before the drafter's window drafts what followed there, as plain greedy decodes" {
+    const loaded = try load(.{ .bits = 4 }) orelse return error.SkipZigTest;
+    defer loaded.model.deinit();
+    defer loaded.drafter.deinit();
+    const a = std.testing.allocator;
+    const m = loaded.model;
+    var s = try spec.Speculator.init(m, loaded.drafter, dflash.tap_ids);
+    defer s.deinit();
+    var lookup = spec.Lookup.init(a);
+    defer lookup.deinit();
+    s.lookup = &lookup;
+    const parsed = try std.json.parseFromSlice([]const Prompt, a, prompts_json, .{});
+    defer parsed.deinit();
+    const agent = parsed.value[0].token_ids;
+    const repeated = 40;
+    const ids = try std.mem.concat(a, u32, &.{ agent, agent[0..repeated] });
+    defer a.free(ids);
+    try std.testing.expect(ids.len > repeated + loaded.drafter.config.window);
+    const first = agent[repeated];
+    const limit = 96;
+    var plain_cache = try inkling.Cache.init(m.device, &m.config, ids.len + limit + 8);
+    defer plain_cache.deinit();
+    var spec_cache = try inkling.Cache.init(m.device, &m.config, ids.len + limit + 8);
+    defer spec_cache.deinit();
+    var want: std.ArrayList(u32) = .empty;
+    defer want.deinit(a);
+    var got: std.ArrayList(u32) = .empty;
+    defer got.deinit(a);
+    var rounds: std.ArrayList(spec.Round) = .empty;
+    defer rounds.deinit(a);
+    _ = try spec.prefillPlain(m, &s.prefill, &plain_cache, ids);
+    try want.append(a, first);
+    try spec.plain(m, &s.batch, &plain_cache, first, limit, &.{}, a, &want, null);
+    _ = try s.start(&spec_cache, ids);
+    try got.append(a, first);
+    try s.run(&spec_cache, first, limit, &.{}, a, &got, &rounds);
+    try std.testing.expectEqualSlices(u32, want.items, got.items);
+    try std.testing.expectEqual(spec_cache.len, s.drafter.committed());
+    try expectSameCache(m, &plain_cache, &spec_cache);
+    const opening = rounds.items[0];
+    try std.testing.expectEqual(spec.Source.lookup, opening.source);
+    try std.testing.expectEqual(dflash.depth, opening.offered);
+    try std.testing.expectEqualSlices(u32, agent[repeated + 1 ..][0..dflash.depth], opening.drafts[0..dflash.depth]);
+    var lookups: usize = 0;
+    var accepted: usize = 0;
+    for (rounds.items) |r| if (r.source == .lookup) {
+        lookups += 1;
+        accepted += r.accepted;
+    };
+    std.debug.print("dflash2 lookup: {d} of {d} rounds drafted from before the drafter's window and accepted {d} drafts; {d} tokens equal plain greedy and its caches\n", .{ lookups, rounds.items.len, accepted, got.items.len });
 }

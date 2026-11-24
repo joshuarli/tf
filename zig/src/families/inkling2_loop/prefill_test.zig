@@ -1601,3 +1601,8 @@ test "wide expert and grouped fallback partition threshold occupancy" {
         try t.expectEqual(@as(u32, 0), overflow.slice(u32, 1)[0]);
     };
 }
+
+test {
+    _ = @import("prefill_staged_test.zig");
+    _ = @import("prefill_rows.zig");
+}

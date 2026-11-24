@@ -1,0 +1,2 @@
+gpu-gate-ready: contended (check 1 of 1): compressor 7073 pages/s (limit 5000); 
+  gpu_other=22.7% util=0%/22% pressure=1 swap=8/s compressor=7073/s window=1s

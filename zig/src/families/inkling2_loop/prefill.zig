@@ -4,6 +4,8 @@ const cfg = @import("config.zig");
 const st = @import("state.zig");
 const wts = @import("model.zig");
 const kernels = @import("kernels.zig");
+const staged_mod = @import("prefill_staged.zig");
+const rows_mod = @import("prefill_rows.zig");
 
 const Model = wts.Model;
 const Dispatch = @import("rows.zig").Dispatch;
@@ -18,6 +20,7 @@ pub const default_chunk: usize = 1024;
 pub const half_source = "#define I2P_HALF_OPERANDS 1\n#define I2P_MATRIX_THRESHOLD 14\n#define I2P_DOWN_MATRIX_THRESHOLD 8\n" ++ kernels.prefill ++ kernels.prefill_expert_wide;
 /// The same on tensor units: the matrices there, and half activations from grouped gate/up for down's matrices.
 pub const units_source = "#define I2P_TENSOR_UNITS 1\n#define I2P_HALF_ACT 1\n" ++ half_source;
+const units_rows_source = "#define I2P_TENSOR_UNITS 1\n#define I2P_HALF_ACT 1\n#define I2P_HALF_OPERANDS 1\n#define I2P_MATRIX_THRESHOLD 1\n#define I2P_DOWN_MATRIX_THRESHOLD 1\n" ++ kernels.prefill ++ kernels.prefill_expert_wide;
 
 pub fn profile(text: ?[]const u8) error{BadInklingProfile}!bool {
     const value = text orelse return false;
@@ -50,6 +53,7 @@ const Gather = extern struct { width: u32, depth: u32, stride: u32 };
 const MixB = extern struct { width: u32, depth: u32, k: u32, rows: u32, scale: f32 };
 const ControlsArgs = extern struct { h: u32, rank: u32, rows: u32, xs: [3]u32, xb: [3]u32 };
 const CtlB = extern struct { h: u32, rows: u32, cxs: u32, cxb: u32, mxs: u32, mxb: u32, ys: u32, yb: u32 };
+const GateCtl = extern struct { h: u32, rows: u32, k: u32, cxs: u32, cxb: u32, mxs: u32, mxb: u32, ys: u32, yb: u32 };
 const Clip3B = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, q_threshold: f32, rel_threshold: f32 };
 const ClipB = extern struct { heads: u32, width: u32, rows: u32, threshold: f32 };
 const ConvB = extern struct { channels: u32, heads: u32, ring: u32, base: u32, rows: u32, layout: u32, norm: f32 };
@@ -126,6 +130,7 @@ pub const Pipes = struct {
     affine_stage_split: ?mtl.Pipeline,
     affine_stage_gemm_split: ?mtl.Pipeline,
     float_mpp: ?mtl.Pipeline,
+    gate_ctl: ?mtl.Pipeline,
     affine_half_up: ?mtl.Pipeline,
     affine_half_down: ?mtl.Pipeline,
     bf16_convert: ?mtl.Pipeline,
@@ -175,6 +180,8 @@ pub const Pipes = struct {
     affine_units_down: ?mtl.Pipeline,
     attn_units: ?mtl.Pipeline,
     half_rows: ?mtl.Pipeline,
+    staged: ?staged_mod.Pipes,
+    rows: rows_mod.Pipes,
     moe_zero: mtl.Pipeline,
     moe_count: mtl.Pipeline,
     moe_offsets: mtl.Pipeline,
@@ -189,6 +196,7 @@ pub const Pipes = struct {
         if (p.affine_stage_split) |pipe| pipe.deinit();
         if (p.affine_stage_gemm_split) |pipe| pipe.deinit();
         if (p.float_mpp) |pipe| pipe.deinit();
+        if (p.gate_ctl) |pipe| pipe.deinit();
         if (p.affine_half_up) |pipe| pipe.deinit();
         if (p.affine_half_down) |pipe| pipe.deinit();
         if (p.bf16_convert) |pipe| pipe.deinit();
@@ -205,9 +213,33 @@ pub const Pipes = struct {
         if (p.affine_units_down) |pipe| pipe.deinit();
         if (p.attn_units) |pipe| pipe.deinit();
         if (p.half_rows) |pipe| pipe.deinit();
+        if (p.staged) |pipes| pipes.deinit();
+        p.rows.deinit();
         inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "gemm", "smallrow", "pick", "gu_g_nv", "down_g_nv", "gu_g_mx", "down_g_mx", "expert_matrix_nv", "expert_matrix_mx", "moe_zero", "moe_count", "moe_offsets", "moe_sort", "embed", "rms", "rms3", "rms_pair", "gather_rms", "scatter", "pass_copy", "mix", "mix4", "ctl", "clips", "clip3", "clip", "conv", "batch_conv", "batch_store_rel", "cstore", "kv", "rel", "rel_rows", "attn", "attn_tiled", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
     }
 };
+
+pub const Rounding = struct {
+    experts: bool = false,
+    inputs: bool = false,
+
+    pub fn parse(text: ?[]const u8) error{BadInklingPrefillHalf}!Rounding {
+        const value = text orelse return .{};
+        if (std.mem.eql(u8, value, "experts")) return .{ .experts = true };
+        if (std.mem.eql(u8, value, "inputs")) return .{ .inputs = true };
+        if (std.mem.eql(u8, value, "both")) return .{ .experts = true, .inputs = true };
+        return error.BadInklingPrefillHalf;
+    }
+};
+
+test "half rounding accepts only the documented values" {
+    try std.testing.expectEqual(Rounding{}, try Rounding.parse(null));
+    try std.testing.expectEqual(Rounding{ .experts = true }, try Rounding.parse("experts"));
+    try std.testing.expectEqual(Rounding{ .inputs = true }, try Rounding.parse("inputs"));
+    try std.testing.expectEqual(Rounding{ .experts = true, .inputs = true }, try Rounding.parse("both"));
+    try std.testing.expectError(error.BadInklingPrefillHalf, Rounding.parse(""));
+    try std.testing.expectError(error.BadInklingPrefillHalf, Rounding.parse("Experts"));
+}
 
 pub const ConvSite = enum { key, value, attention, mlp };
 
@@ -305,6 +337,8 @@ pub const PrefillScratch = struct {
     half: bool,
     /// The half path's expert matrices, attention and staged projections on tensor units; off is the shader cores.
     units: bool,
+    fuse: bool,
+    rounding: Rounding,
     capture: ?mtl.Buffer,
     capture_row: usize,
     routes: ?mtl.Buffer,
@@ -336,6 +370,8 @@ pub const PrefillScratch = struct {
         s.fast = fast;
         s.half = true;
         s.units = true;
+        s.fuse = true;
+        s.rounding = try Rounding.parse(if (std.c.getenv("INKLING_PREFILL_HALF")) |v| std.mem.span(v) else null);
         s.bf16_input = if (fast and device.tensorUnits()) try device.buffer(@max(chunk * @max(2 * h, @max(qw, @max(kvw, rank))) * 2, 16), mtl.ResourceOptions.private) else null;
         errdefer if (s.bf16_input) |buf| buf.deinit();
         s.half_overflow = if (fast or device.tensorUnits()) try device.buffer(16, mtl.ResourceOptions.shared) else null;
@@ -416,6 +452,8 @@ pub const PrefillScratch = struct {
         s.ids = try device.buffer(@max(chunk * 4, 16), mtl.ResourceOptions.shared);
         errdefer s.ids.deinit();
         s.logits = try device.buffer(@max(s.logit_rows * vocab * 4, 16), mtl.ResourceOptions.shared);
+        errdefer s.logits.deinit();
+        try s.commit(device);
         const opts = mtl.CompileOptions.mlx();
         const lib = try mtl.Library.fromSource(device, kernels.prefill, opts);
         defer lib.deinit();
@@ -435,12 +473,16 @@ pub const PrefillScratch = struct {
         defer small_lib.deinit();
         s.pipes.smallrow = try mtl.Pipeline.init(device, small_lib, "i2p_small", false);
         errdefer s.pipes.smallrow.deinit();
+        s.pipes.gate_ctl = null;
         s.pipes.float_mpp = if (s.affine_stage_w != null) blk: {
             const float_lib = try mtl.Library.fromSource(device, kernels.float_mpp, opts);
             defer float_lib.deinit();
+            s.pipes.gate_ctl = try mtl.Pipeline.init(device, float_lib, "i2af_gate_ctl", false);
+            errdefer s.pipes.gate_ctl.?.deinit();
             break :blk try mtl.Pipeline.init(device, float_lib, "i2af_gemm", false);
         } else null;
         errdefer if (s.pipes.float_mpp) |pipe| pipe.deinit();
+        errdefer if (s.pipes.gate_ctl) |pipe| pipe.deinit();
         s.pipes.affine_stage_prepare = null;
         s.pipes.affine_stage_gemm = null;
         s.pipes.affine_stage_split = null;
@@ -460,6 +502,10 @@ pub const PrefillScratch = struct {
         errdefer if (s.pipes.affine_stage_gemm) |pipe| pipe.deinit();
         errdefer if (s.pipes.affine_stage_split) |pipe| pipe.deinit();
         errdefer if (s.pipes.affine_stage_gemm_split) |pipe| pipe.deinit();
+        s.pipes.staged = if (s.affine_stage_w != null) try staged_mod.Pipes.init(device) else null;
+        errdefer if (s.pipes.staged) |pipes| pipes.deinit();
+        s.pipes.rows = try rows_mod.Pipes.init(device);
+        errdefer s.pipes.rows.deinit();
         s.pipes.affine_half_rows = null;
         s.pipes.affine_half_up = null;
         s.pipes.affine_half_down = null;
@@ -570,7 +616,7 @@ pub const PrefillScratch = struct {
         s.pipes.attn_units = null;
         s.pipes.half_rows = null;
         if (fast or device.tensorUnits()) {
-            const half_lib = try mtl.Library.fromSource(device, if (device.tensorUnits()) units_source else half_source, opts);
+            const half_lib = try mtl.Library.fromSource(device, if (!device.tensorUnits()) half_source else if (s.rounding.experts) units_rows_source else units_source, opts);
             defer half_lib.deinit();
             if (device.tensorUnits()) {
                 s.pipes.wide_expert_nv = try mtl.Pipeline.init(device, half_lib, "i2p_expert_matrix_wide", false);
@@ -636,6 +682,25 @@ pub const PrefillScratch = struct {
         return s;
     }
 
+    fn commit(s: *PrefillScratch, device: mtl.Device) !void {
+        const queue = try device.queue();
+        defer queue.deinit();
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
+        const cb = queue.commandBuffer();
+        const blit = cb.blit();
+        inline for (buffer_names) |f| blit.fill(@field(s, f), 0, @field(s, f).length(), 0);
+        for ([_]?mtl.Buffer{ s.bf16_input, s.xh, s.act_h, s.affine_stage_w, s.affine_stage_x }) |optional| {
+            if (optional) |buf| blit.fill(buf, 0, buf.length(), 0);
+        }
+        blit.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |_| return error.GpuFailed;
+    }
+
+    const buffer_names = [_][]const u8{ "ids", "x", "prelude", "passout", "bank", "n0", "n1", "n2", "m0", "q", "k", "v", "r", "kc", "vc", "kh", "vh", "kdyn", "vdyn", "sink", "relbias", "attn", "gate", "projout", "o", "aconv", "moe", "blocks", "staged", "mixout", "msg", "h2in", "normed", "tanhg", "tanhf", "router", "picks", "wts", "act", "down", "moe_cnt", "moe_off", "moe_cur", "moe_sorted", "logits" };
+
     pub fn deinit(s: *PrefillScratch) void {
         if (s.bf16_input) |buf| buf.deinit();
         if (s.half_overflow) |buf| buf.deinit();
@@ -644,7 +709,7 @@ pub const PrefillScratch = struct {
         if (s.affine_stage_w) |buf| buf.deinit();
         if (s.affine_stage_x) |buf| buf.deinit();
         s.pipes.deinit();
-        inline for ([_][]const u8{ "ids", "x", "prelude", "passout", "bank", "n0", "n1", "n2", "m0", "q", "k", "v", "r", "kc", "vc", "kh", "vh", "kdyn", "vdyn", "sink", "relbias", "attn", "gate", "projout", "o", "aconv", "moe", "blocks", "staged", "mixout", "msg", "h2in", "normed", "tanhg", "tanhf", "router", "picks", "wts", "act", "down", "moe_cnt", "moe_off", "moe_cur", "moe_sorted", "logits" }) |f| @field(s, f).deinit();
+        inline for (buffer_names) |f| @field(s, f).deinit();
     }
 };
 
@@ -878,6 +943,23 @@ const Chunk = struct {
         c.mixQ(query, out);
     }
 
+    fn mixNorm(c: Chunk, cur: B, query: Tensor, out: B, norms: []const Tensor, outs: [3]B) bool {
+        var queries: [4]B = @splat(t(query));
+        const k = nrows(query);
+        for (0..@min(k, 4)) |i| queries[i] = bo(query.buffer, query.offset + i * c.h * 4);
+        return c.mixStates(b(c.s.blocks), cur, c.count + 1, queries, k, out, norms, outs);
+    }
+
+    fn mixStates(c: Chunk, states: B, cur: B, depth: usize, queries: [4]B, k: usize, out: B, norms: []const Tensor, outs: [3]B) bool {
+        if (c.batch != null or !c.s.fuse or !rows_mod.mixFits(c.h, depth, k, norms.len)) return false;
+        const args = rows_mod.MixArgs{ .width = c.h, .depth = @intCast(depth), .stride = st.mix_states, .k = @intCast(k), .norm = @intFromBool(norms.len > 0), .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.h))), .eps = c.m.config.text.eps };
+        var weights: [3]B = @splat(queries[0]);
+        for (norms, 0..) |w, i| weights[i] = t(w);
+        c.setP(c.s.pipes.rows.mix, args, &.{ states, cur, queries[0], queries[1], queries[2], queries[3], A, out, weights[0], weights[1], weights[2], outs[0], outs[1], outs[2] });
+        c.enc.dispatchGroups(mtl.Size.of(c.n, 1, 1), mtl.Size.of(rows_mod.threads, 1, 1));
+        return true;
+    }
+
     fn pushBlock(c: *Chunk) void {
         c.setP(c.s.pipes.scatter, Scatter{ .width = c.h, .stride = st.mix_states, .slot = @intCast(c.count) }, &.{ b(c.s.x), A, b(c.s.blocks), b(c.s.o) });
         c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
@@ -923,13 +1005,38 @@ const Chunk = struct {
         }
         c.setP(c.s.pipes.conv, ConvB{ .channels = channels, .heads = conv_heads, .ring = st.ring, .base = c.base, .rows = c.n, .layout = layout, .norm = norm }, &.{ x, ring, t(weight), if (dyn != null) dyn_out else A, A, out });
         c.enc.dispatchThreads(mtl.Size.of(channels, c.n, 1), mtl.Size.of(256, 1, 1));
-        c.setP(c.s.pipes.cstore, CStore{ .channels = channels, .ring = st.ring, .base = c.base, .rows = c.n }, &.{ x, ring, A });
-        c.enc.dispatchThreads(mtl.Size.of(channels, c.n, 1), mtl.Size.of(256, 1, 1));
+        c.ringStore(x, ring, channels);
         if (c.s.verify_conv) |capture| c.copyN(x, bo(capture.buffer, capture.offset(slot, site, 0)), @as(usize, c.n) * channels);
+    }
+
+    fn ringStore(c: Chunk, x: B, ring: B, channels: u32) void {
+        if (!c.s.fuse) {
+            c.setP(c.s.pipes.cstore, CStore{ .channels = channels, .ring = st.ring, .base = c.base, .rows = c.n }, &.{ x, ring, A });
+            c.enc.dispatchThreads(mtl.Size.of(channels, c.n, 1), mtl.Size.of(256, 1, 1));
+            return;
+        }
+        const tail: u32 = @min(c.n, st.ring);
+        c.setP(c.s.pipes.rows.ring, rows_mod.RingArgs{ .channels = channels, .ring = st.ring, .base = c.base, .rows = c.n, .tail = tail }, &.{ x, ring, A });
+        c.enc.dispatchThreads(mtl.Size.of(channels, tail, 1), mtl.Size.of(256, 1, 1));
+    }
+
+    fn convolveAdd(c: Chunk, x: B, out: ?B, weight: Tensor, ring: B, slot: u32, site: ConvSite, residual: B) bool {
+        if (c.batch != null or !c.s.fuse) return false;
+        const norm: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(cfg.conv_taps + 1)));
+        c.setP(c.s.pipes.rows.conv_add, rows_mod.ConvArgs{ .channels = c.h, .heads = 0, .ring = st.ring, .base = c.base, .rows = c.n, .layout = 0, .norm = norm, .out = @intFromBool(out != null) }, &.{ x, ring, t(weight), A, out orelse residual, residual });
+        c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
+        c.ringStore(x, ring, c.h);
+        if (c.s.verify_conv) |capture| c.copyN(x, bo(capture.buffer, capture.offset(slot, site, 0)), @as(usize, c.n) * c.h);
+        return true;
     }
 
     fn kvStore(c: Chunk, slot: u32) void {
         const at = c.slotBase(slot);
+        if (c.s.fuse and c.kvw % 4 == 0) {
+            c.setP(c.s.pipes.rows.kv, rows_mod.KvArgs{ .count = c.kvw, .base = c.base, .rows = c.n, .wring = c.slotRing(slot) }, &.{ b(c.s.kh), b(c.s.vh), bo(c.cache.keys, at), bo(c.cache.values, at), A });
+            c.enc.dispatchThreads(mtl.Size.of(c.kvw / 4, c.n, 1), mtl.Size.of(256, 1, 1));
+            return;
+        }
         c.setP(c.s.pipes.kv, KvB{ .count = c.kvw, .base = c.base, .rows = c.n, .wring = c.slotRing(slot) }, &.{ b(c.s.kh), b(c.s.vh), bo(c.cache.keys, at), bo(c.cache.values, at), A });
         c.enc.dispatchThreads(mtl.Size.of(c.kvw, c.n, 1), mtl.Size.of(256, 1, 1));
     }
@@ -1008,6 +1115,13 @@ const Chunk = struct {
             c.enc.dispatchGroups(mtl.Size.of((n + 7) / 8, c.n, 1), mtl.Size.of(256, 1, 1));
             return;
         }
+        const rank: u32 = @intCast(width(ctl.gain));
+        const fusable = c.batch == null and s.fuse and c.n > 8 and s.half and s.pipes.float_mpp != null and ctl.gain.dtype == .f32 and ctl.forget.dtype == .f32 and nrows(ctl.gain) == c.h and nrows(ctl.forget) == c.h and width(ctl.forget) == rank;
+        if (fusable) if (s.pipes.gate_ctl) |pipe| {
+            c.setP(pipe, GateCtl{ .h = c.h, .rows = c.n, .k = rank, .cxs = cur.xs, .cxb = cur.xb, .mxs = msg.xs, .mxb = msg.xb, .ys = ys, .yb = yb }, &.{ b(s.normed), t(ctl.gain), t(ctl.forget), A, cur.buf, msg.buf, out });
+            c.enc.dispatchGroups(mtl.Size.of((c.h + 31) / 32, (c.n + 15) / 16, 1), mtl.Size.of(128, 1, 1));
+            return;
+        };
         c.lin(ctl.gain, .{ .buf = b(s.normed), .xs = 1, .xb = 0 }, b(s.tanhg));
         c.lin(ctl.forget, .{ .buf = b(s.normed), .xs = 1, .xb = 0 }, b(s.tanhf));
         c.setP(s.pipes.ctl, CtlB{ .h = c.h, .rows = c.n, .cxs = cur.xs, .cxb = cur.xb, .mxs = msg.xs, .mxb = msg.xb, .ys = ys, .yb = yb }, &.{ cur.buf, msg.buf, b(s.tanhg), b(s.tanhf), A, out });
@@ -1030,6 +1144,8 @@ const Chunk = struct {
         const m = c.m;
         const s = c.s;
         const at: usize = ip - m.config.loop.core_start;
+        const queries = [4]B{ t(srows(m.weights.cross_pass_q, at * 2, 1)), t(srows(m.weights.cross_pass_kv, at * 2, 1)), t(srows(m.weights.cross_pass_kv, at * 2 + 1, 1)), t(srows(m.weights.cross_pass_q, at * 2 + 1, 1)) };
+        if (c.mixStates(bk.states, bk.out, bk.n + 1, queries, 4, b(s.msg), &.{}, @splat(b(s.msg)))) return b(s.msg);
         c.gatherM(bk.states, bk.out, @intCast(bk.n + 1));
         const pipe = if (c.batch != null and bk.n + 1 <= st.mix_states) c.batch.?.scratch.mix4 else s.pipes.mix4;
         c.setP(pipe, MixB{ .width = c.h, .depth = @intCast(bk.n + 1), .k = 4, .rows = c.n, .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.h))) }, &.{
@@ -1045,30 +1161,83 @@ const Chunk = struct {
         return b(s.msg);
     }
 
-    fn attention(c: Chunk, lay: *const Layer, slot: u32, full: bool, ins: [3]In) void {
+    fn stage(c: Chunk) ?staged_mod.Stage {
+        const s = c.s;
+        if (c.batch != null or c.n <= 8 or !s.half or !s.units or !s.fuse) return null;
+        return .{
+            .enc = c.enc,
+            .prepare = s.pipes.affine_stage_prepare orelse return null,
+            .split = s.pipes.affine_stage_split orelse return null,
+            .gemm_split = s.pipes.affine_stage_gemm_split orelse return null,
+            .pipes = s.pipes.staged orelse return null,
+            .weights = s.affine_stage_w orelse return null,
+            .inputs = s.affine_stage_x orelse return null,
+            .overflow = s.half_overflow orelse return null,
+            .rows = c.n,
+            .half_inputs = s.rounding.inputs,
+        };
+    }
+
+    fn stagedProjections(c: Chunk, lay: *const Layer, ins: [3]In, full: bool) bool {
+        const st_ = c.stage() orelse return false;
+        const a = &lay.attn;
+        const s = c.s;
+        var inputs: [3]staged_mod.Input = undefined;
+        for (ins, 0..) |in, i| inputs[i] = .{ .buf = in.buf.buf, .off = in.buf.off, .xs = in.xs, .xb = in.xb };
+        if (full) {
+            const kd = a.k_dyn orelse return false;
+            const vd = a.v_dyn orelse return false;
+            const qs = staged_mod.joined(&.{ a.q, a.r, a.gate, a.sink }) orelse return false;
+            const ks = staged_mod.joined(&.{ a.k, kd }) orelse return false;
+            const vs = staged_mod.joined(&.{ a.v, vd }) orelse return false;
+            return staged_mod.encode(st_, &.{ qs, ks, vs }, &.{
+                .{ .view = a.q, .out = s.q, .input = 0 },    .{ .view = a.r, .out = s.r, .input = 0 },
+                .{ .view = a.gate, .out = s.gate, .input = 0 }, .{ .view = a.sink, .out = s.sink, .input = 0 },
+                .{ .view = a.k, .out = s.k, .input = 1 },    .{ .view = kd, .out = s.kdyn, .input = 1 },
+                .{ .view = a.v, .out = s.v, .input = 2 },    .{ .view = vd, .out = s.vdyn, .input = 2 },
+            }, inputs);
+        }
+        const all = staged_mod.joined(&.{ a.q, a.k, a.v, a.r, a.gate, a.sink }) orelse return false;
+        return staged_mod.encode(st_, &.{all}, &.{
+            .{ .view = a.q, .out = s.q, .input = 0 },    .{ .view = a.k, .out = s.k, .input = 1 },
+            .{ .view = a.v, .out = s.v, .input = 2 },    .{ .view = a.r, .out = s.r, .input = 0 },
+            .{ .view = a.gate, .out = s.gate, .input = 0 }, .{ .view = a.sink, .out = s.sink, .input = 0 },
+        }, inputs);
+    }
+
+    fn attention(c: Chunk, lay: *const Layer, slot: u32, full: bool, ins: [3]In, push: bool) bool {
         const s = c.s;
         const text = &c.m.config.text;
         const extent: u32 = if (full) text.rel_extent else text.window;
         const fused = c.batch != null and lay.attn.q.affine != null;
-        if (fused) c.affineProjections(lay, ins, full) else c.lin(lay.attn.q, ins[0], b(s.q));
-        if (c.batch == null) c.clipScaled(b(s.q), lay.attn.q_scale, c.heads, c.dim, text.qk_clip);
-        if (!fused) c.lin(lay.attn.r, ins[0], b(s.r));
-        if (c.batch == null) c.clipScaled(b(s.r), lay.attn.r_scale, c.heads, c.drel, text.rel_clip);
+        const staged = !fused and c.stagedProjections(lay, ins, full);
+        const ready = fused or staged;
+        const clips = staged and c.dim == rows_mod.clip_dim and c.drel == rows_mod.clip_rel;
+        if (fused) c.affineProjections(lay, ins, full) else if (!staged) c.lin(lay.attn.q, ins[0], b(s.q));
+        if (c.batch == null and !clips) c.clipScaled(b(s.q), lay.attn.q_scale, c.heads, c.dim, text.qk_clip);
+        if (!ready) c.lin(lay.attn.r, ins[0], b(s.r));
+        if (c.batch == null and !clips) c.clipScaled(b(s.r), lay.attn.r_scale, c.heads, c.drel, text.rel_clip);
         const ring = c.rings(slot);
-        if (!fused) c.lin(lay.attn.k, ins[1], b(s.k));
-        c.convolve(b(s.k), b(s.kc), lay.attn.k_conv, lay.attn.k_dyn, ins[1], b(s.kdyn), ring[0], c.kvw, if (full) c.kv else 0, @intFromBool(full), slot, .key, fused);
+        if (!ready) c.lin(lay.attn.k, ins[1], b(s.k));
+        c.convolve(b(s.k), b(s.kc), lay.attn.k_conv, lay.attn.k_dyn, ins[1], b(s.kdyn), ring[0], c.kvw, if (full) c.kv else 0, @intFromBool(full), slot, .key, ready);
         if (c.batch != null) {
             c.setP(s.pipes.clip3, Clip3B{ .heads = c.heads, .kv = c.kv, .dim = c.dim, .rel = c.drel, .q_threshold = text.qk_clip, .rel_threshold = text.rel_clip }, &.{ b(s.q), t(lay.attn.q_scale), b(s.r), t(lay.attn.r_scale), b(s.kc), A });
             c.enc.dispatchGroups(mtl.Size.of((2 * c.heads + c.kv) * c.n, 1, 1), mtl.Size.of(256, 1, 1));
-        } else c.clipPlain(b(s.kc), c.kv, c.dim, text.qk_clip);
-        if (!fused) c.lin(lay.attn.v, ins[2], b(s.v));
-        c.convolve(b(s.v), b(s.vc), lay.attn.v_conv, lay.attn.v_dyn, ins[2], b(s.vdyn), ring[1], c.kvw, if (full) c.kv else 0, @intFromBool(full), slot, .value, fused);
-        if (!fused) c.lin(lay.attn.sink, ins[0], b(s.sink));
+        } else if (!clips) c.clipPlain(b(s.kc), c.kv, c.dim, text.qk_clip);
+        if (!ready) c.lin(lay.attn.v, ins[2], b(s.v));
+        c.convolve(b(s.v), b(s.vc), lay.attn.v_conv, lay.attn.v_dyn, ins[2], b(s.vdyn), ring[1], c.kvw, if (full) c.kv else 0, @intFromBool(full), slot, .value, ready);
+        if (!ready) c.lin(lay.attn.sink, ins[0], b(s.sink));
         if (c.batch) |batch| {
             c.batchAttention(lay, slot, full, extent, batch);
         } else {
-        c.setG(.rms_kv_store, Rms{ .width = c.dim, .blocks = 0, .eps = text.eps }, &.{ b(s.kc), b(s.vc), b(s.kh), b(s.vh), A });
-        c.enc.dispatchGroups(mtl.Size.of(c.kv * c.n, 1, 1), mtl.Size.of(256, 1, 1));
+        if (clips) {
+            const items = 2 * c.heads + c.kv;
+            c.setP(s.pipes.rows.clips, rows_mod.ClipArgs{ .heads = c.heads, .kv = c.kv, .items = items, .q_threshold = text.qk_clip, .rel_threshold = text.rel_clip, .eps = text.eps }, &.{ b(s.q), t(lay.attn.q_scale), b(s.r), t(lay.attn.r_scale), b(s.kc), b(s.vc), b(s.kh), b(s.vh), A });
+            c.enc.dispatchGroups(mtl.Size.of((items + rows_mod.clip_items - 1) / rows_mod.clip_items, c.n, 1), mtl.Size.of(32 * rows_mod.clip_items, 1, 1));
+        } else {
+            c.setG(.rms_kv_store, Rms{ .width = c.dim, .blocks = 0, .eps = text.eps }, &.{ b(s.kc), b(s.vc), b(s.kh), b(s.vh), A });
+            c.enc.dispatchGroups(mtl.Size.of(c.kv * c.n, 1, 1), mtl.Size.of(256, 1, 1));
+        }
         c.relative(lay, b(s.r), extent, full);
         const win: u32 = if (full) 0 else text.window;
         const keybase = bo(c.cache.keys, c.slotBase(slot));
@@ -1089,10 +1258,15 @@ const Chunk = struct {
         }
         c.kvStore(slot);
         }
-        if (!fused) c.lin(lay.attn.gate, ins[0], b(s.gate));
-        c.flat(.sig_mul, Pair{ .count = c.qw * c.n }, &.{ b(s.attn), b(s.gate), A, b(s.attn) }, @as(usize, c.qw) * c.n);
-        c.lin(lay.attn.o, .{ .buf = b(s.attn), .xs = 1, .xb = 0 }, b(s.projout));
+        if (!ready) c.lin(lay.attn.gate, ins[0], b(s.gate));
+        const gated = if (c.stage()) |st_| staged_mod.gatedProjection(st_, lay.attn.o, s.projout, s.attn, s.gate) else false;
+        if (!gated) {
+            c.flat(.sig_mul, Pair{ .count = c.qw * c.n }, &.{ b(s.attn), b(s.gate), A, b(s.attn) }, @as(usize, c.qw) * c.n);
+            c.lin(lay.attn.o, .{ .buf = b(s.attn), .xs = 1, .xb = 0 }, b(s.projout));
+        }
+        if (!push and c.convolveAdd(b(s.projout), if (s.capture != null) b(s.o) else null, lay.attn_post, ring[2], slot, .attention, b(s.x))) return true;
         c.convolve(b(s.projout), b(s.o), lay.attn_post, null, undefined, b(s.projout), ring[2], c.h, 0, 0, slot, .attention, false);
+        return false;
     }
 
     fn experts(c: Chunk, lay: *const Layer, input: B, slot: u32) void {
@@ -1289,9 +1463,13 @@ const Chunk = struct {
         const s = c.s;
 
         var ins: [3]In = .{ .{ .buf = b(s.x), .xs = 1, .xb = 0 }, .{ .buf = b(s.x), .xs = 1, .xb = 0 }, .{ .buf = b(s.x), .xs = 1, .xb = 0 } };
+        const normed = [3]B{ b(s.n0), b(s.n1), b(s.n2) };
+        var fused_norm = false;
         if (index > 0) {
             const q = m.weights.attn_queries[index - 1];
-            c.mixBlocks(b(s.x), q, bo(s.mixout, 0));
+            const norms: []const Tensor = if (full) &.{ lay.q_norm, lay.k_norm, lay.v_norm } else &.{lay.q_norm};
+            fused_norm = bank == null and c.mixNorm(b(s.x), q, bo(s.mixout, 0), norms, normed);
+            if (!fused_norm and !c.mixNorm(b(s.x), q, bo(s.mixout, 0), &.{}, normed)) c.mixBlocks(b(s.x), q, bo(s.mixout, 0));
             const k: u32 = @intCast(nrows(q));
             if (full) {
                 ins = .{ .{ .buf = bo(s.mixout, 0), .xs = k, .xb = 0 }, .{ .buf = bo(s.mixout, 0), .xs = k, .xb = 1 }, .{ .buf = bo(s.mixout, 0), .xs = k, .xb = 2 } };
@@ -1320,7 +1498,9 @@ const Chunk = struct {
         }
 
         for (0..3) |j| c.record(slot, j, ins[j]);
-        if (full or bank != null) {
+        if (fused_norm) {
+            ins = if (full) .{ .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, .{ .buf = b(s.n1), .xs = 1, .xb = 0 }, .{ .buf = b(s.n2), .xs = 1, .xb = 0 } } else .{ .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, .{ .buf = b(s.n0), .xs = 1, .xb = 0 } };
+        } else if (full or bank != null) {
             c.setP(s.pipes.rms3, Rms3{ .width = c.h, .xs = .{ ins[0].xs, ins[1].xs, ins[2].xs }, .xb = .{ ins[0].xb, ins[1].xb, ins[2].xb }, .eps = text.eps }, &.{ ins[0].buf, ins[1].buf, ins[2].buf, t(lay.q_norm), t(if (full) lay.k_norm else lay.q_norm), t(if (full) lay.v_norm else lay.q_norm), A, b(s.n0), b(s.n1), b(s.n2) });
             c.enc.dispatchGroups(mtl.Size.of(3 * c.n, 1, 1), mtl.Size.of(256, 1, 1));
             ins = .{ .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, .{ .buf = b(s.n1), .xs = 1, .xb = 0 }, .{ .buf = b(s.n2), .xs = 1, .xb = 0 } };
@@ -1330,23 +1510,28 @@ const Chunk = struct {
         }
 
         for (0..3) |j| c.record(slot, 3 + j, ins[j]);
-        c.attention(lay, slot, full, ins);
+        const push = ip % text.block == 0;
+        const added = c.attention(lay, slot, full, ins, push);
         c.record(slot, 6, .{ .buf = b(s.o), .xs = 1, .xb = 0 });
-        if (ip % text.block == 0) {
+        if (push) {
             c.pushBlock();
-        } else c.addN(b(s.x), b(s.o), @as(usize, c.n) * c.h);
+        } else if (!added) c.addN(b(s.x), b(s.o), @as(usize, c.n) * c.h);
 
         c.record(slot, 7, .{ .buf = b(s.x), .xs = 1, .xb = 0 });
-        c.mixBlocks(b(s.x), m.weights.mlp_queries[index], bo(s.mixout, 0));
+        const mlp_query = m.weights.mlp_queries[index];
+        const mlp_fused = bank == null and c.mixNorm(b(s.x), mlp_query, bo(s.mixout, 0), &.{lay.mlp_norm}, .{ b(s.m0), b(s.m0), b(s.m0) });
+        if (!mlp_fused and !c.mixNorm(b(s.x), mlp_query, bo(s.mixout, 0), &.{}, normed)) c.mixBlocks(b(s.x), mlp_query, bo(s.mixout, 0));
         if (bank) |_| {
             const ctl = lay.controllers[3] orelse return error.MissingController;
             c.control(ctl, .{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, .{ .buf = b(s.msg), .xs = 4, .xb = 3 }, bo(s.mixout, 0), 1, 0);
         }
-        c.rmsW(.{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, t(lay.mlp_norm), b(s.m0), 1, 0, c.h, text.eps);
+        if (!mlp_fused) c.rmsW(.{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, t(lay.mlp_norm), b(s.m0), 1, 0, c.h, text.eps);
         c.experts(lay, b(s.m0), slot);
         const slots = c.rings(slot);
-        c.convolve(b(s.moe), b(s.aconv), lay.mlp_post, null, undefined, b(s.moe), slots[3], c.h, 0, 0, slot, .mlp, false);
-        if (c.batch == null) c.addN(b(s.x), b(s.aconv), @as(usize, c.n) * c.h);
+        if (!c.convolveAdd(b(s.moe), null, lay.mlp_post, slots[3], slot, .mlp, b(s.x))) {
+            c.convolve(b(s.moe), b(s.aconv), lay.mlp_post, null, undefined, b(s.moe), slots[3], c.h, 0, 0, slot, .mlp, false);
+            if (c.batch == null) c.addN(b(s.x), b(s.aconv), @as(usize, c.n) * c.h);
+        }
         c.record(slot, 8, .{ .buf = b(s.x), .xs = 1, .xb = 0 });
     }
 
@@ -1362,6 +1547,18 @@ const ProfileRounds = struct {
     queue: mtl.Queue,
     cb: mtl.CommandBuffer,
     enabled: bool,
+    sent: [8]mtl.CommandBuffer = undefined,
+    count: usize = 0,
+
+    fn flush(p: *ProfileRounds, c: *Chunk) void {
+        if (p.enabled or c.batch != null or !c.s.fuse or p.count == p.sent.len) return;
+        c.enc.end();
+        p.cb.commit();
+        p.sent[p.count] = p.cb;
+        p.count += 1;
+        p.cb = p.queue.commandBuffer();
+        c.enc = p.cb.compute(.serial);
+    }
 
     fn next(p: *ProfileRounds, c: *Chunk, name: []const u8) !void {
         if (!p.enabled) return;
@@ -1475,6 +1672,7 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
         c.tap(@intCast(i));
         try c.layer(@intCast(i), @intCast(i), null);
         try profileOccupancy(&rounds, &c, @intCast(i), "inkling2-occupancy");
+        if (i % 6 == 5) rounds.flush(&c);
     }
     const prelude = c.count;
     c.copyN(b(s.x), b(s.prelude), @as(usize, c.n) * c.h);
@@ -1498,6 +1696,7 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
             c.tap(@intCast(config.loop.core_start + pass * span + (ip - config.loop.core_start)));
             try c.layer(slot, @intCast(ip), bk);
             try profileOccupancy(&rounds, &c, slot, "inkling2-occupancy");
+            if (slot % 6 == 5) rounds.flush(&c);
         }
     }
     for (config.loop.core_end..text.layers) |i| {
@@ -1520,11 +1719,19 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
     c.enc.end();
     rounds.cb.commit();
     rounds.cb.wait();
+    s.gpu_seconds = 0;
+    for (rounds.sent[0..rounds.count]) |sent| {
+        if (sent.failure()) |msg| {
+            std.log.err("inkling2_loop prefill: {s}", .{msg});
+            return error.GpuFailed;
+        }
+        s.gpu_seconds += sent.gpuSeconds();
+    }
     if (rounds.cb.failure()) |msg| {
         std.log.err("inkling2_loop prefill: {s}", .{msg});
         return error.GpuFailed;
     }
-    s.gpu_seconds = rounds.cb.gpuSeconds();
+    s.gpu_seconds += rounds.cb.gpuSeconds();
     if (s.half_overflow) |buf| {
         const overflow = buf.slice(u32, 1)[0];
         if (s.fast) {

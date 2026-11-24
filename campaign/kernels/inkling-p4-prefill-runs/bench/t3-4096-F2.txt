@@ -1,0 +1,4 @@
+inkling2_loop prefill: 4096 tokens in 2572.1 ms, 1592.5 tok/s chunk 1024
+inkling2_loop prefill repeat 2: 4096 tokens in 2434.5 ms, 1682.5 tok/s chunk 1024
+inkling2_loop prefill repeat 3: 4096 tokens in 2430.0 ms, 1685.6 tok/s chunk 1024
+heavy: done: peak charged 18.1 GB of the 28 GB cap (footprint 17.5 GB, resident 18.1 GB, host wired growth 17.5 GB); host pressure worst 1, host swap +0 MB, host pageins 60033

@@ -54,6 +54,19 @@ fn logFn(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comptime
     std.log.defaultLog(level, scope, format, args);
 }
 
+pub fn timelineWanted() bool {
+    const timeline = std.c.getenv("TF_METAL4_TIMELINE");
+    const want = if (timeline) |p| std.mem.span(p).len > 0 and !std.mem.eql(u8, std.mem.span(p), "0") else false;
+    if (want) mtl.Pipeline.labels(true);
+    return want;
+}
+
+pub fn timelineQueue(m: *inkling.Model) void {
+    const q = m.device.queue4() catch return;
+    m.queue.deinit();
+    m.queue = q;
+}
+
 fn field(line: []const u8, key: []const u8) ?f64 {
     const at = std.mem.indexOf(u8, line, key) orelse return null;
     const rest = line[at + key.len ..];
@@ -90,18 +103,10 @@ pub fn main(init: std.process.Init) !void {
     const ids = try std.json.parseFromSlice([]u32, gpa, bytes, .{});
     defer ids.deinit();
     if (ids.value.len == 0) return error.EmptyPrompt;
-    const timeline = std.c.getenv("TF_METAL4_TIMELINE");
-    const want_timeline = if (timeline) |p| std.mem.span(p).len > 0 and !std.mem.eql(u8, std.mem.span(p), "0") else false;
-    if (want_timeline) mtl.Pipeline.labels(true);
+    const want_timeline = timelineWanted();
     const m = try inkling.Model.load(gpa, init.io, args[1]);
     defer m.deinit();
-    if (want_timeline) {
-        const q4 = m.device.queue4() catch null;
-        if (q4) |q| {
-            m.queue.deinit();
-            m.queue = q;
-        }
-    }
+    if (want_timeline) timelineQueue(m);
     const c = &m.config;
     const vocab: usize = c.text.unpadded_vocab;
     const t0 = now();

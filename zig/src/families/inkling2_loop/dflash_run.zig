@@ -5,6 +5,7 @@ const tf = @import("tensorfold");
 const inkling = tf.inkling2_loop;
 const dflash = @import("dflash.zig");
 const spec = @import("dflash_spec.zig");
+const run = @import("run.zig");
 
 pub const usage =
     \\tf-inkling2-loop-run <model> <prompts.json> dflash <drafter> <tokens> <out.jsonl> [bits] [entering|outputs|unnormed]
@@ -24,8 +25,10 @@ pub fn main(init: std.process.Init, args: []const [:0]const u8) !void {
     const parsed = try std.json.parseFromSlice([]const Prompt, gpa, bytes, .{});
     defer parsed.deinit();
     if (parsed.value.len == 0) return error.EmptyPrompt;
+    const timeline = std.mem.eql(u8, mode, "dflash-widths") and run.timelineWanted();
     const m = try inkling.Model.load(gpa, init.io, args[1]);
     defer m.deinit();
+    if (timeline) run.timelineQueue(m);
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(gpa);
     if (std.mem.eql(u8, mode, "dflash")) {
@@ -44,9 +47,9 @@ pub fn main(init: std.process.Init, args: []const [:0]const u8) !void {
         const reps = try std.fmt.parseInt(usize, args[4], 10);
         const load_s = if (args.len == 7) try std.fmt.parseFloat(f64, args[6]) else 0;
         if (reps == 0 or load_s < 0) return error.ExpectedArgs;
-        try widths(gpa, m, parsed.value, reps, load_s, &out);
+        const result = widths(gpa, m, parsed.value, reps, load_s, &out);
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[5], .data = out.items });
-        return;
+        return result;
     }
     return error.ExpectedArgs;
 }
@@ -180,9 +183,13 @@ fn widths(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, re
     defer ps.deinit();
     var rollback = try inkling.Cache.Rollback.initRows(m.device, &m.config, inkling.group.max_rows);
     defer rollback.deinit();
-    const logits = try gpa.alloc(f32, m.config.text.unpadded_vocab);
+    const vocab: usize = m.config.text.unpadded_vocab;
+    const logits = try gpa.alloc(f32, vocab);
     defer gpa.free(logits);
+    const plain = try gpa.alloc(f32, inkling.group.max_rows * vocab);
+    defer gpa.free(plain);
     const cells = [_]usize{ 0, 1, 2, 4, 8 };
+    var all_equal = true;
     for (prompts) |prompt| {
         var cache = try inkling.Cache.init(m.device, &m.config, prompt.ids.len + 16);
         defer cache.deinit();
@@ -190,11 +197,27 @@ fn widths(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, re
         var rows: [inkling.group.max_rows]u32 = undefined;
         rows[0] = first;
         try rollback.copy(m.queue, &m.config, &cache, true);
-        for (rows[1..], 0..) |*r, i| {
-            try inkling.batchStep(m, &bs, &.{&cache}, &.{rows[i]}, logits);
-            r.* = spec.argmax(logits);
+        for (0..rows.len) |i| {
+            try inkling.batchStep(m, &bs, &.{&cache}, &.{rows[i]}, plain[i * vocab ..][0..vocab]);
+            if (i + 1 < rows.len) rows[i + 1] = spec.argmax(plain[i * vocab ..][0..vocab]);
         }
         try rollback.copy(m.queue, &m.config, &cache, false);
+        for (cells[1..]) |width| {
+            const g = try verifier.group(&.{&cache}, &.{width});
+            try verifier.forward(m, &bs, &g, rows[0..width]);
+            const got = bs.rows.logits.slice(f32, width * vocab);
+            var equal: usize = 0;
+            var worst: f32 = 0;
+            for (0..width) |r| {
+                const a = got[r * vocab ..][0..vocab];
+                const b = plain[r * vocab ..][0..vocab];
+                if (std.mem.eql(u8, std.mem.sliceAsBytes(a), std.mem.sliceAsBytes(b))) equal += 1;
+                for (a, b) |x, y| worst = @max(worst, @abs(x - y));
+            }
+            all_equal = all_equal and equal == width;
+            try out.print(gpa, "{{\"kind\":\"exact\",\"prompt\":\"{s}\",\"context\":{d},\"width\":{d},\"rows_equal\":{d},\"max_abs_diff\":{e}}}\n", .{ prompt.name, cache.len, width, equal, worst });
+            std.debug.print("exact {s}: width={d} rows bit-equal to one-row steps {d}/{d} max_abs_diff={e}\n", .{ prompt.name, width, equal, width, worst });
+        }
         const load_start = spec.now();
         var loaded: usize = 0;
         while (@as(f64, @floatFromInt(spec.now() - load_start)) / 1e9 < load_s) : (loaded += 1) {
@@ -206,6 +229,8 @@ fn widths(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, re
         defer for (&samples) |*list| list.deinit(gpa);
         var forward_only: [cells.len]std.ArrayList(f64) = @splat(.empty);
         defer for (&forward_only) |*list| list.deinit(gpa);
+        var gpu_only: [cells.len]std.ArrayList(f64) = @splat(.empty);
+        defer for (&gpu_only) |*list| list.deinit(gpa);
         for (0..reps + 1) |rep| {
             for (0..cells.len) |k| {
                 const cell = (k + rep) % cells.len;
@@ -222,17 +247,20 @@ fn widths(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, re
                     if (rep > 0) {
                         try samples[cell].append(gpa, ms(t1 - s0));
                         try forward_only[cell].append(gpa, ms(t1 - s0));
+                        try gpu_only[cell].append(gpa, bs.rows.gpu_seconds * 1e3);
                     }
                     continue;
                 }
                 const g = try verifier.group(&.{&cache}, &.{width});
                 try verifier.forward(m, &bs, &g, rows[0..width]);
                 t1 = spec.now();
+                const gpu_ms = bs.rows.gpu_seconds * 1e3;
                 _ = try verifier.picks(m, bs.rows.logits, width);
                 const t2 = spec.now();
                 if (rep > 0) {
                     try samples[cell].append(gpa, ms(t2 - t0));
                     try forward_only[cell].append(gpa, ms(t1 - t0));
+                    try gpu_only[cell].append(gpa, gpu_ms);
                 }
             }
         }
@@ -241,8 +269,47 @@ fn widths(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, re
             defer gpa.free(ordered);
             const fw = try sorted(gpa, forward_only[cell].items);
             defer gpa.free(fw);
-            try out.print(gpa, "{{\"kind\":\"width\",\"prompt\":\"{s}\",\"load_s\":{d:.1},\"load_forwards\":{d},\"context\":{d},\"width\":{d},\"path\":\"{s}\",\"reps\":{d},\"ms_mean\":{d:.4},\"ms_p50\":{d:.4},\"ms_p90\":{d:.4},\"ms_min\":{d:.4},\"ms_max\":{d:.4},\"forward_ms_p50\":{d:.4}}}\n", .{ prompt.name, load_s, loaded, cache.len, if (width == 0) 1 else width, if (width == 0) "batch_step" else "grouped", reps, mean(ordered), quantile(ordered, 0.5), quantile(ordered, 0.9), ordered[0], ordered[ordered.len - 1], quantile(fw, 0.5) });
-            std.debug.print("widths {s}: context={d} {s} width={d} p50={d:.3} ms p90={d:.3} ms forward p50={d:.3} ms\n", .{ prompt.name, cache.len, if (width == 0) "batch_step" else "grouped", if (width == 0) 1 else width, quantile(ordered, 0.5), quantile(ordered, 0.9), quantile(fw, 0.5) });
+            const gw = try sorted(gpa, gpu_only[cell].items);
+            defer gpa.free(gw);
+            try out.print(gpa, "{{\"kind\":\"width\",\"prompt\":\"{s}\",\"load_s\":{d:.1},\"load_forwards\":{d},\"context\":{d},\"width\":{d},\"path\":\"{s}\",\"reps\":{d},\"ms_mean\":{d:.4},\"ms_p50\":{d:.4},\"ms_p90\":{d:.4},\"ms_min\":{d:.4},\"ms_max\":{d:.4},\"forward_ms_p50\":{d:.4},\"gpu_ms_p50\":{d:.4}}}\n", .{ prompt.name, load_s, loaded, cache.len, if (width == 0) 1 else width, if (width == 0) "batch_step" else "grouped", reps, mean(ordered), quantile(ordered, 0.5), quantile(ordered, 0.9), ordered[0], ordered[ordered.len - 1], quantile(fw, 0.5), quantile(gw, 0.5) });
+            std.debug.print("widths {s}: context={d} {s} width={d} p50={d:.3} ms p90={d:.3} ms forward p50={d:.3} ms gpu p50={d:.3} ms\n", .{ prompt.name, cache.len, if (width == 0) "batch_step" else "grouped", if (width == 0) 1 else width, quantile(ordered, 0.5), quantile(ordered, 0.9), quantile(fw, 0.5), quantile(gw, 0.5) });
         }
+        try routeOverlap(gpa, m, &verifier, &bs, &cache, &rows, prompt.name, out);
+    }
+    if (!all_equal) return error.GroupedDiffersFromPlain;
+}
+
+fn routeOverlap(gpa: std.mem.Allocator, m: *inkling.Model, verifier: *const inkling.group.Verifier, bs: *inkling.BatchScratch, cache: *inkling.Cache, rows: []const u32, name: []const u8, out: *std.ArrayList(u8)) !void {
+    const c = &m.config;
+    const topk: usize = c.text.topk;
+    const experts: usize = c.text.experts;
+    const per = rows.len * (topk + experts) + experts;
+    const routes = try m.device.buffer(c.slots() * per * 4, mtl.ResourceOptions.shared);
+    defer routes.deinit();
+    const g = try verifier.group(&.{cache}, &.{rows.len});
+    bs.rows.routes = routes;
+    defer bs.rows.routes = null;
+    try verifier.forward(m, bs, &g, rows);
+    const words = routes.slice(u32, c.slots() * per);
+    try out.print(gpa, "{{\"kind\":\"picks\",\"prompt\":\"{s}\",\"rows\":{d},\"picks\":[", .{ name, rows.len });
+    for (0..c.slots()) |slot| for (words[slot * per ..][0 .. rows.len * topk], 0..) |e, i| {
+        try out.print(gpa, "{s}{d}", .{ if (slot == 0 and i == 0) "" else ",", e });
+    };
+    try out.appendSlice(gpa, "]}\n");
+    for ([_]usize{ 1, 2, 4, 8 }) |width| {
+        if (width > rows.len) continue;
+        var total: usize = 0;
+        var most: usize = 0;
+        var least: usize = experts;
+        for (0..c.slots()) |slot| {
+            var seen: std.StaticBitSet(256) = .empty;
+            for (words[slot * per ..][0 .. width * topk]) |e| if (e < 256) seen.set(e);
+            total += seen.count();
+            most = @max(most, seen.count());
+            least = @min(least, seen.count());
+        }
+        const visits: f64 = @floatFromInt(c.slots());
+        try out.print(gpa, "{{\"kind\":\"routes\",\"prompt\":\"{s}\",\"context\":{d},\"width\":{d},\"visits\":{d},\"distinct_mean\":{d:.3},\"distinct_min\":{d},\"distinct_max\":{d}}}\n", .{ name, cache.len, width, c.slots(), @as(f64, @floatFromInt(total)) / visits, least, most });
+        std.debug.print("routes {s}: width={d} distinct experts a visit mean={d:.2} min={d} max={d}\n", .{ name, width, @as(f64, @floatFromInt(total)) / visits, least, most });
     }
 }

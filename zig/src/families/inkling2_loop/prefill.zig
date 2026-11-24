@@ -309,6 +309,7 @@ pub const PrefillScratch = struct {
     routes: ?mtl.Buffer,
     verify_conv: ?*ConvCapture,
     taps: ?*const @import("taps.zig").Taps,
+    gpu_seconds: f64,
 
     pub fn init(device: mtl.Device, c: *const cfg.Config, chunk: usize) !PrefillScratch {
         return initRows(device, c, chunk, chunk);
@@ -352,6 +353,7 @@ pub const PrefillScratch = struct {
         s.routes = null;
         s.verify_conv = null;
         s.taps = null;
+        s.gpu_seconds = 0;
         s.chunk = chunk;
         s.logit_rows = @min(@max(logit_rows, 1), chunk);
         s.h = @intCast(h);
@@ -1381,6 +1383,14 @@ pub fn groupStep(m: *const Model, s: *@import("batch.zig").BatchScratch, group: 
     try run(m, &s.rows, group.caches[0], ids, .all, &context);
 }
 
+const group_rounds = [_][]const u8{ "inkling2-group-1", "inkling2-group-2", "inkling2-group-3", "inkling2-group-4", "inkling2-group-5", "inkling2-group-6", "inkling2-group-7", "inkling2-group-8" };
+
+fn roundName(batch: ?*BatchContext, rows: usize) []const u8 {
+    const context = batch orelse return "inkling2-prefill";
+    if (context.group == null) return "inkling2-batch";
+    return group_rounds[@min(rows, group_rounds.len) - 1];
+}
+
 fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, want: WantLogits, batch: ?*BatchContext) !void {
     if (ids.len == 0 or ids.len > s.chunk or (want == .all and ids.len > s.logit_rows)) return error.BadChunk;
     if (batch == null and ids.len + cache.len > cache.capacity) return error.ContextFull;
@@ -1392,7 +1402,7 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
     const ring = cache.keys.length() != linear;
     const pool = mtl.objc.Pool.push();
     defer pool.pop();
-    m.queue.roundBegin(if (batch == null) "inkling2-prefill" else "inkling2-batch");
+    m.queue.roundBegin(roundName(batch, ids.len));
     defer m.queue.roundEnd();
     const threshold = if (std.c.getenv("TF_INKLING_PREFILL_PROFILE_BASE")) |v| std.fmt.parseInt(usize, std.mem.span(v), 10) catch 0 else null;
     const profiling = if (threshold) |base| batch == null and cache.len >= base else false;
@@ -1474,6 +1484,7 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
         std.log.err("inkling2_loop prefill: {s}", .{msg});
         return error.GpuFailed;
     }
+    s.gpu_seconds = rounds.cb.gpuSeconds();
     if (s.half_overflow) |buf| {
         const overflow = buf.slice(u32, 1)[0];
         if (s.fast) {

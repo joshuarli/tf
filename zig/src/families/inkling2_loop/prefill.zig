@@ -1501,6 +1501,18 @@ const ProfileRounds = struct {
     queue: mtl.Queue,
     cb: mtl.CommandBuffer,
     enabled: bool,
+    sent: [8]mtl.CommandBuffer = undefined,
+    count: usize = 0,
+
+    fn flush(p: *ProfileRounds, c: *Chunk) void {
+        if (p.enabled or c.batch != null or !c.s.fuse or p.count == p.sent.len) return;
+        c.enc.end();
+        p.cb.commit();
+        p.sent[p.count] = p.cb;
+        p.count += 1;
+        p.cb = p.queue.commandBuffer();
+        c.enc = p.cb.compute(.serial);
+    }
 
     fn next(p: *ProfileRounds, c: *Chunk, name: []const u8) !void {
         if (!p.enabled) return;
@@ -1614,6 +1626,7 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
         c.tap(@intCast(i));
         try c.layer(@intCast(i), @intCast(i), null);
         try profileOccupancy(&rounds, &c, @intCast(i), "inkling2-occupancy");
+        if (i % 6 == 5) rounds.flush(&c);
     }
     const prelude = c.count;
     c.copyN(b(s.x), b(s.prelude), @as(usize, c.n) * c.h);
@@ -1637,6 +1650,7 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
             c.tap(@intCast(config.loop.core_start + pass * span + (ip - config.loop.core_start)));
             try c.layer(slot, @intCast(ip), bk);
             try profileOccupancy(&rounds, &c, slot, "inkling2-occupancy");
+            if (slot % 6 == 5) rounds.flush(&c);
         }
     }
     for (config.loop.core_end..text.layers) |i| {
@@ -1659,11 +1673,19 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
     c.enc.end();
     rounds.cb.commit();
     rounds.cb.wait();
+    s.gpu_seconds = 0;
+    for (rounds.sent[0..rounds.count]) |sent| {
+        if (sent.failure()) |msg| {
+            std.log.err("inkling2_loop prefill: {s}", .{msg});
+            return error.GpuFailed;
+        }
+        s.gpu_seconds += sent.gpuSeconds();
+    }
     if (rounds.cb.failure()) |msg| {
         std.log.err("inkling2_loop prefill: {s}", .{msg});
         return error.GpuFailed;
     }
-    s.gpu_seconds = rounds.cb.gpuSeconds();
+    s.gpu_seconds += rounds.cb.gpuSeconds();
     if (s.half_overflow) |buf| {
         const overflow = buf.slice(u32, 1)[0];
         if (s.fast) {

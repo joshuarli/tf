@@ -18,9 +18,9 @@ pub const usage =
     \\tf-inkling2-loop-run <model> <prompts.json> dflash-widths <reps> <out.jsonl> [load_s] [widths]  grouped verify at
     \\  widths 1, 2, 4, 8, 12 and 16 (or the comma-separated widths; 0: the one-row batch step), each prompt after load_s
     \\  seconds of eight-row verifies (sustained load; 0: none)
-    \\tf-inkling2-loop-run <model> <prompts.json> dflash-kernels <reps> <out.jsonl> [picks.json|-] [variants]  one-row
-    \\  against shared-row kernels on the weights at 1 to 16 rows; picks.json: a widths run's 48 visits of routed experts;
-    \\  variants: all, none (the default) or comma-separated candidate kernels, each also checked byte for byte
+    \\tf-inkling2-loop-run <model> <prompts.json> dflash-kernels <reps> <out.jsonl> [picks.json]  one-row against
+    \\  shared-row kernels on the weights at 1 to 16 rows, each shared output checked byte for byte; picks.json: a widths
+    \\  run's 48 visits of routed experts
     \\  prompts.json: [{"name": ..., "ids": [...]}]; EOS is ignored; a run whose tokens differ from plain exits non-zero
     \\
 ;
@@ -62,9 +62,8 @@ pub fn main(init: std.process.Init, args: []const [:0]const u8) !void {
         return;
     }
     if (std.mem.eql(u8, mode, "dflash-kernels")) {
-        if (args.len < 6 or args.len > 8) return error.ExpectedArgs;
-        const picks: ?[]const u8 = if (args.len >= 7 and !std.mem.eql(u8, args[6], "-")) args[6] else null;
-        try @import("kbench.zig").run(gpa, m, try std.fmt.parseInt(usize, args[4], 10), picks, if (args.len == 8) args[7] else "none", init.io, &out);
+        if (args.len != 6 and args.len != 7) return error.ExpectedArgs;
+        try @import("kbench.zig").run(gpa, m, try std.fmt.parseInt(usize, args[4], 10), if (args.len == 7) args[6] else null, init.io, &out);
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[5], .data = out.items });
         return;
     }

@@ -14,72 +14,8 @@ const slots_a_visit = widest * 8;
 const Io = struct { x: mtl.Buffer, act: mtl.Buffer, y: mtl.Buffer, outs: [8]mtl.Buffer, picks: mtl.Buffer, visits: usize };
 const Case = struct { pipe: mtl.Pipeline, groups: mtl.Size, threads: mtl.Size };
 
-/// A candidate few-row kernel in `rows.source`: simdgroups, 8-row weight tiles and batch halves a group, its widths.
-const Variant = struct { kind: Kind, name: [:0]const u8, sg: u32, t: u32, h: u32 = 1, j: u32 = 1, least: u32, most: u32 };
-
-const variants = [_]Variant{
-    .{ .kind = .gate_up, .name = "i2e_gate_up_f3", .sg = 4, .t = 2, .least = 2, .most = 8 },
-    .{ .kind = .gate_up, .name = "i2e_gate_up_f4", .sg = 4, .t = 2, .least = 2, .most = 8 },
-    .{ .kind = .gate_up, .name = "i2e_gate_up_r4", .sg = 4, .t = 1, .least = 2, .most = 8 },
-    .{ .kind = .gate_up, .name = "i2e_gate_up_r4_t2", .sg = 4, .t = 2, .least = 2, .most = 8 },
-    .{ .kind = .gate_up, .name = "i2e_gate_up_r4_s8", .sg = 8, .t = 2, .least = 2, .most = 8 },
-    .{ .kind = .gate_up, .name = "i2e_gate_up16_f3", .sg = 4, .t = 2, .least = 2, .most = 16 },
-    .{ .kind = .gate_up, .name = "i2e_gate_up16_f4", .sg = 4, .t = 2, .least = 2, .most = 16 },
-    .{ .kind = .gate_up, .name = "i2e_gate_up16_r4", .sg = 4, .t = 1, .least = 2, .most = 16 },
-    .{ .kind = .gate_up, .name = "i2e_gate_up16_r4_t2", .sg = 4, .t = 2, .least = 2, .most = 16 },
-    .{ .kind = .gate_up, .name = "i2e_gate_up16_r4_s8", .sg = 8, .t = 2, .least = 2, .most = 16 },
-    .{ .kind = .gate_up, .name = "i2e_gate_up16_f3_j2", .sg = 4, .t = 2, .j = 2, .least = 2, .most = 16 },
-    .{ .kind = .down, .name = "i2e_down_f1", .sg = 8, .t = 4, .least = 1, .most = 8 },
-    .{ .kind = .down, .name = "i2e_down_f3", .sg = 8, .t = 4, .least = 1, .most = 8 },
-    .{ .kind = .down, .name = "i2e_down_r4", .sg = 8, .t = 2, .least = 1, .most = 8 },
-    .{ .kind = .down, .name = "i2e_down_r4_t4", .sg = 8, .t = 4, .least = 1, .most = 8 },
-    .{ .kind = .down, .name = "i2e_down16_f3", .sg = 8, .t = 4, .least = 1, .most = 16 },
-    .{ .kind = .down, .name = "i2e_down16_r4", .sg = 8, .t = 2, .least = 1, .most = 16 },
-    .{ .kind = .down, .name = "i2e_down16_r4_t4", .sg = 8, .t = 4, .least = 1, .most = 16 },
-    .{ .kind = .down, .name = "i2e_down16_f3_j2", .sg = 8, .t = 4, .j = 2, .least = 1, .most = 16 },
-    .{ .kind = .gate_up, .name = "i2e_gate_up_o3", .sg = 4, .t = 2, .least = 2, .most = 8 },
-    .{ .kind = .gate_up, .name = "i2e_gate_up16_o3", .sg = 4, .t = 2, .least = 2, .most = 16 },
-    .{ .kind = .down, .name = "i2e_down_m", .sg = 8, .t = 4, .least = 1, .most = 8 },
-    .{ .kind = .down, .name = "i2e_down_o1", .sg = 8, .t = 4, .least = 1, .most = 8 },
-    .{ .kind = .down, .name = "i2e_down_o3", .sg = 8, .t = 4, .least = 1, .most = 8 },
-    .{ .kind = .down, .name = "i2e_down16_o1", .sg = 8, .t = 4, .least = 1, .most = 16 },
-    .{ .kind = .down, .name = "i2e_down16_o3", .sg = 8, .t = 4, .least = 1, .most = 16 },
-    .{ .kind = .head, .name = "i2t_dense_8_2", .sg = 8, .t = 2, .least = 2, .most = 8 },
-    .{ .kind = .head, .name = "i2t_dense_8_1", .sg = 8, .t = 1, .least = 2, .most = 8 },
-    .{ .kind = .head, .name = "i2t_dense_16_2", .sg = 16, .t = 2, .least = 2, .most = 8 },
-    .{ .kind = .head, .name = "i2t_dense_8_4", .sg = 8, .t = 4, .least = 2, .most = 8 },
-    .{ .kind = .head, .name = "i2t_dense_16_4", .sg = 16, .t = 4, .least = 2, .most = 8 },
-    .{ .kind = .head, .name = "i2t_dense16_8_2", .sg = 8, .t = 2, .least = 9, .most = 16 },
-    .{ .kind = .head, .name = "i2t_dense16_16_2", .sg = 16, .t = 2, .least = 9, .most = 16 },
-    .{ .kind = .head, .name = "i2t_dense16_16_4", .sg = 16, .t = 4, .least = 9, .most = 16 },
-    .{ .kind = .head, .name = "i2t_dense16_8_1", .sg = 8, .t = 1, .least = 9, .most = 16 },
-    .{ .kind = .head, .name = "i2t_dense16_h8_2", .sg = 8, .t = 2, .h = 2, .least = 9, .most = 16 },
-    .{ .kind = .head, .name = "i2t_dense16_h16_2", .sg = 16, .t = 2, .h = 2, .least = 9, .most = 16 },
-    .{ .kind = .oproj, .name = "i2t_dense_8_2", .sg = 8, .t = 2, .least = 2, .most = 8 },
-    .{ .kind = .oproj, .name = "i2t_dense_8_1", .sg = 8, .t = 1, .least = 2, .most = 8 },
-    .{ .kind = .oproj, .name = "i2t_dense_16_2", .sg = 16, .t = 2, .least = 2, .most = 8 },
-    .{ .kind = .oproj, .name = "i2t_dense_8_4", .sg = 8, .t = 4, .least = 2, .most = 8 },
-    .{ .kind = .oproj, .name = "i2t_dense_16_4", .sg = 16, .t = 4, .least = 2, .most = 8 },
-    .{ .kind = .oproj, .name = "i2t_dense16_8_2", .sg = 8, .t = 2, .least = 9, .most = 16 },
-    .{ .kind = .oproj, .name = "i2t_dense16_16_2", .sg = 16, .t = 2, .least = 9, .most = 16 },
-    .{ .kind = .oproj, .name = "i2t_dense16_16_4", .sg = 16, .t = 4, .least = 9, .most = 16 },
-    .{ .kind = .oproj, .name = "i2t_dense16_8_1", .sg = 8, .t = 1, .least = 9, .most = 16 },
-    .{ .kind = .oproj, .name = "i2t_dense16_h8_2", .sg = 8, .t = 2, .h = 2, .least = 9, .most = 16 },
-    .{ .kind = .oproj, .name = "i2t_dense16_h16_2", .sg = 16, .t = 2, .h = 2, .least = 9, .most = 16 },
-    .{ .kind = .proj, .name = "i2t_projections_8_2", .sg = 8, .t = 2, .least = 3, .most = 8 },
-    .{ .kind = .proj, .name = "i2t_projections_8_1", .sg = 8, .t = 1, .least = 3, .most = 8 },
-    .{ .kind = .proj, .name = "i2t_projections16_8_1", .sg = 8, .t = 1, .least = 9, .most = 16 },
-    .{ .kind = .proj, .name = "i2t_projections_16_2", .sg = 16, .t = 2, .least = 3, .most = 8 },
-    .{ .kind = .proj, .name = "i2t_projections_16_4", .sg = 16, .t = 4, .least = 3, .most = 8 },
-    .{ .kind = .proj, .name = "i2t_projections16_8_2", .sg = 8, .t = 2, .least = 9, .most = 16 },
-    .{ .kind = .proj, .name = "i2t_projections16_16_2", .sg = 16, .t = 2, .least = 9, .most = 16 },
-    .{ .kind = .proj, .name = "i2t_projections16_16_4", .sg = 16, .t = 4, .least = 9, .most = 16 },
-    .{ .kind = .proj, .name = "i2t_projections16_h8_2", .sg = 8, .t = 2, .h = 2, .least = 9, .most = 16 },
-    .{ .kind = .proj, .name = "i2t_projections16_h16_2", .sg = 16, .t = 2, .h = 2, .least = 9, .most = 16 },
-};
-
-/// `chosen`: "all", "none" or comma-separated variant names to time beside the one-row and the served kernels.
-pub fn run(gpa: std.mem.Allocator, m: *inkling.Model, reps: usize, picks_path: ?[]const u8, chosen: []const u8, io_ctx: std.Io, out: *std.ArrayList(u8)) !void {
+/// The served few-row kernels against the one-row kernels at 1 to 16 rows, each served output checked byte for byte.
+pub fn run(gpa: std.mem.Allocator, m: *inkling.Model, reps: usize, picks_path: ?[]const u8, io_ctx: std.Io, out: *std.ArrayList(u8)) !void {
     const c = &m.config;
     var bs = try inkling.BatchScratch.init(m.device, c, 8);
     defer bs.deinit();
@@ -114,16 +50,6 @@ pub fn run(gpa: std.mem.Allocator, m: *inkling.Model, reps: usize, picks_path: ?
         picked_rows = per / 8;
         for (0..visits) |v| @memcpy(pv[v * slots_a_visit ..][0..per], parsed.value[v * per ..][0..per]);
     }
-    const lib = try mtl.Library.fromSource(m.device, inkling.rows.source, mtl.CompileOptions.mlx());
-    defer lib.deinit();
-    var pipes: [variants.len]?mtl.Pipeline = @splat(null);
-    defer for (pipes) |p| if (p) |pipe| pipe.deinit();
-    for (variants, 0..) |v, i| if (picked(chosen, v.name)) {
-        pipes[i] = mtl.Pipeline.init(m.device, lib, v.name, false) catch |e| blk: {
-            std.debug.print("kernel bench: {s} skipped: {t}\n", .{ v.name, e });
-            break :blk null;
-        };
-    };
     const io = Io{ .x = x, .act = act, .y = y, .outs = outs, .picks = picks, .visits = visits };
     const affine = m.affine_pipes.?;
     const shared = &bs.shared;
@@ -159,54 +85,21 @@ pub fn run(gpa: std.mem.Allocator, m: *inkling.Model, reps: usize, picks_path: ?
             .gate_up => shared.gateUp(rows, text.expert_inter, text.hidden, slots),
             .down => shared.downs(rows, text.hidden, text.expert_inter, slots),
         };
-        var cases: [2 + variants.len]Case = undefined;
-        var names: [2 + variants.len][]const u8 = undefined;
-        cases[0] = one;
-        names[0] = "one-row";
-        cases[1] = if (d) |v| .{ .pipe = v.pipe, .groups = v.groups, .threads = v.threads } else one;
-        names[1] = "served";
-        var count: usize = 2;
-        for (variants, pipes) |v, p| if (p) |pipe| if (v.kind == kind and rows >= v.least and rows <= v.most) {
-            const n: usize = switch (kind) {
-                .head => vocab,
-                .oproj => text.hidden,
-                .gate_up => 2 * @as(usize, text.expert_inter),
-                .down => text.hidden,
-                .proj => 0,
-            };
-            var blocks: usize = (n + 8 * v.t - 1) / (8 * v.t);
-            if (kind == .proj) {
-                blocks = 0;
-                for (ms) |part| blocks += (part + 8 * v.t - 1) / (8 * v.t);
-            }
-            const moe = kind == .gate_up or kind == .down;
-            cases[count] = .{ .pipe = pipe, .groups = mtl.Size.of(blocks * v.h, if (moe) (slots + v.j - 1) / v.j else 1, 1), .threads = mtl.Size.of(32 * v.sg, 1, 1) };
-            names[count] = v.name;
-            count += 1;
+        const served: Case = if (d) |v| .{ .pipe = v.pipe, .groups = v.groups, .threads = v.threads } else one;
+        var times: [2][5]f64 = undefined;
+        for (0..5) |round| for ([_]Case{ one, served }, 0..) |cs, side| {
+            times[side][round] = try timeIt(m, reps, kind, cs, side == 1 and d != null, io, rows, io.y);
         };
-        var times: [2 + variants.len][5]f64 = undefined;
-        for (0..5) |round| for (cases[0..count], 0..) |cs, side| {
-            times[side][round] = try timeIt(m, reps, kind, cs, side > 0 and (side > 1 or d != null), io, rows, io.y);
-        };
-        for (times[0..count]) |*t| std.mem.sort(f64, t, {}, std.sort.asc(f64));
-        for (cases[1..count], names[1..count], times[1..count], 1..) |cs, name, t, side| {
-            const equal = if (kind == .proj) true else try sameOut(m, kind, one, cs, side > 1 or d != null, io, rows, checks);
-            try out.print(gpa, "{{\"kind\":\"kernel\",\"rows\":{d},\"op\":\"{s}\",\"kernel\":\"{s}\",\"one_row_us\":{d:.2},\"kernel_us\":{d:.2},\"equal\":{}}}\n", .{ rows, @tagName(kind), name, times[0][2], t[2], equal });
-            std.debug.print("kernel rows={d} {s}: one-row {d:.1} us, {s} {d:.1} us{s}\n", .{ rows, @tagName(kind), times[0][2], name, t[2], if (equal) "" else " BYTES DIFFER" });
-            if (!equal) return error.KernelDiffers;
-        }
+        for (&times) |*t| std.mem.sort(f64, t, {}, std.sort.asc(f64));
+        const equal = if (kind == .proj or d == null) true else try sameOut(m, kind, one, served, io, rows, checks);
+        try out.print(gpa, "{{\"kind\":\"kernel\",\"rows\":{d},\"op\":\"{s}\",\"kernel\":\"served\",\"one_row_us\":{d:.2},\"kernel_us\":{d:.2},\"shared_kernel\":{},\"equal\":{}}}\n", .{ rows, @tagName(kind), times[0][2], times[1][2], d != null, equal });
+        std.debug.print("kernel rows={d} {s}: one-row {d:.1} us, served {d:.1} us{s}\n", .{ rows, @tagName(kind), times[0][2], times[1][2], if (equal) "" else " BYTES DIFFER" });
+        if (!equal) return error.KernelDiffers;
     };
 }
 
-fn picked(chosen: []const u8, name: []const u8) bool {
-    if (std.mem.eql(u8, chosen, "all")) return true;
-    var it = std.mem.splitScalar(u8, chosen, ',');
-    while (it.next()) |part| if (std.mem.eql(u8, part, name)) return true;
-    return false;
-}
-
-fn sameOut(m: *inkling.Model, kind: Kind, one: Case, cs: Case, shared: bool, io: Io, rows: u32, checks: [2]mtl.Buffer) !bool {
-    for ([_]Case{ one, cs }, [_]bool{ false, shared }, checks) |case, s, buf| _ = try timeIt(m, 1, kind, case, s, io, rows, buf);
+fn sameOut(m: *inkling.Model, kind: Kind, one: Case, cs: Case, io: Io, rows: u32, checks: [2]mtl.Buffer) !bool {
+    for ([_]Case{ one, cs }, [_]bool{ false, true }, checks) |case, s, buf| _ = try timeIt(m, 1, kind, case, s, io, rows, buf);
     const n: usize = switch (kind) {
         .head => m.config.text.unpadded_vocab * @as(usize, rows),
         .oproj => m.config.text.hidden * @as(usize, rows),

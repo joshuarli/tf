@@ -122,23 +122,20 @@ inline void i2t_affine(const device float* x, size_t step, uint rows, const devi
     for (uint t = 0; t < T; ++t) out[g][t] = i2t_total<SG, G * T>(part, g * T + t, lane);
 }
 
-template <uint SG, uint T, uint G, uint H>
+template <uint SG, uint T, uint G>
 [[kernel]] void i2t_dense(const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]],
     const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
     constant i2t_dense_args& a [[buffer(4)]], device float* y [[buffer(5)]],
     uint group [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]]) {
   threadgroup float2 part[SG * G * T * 32];
-  const uint row0 = (group / H) * 8u * T, skip = 8u * G * (group % H);
-  if (skip >= a.rows) return;
-  const uint rows = a.rows - skip;
+  const uint row0 = group * 8u * T;
   float2 out[G][T];
-  i2t_affine<SG, T, G>(x + ((size_t)a.xb + (size_t)skip * a.xs) * a.k, (size_t)a.xs * a.k, rows, w, s, b, row0, a.n - 1u,
-      a.k, sg, lane, part, out);
+  i2t_affine<SG, T, G>(x + (size_t)a.xb * a.k, (size_t)a.xs * a.k, a.rows, w, s, b, row0, a.n - 1u, a.k, sg, lane, part,
+      out);
   if (sg != 0u) return;
   uint fm, fn;
   i2t_lane(lane, fm, fn);
-  y += (size_t)skip * a.n;
 #pragma unroll
   for (uint t = 0; t < T; ++t) {
     const uint col = row0 + t * 8u + fm;
@@ -147,8 +144,8 @@ template <uint SG, uint T, uint G, uint H>
     for (uint g = 0; g < G; ++g) {
       float2 v = out[g][t];
       if (a.cap > 0.0f) v = float2(a.cap * precise::tanh(v.x / a.cap), a.cap * precise::tanh(v.y / a.cap));
-      if (8u * g + fn < rows) y[(size_t)(8u * g + fn) * a.n + col] = v.x;
-      if (8u * g + fn + 1u < rows) y[(size_t)(8u * g + fn + 1u) * a.n + col] = v.y;
+      if (8u * g + fn < a.rows) y[(size_t)(8u * g + fn) * a.n + col] = v.x;
+      if (8u * g + fn + 1u < a.rows) y[(size_t)(8u * g + fn + 1u) * a.n + col] = v.y;
     }
   }
 }
@@ -163,13 +160,10 @@ template <uint SG, uint T, uint G, uint H>
     constant i2t_projection_args& a [[buffer(20)]], uint group [[threadgroup_position_in_grid]], \
     uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]
 
-template <uint SG, uint T, uint G, uint H>
+template <uint SG, uint T, uint G>
 [[kernel]] void i2t_projections(I2T_PROJECTION_ARGS) {
   threadgroup float2 part[SG * G * T * 32];
-  const uint skip = 8u * G * (group % H);
-  if (skip >= a.rows) return;
-  const uint rows = a.rows - skip;
-  uint which = 0u, first = group / H;
+  uint which = 0u, first = group;
   for (; which < 8u; ++which) {
     const uint span = (a.m[which] + 8u * T - 1u) / (8u * T);
     if (first < span) break;
@@ -188,12 +182,12 @@ template <uint SG, uint T, uint G, uint H>
   if (which == 7u) offset = a.m[2];
   const uint m = a.m[which], row0 = first * 8u * T;
   float2 out[G][T];
-  i2t_affine<SG, T, G>((key ? xk : val ? xv : xq) + (size_t)skip * a.k, a.k, rows, a.full && key ? wk : a.full && val ? wv : wq,
+  i2t_affine<SG, T, G>(key ? xk : val ? xv : xq, a.k, a.rows, a.full && key ? wk : a.full && val ? wv : wq,
       a.full && key ? sk : a.full && val ? sv : sq, a.full && key ? bk : a.full && val ? bv : bq, offset + row0,
       offset + m - 1u, a.k, sg, lane, part, out);
   if (sg != 0u) return;
-  device float* y = (which == 0u ? oq : which == 1u ? ok : which == 2u ? ov : which == 3u ? orl
-      : which == 4u ? og : which == 5u ? os : which == 6u ? okd : ovd) + (size_t)skip * m;
+  device float* y = which == 0u ? oq : which == 1u ? ok : which == 2u ? ov : which == 3u ? orl
+      : which == 4u ? og : which == 5u ? os : which == 6u ? okd : ovd;
   uint fm, fn;
   i2t_lane(lane, fm, fn);
 #pragma unroll
@@ -202,44 +196,27 @@ template <uint SG, uint T, uint G, uint H>
     if (row >= m) break;
 #pragma unroll
     for (uint g = 0; g < G; ++g) {
-      if (8u * g + fn < rows) y[(size_t)(8u * g + fn) * m + row] = out[g][t].x;
-      if (8u * g + fn + 1u < rows) y[(size_t)(8u * g + fn + 1u) * m + row] = out[g][t].y;
+      if (8u * g + fn < a.rows) y[(size_t)(8u * g + fn) * m + row] = out[g][t].x;
+      if (8u * g + fn + 1u < a.rows) y[(size_t)(8u * g + fn + 1u) * m + row] = out[g][t].y;
     }
   }
 }
 
-#define I2T_DENSE(name, sgs, t, g, h) \
-  template [[host_name(#name)]] [[kernel]] void i2t_dense<sgs, t, g, h>( \
+#define I2T_DENSE(name, sgs, t, g) \
+  template [[host_name(#name)]] [[kernel]] void i2t_dense<sgs, t, g>( \
       const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]], const device bfloat* s [[buffer(2)]], \
       const device bfloat* b [[buffer(3)]], constant i2t_dense_args& a [[buffer(4)]], device float* y [[buffer(5)]], \
       uint group [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]], \
       uint lane [[thread_index_in_simdgroup]]);
 
-I2T_DENSE(i2t_dense_8_2, 8, 2, 1, 1)
-I2T_DENSE(i2t_dense_8_1, 8, 1, 1, 1)
-I2T_DENSE(i2t_dense_16_2, 16, 2, 1, 1)
-I2T_DENSE(i2t_dense_8_4, 8, 4, 1, 1)
-I2T_DENSE(i2t_dense_16_4, 16, 4, 1, 1)
-I2T_DENSE(i2t_dense16_8_2, 8, 2, 2, 1)
-I2T_DENSE(i2t_dense16_16_2, 16, 2, 2, 1)
-I2T_DENSE(i2t_dense16_16_4, 16, 4, 2, 1)
-I2T_DENSE(i2t_dense16_8_1, 8, 1, 2, 1)
-I2T_DENSE(i2t_dense16_h8_2, 8, 2, 1, 2)
-I2T_DENSE(i2t_dense16_h16_2, 16, 2, 1, 2)
+I2T_DENSE(i2t_dense_8_2, 8, 2, 1)
+I2T_DENSE(i2t_dense16_8_1, 8, 1, 2)
 
-#define I2T_PROJECTIONS(name, sgs, t, g, h) \
-  template [[host_name(#name)]] [[kernel]] void i2t_projections<sgs, t, g, h>(I2T_PROJECTION_ARGS);
+#define I2T_PROJECTIONS(name, sgs, t, g) \
+  template [[host_name(#name)]] [[kernel]] void i2t_projections<sgs, t, g>(I2T_PROJECTION_ARGS);
 
-I2T_PROJECTIONS(i2t_projections_8_2, 8, 2, 1, 1)
-I2T_PROJECTIONS(i2t_projections_8_1, 8, 1, 1, 1)
-I2T_PROJECTIONS(i2t_projections16_8_1, 8, 1, 2, 1)
-I2T_PROJECTIONS(i2t_projections_16_2, 16, 2, 1, 1)
-I2T_PROJECTIONS(i2t_projections_16_4, 16, 4, 1, 1)
-I2T_PROJECTIONS(i2t_projections16_8_2, 8, 2, 2, 1)
-I2T_PROJECTIONS(i2t_projections16_16_2, 16, 2, 2, 1)
-I2T_PROJECTIONS(i2t_projections16_16_4, 16, 4, 2, 1)
-I2T_PROJECTIONS(i2t_projections16_h8_2, 8, 2, 1, 2)
-I2T_PROJECTIONS(i2t_projections16_h16_2, 16, 2, 1, 2)
+I2T_PROJECTIONS(i2t_projections_8_2, 8, 2, 1)
+I2T_PROJECTIONS(i2t_projections16_8_1, 8, 1, 2)
 
 template <uint R, uint C, uint U>
 inline void i2r_dot_ahead(const device float* x, size_t step, uint rows, const device uint* w, const device bfloat* s,

@@ -749,184 +749,6 @@ test "batched depth mixes keep the prefill mixes' bytes" {
     std.debug.print("batched depth mix test: {d} cases byte-equal to the prefill mixes\n", .{checked});
 }
 
-const VerifyRow = extern struct { keys: u64, values: u64, args: AttnParts, gpos: u32, path: [16]u8 };
-
-test "the verify's split orders and shared staging keep the per-row split's bytes for chains and trees" {
-    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
-    const device = mtl.Device.init() catch return error.SkipZigTest;
-    defer device.deinit();
-    const pool = mtl.objc.Pool.push();
-    defer pool.pop();
-    const queue = try device.queue();
-    defer queue.deinit();
-    const lib = try mtl.Library.fromSource(device, @import("group.zig").source, mtl.CompileOptions.mlx());
-    defer lib.deinit();
-    var pipes: [3]mtl.Pipeline = undefined;
-    for (&pipes, [_][:0]const u8{ "i2v_split", "i2v_split_rows", "i2v_split_runs" }) |*p, name| p.* = try mtl.Pipeline.init(device, lib, name, false);
-    defer for (pipes) |p| p.deinit();
-    const most = 16;
-    const capacity = 2100;
-    var prng = std.Random.DefaultPrng.init(0x7370_6c74);
-    const rng = prng.random();
-    var bufs: [5]mtl.Buffer = undefined;
-    const counts = [5]usize{ most * heads * dim * 4, most * heads * (extent + 1) * 4, most * heads * 4, most * kv * dim * 2, most * kv * dim * 2 };
-    for (&bufs, counts) |*b, n| b.* = try device.buffer(n, mtl.ResourceOptions.shared);
-    defer for (bufs) |b| b.deinit();
-    const q, const bias, const sink, const kh, const vh = bufs;
-    fill(rng, q.slice(f32, most * heads * dim));
-    fill(rng, bias.slice(f32, most * heads * (extent + 1)));
-    fill(rng, sink.slice(f32, most * heads));
-    for ([_]mtl.Buffer{ kh, vh }) |b| for (b.slice(f16, most * kv * dim)) |*x| {
-        x.* = @floatCast(rng.float(f32) * 4.0 - 2.0);
-    };
-    const keys = try device.buffer(capacity * kv * dim * 2, mtl.ResourceOptions.shared);
-    defer keys.deinit();
-    const values = try device.buffer(capacity * kv * dim * 2, mtl.ResourceOptions.shared);
-    defer values.deinit();
-    for ([_]mtl.Buffer{ keys, values }) |b| for (b.slice(f16, capacity * kv * dim)) |*x| {
-        x.* = @floatCast(rng.float(f32) * 4.0 - 2.0);
-    };
-    const part_count = most * heads * st.attn_splits * (dim + 2);
-    var parts: [3]mtl.Buffer = undefined;
-    for (&parts) |*b| b.* = try device.buffer(part_count * 4, mtl.ResourceOptions.shared);
-    defer for (parts) |b| b.deinit();
-    const tree = [_]u8{ 0, 0, 1, 1, 2, 3, 0, 5, 6, 4, 9, 10, 2, 7, 13 };
-    var checked: usize = 0;
-    var shared_splits: usize = 0;
-    for ([_]u32{ 0, window }) |win| for ([_]u32{ 700, 1020, 1030, 2000 }) |gpos| for (1..most + 1) |n| for ([_]bool{ false, true }) |branching| {
-        var rows: [most]VerifyRow = undefined;
-        var depth: [most]u8 = undefined;
-        var max_splits: u32 = 0;
-        for (0..n) |r| {
-            const parent: ?usize = if (r == 0) null else if (branching) tree[r - 1] else r - 1;
-            depth[r] = if (parent) |p| depth[p] + 1 else 0;
-            var path: [16]u8 = @splat(0xff);
-            var at: usize = r;
-            var d: usize = depth[r];
-            while (true) : (d -= 1) {
-                path[d] = @intCast(at);
-                if (d == 0) break;
-                at = if (branching) tree[at - 1] else at - 1;
-            }
-            const pos = gpos + depth[r];
-            const lo: u32 = if (win != 0 and pos + 1 > win) pos + 1 - win else 0;
-            const partition = st.attnPartition(pos + 1 - lo);
-            max_splits = @max(max_splits, partition.splits);
-            rows[r] = .{ .keys = keys.gpuAddress(), .values = values.gpuAddress(), .args = .{ .heads = heads, .kv = kv, .dim = dim, .rel = drel, .extent = extent, .window = win, .pos = pos, .tau = @intFromBool(win == 0), .splits = partition.splits, .chunk = partition.chunk, .scale = scale, .floor = floor, .alpha = alpha }, .gpos = gpos, .path = path };
-        }
-        const cb = queue.commandBuffer();
-        const enc = cb.compute(.serial);
-        for (pipes, parts, 0..) |pipe, out, i| {
-            enc.setPipeline(pipe);
-            enc.useResource(keys, mtl.ResourceUsage.read);
-            enc.useResource(values, mtl.ResourceUsage.read);
-            for ([_]mtl.Buffer{ q, bias, sink }, 0..) |b, j| enc.setBuffer(b, 0, j);
-            enc.setBytes(std.mem.sliceAsBytes(rows[0..n]), 3);
-            enc.setBuffer(out, 0, 4);
-            enc.setBuffer(kh, 0, 5);
-            enc.setBuffer(vh, 0, 6);
-            const grid = if (i == 1) mtl.Size.of(n, kv * max_splits, 1) else mtl.Size.of(kv * max_splits, n, 1);
-            enc.dispatchGroups(grid, mtl.Size.of((heads / kv) * 32, 1, 1));
-        }
-        enc.end();
-        cb.commit();
-        cb.wait();
-        if (cb.failure()) |m| {
-            std.debug.print("verify split test: {s}\n", .{m});
-            return error.GpuFailed;
-        }
-        for (0..n) |r| {
-            const splits = rows[r].args.splits;
-            for (0..heads) |h| {
-                const at = (r * heads + h) * st.attn_splits * (dim + 2);
-                const len = splits * (dim + 2);
-                const want = parts[0].slice(f32, part_count)[at..][0..len];
-                for (parts[1..]) |got| if (!sameBits(want, got.slice(f32, part_count)[at..][0..len])) {
-                    std.debug.print("verify split test window={d} gpos={d} rows={d} tree={} row={d} head={d}: bytes differ\n", .{ win, gpos, n, branching, r, h });
-                    return error.TestUnexpectedResult;
-                };
-            }
-            for (0..splits) |sp| {
-                const lo: u32 = if (win != 0 and rows[r].args.pos + 1 > win) rows[r].args.pos + 1 - win else 0;
-                shared_splits += @intFromBool(r > 0 and lo + (sp + 1) * rows[r].args.chunk <= gpos);
-            }
-        }
-        checked += 1;
-    };
-    std.debug.print("verify split test: {d} groups byte-equal in all three orders, {d} row splits wholly cached\n", .{ checked, shared_splits });
-}
-
-const ControlsArgs = extern struct { h: u32, rank: u32, rows: u32, xs: [3]u32, xb: [3]u32 };
-
-test "multi-row controllers keep the per-row controller kernels' bytes" {
-    if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
-    const device = mtl.Device.init() catch return error.SkipZigTest;
-    defer device.deinit();
-    const pool = mtl.objc.Pool.push();
-    defer pool.pop();
-    const queue = try device.queue();
-    defer queue.deinit();
-    const lib = try mtl.Library.fromSource(device, @import("group.zig").source, mtl.CompileOptions.mlx());
-    defer lib.deinit();
-    var pipes: [4]mtl.Pipeline = undefined;
-    for (&pipes, [_][:0]const u8{ "i2_controls_down", "i2v_controls_down", "i2_controls_apply", "i2v_controls_apply" }) |*p, name| p.* = try mtl.Pipeline.init(device, lib, name, false);
-    defer for (pipes) |p| p.deinit();
-    const h = 2304;
-    const rank = 64;
-    const widest = @import("rows.zig").max_rows;
-    var prng = std.Random.DefaultPrng.init(0x6374_6c73);
-    const rng = prng.random();
-    var bufs: [12]mtl.Buffer = undefined;
-    const sizes = [12]usize{ 3 * widest * 2 * h, 3 * rank * 2 * h, 3 * widest * rank, 3 * h * rank, 3 * h * rank, 3 * widest * h, widest * 4 * h, 3 * widest * rank, 3 * widest * rank, 3 * widest * h, 3 * widest * h, 0 };
-    for (bufs[0..11], sizes[0..11]) |*b, n| {
-        b.* = try device.buffer(n * 4, mtl.ResourceOptions.shared);
-        fill(rng, b.slice(f32, n));
-    }
-    defer for (bufs[0..11]) |b| b.deinit();
-    const x_down, const w, const x_up, const gains, const forgets, const cur, const msg, const hid0, const hid1, const out0, const out1 = bufs[0..11].*;
-    var checked: usize = 0;
-    for (1..widest + 1) |rows| for ([_]bool{ false, true }) |strided| {
-        const args = ControlsArgs{ .h = h, .rank = rank, .rows = @intCast(rows), .xs = if (strided) .{ 3, 3, 3 } else .{ 1, 1, 1 }, .xb = if (strided) .{ 0, 1, 2 } else .{ 0, 0, 0 } };
-        const cb = queue.commandBuffer();
-        const enc = cb.compute(.serial);
-        for (0..2) |side| {
-            enc.setPipeline(pipes[side]);
-            enc.setBuffer(x_down, 0, 0);
-            for (0..3) |j| enc.setBuffer(w, j * rank * 2 * h * 4, 1 + j);
-            enc.setValue(args, 4);
-            enc.setBuffer(if (side == 0) hid0 else hid1, 0, 5);
-            enc.dispatchGroups(mtl.Size.of((rank + 7) / 8, rows, 3), mtl.Size.of(256, 1, 1));
-            enc.setPipeline(pipes[2 + side]);
-            enc.setBuffer(x_up, 0, 0);
-            for (0..3) |j| {
-                enc.setBuffer(gains, j * h * rank * 4, 1 + j);
-                enc.setBuffer(forgets, j * h * rank * 4, 4 + j);
-                enc.setBuffer(cur, if (strided) 0 else j * widest * h * 4, 7 + j);
-                enc.setBuffer(if (side == 0) out0 else out1, j * widest * h * 4, 11 + j);
-            }
-            enc.setBuffer(msg, 0, 10);
-            enc.setValue(args, 14);
-            enc.dispatchGroups(mtl.Size.of((h + 7) / 8, rows, 3), mtl.Size.of(256, 1, 1));
-        }
-        enc.end();
-        cb.commit();
-        cb.wait();
-        if (cb.failure()) |m| {
-            std.debug.print("controller test: {s}\n", .{m});
-            return error.GpuFailed;
-        }
-        const same_down = sameBits(hid0.slice(f32, 3 * rows * rank), hid1.slice(f32, 3 * rows * rank));
-        var same_up = true;
-        for (0..3) |j| same_up = same_up and sameBits(out0.slice(f32, 3 * widest * h)[j * widest * h ..][0 .. rows * h], out1.slice(f32, 3 * widest * h)[j * widest * h ..][0 .. rows * h]);
-        if (!same_down or !same_up) {
-            std.debug.print("controller test rows={d} strided={}: down equal {} apply equal {}\n", .{ rows, strided, same_down, same_up });
-            return error.TestUnexpectedResult;
-        }
-        checked += 1;
-    };
-    std.debug.print("multi-row controller test: {d} cases byte-equal to the per-row kernels\n", .{checked});
-}
-
 const MoeArgs = extern struct { k: u32, n: u32, slots: u32, topk: u32, gate_cap: f32, up_cap: f32 };
 
 test "gathered expert projections keep the per-slot kernels' bytes" {
@@ -985,11 +807,6 @@ test "gathered expert projections keep the per-slot kernels' bytes" {
     var outs: [2]mtl.Buffer = undefined;
     for (&outs) |*o| o.* = try device.buffer(most * h * 4, mtl.ResourceOptions.shared);
     defer for (outs) |o| o.deinit();
-    const rows_lib = try mtl.Library.fromSource(device, @import("rows.zig").source, mtl.CompileOptions.mlx());
-    defer rows_lib.deinit();
-    var candidate_pipes: [candidates.len]mtl.Pipeline = undefined;
-    for (&candidate_pipes, candidates) |*p, v| p.* = try mtl.Pipeline.init(device, rows_lib, v.name, false);
-    defer for (candidate_pipes) |p| p.deinit();
     var checked: usize = 0;
     var seen: std.StaticBitSet(widest + 1) = .empty;
     for (0..4 * widest) |case| {
@@ -1008,16 +825,11 @@ test "gathered expert projections keep the per-slot kernels' bytes" {
         var members: [experts]usize = @splat(0);
         for (ps[0..slots]) |e| members[@intCast(e)] += 1;
         for (members) |n| if (n > 0) seen.set(n);
-        for (0..candidates.len + 2) |which| {
-            const up = if (which < 2) which == 0 else candidates[which - 2].up;
-            if (which >= 2 and (rows > candidates[which - 2].most or (up and rows == 1))) continue;
+        for ([_]bool{ true, false }) |up| {
             const args = if (up) MoeArgs{ .k = h, .n = inter, .slots = @intCast(slots), .topk = topk, .gate_cap = 30, .up_cap = 20 } else MoeArgs{ .k = inter, .n = h, .slots = @intCast(slots), .topk = topk, .gate_cap = 0, .up_cap = 0 };
-            const served = if (which >= 2) null else if (up) shared.gateUp(rows, inter, h, @intCast(slots)) else shared.downs(rows, h, inter, @intCast(slots));
-            if (which < 2 and served == null and !(up and rows == 1)) return error.TestUnexpectedResult;
-            if (which < 2 and served == null) continue;
-            const gathered = if (served) |d| d else blk: {
-                const v = candidates[which - 2];
-                break :blk @import("rows.zig").Dispatch{ .pipe = candidate_pipes[which - 2], .groups = mtl.Size.of(2304 / (8 * v.t), (slots + v.j - 1) / v.j, 1), .threads = mtl.Size.of(32 * v.sg, 1, 1) };
+            const gathered = (if (up) shared.gateUp(rows, inter, h, @intCast(slots)) else shared.downs(rows, h, inter, @intCast(slots))) orelse {
+                if (up and rows == 1) continue;
+                return error.TestUnexpectedResult;
             };
             const cb = queue.commandBuffer();
             const enc = cb.compute(.serial);
@@ -1043,7 +855,7 @@ test "gathered expert projections keep the per-slot kernels' bytes" {
             }
             const count = slots * (if (up) @as(usize, inter) else h);
             if (!sameBits(outs[0].slice(f32, count), outs[1].slice(f32, count))) {
-                std.debug.print("expert test rows={d} up={} kernel={s}: bytes differ\n", .{ rows, up, if (which >= 2) candidates[which - 2].name else "served" });
+                std.debug.print("expert test rows={d} up={}: bytes differ\n", .{ rows, up });
                 return error.TestUnexpectedResult;
             }
             checked += 1;
@@ -1052,37 +864,6 @@ test "gathered expert projections keep the per-slot kernels' bytes" {
     for (1..widest + 1) |n| try std.testing.expect(seen.isSet(n));
     std.debug.print("gathered expert test: {d} cases byte-equal to the per-slot kernels, experts of 1 to {d} members\n", .{ checked, widest });
 }
-
-const Candidate = struct { name: [:0]const u8, up: bool, sg: u32, t: u32, j: u32 = 1, most: usize };
-
-const candidates = [_]Candidate{
-    .{ .name = "i2e_gate_up_o3", .up = true, .sg = 4, .t = 2, .most = 8 },
-    .{ .name = "i2e_gate_up16_o3", .up = true, .sg = 4, .t = 2, .most = 16 },
-    .{ .name = "i2e_down_m", .up = false, .sg = 8, .t = 4, .most = 8 },
-    .{ .name = "i2e_down_o1", .up = false, .sg = 8, .t = 4, .most = 8 },
-    .{ .name = "i2e_down_o3", .up = false, .sg = 8, .t = 4, .most = 8 },
-    .{ .name = "i2e_down16_o1", .up = false, .sg = 8, .t = 4, .most = 16 },
-    .{ .name = "i2e_down16_o3", .up = false, .sg = 8, .t = 4, .most = 16 },
-    .{ .name = "i2e_gate_up_f3", .up = true, .sg = 4, .t = 2, .most = 8 },
-    .{ .name = "i2e_gate_up_f4", .up = true, .sg = 4, .t = 2, .most = 8 },
-    .{ .name = "i2e_gate_up_r4", .up = true, .sg = 4, .t = 1, .most = 8 },
-    .{ .name = "i2e_gate_up_r4_t2", .up = true, .sg = 4, .t = 2, .most = 8 },
-    .{ .name = "i2e_gate_up_r4_s8", .up = true, .sg = 8, .t = 2, .most = 8 },
-    .{ .name = "i2e_gate_up16_f3", .up = true, .sg = 4, .t = 2, .most = 16 },
-    .{ .name = "i2e_gate_up16_f4", .up = true, .sg = 4, .t = 2, .most = 16 },
-    .{ .name = "i2e_gate_up16_r4", .up = true, .sg = 4, .t = 1, .most = 16 },
-    .{ .name = "i2e_gate_up16_r4_t2", .up = true, .sg = 4, .t = 2, .most = 16 },
-    .{ .name = "i2e_gate_up16_r4_s8", .up = true, .sg = 8, .t = 2, .most = 16 },
-    .{ .name = "i2e_gate_up16_f3_j2", .up = true, .sg = 4, .t = 2, .j = 2, .most = 16 },
-    .{ .name = "i2e_down_f1", .up = false, .sg = 8, .t = 4, .most = 8 },
-    .{ .name = "i2e_down_f3", .up = false, .sg = 8, .t = 4, .most = 8 },
-    .{ .name = "i2e_down_r4", .up = false, .sg = 8, .t = 2, .most = 8 },
-    .{ .name = "i2e_down_r4_t4", .up = false, .sg = 8, .t = 4, .most = 8 },
-    .{ .name = "i2e_down16_f3", .up = false, .sg = 8, .t = 4, .most = 16 },
-    .{ .name = "i2e_down16_r4", .up = false, .sg = 8, .t = 2, .most = 16 },
-    .{ .name = "i2e_down16_r4_t4", .up = false, .sg = 8, .t = 4, .most = 16 },
-    .{ .name = "i2e_down16_f3_j2", .up = false, .sg = 8, .t = 4, .j = 2, .most = 16 },
-};
 
 /// Picks where the experts' member counts run from `rows` down to 1 (or up from 1) and repeat, each row 8 distinct.
 fn countedPicks(rng: std.Random, rows: usize, ascending: bool, comptime experts: usize, out: []i32) void {

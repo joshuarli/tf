@@ -10,8 +10,8 @@ pub const wide_output: u32 = 65536;
 
 pub const Dispatch = struct { pipe: mtl.Pipeline, groups: mtl.Size, threads: mtl.Size = mtl.Size.of(256, 1, 1) };
 
-/// A few-row kernel: simdgroups a threadgroup, 8-row output tiles a simdgroup, batch halves and routed slots a group.
-const Kernel = struct { name: [:0]const u8, sg: u32, t: u32, h: u32 = 1, j: u32 = 1 };
+/// A few-row kernel: its simdgroups a threadgroup and 8-row output tiles a simdgroup.
+const Kernel = struct { name: [:0]const u8, sg: u32, t: u32 };
 
 /// The served kernels, in `Pipes.pipes` order: up to 8 rows, then 9 to 16; last, down for a one-row step.
 const kernels = [_]Kernel{
@@ -19,11 +19,11 @@ const kernels = [_]Kernel{
     .{ .name = "i2t_dense16_8_1", .sg = 8, .t = 1 },
     .{ .name = "i2t_projections_8_2", .sg = 8, .t = 2 },
     .{ .name = "i2t_projections16_8_1", .sg = 8, .t = 1 },
-    .{ .name = "i2e_gate_up_o3", .sg = 4, .t = 2 },
-    .{ .name = "i2e_gate_up16_f3", .sg = 4, .t = 2 },
-    .{ .name = "i2e_down_f3", .sg = 8, .t = 4 },
-    .{ .name = "i2e_down16_f3", .sg = 8, .t = 4 },
-    .{ .name = "i2e_down_m", .sg = 8, .t = 4 },
+    .{ .name = "i2e_gate_up", .sg = 4, .t = 2 },
+    .{ .name = "i2e_gate_up16", .sg = 4, .t = 2 },
+    .{ .name = "i2e_down", .sg = 8, .t = 4 },
+    .{ .name = "i2e_down16", .sg = 8, .t = 4 },
+    .{ .name = "i2e_down1", .sg = 8, .t = 4 },
 };
 const Kind = enum(u8) { dense, projections, gate_up, down };
 
@@ -56,11 +56,12 @@ pub const Pipes = struct {
         p.head_pair.deinit();
     }
 
-    fn pick(p: *const Pipes, kind: Kind, rows: usize, outputs: u32, slots: u32) Dispatch {
+    fn pick(p: *const Pipes, kind: Kind, rows: usize, outputs: []const u32, slots: u32) Dispatch {
         const i = if (kind == .down and rows == 1) kernels.len - 1 else 2 * @as(usize, @intFromEnum(kind)) + @intFromBool(rows > tile_rows);
         const k = kernels[i];
-        const groups = (outputs + 8 * k.t - 1) / (8 * k.t);
-        return .{ .pipe = p.pipes[i], .groups = mtl.Size.of(groups * k.h, (slots + k.j - 1) / k.j, 1), .threads = mtl.Size.of(32 * k.sg, 1, 1) };
+        var groups: u32 = 0;
+        for (outputs) |n| groups += (n + 8 * k.t - 1) / (8 * k.t);
+        return .{ .pipe = p.pipes[i], .groups = mtl.Size.of(groups, slots, 1), .threads = mtl.Size.of(32 * k.sg, 1, 1) };
     }
 
     /// Affine 8-bit `n`x`k` rows for 2 to 16 rows; one row keeps `i2a_dense`.
@@ -68,30 +69,25 @@ pub const Pipes = struct {
         if (bits != 8 or rows < 2 or rows > max_rows or k % 256 != 0) return null;
         if (rows == 2 and n >= wide_output) return .{ .pipe = p.head_pair, .groups = mtl.Size.of((n + 31) / 32, 1, 1) };
         if (!p.tiles) return null;
-        return p.pick(.dense, rows, n, 1);
+        return p.pick(.dense, rows, &.{n}, 1);
     }
 
     /// A layer's fused attention projections for 3 to 16 rows; fewer keep `i2a_batch_projections`.
     pub fn fused(p: *const Pipes, rows: usize, m: [8]u32, k: u32) ?Dispatch {
         if (!p.tiles or rows < 3 or rows > max_rows or k % 256 != 0) return null;
-        const kernel = kernels[2 * @as(usize, @intFromEnum(Kind.projections)) + @intFromBool(rows > tile_rows)];
-        var d = p.pick(.projections, rows, 0, 1);
-        var tiles: u32 = 0;
-        for (m) |part| tiles += (part + 8 * kernel.t - 1) / (8 * kernel.t);
-        d.groups = mtl.Size.of(tiles * kernel.h, 1, 1);
-        return d;
+        return p.pick(.projections, rows, &m, 1);
     }
 
     /// NVFP4 gate and up for 2 to 16 rows; one row keeps `i2p_gu`.
     pub fn gateUp(p: *const Pipes, rows: usize, inter: u32, k: u32, slots: u32) ?Dispatch {
         if (!p.tiles or k % 16 != 0 or rows < 2 or rows > max_rows or slots > 8 * (if (rows > tile_rows) max_rows else tile_rows)) return null;
-        return p.pick(.gate_up, rows, 2 * inter, slots);
+        return p.pick(.gate_up, rows, &.{2 * inter}, slots);
     }
 
     /// NVFP4 down for 1 to 16 rows.
     pub fn downs(p: *const Pipes, rows: usize, n: u32, k: u32, slots: u32) ?Dispatch {
         if (!p.tiles or k % 16 != 0 or rows == 0 or rows > max_rows or slots > 8 * (if (rows > tile_rows) max_rows else tile_rows)) return null;
-        return p.pick(.down, rows, n, slots);
+        return p.pick(.down, rows, &.{n}, slots);
     }
 };
 

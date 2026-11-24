@@ -1,0 +1,54 @@
+# attempt 0 14:38:55: /Users/josh/repos/tf/.work/tmp/v3/run-final-a/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v3-experts/campaign/kernels/inkling-v3-experts-runs/code-1024.json dflash-widths 20 /Users/josh/repos/tf/.work/wt/v3-experts/campaign/kernels/inkling-v3-experts-runs/profile-lane-9.jsonl 0.0 9
+exact code-1024: width=9 rows bit-equal to one-row steps 9/9 max_abs_diff=0e0
+info: metal 4 timeline: inkling2-group-8, 12 rounds after 8 warm: 1 encoders, 1302 stages and 1302 dispatches a round
+info: metal 4 timeline: inkling2-group-8: 45.424 ms a round from the first stamp to the last, 45.424 in stages, 0.000 between encoders
+info: metal 4 timeline: inkling2-group-8 by kernel: ms a round, stages a round, us a stage
+info:     11.862   44.0    269.6  i2e_gate_up16_f3
+info:      6.988   44.0    158.8  i2e_down16_f3
+info:      4.282   48.0     89.2  i2t_projections16_8_1
+info:      3.291   49.0     67.2  i2t_dense16_8_1
+info:      3.044   48.0     63.4  i2v_split
+info:      2.097  192.0     10.9  i2v_conv
+info:      1.553   24.0     64.7  i2v_controls_apply
+info:      1.232   96.0     12.8  i2_batch_mix
+info:      1.168    4.0    291.9  i2a_expert_up
+info:      1.121   24.0     46.7  i2v_controls_down
+info:      1.027   72.0     14.3  i2a_float
+info:      0.936   48.0     19.5  i2v_store_rel
+info:      0.770  120.0      6.4  i2p_gather_rms
+info:      0.756   48.0     15.7  i2_batch_combine
+info:      0.689   48.0     14.4  i2p_routepick
+info:      0.660    4.0    165.0  i2a_expert_down
+info:      0.545   48.0     11.4  i2p_clip3
+info:      0.524   69.0      7.6  i2p_rms
+info:      0.501   24.0     20.9  i2_batch_mix4
+info:      0.462   48.0      9.6  i2p_combine
+info:      0.397   48.0      8.3  i2_sig_mul
+info:      0.374   24.0     15.6  i2a_batch_float_control
+info:      0.372   24.0     15.5  i2_controls_norm
+info:      0.371   24.0     15.5  i2p_rms_pair
+info:      0.226   28.0      8.1  i2p_rms3
+info: metal 4 timeline: inkling2-group-8: the longest single stages, us a round
+info:   stage 1301 of encoder 1:   1682.5  i2t_dense16_8_1
+info:   stage  970 of encoder 1:    332.0  i2e_gate_up16_f3
+info:   stage  110 of encoder 1:    324.6  i2e_gate_up16_f3
+info:   stage  846 of encoder 1:    317.6  i2e_gate_up16_f3
+info:   stage 1125 of encoder 1:    313.4  i2e_gate_up16_f3
+info:   stage 1225 of encoder 1:    306.9  i2a_expert_up
+info:   stage   18 of encoder 1:    305.5  i2e_gate_up16_f3
+info:   stage   87 of encoder 1:    304.5  i2e_gate_up16_f3
+info:   stage  752 of encoder 1:    303.7  i2e_gate_up16_f3
+info:   stage   41 of encoder 1:    302.3  i2e_gate_up16_f3
+info:   stage  721 of encoder 1:    299.5  i2e_gate_up16_f3
+info:   stage 1094 of encoder 1:    297.0  i2e_gate_up16_f3
+info:   stage 1294 of encoder 1:    296.7  i2a_expert_up
+info:   stage  640 of encoder 1:    296.1  i2t_projections16_8_1
+info:   stage  473 of encoder 1:    293.9  i2e_gate_up16_f3
+widths code-1024: context=1024 grouped width=9 p50=50.042 ms p90=50.840 ms forward p50=49.709 ms gpu p50=45.114 ms
+routes code-1024: width=1 distinct experts a visit mean=8.00 min=8 max=8
+routes code-1024: width=2 distinct experts a visit mean=13.23 min=10 max=16
+routes code-1024: width=4 distinct experts a visit mean=20.27 min=14 max=29
+routes code-1024: width=8 distinct experts a visit mean=30.69 min=17 max=39
+routes code-1024: width=12 distinct experts a visit mean=37.25 min=18 max=50
+routes code-1024: width=16 distinct experts a visit mean=41.79 min=21 max=59
+heavy: done: peak charged 19.0 GB of the 28 GB cap (footprint 18.2 GB, resident 19.0 GB, host wired growth 18.0 GB); host pressure worst 1, host swap +0 MB, host pageins 396326

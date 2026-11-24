@@ -29,13 +29,7 @@ const CommitArgs = extern struct { kvw: u32, hidden: u32, rows: u32, stride: u32
 const RoundRow = extern struct { keys: u64, values: u64, conv: [4]u64, pos: u32, capacity: u32, owner: u32, depth: u32 };
 const Stream = extern struct { first: u32, size: u32 };
 
-const Split = enum { splits_first, rows_first, runs };
-const split_kernel: Split = .splits_first;
-const names = [_][:0]const u8{ "i2v_conv", "i2v_store_rel", switch (split_kernel) {
-    .splits_first => "i2v_split",
-    .rows_first => "i2v_split_rows",
-    .runs => "i2v_split_runs",
-}, "i2v_commit_kv", "i2v_commit_conv", "i2v_argmax", "i2v_accept", "i2v_round_kv", "i2v_round_conv" };
+const names = [_][:0]const u8{ "i2v_conv", "i2v_store_rel", "i2v_split", "i2v_commit_kv", "i2v_commit_conv", "i2v_argmax", "i2v_accept", "i2v_round_kv", "i2v_round_conv" };
 const Kernel = enum { conv, store_rel, split, commit_kv, commit_conv, argmax, accept, round_kv, round_conv };
 
 pub const Finish = enum { picks, commit };
@@ -313,7 +307,7 @@ pub fn scratch(device: mtl.Device, config: *const Config) !batch_mod.BatchScratc
     errdefer controls_input.deinit();
     const controls_hidden = try device.buffer(capacity * 3 * config.loop.gate_rank * 4, mtl.ResourceOptions.private);
     errdefer controls_hidden.deinit();
-    const lib = try mtl.Library.fromSource(device, source, mtl.CompileOptions.mlx());
+    const lib = try mtl.Library.fromSource(device, @import("kernels.zig").attention, mtl.CompileOptions.mlx());
     defer lib.deinit();
     const split = try mtl.Pipeline.init(device, lib, "i2_batch_split", false);
     errdefer split.deinit();
@@ -321,9 +315,9 @@ pub fn scratch(device: mtl.Device, config: *const Config) !batch_mod.BatchScratc
     errdefer combine.deinit();
     const controls_norm = try mtl.Pipeline.init(device, lib, "i2_controls_norm", false);
     errdefer controls_norm.deinit();
-    const controls_down = try mtl.Pipeline.init(device, lib, "i2v_controls_down", false);
+    const controls_down = try mtl.Pipeline.init(device, lib, "i2_controls_down", false);
     errdefer controls_down.deinit();
-    const controls_apply = try mtl.Pipeline.init(device, lib, "i2v_controls_apply", false);
+    const controls_apply = try mtl.Pipeline.init(device, lib, "i2_controls_apply", false);
     errdefer controls_apply.deinit();
     const mix = try mtl.Pipeline.init(device, lib, "i2_batch_mix", false);
     errdefer mix.deinit();
@@ -448,7 +442,7 @@ pub const Group = struct {
         enc.setBuffer(bufs.parts, 0, 4);
         enc.setBuffer(v.kv, kh, 5);
         enc.setBuffer(v.kv, vh, 6);
-        enc.dispatchGroups(if (split_kernel == .rows_first) mtl.Size.of(g.rows, kv * max_splits, 1) else mtl.Size.of(kv * max_splits, g.rows, 1), mtl.Size.of((heads / kv) * 32, 1, 1));
+        enc.dispatchGroups(mtl.Size.of(kv * max_splits, g.rows, 1), mtl.Size.of((heads / kv) * 32, 1, 1));
         enc.setPipeline(bufs.combine);
         enc.setBuffer(bufs.parts, 0, 0);
         enc.setBytes(std.mem.sliceAsBytes(plain[0..g.rows]), 1);

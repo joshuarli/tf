@@ -326,24 +326,10 @@ inline void i2_plain_row(const device uchar* w, const device float* x, uint k0, 
     uint tid [[thread_index_in_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]], \
     uint lane [[thread_index_in_simdgroup]]
 
-inline float i2e_e4m3(uchar c) {
-  if ((c & 127u) == 127u) return NAN;
-  const uint e = (uint(c) >> 3) & 15u, man = uint(c) & 7u;
-  const float v = e ? (1.0f + float(man) * 0.125f) * exp2(float(int(e) - 7)) : float(man) * (1.0f / 512.0f);
-  return (c & 128u) ? -v : v;
-}
-
-inline float i2e_situ(float g, float u, float gate_cap, float up_cap) {
-  const float gate = gate_cap * precise::tanh(g / gate_cap) * (1.0f / (1.0f + precise::exp(-g)));
-  const float up = up_cap > 0.0f ? up_cap * precise::tanh(u / up_cap) : u;
-  return gate * up;
-}
-
-template <uint Q, uint RUN>
+template <uint Q>
 inline uint i2e_run(const device int* PICKS, uint slots, uint slot, uint lane, thread uint (&member)[8]) {
   const int e = PICKS[slot];
-  uint mask[Q];
-  uint rank = 0u;
+  uint mask[Q], rank = 0u;
 #pragma unroll
   for (uint q = 0; q < Q; ++q) {
     const uint at = lane + 32u * q, base = 32u * q;
@@ -352,14 +338,14 @@ inline uint i2e_run(const device int* PICKS, uint slots, uint slot, uint lane, t
     rank += popcount(mask[q] & below);
     mask[q] &= ~below;
   }
-  if (rank % RUN != 0u) return 0u;
+  if (rank % 8u != 0u) return 0u;
   uint count = 0u;
 #pragma unroll
   for (uint i = 0; i < 8u; ++i) {
     uint s = 32u * Q;
 #pragma unroll
     for (uint q = 0; q < Q; ++q) {
-      if (i < RUN && s == 32u * Q && mask[q] != 0u) {
+      if (s == 32u * Q && mask[q] != 0u) {
         s = 32u * q + ctz(mask[q]);
         mask[q] &= mask[q] - 1u;
       }
@@ -420,7 +406,7 @@ inline void i2e_scalar(const device uchar* We, const device uchar* Se, uint firs
     for (uint r = 0; r < R; ++r) {
       const float s0 = simd_sum(d[j][0][r]);
       const float s1 = GU ? simd_sum(d[j][U - 1u][r]) : 0.0f;
-      if (lane == 0u) Y[(size_t)slot[r] * a.n + first + j] = GU ? i2e_situ(s0 * global, s1 * global, a.gate_cap, a.up_cap) : s0 * global;
+      if (lane == 0u) Y[(size_t)slot[r] * a.n + first + j] = GU ? i2_situ(s0 * global, s1 * global, a.gate_cap, a.up_cap) : s0 * global;
     }
   }
 }
@@ -461,7 +447,7 @@ inline void i2e_held(const device uchar* We, const device uchar* Se, uint first,
 #pragma unroll
       for (uint r = 0; r < R; ++r) {
         const float gsum = simd_sum(dg[r]), usum = simd_sum(du[r]);
-        if (lane == 0u) Y[(size_t)slot[r] * a.n + unit] = i2e_situ(gsum * global, usum * global, a.gate_cap, a.up_cap);
+        if (lane == 0u) Y[(size_t)slot[r] * a.n + unit] = i2_situ(gsum * global, usum * global, a.gate_cap, a.up_cap);
       }
     }
     return;
@@ -506,7 +492,7 @@ inline void i2e_held(const device uchar* We, const device uchar* Se, uint first,
   }
 }
 
-template <bool GU, uint SG, uint T, uint R, bool OLD = false>
+template <bool GU, uint SG, uint T, uint R, bool HELD>
 inline void i2e_few(const device float* X, const device uchar* We, const device uchar* Se, const thread uint (&member)[8],
     uint r0, uint sg, threadgroup const float* lut, threadgroup const float* scales, uint lane, float global,
     constant i2t_moe& a, device float* Y) {
@@ -519,7 +505,7 @@ inline void i2e_few(const device float* X, const device uchar* We, const device 
     x[r] = X + (size_t)(GU ? member[r] / a.topk : member[r]) * a.k;
   }
   const uint first = (GU ? r0 / 2u : r0) + sg * PER;
-  if (OLD) i2e_held<GU, R, PER>(We, Se, first, a.k / 2u, a.k / 16u, x, slot, lut, scales, lane, global, a, Y);
+  if (HELD) i2e_held<GU, R, PER>(We, Se, first, a.k / 2u, a.k / 16u, x, slot, lut, scales, lane, global, a, Y);
   else i2e_scalar<GU, R, PER>(We, Se, first, a.k / 2u, a.k / 16u, x, slot, lut, scales, lane, global, a, Y);
 }
 
@@ -568,8 +554,8 @@ inline void i2e_tiles(const device float* X, const device uchar* We, const devic
     if (GU) {
       const float2 up = float2(simd_shuffle_xor(sum.x, 2u), simd_shuffle_xor(sum.y, 2u));
       if ((fm & 1u) == 0u && r < wrows) {
-        if (live0) Y[y0 + r / 2u] = i2e_situ(sum.x * global, up.x * global, a.gate_cap, a.up_cap);
-        if (live1) Y[y1 + r / 2u] = i2e_situ(sum.y * global, up.y * global, a.gate_cap, a.up_cap);
+        if (live0) Y[y0 + r / 2u] = i2_situ(sum.x * global, up.x * global, a.gate_cap, a.up_cap);
+        if (live1) Y[y1 + r / 2u] = i2_situ(sum.y * global, up.y * global, a.gate_cap, a.up_cap);
       }
     } else if (r < wrows) {
       if (live0) Y[y0 + r] = sum.x * global;
@@ -578,75 +564,37 @@ inline void i2e_tiles(const device float* X, const device uchar* We, const devic
   }
 }
 
-template <bool GU, uint SG, uint T, uint FEW, uint RUN, uint STYLE>
-inline void i2e_run_one(const device float* X, const device uchar* W, const device uchar* S, const device float* amax,
-    const device float* den, int e, const thread uint (&member)[8], uint count, constant i2t_moe& a, device float* Y,
-    uint bx, uint sg, uint lane, threadgroup const float* lut, threadgroup const float* scales, threadgroup float2* part) {
-  const uint wrows = GU ? 2u * a.n : a.n;
-  const uint r0 = bx * 8u * T;
-  const float global = amax[e] / den[0];
-  const device uchar* We = W + (size_t)uint(e) * wrows * (a.k / 2u);
-  const device uchar* Se = S + (size_t)uint(e) * wrows * (a.k / 16u);
-  if (count == 1u) i2e_few<GU, SG, T, 1, (STYLE & 1u) != 0u>(X, We, Se, member, r0, sg, lut, scales, lane, global, a, Y);
-  else if (FEW >= 2u && count == 2u) i2e_few<GU, SG, T, 2, (STYLE & 2u) != 0u>(X, We, Se, member, r0, sg, lut, scales, lane, global, a, Y);
-  else if (FEW >= 3u && count == 3u) i2e_few<GU, SG, T, 3, (STYLE & 2u) != 0u>(X, We, Se, member, r0, sg, lut, scales, lane, global, a, Y);
-  else if (FEW >= 4u && count == 4u) i2e_few<GU, SG, T, 4, (STYLE & 2u) != 0u>(X, We, Se, member, r0, sg, lut, scales, lane, global, a, Y);
-  else if (RUN > FEW) i2e_tiles<GU, SG, T>(X, We, Se, lut, scales, part, member, count, r0, wrows, a.k / 16u, a.k / 2u, global, a, Y, sg, lane);
-}
-
-template <bool GU, uint SG, uint T, uint Q, uint FEW, uint J, uint RUN, uint STYLE = 0>
+template <bool GU, uint SG, uint T, uint Q, uint FEW, bool ONE_HELD, bool FEW_HELD>
 [[kernel]] void i2e_routed(I2T_EXPERT_ARGS) {
   threadgroup float lut[16];
   threadgroup float scales[256];
-  threadgroup float2 part[RUN > FEW ? SG * T * 32 : 1];
-  bool ready = false;
-  for (uint j = 0; j < J; ++j) {
-    const uint slot = tg.y * J + j;
-    if (slot >= a.slots) break;
-    uint member[8];
-    const uint count = i2e_run<Q, RUN>(PICKS, a.slots, slot, lane, member);
-    if (count == 0u) continue;
-    if (!ready) {
-      if (tid < 16u) lut[tid] = CODES[tid];
-      for (uint i = tid; i < 256u; i += 32u * SG) scales[i] = i2e_e4m3(uchar(i));
-      ready = true;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    i2e_run_one<GU, SG, T, FEW, RUN, STYLE>(X, W, S, amax, den, PICKS[slot], member, count, a, Y, tg.x, sg, lane, lut, scales, part);
-  }
+  threadgroup float2 part[SG * T * 32];
+  const uint slot = tg.y;
+  if (slot >= a.slots) return;
+  uint member[8];
+  const uint count = i2e_run<Q>(PICKS, a.slots, slot, lane, member);
+  if (count == 0u) return;
+  if (tid < 16u) lut[tid] = CODES[tid];
+  for (uint i = tid; i < 256u; i += 32u * SG) scales[i] = i2_e4m3(uchar(i));
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  const int e = PICKS[slot];
+  const uint wrows = GU ? 2u * a.n : a.n;
+  const uint r0 = tg.x * 8u * T;
+  const float global = amax[e] / den[0];
+  const device uchar* We = W + (size_t)uint(e) * wrows * (a.k / 2u);
+  const device uchar* Se = S + (size_t)uint(e) * wrows * (a.k / 16u);
+  if (count == 1u) return i2e_few<GU, SG, T, 1, ONE_HELD>(X, We, Se, member, r0, sg, lut, scales, lane, global, a, Y);
+  if (FEW >= 2u && count == 2u) return i2e_few<GU, SG, T, 2, FEW_HELD>(X, We, Se, member, r0, sg, lut, scales, lane, global, a, Y);
+  if (FEW >= 3u && count == 3u) return i2e_few<GU, SG, T, 3, FEW_HELD>(X, We, Se, member, r0, sg, lut, scales, lane, global, a, Y);
+  i2e_tiles<GU, SG, T>(X, We, Se, lut, scales, part, member, count, r0, wrows, a.k / 16u, a.k / 2u, global, a, Y, sg, lane);
 }
 
-#define I2E_ROUTED(name, gu, sgs, t, q, few, j, run) \
-  template [[host_name(#name)]] [[kernel]] void i2e_routed<gu, sgs, t, q, few, j, run>(I2T_EXPERT_ARGS);
+#define I2E_ROUTED(name, gu, sgs, t, q, few, one, held) \
+  template [[host_name(#name)]] [[kernel]] void i2e_routed<gu, sgs, t, q, few, one, held>(I2T_EXPERT_ARGS);
 
-I2E_ROUTED(i2e_gate_up_f3, true, 4, 2, 2, 3, 1, 8)
-I2E_ROUTED(i2e_gate_up_f4, true, 4, 2, 2, 4, 1, 8)
-I2E_ROUTED(i2e_gate_up_r4, true, 4, 1, 2, 4, 1, 4)
-I2E_ROUTED(i2e_gate_up_r4_t2, true, 4, 2, 2, 4, 1, 4)
-I2E_ROUTED(i2e_gate_up_r4_s8, true, 8, 2, 2, 4, 1, 4)
-I2E_ROUTED(i2e_gate_up16_f3, true, 4, 2, 4, 3, 1, 8)
-I2E_ROUTED(i2e_gate_up16_f4, true, 4, 2, 4, 4, 1, 8)
-I2E_ROUTED(i2e_gate_up16_r4, true, 4, 1, 4, 4, 1, 4)
-I2E_ROUTED(i2e_gate_up16_r4_t2, true, 4, 2, 4, 4, 1, 4)
-I2E_ROUTED(i2e_gate_up16_r4_s8, true, 8, 2, 4, 4, 1, 4)
-I2E_ROUTED(i2e_gate_up16_f3_j2, true, 4, 2, 4, 3, 2, 8)
-I2E_ROUTED(i2e_down_f1, false, 8, 4, 2, 1, 1, 8)
-I2E_ROUTED(i2e_down_f3, false, 8, 4, 2, 3, 1, 8)
-I2E_ROUTED(i2e_down_r4, false, 8, 2, 2, 4, 1, 4)
-I2E_ROUTED(i2e_down_r4_t4, false, 8, 4, 2, 4, 1, 4)
-I2E_ROUTED(i2e_down16_f3, false, 8, 4, 4, 3, 1, 8)
-I2E_ROUTED(i2e_down16_r4, false, 8, 2, 4, 4, 1, 4)
-I2E_ROUTED(i2e_down16_r4_t4, false, 8, 4, 4, 4, 1, 4)
-I2E_ROUTED(i2e_down16_f3_j2, false, 8, 4, 4, 3, 2, 8)
-
-#define I2E_STYLED(name, gu, sgs, t, q, few, j, run, style) \
-  template [[host_name(#name)]] [[kernel]] void i2e_routed<gu, sgs, t, q, few, j, run, style>(I2T_EXPERT_ARGS);
-
-I2E_STYLED(i2e_gate_up_o3, true, 4, 2, 2, 3, 1, 8, 3)
-I2E_STYLED(i2e_gate_up16_o3, true, 4, 2, 4, 3, 1, 8, 3)
-I2E_STYLED(i2e_down_m, false, 8, 4, 2, 1, 1, 8, 1)
-I2E_STYLED(i2e_down_o1, false, 8, 4, 2, 3, 1, 8, 1)
-I2E_STYLED(i2e_down_o3, false, 8, 4, 2, 3, 1, 8, 3)
-I2E_STYLED(i2e_down16_o1, false, 8, 4, 4, 3, 1, 8, 1)
-I2E_STYLED(i2e_down16_o3, false, 8, 4, 4, 3, 1, 8, 3)
+I2E_ROUTED(i2e_gate_up, true, 4, 2, 2, 3, true, true)
+I2E_ROUTED(i2e_gate_up16, true, 4, 2, 4, 3, false, false)
+I2E_ROUTED(i2e_down1, false, 8, 4, 2, 1, true, true)
+I2E_ROUTED(i2e_down, false, 8, 4, 2, 3, false, false)
+I2E_ROUTED(i2e_down16, false, 8, 4, 4, 3, false, false)
 #endif

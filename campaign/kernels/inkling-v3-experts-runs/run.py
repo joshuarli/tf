@@ -154,8 +154,9 @@ def widths(args: argparse.Namespace) -> None:
 def kernels(args: argparse.Namespace) -> None:
     runner = Path(args.runner).resolve()
     out = HERE / f"{args.name}.jsonl"
-    command = [str(runner), str(TARGET), str(Path(args.prompts).resolve()), "dflash-kernels", str(args.reps), str(out),
-               str(Path(args.picks).resolve()) if args.picks else "-"] + ([args.variants] if args.variants else [])
+    command = [str(runner), str(TARGET), str(Path(args.prompts).resolve()), "dflash-kernels", str(args.reps), str(out)]
+    command += [str(Path(args.picks).resolve())] if args.picks else []
+    command += [args.variants] if args.variants else []
     gated(args.name, command, {})
     meta = {"kind": "binary", "runner": str(runner), "runner_sha256": sha256(runner), "target": str(TARGET),
             "picks": args.picks, "variants": args.variants, "timed": True}

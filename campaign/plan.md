@@ -56,7 +56,7 @@
   6. Q3: the `code-c02` reasoning loop from P3c.
   7. Deferred off the critical path: J1 (multi-agent scheduling), B2 remainder, R1.
 
-  Run one GPU-timing lane at a time: the shared lock and outside load (OrbStack at 4–10 cores) left parallel lanes unmeasurable. Code-only lanes may run beside a timing lane.
+  Run one GPU-timing lane at a time: the shared lock and outside load (OrbStack at 4–10 cores) left parallel lanes unmeasurable. Code-only lanes may run beside a timing lane, but only reading and editing source: their compiles run outside the GPU lock and spoil timed runs ("compiler observed"), and their device tests take the lock between timed runs.
 - History: the "Status log" section of `campaign/ledger.md`.
 
 ## Charter

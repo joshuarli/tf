@@ -97,6 +97,8 @@ pub const Drafter = struct {
 
     /// The window's keys and values from the committed taps, so the next proposal absorbs only its round's rows.
     pub fn flush(d: *Drafter) !void {
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
         try d.model.flush();
     }
 
@@ -104,6 +106,8 @@ pub const Drafter = struct {
     pub fn propose(d: *Drafter, pending: u32, n: u32, out: []u32) !void {
         if (n == 0) return;
         if (n > depth or out.len < n) return error.BadDraftDepth;
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
         var tree = try d.model.proposeOptions(pending, .{ .nodes = n, .children = 1, .edge = 1 });
         defer tree.deinit();
         if (tree.tokens.len != n) return error.ShortDraftChain;
@@ -135,6 +139,8 @@ pub const Drafter = struct {
     }
 
     fn warm(d: *Drafter) !void {
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
         for (0..3) |i| {
             try d.model.reset();
             @memset(d.model.pending.contents()[0 .. d.config.tapWidth() * 2], 0);

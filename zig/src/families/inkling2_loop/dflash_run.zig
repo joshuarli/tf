@@ -9,7 +9,8 @@ const spec = @import("dflash_spec.zig");
 
 pub const usage =
     \\tf-inkling2-loop-run <model> <prompts.json> dflash <drafter> <tokens> <out.jsonl> [bits]  speculative and plain greedy
-    \\tf-inkling2-loop-run <model> <prompts.json> dflash-widths <reps> <out.jsonl>  grouped verify at widths 1, 2, 4, 8
+    \\tf-inkling2-loop-run <model> <prompts.json> dflash-widths <reps> <out.jsonl> [load_s]  grouped verify at widths 1-8,
+    \\  each prompt after load_s seconds of eight-row verifies (sustained load; 0: none)
     \\  prompts.json: [{"name": ..., "ids": [...]}]; EOS is ignored; a run whose tokens differ from plain exits non-zero
     \\
 ;
@@ -39,10 +40,11 @@ pub fn main(init: std.process.Init, args: []const [:0]const u8) !void {
         return;
     }
     if (std.mem.eql(u8, mode, "dflash-widths")) {
-        if (args.len != 6) return error.ExpectedArgs;
+        if (args.len != 6 and args.len != 7) return error.ExpectedArgs;
         const reps = try std.fmt.parseInt(usize, args[4], 10);
-        if (reps == 0) return error.ExpectedArgs;
-        try widths(gpa, m, parsed.value, reps, &out);
+        const load_s = if (args.len == 7) try std.fmt.parseFloat(f64, args[6]) else 0;
+        if (reps == 0 or load_s < 0) return error.ExpectedArgs;
+        try widths(gpa, m, parsed.value, reps, load_s, &out);
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[5], .data = out.items });
         return;
     }
@@ -53,6 +55,23 @@ fn flag(name: [*:0]const u8) bool {
     const v = std.c.getenv(name) orelse return false;
     const text = std.mem.span(v);
     return text.len > 0 and !std.mem.eql(u8, text, "0");
+}
+
+/// The tokens' sha256 over their little-endian u32 bytes.
+fn digest(tokens: []const u32) [32]u8 {
+    var h = std.crypto.hash.sha2.Sha256.init(.{});
+    for (tokens) |t| {
+        var word: [4]u8 = undefined;
+        std.mem.writeInt(u32, &word, t, .little);
+        h.update(&word);
+    }
+    return h.finalResult();
+}
+
+fn tokensJson(gpa: std.mem.Allocator, out: *std.ArrayList(u8), tokens: []const u32) !void {
+    try out.append(gpa, '[');
+    for (tokens, 0..) |t, i| try out.print(gpa, "{s}{d}", .{ if (i == 0) "" else ",", t });
+    try out.append(gpa, ']');
 }
 
 fn ms(ns: u64) f64 {
@@ -148,14 +167,16 @@ fn speculate(gpa: std.mem.Allocator, io: std.Io, m: *inkling.Model, dir: []const
         const flush_rate = @as(f64, @floatFromInt(emitted)) / (@as(f64, @floatFromInt(spec_ns + started.flush_ns)) / 1e9);
         const plain_rate = @as(f64, @floatFromInt(steps.items.len)) / (@as(f64, @floatFromInt(plain_ns)) / 1e9);
         const committed = @as(f64, @floatFromInt(emitted)) / n;
-        try out.print(gpa, "{{\"kind\":\"spec\",\"prompt\":\"{s}\",\"prompt_tokens\":{d},\"limit\":{d},\"equal_plain\":{},\"first_difference\":{d},\"rounds\":{d},\"emitted\":{d},\"full_rounds\":{d},\"zero_rounds\":{d},\"mean_committed\":{d:.4},\"round_ms_mean\":{d:.4},\"round_ms_p50\":{d:.4},\"round_ms_p90\":{d:.4},\"draft_ms_mean\":{d:.4},\"verify_ms_mean\":{d:.4},\"select_ms_mean\":{d:.4},\"commit_ms_mean\":{d:.4},\"host_ms_mean\":{d:.4},\"prefill_ms\":{d:.3},\"flush_ms\":{d:.3},\"decode_s\":{d:.4},\"tok_s\":{d:.3},\"tok_s_with_flush\":{d:.3},\"spec_first\":{}}}\n", .{ prompt.name, prompt.ids.len, limit, same, first_diff, rounds.items.len, emitted, full, zero, committed, mean(totals.items), quantile(ordered, 0.5), quantile(ordered, 0.9), parts[0] / n, parts[1] / n, parts[2] / n, parts[3] / n, parts[4] / n, ms(started.prefill_ns), ms(started.flush_ns), @as(f64, @floatFromInt(spec_ns)) / 1e9, spec_rate, flush_rate, index % 2 == 0 });
-        try out.print(gpa, "{{\"kind\":\"plain\",\"prompt\":\"{s}\",\"steps\":{d},\"step_ms_mean\":{d:.4},\"step_ms_p50\":{d:.4},\"step_ms_p90\":{d:.4},\"decode_s\":{d:.4},\"tok_s\":{d:.3}}}\n", .{ prompt.name, steps.items.len, mean(step_ms.items), quantile(plain_sorted, 0.5), quantile(plain_sorted, 0.9), @as(f64, @floatFromInt(plain_ns)) / 1e9, plain_rate });
+        try out.print(gpa, "{{\"kind\":\"spec\",\"prompt\":\"{s}\",\"prompt_tokens\":{d},\"limit\":{d},\"equal_plain\":{},\"first_difference\":{d},\"rounds\":{d},\"emitted\":{d},\"full_rounds\":{d},\"zero_rounds\":{d},\"mean_committed\":{d:.4},\"round_ms_mean\":{d:.4},\"round_ms_p50\":{d:.4},\"round_ms_p90\":{d:.4},\"draft_ms_mean\":{d:.4},\"verify_ms_mean\":{d:.4},\"select_ms_mean\":{d:.4},\"commit_ms_mean\":{d:.4},\"host_ms_mean\":{d:.4},\"prefill_ms\":{d:.3},\"flush_ms\":{d:.3},\"decode_s\":{d:.4},\"tok_s\":{d:.3},\"tok_s_with_flush\":{d:.3},\"spec_first\":{},\"tokens_sha256\":\"{s}\"}}\n", .{ prompt.name, prompt.ids.len, limit, same, first_diff, rounds.items.len, emitted, full, zero, committed, mean(totals.items), quantile(ordered, 0.5), quantile(ordered, 0.9), parts[0] / n, parts[1] / n, parts[2] / n, parts[3] / n, parts[4] / n, ms(started.prefill_ns), ms(started.flush_ns), @as(f64, @floatFromInt(spec_ns)) / 1e9, spec_rate, flush_rate, index % 2 == 0, &std.fmt.bytesToHex(digest(spec_tokens.items), .lower) });
+        try out.print(gpa, "{{\"kind\":\"plain\",\"prompt\":\"{s}\",\"steps\":{d},\"step_ms_mean\":{d:.4},\"step_ms_p50\":{d:.4},\"step_ms_p90\":{d:.4},\"decode_s\":{d:.4},\"tok_s\":{d:.3},\"tokens_sha256\":\"{s}\",\"tokens\":", .{ prompt.name, steps.items.len, mean(step_ms.items), quantile(plain_sorted, 0.5), quantile(plain_sorted, 0.9), @as(f64, @floatFromInt(plain_ns)) / 1e9, plain_rate, &std.fmt.bytesToHex(digest(plain_tokens.items), .lower) });
+        try tokensJson(gpa, out, plain_tokens.items);
+        try out.appendSlice(gpa, "}\n");
         std.debug.print("dflash {s}: prompt={d} equal={} rounds={d} committed/round={d:.3} round_ms mean={d:.2} p90={d:.2} (draft {d:.2} verify {d:.2} select {d:.2} commit {d:.2} host {d:.2}) spec_tok_s={d:.2} plain_tok_s={d:.2} plain_ms={d:.2} full={d} zero={d}\n", .{ prompt.name, prompt.ids.len, same, rounds.items.len, committed, mean(totals.items), quantile(ordered, 0.9), parts[0] / n, parts[1] / n, parts[2] / n, parts[3] / n, parts[4] / n, spec_rate, plain_rate, mean(step_ms.items), full, zero });
     }
     return all_same;
 }
 
-fn widths(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, reps: usize, out: *std.ArrayList(u8)) !void {
+fn widths(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, reps: usize, load_s: f64, out: *std.ArrayList(u8)) !void {
     var verifier = try inkling.group.Verifier.init(m.device, &m.config);
     defer verifier.deinit();
     var bs = try inkling.BatchScratch.init(m.device, &m.config, inkling.group.max_rows);
@@ -179,6 +200,13 @@ fn widths(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, re
             r.* = spec.argmax(logits);
         }
         try rollback.copy(m.queue, &m.config, &cache, false);
+        const load_start = spec.now();
+        var loaded: usize = 0;
+        while (@as(f64, @floatFromInt(spec.now() - load_start)) / 1e9 < load_s) : (loaded += 1) {
+            const g = try verifier.group(&.{&cache}, &.{inkling.group.max_rows});
+            try verifier.forward(m, &bs, &g, &rows);
+            _ = try verifier.picks(m, bs.rows.logits, inkling.group.max_rows);
+        }
         var samples: [cells.len]std.ArrayList(f64) = @splat(.empty);
         defer for (&samples) |*list| list.deinit(gpa);
         var forward_only: [cells.len]std.ArrayList(f64) = @splat(.empty);
@@ -218,7 +246,7 @@ fn widths(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, re
             defer gpa.free(ordered);
             const fw = try sorted(gpa, forward_only[cell].items);
             defer gpa.free(fw);
-            try out.print(gpa, "{{\"kind\":\"width\",\"prompt\":\"{s}\",\"context\":{d},\"width\":{d},\"path\":\"{s}\",\"reps\":{d},\"ms_mean\":{d:.4},\"ms_p50\":{d:.4},\"ms_p90\":{d:.4},\"ms_min\":{d:.4},\"ms_max\":{d:.4},\"forward_ms_p50\":{d:.4}}}\n", .{ prompt.name, cache.len, if (width == 0) 1 else width, if (width == 0) "batch_step" else "grouped", reps, mean(ordered), quantile(ordered, 0.5), quantile(ordered, 0.9), ordered[0], ordered[ordered.len - 1], quantile(fw, 0.5) });
+            try out.print(gpa, "{{\"kind\":\"width\",\"prompt\":\"{s}\",\"load_s\":{d:.1},\"load_forwards\":{d},\"context\":{d},\"width\":{d},\"path\":\"{s}\",\"reps\":{d},\"ms_mean\":{d:.4},\"ms_p50\":{d:.4},\"ms_p90\":{d:.4},\"ms_min\":{d:.4},\"ms_max\":{d:.4},\"forward_ms_p50\":{d:.4}}}\n", .{ prompt.name, load_s, loaded, cache.len, if (width == 0) 1 else width, if (width == 0) "batch_step" else "grouped", reps, mean(ordered), quantile(ordered, 0.5), quantile(ordered, 0.9), ordered[0], ordered[ordered.len - 1], quantile(fw, 0.5) });
             std.debug.print("widths {s}: context={d} {s} width={d} p50={d:.3} ms p90={d:.3} ms forward p50={d:.3} ms\n", .{ prompt.name, cache.len, if (width == 0) "batch_step" else "grouped", if (width == 0) 1 else width, quantile(ordered, 0.5), quantile(ordered, 0.9), quantile(fw, 0.5) });
         }
     }

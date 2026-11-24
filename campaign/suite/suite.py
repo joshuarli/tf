@@ -30,6 +30,7 @@ BASELINE_SHA = "8c2c8e6f4fd9f2c111d6fba7d89251a32a5afb309cc950ee3ff2d6a50816ac87
 FLINT = Path.home() / "models/flint-int4@3b93f9053b53"
 INKLING = Path.home() / "models/Inkling-2-Mini@ed40e7da625f"
 INKLING_OQ4E = Path.home() / "models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd"
+INKLING_DFLASH2 = Path.home() / "models/Inkling-2-Mini-DFlash2@4f9088ea66c2"
 FLINT_RUN = REPO / "zig-out/bin/tf-flint-run"
 FIXTURES = WORK / "suite/fixtures"
 OMLX_ORACLE = WORK / "parity/inkling2-mini/omlx-ref"
@@ -91,11 +92,12 @@ WORKLOADS = [
              ("target:bench", "inkling-binary", "inkling-weights"),
              make("bench", "MODEL=inkling2-mini", "MODE=ar", "CELLS=1024", "PAIRS=1", f"BIN={INKLING_BIN}")),
     Workload("inkling-gpu", "change", "inkling",
-             "Metal forward, prefill, batched step, rollback, fork, verify and oQ4e affine kernels against the checkpoints",
-             "estimated 5 min", ("zig", "inkling-weights", "inkling-oq4e-weights"),
+             "Metal forward, prefill, batched step, rollback, fork, verify, grouped verify, oQ4e affine kernels and "
+             "DFlash2 speculation against the checkpoints",
+             "estimated 7 min", ("zig", "inkling-weights", "inkling-oq4e-weights", "inkling-dflash2-weights"),
              ("python3", str(HEAVY), "--", "zig", "build", "test-inkling2-loop", "-Dcpu=apple_m1", "-j1", "--summary", "all"),
              env=(("TF_INKLING2_LOOP_DIR", str(INKLING)), ("TF_INKLING2_LOOP_OQ4E_DIR", str(INKLING_OQ4E)),
-                  ("INKLING_LOAD_LIMIT_GB", "26")), no_skips=True),
+                  ("TF_INKLING2_DFLASH2_DIR", str(INKLING_DFLASH2)), ("INKLING_LOAD_LIMIT_GB", "26")), no_skips=True),
     Workload("inkling-agents-4", "scenario", "inkling",
              "four multi-turn agents on one server: prefix reuse, forks, and concurrent replies equal to solo",
              "estimated 15 min", ("inkling-binary", "inkling-weights"),
@@ -178,6 +180,13 @@ def requirement(need: str, targets: set[str], fix_fixture: bool) -> str | None:
         bad = [p.name for p, size in sizes.items() if not p.exists() or p.stat().st_size != size]
         name = "flint-int4" if need == "flint-weights" else "inkling-2-mini"
         return None if sizes and not bad else f"{name} weights missing or wrong size ({', '.join(bad[:3])}); run `make -C campaign fetch NAMES={name}`"
+    if need == "inkling-dflash2-weights":
+        lock = json.loads((CAMPAIGN / "sources.lock.json").read_text())["inputs"]
+        sizes = {INKLING_DFLASH2 / i["name"].split("/", 1)[1]: i["size"] for i in lock
+                 if i["name"].startswith("inkling-2-mini-dflash2/") and i["name"].endswith((".json", ".safetensors"))}
+        bad = [p.name for p, size in sizes.items() if not p.exists() or p.stat().st_size != size]
+        return None if sizes and not bad else (f"Inkling 2 Mini DFlash2 drafter missing or wrong size ({', '.join(bad)}); "
+                                               "run `make -C campaign fetch NAMES=inkling-2-mini-dflash2`")
     if need == "inkling-oq4e-weights":
         index = INKLING_OQ4E / "model.safetensors.index.json"
         return None if index.is_file() else f"oQ4e checkpoint missing at {INKLING_OQ4E} (no model.safetensors.index.json)"

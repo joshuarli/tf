@@ -4,6 +4,7 @@ const cfg = @import("config.zig");
 const st = @import("state.zig");
 const wts = @import("model.zig");
 const kernels = @import("kernels.zig");
+const staged_mod = @import("prefill_staged.zig");
 
 const Model = wts.Model;
 const Cache = st.Cache;
@@ -174,6 +175,7 @@ pub const Pipes = struct {
     affine_units_down: ?mtl.Pipeline,
     attn_units: ?mtl.Pipeline,
     half_rows: ?mtl.Pipeline,
+    staged: ?staged_mod.Pipes,
     moe_zero: mtl.Pipeline,
     moe_count: mtl.Pipeline,
     moe_offsets: mtl.Pipeline,
@@ -204,6 +206,7 @@ pub const Pipes = struct {
         if (p.affine_units_down) |pipe| pipe.deinit();
         if (p.attn_units) |pipe| pipe.deinit();
         if (p.half_rows) |pipe| pipe.deinit();
+        if (p.staged) |pipes| pipes.deinit();
         inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "gemm", "smallrow", "pick", "gu_g_nv", "down_g_nv", "gu_g_mx", "down_g_mx", "expert_matrix_nv", "expert_matrix_mx", "moe_zero", "moe_count", "moe_offsets", "moe_sort", "embed", "rms", "rms3", "rms_pair", "gather_rms", "scatter", "pass_copy", "mix", "mix4", "ctl", "clips", "clip3", "clip", "conv", "batch_conv", "batch_store_rel", "cstore", "kv", "rel", "rel_rows", "attn", "attn_tiled", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
     }
 };
@@ -304,6 +307,7 @@ pub const PrefillScratch = struct {
     half: bool,
     /// The half path's expert matrices, attention and staged projections on tensor units; off is the shader cores.
     units: bool,
+    fuse: bool,
     capture: ?mtl.Buffer,
     capture_row: usize,
     routes: ?mtl.Buffer,
@@ -335,6 +339,7 @@ pub const PrefillScratch = struct {
         s.fast = fast;
         s.half = true;
         s.units = true;
+        s.fuse = true;
         s.bf16_input = if (fast and device.tensorUnits()) try device.buffer(@max(chunk * @max(2 * h, @max(qw, @max(kvw, rank))) * 2, 16), mtl.ResourceOptions.private) else null;
         errdefer if (s.bf16_input) |buf| buf.deinit();
         s.half_overflow = if (fast or device.tensorUnits()) try device.buffer(16, mtl.ResourceOptions.shared) else null;
@@ -459,6 +464,8 @@ pub const PrefillScratch = struct {
         errdefer if (s.pipes.affine_stage_gemm) |pipe| pipe.deinit();
         errdefer if (s.pipes.affine_stage_split) |pipe| pipe.deinit();
         errdefer if (s.pipes.affine_stage_gemm_split) |pipe| pipe.deinit();
+        s.pipes.staged = if (s.affine_stage_w != null) try staged_mod.Pipes.init(device) else null;
+        errdefer if (s.pipes.staged) |pipes| pipes.deinit();
         s.pipes.affine_half_rows = null;
         s.pipes.affine_half_up = null;
         s.pipes.affine_half_down = null;
@@ -1044,25 +1051,70 @@ const Chunk = struct {
         return b(s.msg);
     }
 
+    fn stage(c: Chunk) ?staged_mod.Stage {
+        const s = c.s;
+        if (c.batch != null or c.n <= 8 or !s.half or !s.units or !s.fuse) return null;
+        return .{
+            .enc = c.enc,
+            .prepare = s.pipes.affine_stage_prepare orelse return null,
+            .split = s.pipes.affine_stage_split orelse return null,
+            .gemm_split = s.pipes.affine_stage_gemm_split orelse return null,
+            .pipes = s.pipes.staged orelse return null,
+            .weights = s.affine_stage_w orelse return null,
+            .inputs = s.affine_stage_x orelse return null,
+            .overflow = s.half_overflow orelse return null,
+            .rows = c.n,
+        };
+    }
+
+    fn stagedProjections(c: Chunk, lay: *const Layer, ins: [3]In, full: bool) bool {
+        const st_ = c.stage() orelse return false;
+        const a = &lay.attn;
+        const s = c.s;
+        var inputs: [3]staged_mod.Input = undefined;
+        for (ins, 0..) |in, i| inputs[i] = .{ .buf = in.buf.buf, .off = in.buf.off, .xs = in.xs, .xb = in.xb };
+        if (full) {
+            const kd = a.k_dyn orelse return false;
+            const vd = a.v_dyn orelse return false;
+            const qs = staged_mod.joined(&.{ a.q, a.r, a.gate, a.sink }) orelse return false;
+            const ks = staged_mod.joined(&.{ a.k, kd }) orelse return false;
+            const vs = staged_mod.joined(&.{ a.v, vd }) orelse return false;
+            return staged_mod.encode(st_, &.{ qs, ks, vs }, &.{
+                .{ .view = a.q, .out = s.q, .input = 0 },    .{ .view = a.r, .out = s.r, .input = 0 },
+                .{ .view = a.gate, .out = s.gate, .input = 0 }, .{ .view = a.sink, .out = s.sink, .input = 0 },
+                .{ .view = a.k, .out = s.k, .input = 1 },    .{ .view = kd, .out = s.kdyn, .input = 1 },
+                .{ .view = a.v, .out = s.v, .input = 2 },    .{ .view = vd, .out = s.vdyn, .input = 2 },
+            }, inputs);
+        }
+        const all = staged_mod.joined(&.{ a.q, a.k, a.v, a.r, a.gate, a.sink }) orelse return false;
+        return staged_mod.encode(st_, &.{all}, &.{
+            .{ .view = a.q, .out = s.q, .input = 0 },    .{ .view = a.k, .out = s.k, .input = 1 },
+            .{ .view = a.v, .out = s.v, .input = 2 },    .{ .view = a.r, .out = s.r, .input = 0 },
+            .{ .view = a.gate, .out = s.gate, .input = 0 }, .{ .view = a.sink, .out = s.sink, .input = 0 },
+        }, inputs);
+    }
+
     fn attention(c: Chunk, lay: *const Layer, slot: u32, full: bool, ins: [3]In) void {
         const s = c.s;
         const text = &c.m.config.text;
         const extent: u32 = if (full) text.rel_extent else text.window;
         const fused = c.batch != null and lay.attn.q.affine != null;
-        if (fused) c.affineProjections(lay, ins, full) else c.lin(lay.attn.q, ins[0], b(s.q));
+        const staged = !fused and c.stagedProjections(lay, ins, full);
+        const ready = fused or staged;
+        if (fused) c.affineProjections(lay, ins, full) else if (!staged) c.lin(lay.attn.q, ins[0], b(s.q));
         if (c.batch == null) c.clipScaled(b(s.q), lay.attn.q_scale, c.heads, c.dim, text.qk_clip);
-        if (!fused) c.lin(lay.attn.r, ins[0], b(s.r));
+        if (!ready) c.lin(lay.attn.r, ins[0], b(s.r));
         if (c.batch == null) c.clipScaled(b(s.r), lay.attn.r_scale, c.heads, c.drel, text.rel_clip);
         const ring = c.rings(slot);
-        if (!fused) c.lin(lay.attn.k, ins[1], b(s.k));
-        c.convolve(b(s.k), b(s.kc), lay.attn.k_conv, lay.attn.k_dyn, ins[1], b(s.kdyn), ring[0], c.kvw, if (full) c.kv else 0, @intFromBool(full), slot, .key, fused);
+        if (!ready) c.lin(lay.attn.k, ins[1], b(s.k));
+        c.convolve(b(s.k), b(s.kc), lay.attn.k_conv, lay.attn.k_dyn, ins[1], b(s.kdyn), ring[0], c.kvw, if (full) c.kv else 0, @intFromBool(full), slot, .key, ready);
         if (c.batch != null) {
             c.setP(s.pipes.clip3, Clip3B{ .heads = c.heads, .kv = c.kv, .dim = c.dim, .rel = c.drel, .q_threshold = text.qk_clip, .rel_threshold = text.rel_clip }, &.{ b(s.q), t(lay.attn.q_scale), b(s.r), t(lay.attn.r_scale), b(s.kc), A });
             c.enc.dispatchGroups(mtl.Size.of((2 * c.heads + c.kv) * c.n, 1, 1), mtl.Size.of(256, 1, 1));
         } else c.clipPlain(b(s.kc), c.kv, c.dim, text.qk_clip);
-        if (!fused) c.lin(lay.attn.v, ins[2], b(s.v));
-        c.convolve(b(s.v), b(s.vc), lay.attn.v_conv, lay.attn.v_dyn, ins[2], b(s.vdyn), ring[1], c.kvw, if (full) c.kv else 0, @intFromBool(full), slot, .value, fused);
-        if (!fused) c.lin(lay.attn.sink, ins[0], b(s.sink));
+        if (!ready) c.lin(lay.attn.v, ins[2], b(s.v));
+        c.convolve(b(s.v), b(s.vc), lay.attn.v_conv, lay.attn.v_dyn, ins[2], b(s.vdyn), ring[1], c.kvw, if (full) c.kv else 0, @intFromBool(full), slot, .value, ready);
+        if (!ready) c.lin(lay.attn.sink, ins[0], b(s.sink));
         if (c.batch) |batch| {
             c.batchAttention(lay, slot, full, extent, batch);
         } else {
@@ -1088,9 +1140,12 @@ const Chunk = struct {
         }
         c.kvStore(slot);
         }
-        if (!fused) c.lin(lay.attn.gate, ins[0], b(s.gate));
-        c.flat(.sig_mul, Pair{ .count = c.qw * c.n }, &.{ b(s.attn), b(s.gate), A, b(s.attn) }, @as(usize, c.qw) * c.n);
-        c.lin(lay.attn.o, .{ .buf = b(s.attn), .xs = 1, .xb = 0 }, b(s.projout));
+        if (!ready) c.lin(lay.attn.gate, ins[0], b(s.gate));
+        const gated = if (c.stage()) |st_| staged_mod.gatedProjection(st_, lay.attn.o, s.projout, s.attn, s.gate) else false;
+        if (!gated) {
+            c.flat(.sig_mul, Pair{ .count = c.qw * c.n }, &.{ b(s.attn), b(s.gate), A, b(s.attn) }, @as(usize, c.qw) * c.n);
+            c.lin(lay.attn.o, .{ .buf = b(s.attn), .xs = 1, .xb = 0 }, b(s.projout));
+        }
         c.convolve(b(s.projout), b(s.o), lay.attn_post, null, undefined, b(s.projout), ring[2], c.h, 0, 0, slot, .attention, false);
     }
 

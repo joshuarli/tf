@@ -20,6 +20,12 @@ measures:
 The tf speculative numbers are DF1's round table (`inkling-dflash2.md`). They come from the same prompt files,
 but that table was timed in-process, not through the server.
 
+**Correction (DF2a, `inkling-df2-accept.md`).** The 4K rows do not compare like for like. DF1's harness cut the 4K
+prompt files to 4,096 tokens, so code-4096 lost its last 1,184 tokens, while Splash served all 5,280. Splash's
+9.1 tokens a cycle also comes from its 16-row tree with prompt lookup, not from its drafter: its drafter has the
+same 2,048-row window as tf's. tf's 4K drop is that window. The 4K replies quote text from before it, and the
+checkpoint does not use rows past its trained distances. It is not a tf bug.
+
 ## Setup
 
 - **Splash.** The 1.7.2 release build (`2afc7337aacc`, tarball sha in `campaign/sources.lock.json`) was run

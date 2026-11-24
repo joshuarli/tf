@@ -29,11 +29,15 @@
   3c. V2, running (Decision 18): `lane/v2-arith` in `.work/wt/v2-arith` (scope
      `usrn_d996b77c-2510-4d79-9e42-b1435d8c4771`), receipt `inkling-v2-arith.md`. One matrix-unit arithmetic for the one-row step, batch step and grouped verify, with row
      results independent of grouping. Target: 8 rows at about 26 ms, and one row no slower.
-  3a. DF2a, running beside V1 (acceptance only, no timing): `lane/df2-accept` in `.work/wt/df2-accept` (scope
-     `usrn_0269a0d1-fa1d-4c55-841f-a4b02e188630`), receipt `inkling-df2-accept.md`. Splash commits 1.3× (code-1024)
-     to 3.3× (code-4096) what tf's chain commits with the same drafter. Trace and fix tf's 4K collapse against
-     Splash's drafter window semantics (`inkling-splash.md`, source study).
-  3b. DF2b, after V1: a tree-masked verify of up to 16 rows with prompt-lookup chains, as Splash does.
+  3a. DF2a, done and merged (`inkling-df2-accept.md`). The 4K drop is the drafter's own 2,047-row window, not a tf
+     bug: 4K replies quote text from before the window, and widening the window does not help. Lookup rounds,
+     which draft from an earlier match that lies before the window, raise 4K committed tokens per round to
+     3.12/2.95/3.57 (from 2.76/2.69/3.43) and leave 1K unchanged. Served lookup still needs the host to pass the
+     request's tokens in. First-rows retention (3.43/3.01/4.15) is parked: it departs from the checkpoint's window,
+     only works as a full rebuild every round, and every test prompt puts its instruction first.
+  3b. DF2b, after V2: a tree-masked verify of up to 16 rows that merges the drafter's candidates with lookup chains
+     as deep as 15, as Splash does. That is where Splash's 9.1 tokens a cycle on code comes from. It also wires lookup
+     into the served round.
   4. SV1, done and merged (`inkling-sv1-serve.md`). `INKLING_DRAFTER=<dir>` turns on served greedy DFlash2
      speculation, byte-identical to plain greedy across prompt-cache hits, forks and EOS (133/133 in `inkling-gpu`).
      It is faster only on code-1024 (1.47×) and prose-1024 (1.16×), so it stays opt-in until V1 and DF2 land. It

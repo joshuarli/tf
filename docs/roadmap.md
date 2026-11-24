@@ -73,11 +73,19 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    3.12/2.95/3.57 (from 2.76/2.69/3.43) and leave 1K unchanged. Served lookup still needs the host to pass the
    request's tokens in. First-rows retention (3.43/3.01/4.15) is parked: it departs from the checkpoint's window,
    only works as a full rebuild every round, and every test prompt puts its instruction first.
-3b. DF2b, running and holding the timing lane:
-   `lane/df2b-tree` in `.work/wt/df2b-tree` (scope `usrn_5365e82f-0fed-4516-9e86-c517d413dc60`), receipt
-   `inkling-df2b-tree.md`. A tree-masked verify of up to 16 rows that merges the drafter's candidates with lookup
-   chains as deep as 15, as Splash does (where Splash's 9.1 tokens a cycle on code comes from), and lookup in the
-   served round.
+3b. DF2b, done and merged `53a3b8894` (`inkling-df2b-tree.md`). Best-first trees of up to 16 rows from the
+   drafter plus lookup chains up to 15 deep, ancestor-masked verify with a per-node recurrent path, and lookup in the
+   served round. Every reply equals plain greedy, and tree rows equal their paths' one-row steps bit for bit.
+   Speculative decode is 1.193× main `50b4a681a` (six process pairs, 95% interval 1.140–1.249): code-1024
+   132.3 → 150.8 tok/s (7.51 committed a round), prose/structured-1024 1.11×/1.09×, the 4K prompts 1.24–1.35×
+   (78–93 tok/s). Verify costs 40.4 ms at 8 rows and 71.9 at 16 in rounds. Rounds that run the drafter peak at
+   0.117 tokens/ms, so 200 tok/s needs 8-row rounds close to a one-row step's cost. The six pairs ran in two
+   back-to-back sessions on one host state; accepted for an opt-in mode (delegated, Decision 11), to be re-paired
+   across separate sessions before speculation becomes a default.
+3d. V3, running (code and tests; timing via `.work/tmp/v3-timing-go`): `lane/v3-experts` in `.work/wt/v3-experts`
+   (scope `usrn_4c1b50f9-4878-49f1-b590-5caa0873b297`), receipt `inkling-v3-experts.md`. A cheaper 4–16-row verify:
+   expert tiles for 2–8 live rows per expert, the affine 4-bit expert layers, attention and controllers, and dense
+   kernels past 8 rows, under Decision 18.
 4. SV1, done and merged (`inkling-sv1-serve.md`). `INKLING_DRAFTER=<dir>` turns on served greedy DFlash2
    speculation, byte-identical to plain greedy across prompt-cache hits, forks and EOS (133/133 in `inkling-gpu`).
    It is faster only on code-1024 (1.47×) and prose-1024 (1.16×), so it stays opt-in until V1 and DF2 land. It
@@ -89,15 +97,19 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    Opt-in `INKLING_PREFILL_HALF=both` serves 2,048/2,059 tok/s at 4K/8K (1.18–1.36× default) but agrees with the
    exact path's top-1 on 97.49% of rows at margin ≥ 0.1, under the 99.5% bar, so it is not promoted; `inputs`
    97.32%, `experts` 97.25%. Unresolved: `experts` alone measured slower in its one trial.
-5a. PH, next on the GPU after DF2b's timing: qualify `INKLING_PREFILL_HALF=both` under Decision 19. Already
+5a. PH, on the GPU after the DF2b merge suite (not a timing lane; it yields to a timing lane): qualify `INKLING_PREFILL_HALF=both` under Decision 19. Already
    measured (P4): oracle top-1 94.73% against exact 94.96% (−0.23 points), mean KL 0.0199 against 0.0195 (1.02×);
    quality dev 7/11 on both, losing `retrieval-t01` (ran to the 8,192 cap) and gaining `code-c02`. Still needed:
    `quality SET=full` on exact and `both`, `retrieval-t01` examined for repeatability, and Pi tasks. If it passes,
    flip the default and keep `INKLING_PREFILL_HALF=off` for the exact path.
-5b. P5c, after DF2b (shares `zig/src/native/inkling2_loop_host.zig`): the host's fork-point chunking. Prompts are cut
-   on a 128-row grid and end with a 128-row chunk, a 0–127-row tail and a one-row chunk; those small chunks run near
-   600 tok/s. With prefix reuse off, 1K serves 1,693 tok/s and held-out prompts match dev. Target: keep prefix reuse
-   and fork snapshots while prefilling the tail in one chunk; then the first request's unexplained 2.5–3.7 s.
+5b. P5c, running (code and tests; timing via `.work/tmp/p5c-timing-go`, first in the timing queue):
+   `lane/p5c-chunks` in `.work/wt/p5c-chunks` (scope `usrn_265d53ea-e1a8-4a21-a50b-9bb72e300e69`), receipt
+   `inkling-p5c-chunks.md`. The host's fork-point chunking: prompts are cut on a 128-row grid and end with a 128-row
+   chunk, a 0–127-row tail and a one-row chunk, which run near 600 tok/s; with prefix reuse off 1K serves 1,693
+   tok/s. Keep reuse, forks and the len-1 store while prefilling in full chunks; then the first request's
+   unexplained 2.5–3.7 s.
+5c. SV2, after V3: speculation on by default if it beats plain decode on every quick prompt class at 1K and 4K and
+   stays within Decision 8's 4 GiB draft residency, re-paired across separate sessions.
 6. Q3: the `code-c02` reasoning loop from P3c.
 7. Deferred off the critical path: see **Later**.
 

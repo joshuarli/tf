@@ -1056,6 +1056,13 @@ test "gathered expert projections keep the per-slot kernels' bytes" {
 const Candidate = struct { name: [:0]const u8, up: bool, sg: u32, t: u32, j: u32 = 1, most: usize };
 
 const candidates = [_]Candidate{
+    .{ .name = "i2e_gate_up_o3", .up = true, .sg = 4, .t = 2, .most = 8 },
+    .{ .name = "i2e_gate_up16_o3", .up = true, .sg = 4, .t = 2, .most = 16 },
+    .{ .name = "i2e_down_m", .up = false, .sg = 8, .t = 4, .most = 8 },
+    .{ .name = "i2e_down_o1", .up = false, .sg = 8, .t = 4, .most = 8 },
+    .{ .name = "i2e_down_o3", .up = false, .sg = 8, .t = 4, .most = 8 },
+    .{ .name = "i2e_down16_o1", .up = false, .sg = 8, .t = 4, .most = 16 },
+    .{ .name = "i2e_down16_o3", .up = false, .sg = 8, .t = 4, .most = 16 },
     .{ .name = "i2e_gate_up_f3", .up = true, .sg = 4, .t = 2, .most = 8 },
     .{ .name = "i2e_gate_up_f4", .up = true, .sg = 4, .t = 2, .most = 8 },
     .{ .name = "i2e_gate_up_r4", .up = true, .sg = 4, .t = 1, .most = 8 },

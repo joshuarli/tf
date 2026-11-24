@@ -216,6 +216,7 @@ template <uint SG, uint T, uint G, uint H>
       uint lane [[thread_index_in_simdgroup]]);
 
 I2T_DENSE(i2t_dense_8_2, 8, 2, 1, 1)
+I2T_DENSE(i2t_dense_8_1, 8, 1, 1, 1)
 I2T_DENSE(i2t_dense_16_2, 16, 2, 1, 1)
 I2T_DENSE(i2t_dense_8_4, 8, 4, 1, 1)
 I2T_DENSE(i2t_dense_16_4, 16, 4, 1, 1)
@@ -230,6 +231,8 @@ I2T_DENSE(i2t_dense16_h16_2, 16, 2, 1, 2)
   template [[host_name(#name)]] [[kernel]] void i2t_projections<sgs, t, g, h>(I2T_PROJECTION_ARGS);
 
 I2T_PROJECTIONS(i2t_projections_8_2, 8, 2, 1, 1)
+I2T_PROJECTIONS(i2t_projections_8_1, 8, 1, 1, 1)
+I2T_PROJECTIONS(i2t_projections16_8_1, 8, 1, 2, 1)
 I2T_PROJECTIONS(i2t_projections_16_2, 16, 2, 1, 1)
 I2T_PROJECTIONS(i2t_projections_16_4, 16, 4, 1, 1)
 I2T_PROJECTIONS(i2t_projections16_8_2, 8, 2, 2, 1)

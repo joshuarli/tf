@@ -41,6 +41,7 @@ fn finish(cb: mtl.CommandBuffer) !void {
 const Candidate = struct { name: [:0]const u8, sg: u32, t: u32, h: u32 = 1, least: usize, most: usize };
 
 const dense_candidates = [_]Candidate{
+    .{ .name = "i2t_dense_8_1", .sg = 8, .t = 1, .least = 2, .most = 8 },
     .{ .name = "i2t_dense_16_2", .sg = 16, .t = 2, .least = 2, .most = 8 },
     .{ .name = "i2t_dense_8_4", .sg = 8, .t = 4, .least = 2, .most = 8 },
     .{ .name = "i2t_dense_16_4", .sg = 16, .t = 4, .least = 2, .most = 8 },
@@ -52,6 +53,8 @@ const dense_candidates = [_]Candidate{
 };
 
 const projection_candidates = [_]Candidate{
+    .{ .name = "i2t_projections_8_1", .sg = 8, .t = 1, .least = 2, .most = 8 },
+    .{ .name = "i2t_projections16_8_1", .sg = 8, .t = 1, .least = 2, .most = 16 },
     .{ .name = "i2t_projections_16_2", .sg = 16, .t = 2, .least = 2, .most = 8 },
     .{ .name = "i2t_projections_16_4", .sg = 16, .t = 4, .least = 2, .most = 8 },
     .{ .name = "i2t_projections16_16_2", .sg = 16, .t = 2, .least = 2, .most = 16 },

@@ -338,12 +338,15 @@ template <bool GU, uint SG, uint T>
   const float global = amax[e] / den[0];
   const device uchar* We = W + (size_t)uint(e) * wrows * stride;
   const device uchar* Se = S + (size_t)uint(e) * wrows * groups;
-  if (GU && count == 2u) {
+  if (GU && (count == 2u || count == 3u)) {
     constexpr uint per = 4u * T / SG;
-    const device float* const x[2] = { X + (size_t)(member[0] / a.topk) * a.k, X + (size_t)(member[1] / a.topk) * a.k };
-    const uint slots[2] = { member[0], member[1] };
-    i2t_columns<2, per>(We, r0 / 2u + sg * per, a.n, stride, groups, x, lut, scales, Se, lane, global, a, Y, slots);
-    return;
+    const uint first = r0 / 2u + sg * per;
+    const device float* const x2[2] = { X + (size_t)(member[0] / a.topk) * a.k, X + (size_t)(member[1] / a.topk) * a.k };
+    const uint s2[2] = { member[0], member[1] };
+    if (count == 2u) return i2t_columns<2, per>(We, first, a.n, stride, groups, x2, lut, scales, Se, lane, global, a, Y, s2);
+    const device float* const x3[3] = { x2[0], x2[1], X + (size_t)(member[2] / a.topk) * a.k };
+    const uint s3[3] = { member[0], member[1], member[2] };
+    return i2t_columns<3, per>(We, first, a.n, stride, groups, x3, lut, scales, Se, lane, global, a, Y, s3);
   }
   if (count == 1u) {
     const device float* x = X + (size_t)(GU ? slot / a.topk : slot) * a.k;

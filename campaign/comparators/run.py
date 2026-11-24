@@ -76,7 +76,8 @@ def load_server(name: str):
     return module
 
 
-def trial(path, *, base, model_id, metadata, run_id, engine, mode, flags, cell, cache_gib, pair, order, prompt):
+def trial(path, *, base, model_id, metadata, run_id, engine, mode, flags, cell, cache_gib, pair, order, prompt,
+          own, expected_tokens=None):
     record = {"schema": 1, "kind": "trial", "recorded_at": dt.datetime.now(dt.timezone.utc).isoformat(),
               "run_id": run_id, "engine": engine, "binary": metadata["binary"], "mode": mode, "mode_flags": flags,
               "cell": cell, "prompt_cache_gib": cache_gib, "pair": pair, "pair_order": order,
@@ -90,7 +91,7 @@ def trial(path, *, base, model_id, metadata, run_id, engine, mode, flags, cell, 
               "host": harness.host_summary(), "requests": {}, "natural_termination": None,
               "footprint": metadata.get("footprint"), "valid": False, "invalid_reasons": [],
               "omitted": metadata.get("omitted") or {}, "error": None}
-    before = harness.conditions()
+    before = harness.conditions(own)
     record["pressure_before"] = before["pressure"]
     text = (harness.REPO / prompt["path"]).read_text(encoding="utf-8")
     try:
@@ -101,7 +102,7 @@ def trial(path, *, base, model_id, metadata, run_id, engine, mode, flags, cell, 
         natural = client.chat_request(base, model_id, text, max_tokens=OUTPUT_TOKENS, temperature=TEMPERATURE,
                                       ignore_eos=False, seed=SEED)
         record["natural_termination"] = harness.request_record(natural, "natural")
-        after = harness.conditions()
+        after = harness.conditions(own)
         record["pressure_after"] = after["pressure"]
         record["invalid_reasons"] = before["pressure_reasons"] + after["pressure_reasons"]
         for name, run in (("cold", cold), ("warm", warm)):
@@ -109,12 +110,13 @@ def trial(path, *, base, model_id, metadata, run_id, engine, mode, flags, cell, 
                 record["invalid_reasons"].append(f"{name} request did not complete")
             if run.get("tokens") != OUTPUT_TOKENS:
                 record["invalid_reasons"].append(f"{name} returned {run.get('tokens')} tokens, not {OUTPUT_TOKENS}")
-            if run.get("prompt_tokens") != cell:
-                record["invalid_reasons"].append(f"{name} prompt_tokens {run.get('prompt_tokens')} != cell {cell}")
+            expected = cell if expected_tokens is None else expected_tokens(prompt)
+            if expected is not None and run.get("prompt_tokens") != expected:
+                record["invalid_reasons"].append(f"{name} prompt_tokens {run.get('prompt_tokens')} != {expected}")
         record["valid"] = not record["invalid_reasons"]
     except Exception as error:  # noqa: BLE001 - a failed trial is a recorded result, not a crash
         record["error"] = f"{type(error).__name__}: {error}"
-        record["pressure_after"] = harness.conditions()["pressure"]
+        record["pressure_after"] = harness.conditions(own)["pressure"]
         record["invalid_reasons"] = [record["error"]]
     with path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(record, sort_keys=True) + "\n")
@@ -189,7 +191,8 @@ def run(args) -> int:
                 for prompt in by_cell[cell]:
                     trial(path, base=base, model_id=model_id, metadata=metadata, run_id=run_id, engine=engine,
                           mode=args.mode, flags=list(argv), cell=cell, cache_gib=cache_gib, pair=pair,
-                          order=0, prompt=prompt)
+                          order=0, prompt=prompt, own=harness.process_tree(process.pid),
+                          expected_tokens=getattr(server, "expected_prompt_tokens", None))
             except Exception as error:  # noqa: BLE001 - a dead server is a recorded failure
                 failures += 1
                 failure(path, run_id=run_id, engine=engine, metadata=metadata, mode=args.mode, cell=cell,

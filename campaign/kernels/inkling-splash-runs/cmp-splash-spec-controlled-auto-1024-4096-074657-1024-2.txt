@@ -1,0 +1,49 @@
+23:46:58 Loading · thinkingmachines/Inkling-2-Mini
+23:46:59 Weights loaded in 1.39 s.
+23:46:59 Decode cycles verify the rows of the step their measured costs choose (--verify-rows auto): greedy and seeded outputs can differ from run to run.
+23:46:59 Routed experts load with their layers: memory holds their 13730 MiB (--expert-memory auto).
+23:46:59 Kernel policy for GPU family 10 with 40 cores.
+23:46:59 Decode step costs of 1 lane as an earlier start measured them: 1:8:15.794667 2:8:18.648125 3:8:21.513125 8:8:26.513542 9:16:27.610916 15:16:32.558083 16:16:32.738084
+23:46:59 Warming up · 0 of 11 steps
+23:46:59 Chat template · renders later system messages in place, generation prompt 0 tokens
+23:47:00 Decode step costs as an earlier start measured them, checked: a step of 16 rows over 1 lane takes 35.83 32.90 30.18 ms, the table's 32.74 ms
+23:47:00 Warming up · 1 of 11 steps
+23:47:00 Warming up · 2 of 11 steps
+23:47:00 Warming up · 3 of 11 steps
+23:47:00 Warming up · 4 of 11 steps
+23:47:00 Warming up · 5 of 11 steps
+23:47:00 Warming up · 6 of 11 steps
+23:47:00 Warming up · 7 of 11 steps
+23:47:00 Warming up · 8 of 11 steps
+23:47:00 Warming up · 9 of 11 steps
+23:47:00 Warming up · 10 of 11 steps
+23:47:00 Warming up · 11 of 11 steps
+23:47:00 Ready · thinkingmachines/Inkling-2-Mini · context 32K · text only · http://127.0.0.1:60128
+23:47:01 Started · request 1 · input 1,349 · cached 0 · effort absent · thinking off
+23:47:02 TTFT of request 1: 420.771 ms: own prefill 420.264, claim wait 0, decode 0, other prefill 0, unit wait 0, rest 0.507167
+23:47:04 Done · request 1 · input 1,349 · cached 0 · output 512 · TTFT 0.4s · 232.5 tok/s · 7.6 tok/cycle
+23:47:04 Started · request 2 · input 1,349 · cached 1,344 · effort absent · thinking off
+23:47:04 TTFT of request 2: 27.8808 ms: own prefill 27.7772, claim wait 0, decode 0, other prefill 0, unit wait 0, rest 0.103541
+23:47:06 Done · request 2 · input 1,349 · cached 1,344 · output 512 · TTFT 0.0s · 234.1 tok/s · 7.8 tok/cycle
+23:47:06 Started · request 3 · input 1,349 · cached 1,344 · effort absent · thinking off
+23:47:06 TTFT of request 3: 28.2491 ms: own prefill 28.1595, claim wait 0, decode 0, other prefill 0, unit wait 0, rest 0.0895829
+23:47:09 Done · request 3 · input 1,349 · cached 1,344 · output 512 · TTFT 0.0s · 233.3 tok/s · 7.9 tok/cycle
+23:47:11 Started · request 4 · input 1,154 · cached 0 · effort absent · thinking off
+23:47:11 TTFT of request 4: 369.692 ms: own prefill 369.527, claim wait 0, decode 0, other prefill 0, unit wait 0, rest 0.165667
+23:47:14 Done · request 4 · input 1,154 · cached 0 · output 512 · TTFT 0.4s · 186.9 tok/s · 5.9 tok/cycle
+23:47:14 Started · request 5 · input 1,154 · cached 1,152 · effort absent · thinking off
+23:47:14 TTFT of request 5: 21.4793 ms: own prefill 21.3662, claim wait 0, decode 0, other prefill 0, unit wait 0, rest 0.113041
+23:47:17 Done · request 5 · input 1,154 · cached 1,152 · output 512 · TTFT 0.0s · 159.3 tok/s · 4.9 tok/cycle
+23:47:17 Started · request 6 · input 1,154 · cached 1,152 · effort absent · thinking off
+23:47:17 TTFT of request 6: 21.5823 ms: own prefill 21.4551, claim wait 0, decode 0, other prefill 0, unit wait 0, rest 0.127209
+23:47:20 Done · request 6 · input 1,154 · cached 1,152 · output 512 · TTFT 0.0s · 192.0 tok/s · 6.1 tok/cycle
+23:47:22 Started · request 7 · input 1,124 · cached 0 · effort absent · thinking off
+23:47:23 TTFT of request 7: 370.369 ms: own prefill 370.216, claim wait 0, decode 0, other prefill 0, unit wait 0, rest 0.153251
+23:47:26 Done · request 7 · input 1,124 · cached 0 · output 512 · TTFT 0.4s · 155.7 tok/s · 4.7 tok/cycle
+23:47:26 Started · request 8 · input 1,124 · cached 1,120 · effort absent · thinking off
+23:47:26 TTFT of request 8: 27.6296 ms: own prefill 27.5315, claim wait 0, decode 0, other prefill 0, unit wait 0, rest 0.098083
+23:47:29 Done · request 8 · input 1,124 · cached 1,120 · output 512 · TTFT 0.0s · 159.1 tok/s · 5.3 tok/cycle
+23:47:29 Started · request 9 · input 1,124 · cached 1,120 · effort absent · thinking off
+23:47:29 TTFT of request 9: 31.0255 ms: own prefill 30.9259, claim wait 0, decode 0, other prefill 0, unit wait 0, rest 0.0995421
+23:47:33 Done · request 9 · input 1,124 · cached 1,120 · output 512 · TTFT 0.0s · 141.0 tok/s · 4.5 tok/cycle
+23:47:34 Stopping · releasing engine resources

@@ -2,10 +2,10 @@
 
 ## Status
 
-**Active 2026-11-23.**
+**Active 2026-11-24.**
 - Resume prompt: "Resume the Inkling 2K/200 campaign (Decision 17) from `campaign/plan.md` **Status**."
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
-- **Last accepted code: D2, `038f24cce`, green.** Passing there: `evidence-controls`, `inkling-host`, `inkling-gpu` (107 tests), `zig build native` and the `inkling-omlx-oracle` report (mean KL 0.0195 at chunk 512). Receipts: `campaign/kernels/inkling-cold-prefill.md` and `campaign/kernels/inkling-decode-step.md`.
+- **Last accepted code: DF1, `93de31eca`, green** (`inkling-host`, `inkling-gpu` 123/123, `zig build native`; receipt `campaign/kernels/inkling-dflash2.md`). Before it, D2 `038f24cce`: Passing there: `evidence-controls`, `inkling-host`, `inkling-gpu` (107 tests), `zig build native` and the `inkling-omlx-oracle` report (mean KL 0.0195 at chunk 512). Receipts: `campaign/kernels/inkling-cold-prefill.md` and `campaign/kernels/inkling-decode-step.md`.
 - **Open from P3c:** `code-c02` now falls into a repeatable reasoning loop, and oQ4e quality dev is 7/11 (base 6/11), below the fast profile's 8-case bar. Mean TTFT at four agents rose on the warm repetition; the cause is not traced.
 - **Parked branches** (all on `origin`), with item, cause and retry:
   - `lane/p3c-prefill` at `f0ff849e6`: commits the prefill scratch at setup. Two 1K pairs are inconclusive and it has not run the suite. Retry: the suite, then three first-pass pairs at 1K.
@@ -16,12 +16,18 @@
   - Old wip records: `c0-ground`, `k2-inkling-experts`.
 - **B2, first pass done** (`campaign/kernels/inkling-b2-baselines.md`): TensorFold leads oMLX at one and two agents, trails it at four (0.84× and 0.90×) and matches at eight. Its warm aggregate is flat from two to eight agents, and its four-agent TTFT is 998 ms against 623 ms for oMLX.
 - **Next slice (Decision 17, owner 2026-11-23): 2,000 tok/s prefill and 200 tok/s single stream.**
-  1. S1: Splash 1.7.2 as the same-model reference on this Mac. Controlled on oQ4e, best practical on
-     `unsloth/Inkling-2-Mini-GGUF:UD-Q4_K_M` with `incoai/Inkling-2-Mini-DFlash2`. Bounded: one measurement pass.
-  2. DF1: the Inkling DFlash2 drafter on the shared `qwen27/dflash` Metal runtime, bound to the Inkling target as
-     `families/flint/draft.zig` binds Flint (4 taps at 5, 23, 41 and the final norm; softcap 30 after correction).
-     Its first deliverable is the round table: committed tokens and full round time per width and context.
-  3. V1: verifier cost at widths 1/2/4/8 from identical states, against the Decision 17 round budgets.
+  1. S1, done (`campaign/kernels/inkling-splash.md`). On oQ4e, Splash prefills unseen prompts at 2,200–3,250 tok/s
+     from 1K to the cap; tf `93de31eca` manages 1,180–1,483. Splash cycles take 28–36 ms and commit 3.2–9.1
+     tokens; it reaches 200 tok/s only on code. Its 8-row verify costs 26 ms against tf's 56–66 ms. Its
+     controlled profile (bf16 KV) breaches the 28 GB cap at 22K tokens.
+  2. DF1, done and merged (`inkling-dflash2.md`). Greedy-exact. Rounds take 61–77 ms (93% of it the 8-row verify)
+     and commit 5.81/4.52/4.33 at 1K and 2.7–3.4 at 4K: 95 tok/s at best, below plain decode at 4K.
+  3. V1, running: lane `lane/v1-verify` in `.work/wt/v1-verify` (scope `usrn_651ac2c0-caf8-4b08-aa21-4ba53965fe17`),
+     an Opus subagent. Target: 8-row grouped verify at or under about 30 ms at 1K, at the expert-read floor. On
+     resume after a lost session, check its branch and receipt `campaign/kernels/inkling-v1-verify.md`.
+  3a. DF2 (new from S1): acceptance. Splash commits 1.3× (code-1024) to 3.3× (code-4096) what tf's chain commits
+     with the same drafter. Trace tf's 4K collapse (prompt taps from the half-precision prefill path, window
+     handling), then tree or deeper verification within the row budget V1 delivers.
   4. SV1: the draft path in the served `inkling2_loop_host` (today `copy_drafts` is discarded and every lane runs
      `batchStep`).
   5. P4: prefill to 2K across the curve: qualify `lane/p3c-prefill`, fuse compatible projections and split the

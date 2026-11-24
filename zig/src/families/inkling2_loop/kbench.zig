@@ -67,7 +67,7 @@ pub fn run(gpa: std.mem.Allocator, m: *inkling.Model, reps: usize, picks_path: ?
         const many: Case = if (d) |v| .{ .pipe = v.pipe, .groups = v.groups, .threads = v.threads } else one;
         var times: [2][5]f64 = undefined;
         for (0..5) |round| for ([_]Case{ one, many }, 0..) |cs, side| {
-            times[side][round] = try timeIt(m, reps, kind, cs, side == 1, io, rows);
+            times[side][round] = try timeIt(m, reps, kind, cs, side == 1 and d != null, io, rows);
         };
         for (&times) |*t| std.mem.sort(f64, t, {}, std.sort.asc(f64));
         try out.print(gpa, "{{\"kind\":\"kernel\",\"rows\":{d},\"op\":\"{s}\",\"one_row_us\":{d:.2},\"shared_us\":{d:.2},\"shared_kernel\":{}}}\n", .{ rows, @tagName(kind), times[0][2], times[1][2], d != null });

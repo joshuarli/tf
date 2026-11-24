@@ -30,7 +30,7 @@ const RoundRow = extern struct { keys: u64, values: u64, conv: [4]u64, pos: u32,
 const Stream = extern struct { first: u32, size: u32 };
 
 const Split = enum { splits_first, rows_first, runs };
-const split_kernel: Split = .runs;
+const split_kernel: Split = .splits_first;
 const names = [_][:0]const u8{ "i2v_conv", "i2v_store_rel", switch (split_kernel) {
     .splits_first => "i2v_split",
     .rows_first => "i2v_split_rows",

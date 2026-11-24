@@ -13,16 +13,17 @@ pub const Dispatch = struct { pipe: mtl.Pipeline, groups: mtl.Size, threads: mtl
 /// A few-row kernel: simdgroups a threadgroup, 8-row output tiles a simdgroup, batch halves and routed slots a group.
 const Kernel = struct { name: [:0]const u8, sg: u32, t: u32, h: u32 = 1, j: u32 = 1 };
 
-/// The served kernels, in `Pipes.pipes` order: up to 8 rows, then 9 to 16.
+/// The served kernels, in `Pipes.pipes` order: up to 8 rows, then 9 to 16; last, down for a one-row step.
 const kernels = [_]Kernel{
     .{ .name = "i2t_dense_8_2", .sg = 8, .t = 2 },
-    .{ .name = "i2t_dense16_8_2", .sg = 8, .t = 2 },
+    .{ .name = "i2t_dense16_8_1", .sg = 8, .t = 1 },
     .{ .name = "i2t_projections_8_2", .sg = 8, .t = 2 },
-    .{ .name = "i2t_projections16_8_2", .sg = 8, .t = 2 },
-    .{ .name = "i2e_gate_up_f3", .sg = 4, .t = 2 },
+    .{ .name = "i2t_projections16_8_1", .sg = 8, .t = 1 },
+    .{ .name = "i2e_gate_up_o3", .sg = 4, .t = 2 },
     .{ .name = "i2e_gate_up16_f3", .sg = 4, .t = 2 },
     .{ .name = "i2e_down_f3", .sg = 8, .t = 4 },
     .{ .name = "i2e_down16_f3", .sg = 8, .t = 4 },
+    .{ .name = "i2e_down_m", .sg = 8, .t = 4 },
 };
 const Kind = enum(u8) { dense, projections, gate_up, down };
 
@@ -56,7 +57,7 @@ pub const Pipes = struct {
     }
 
     fn pick(p: *const Pipes, kind: Kind, rows: usize, outputs: u32, slots: u32) Dispatch {
-        const i = 2 * @as(usize, @intFromEnum(kind)) + @intFromBool(rows > tile_rows);
+        const i = if (kind == .down and rows == 1) kernels.len - 1 else 2 * @as(usize, @intFromEnum(kind)) + @intFromBool(rows > tile_rows);
         const k = kernels[i];
         const groups = (outputs + 8 * k.t - 1) / (8 * k.t);
         return .{ .pipe = p.pipes[i], .groups = mtl.Size.of(groups * k.h, (slots + k.j - 1) / k.j, 1), .threads = mtl.Size.of(32 * k.sg, 1, 1) };

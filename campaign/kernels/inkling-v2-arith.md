@@ -18,14 +18,14 @@ meets a Decision 17 round budget at the measured acceptance.
 
 ## The finding that sets the design
 
-Decision 18 allowed the decode arithmetic to change so that matrix units could serve every width. It turned out not
-to need changing. On this M5 Max a float `simdgroup_multiply_accumulate` is one fma chain over the inner index, in
-index order, from the accumulator (`mma-probe.swift`): of 1,280,000 output elements with operands spread over 2^±12,
-all 1,280,000 equal `d = c; d = fma(a[t], b[t], d)` for t = 0..7, and no other order tried matches more than 71%. A
-nine-step chain of products, and operands that include ±0, subnormals, infinities and values that overflow, give the
-same bytes as a GPU scalar fma chain in every one of 256,000 elements each (`mma-edges.swift`). The kernels' map
-from lane to matrix element holds on this GPU (`mma-lanes.swift`). Float products run at 16.2 TFLOP/s, half at 10.5
-and scalar fma at 13.5 (`mma-edges.log`).
+Decision 18 allowed the decode arithmetic to change so that matrix units could serve every width. It turned out not to
+need changing. On this M5 Max a float `simdgroup_multiply_accumulate` is one fma chain over the inner index, in index
+order, from the accumulator (`mma-probe.swift`, output in `mma-probe.txt`): of 1,280,000 output elements with operands
+spread over 2^±12, all 1,280,000 equal `d = c; d = fma(a[t], b[t], d)` for t = 0..7, and no other order tried matches
+more than 71%. A nine-step chain of products, and operands that include ±0, subnormals, infinities and values that
+overflow, give the same bytes as a GPU scalar fma chain in every one of 256,000 elements each (`mma-edges.swift`,
+`mma-edges.txt`). The kernels' map from lane to matrix element holds on this GPU (`mma-lanes.swift`, `mma-lanes.txt`).
+Float products run at 16.2 TFLOP/s, half at 10.5 and scalar fma at 13.5 (`mma-edges.txt`).
 
 So a tile can reproduce any one-row kernel whose per-lane work is a sequential fma chain followed by `simd_sum`: each
 lane's chain becomes a chain of 8x8 products over the same products in the same order (the lane's k values run along
@@ -79,7 +79,7 @@ A tile kernel serves a width only where it is both bit-equal to the one-row kern
 
 - **One row.** The head and the fused projections already run at their bytes floor (875 against 885 µs, 40.6 against
   40 µs), and a tile would do eight rows' products for one. The tile kernel's one-row gate/up path took 52.9 µs
-  against `i2p_gu`'s 49.3 (`harness-experts.log`), so `i2p_gu` stays; its one-row down path takes 28.6 µs against
+  against `i2p_gu`'s 49.3 (`harness-experts.txt`), so `i2p_gu` stays; its one-row down path takes 28.6 µs against
   `i2p_down`'s 35.6 with the same bits, so one-row steps use it.
 - **Two rows.** The head keeps V1's `i2r_dense_ahead_2`: 1,002 µs against the tiles' 1,086 (`kernels-v1-tiles.jsonl`).
   The fused projections keep `i2a_batch_projections` (48.3 µs): a tile's products are fixed whatever its live rows,
@@ -121,7 +121,7 @@ new is how the tiles keep it; the checks that show it are bit equality, not tole
 The acceptance suite at `48fbf2955`, `python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`,
 exits 0 with no test skipped: `inkling-host` passes 35 of 35 tests in 8 s and `inkling-gpu` 151 of 151 in 1,127 s
 against both checkpoints and the DFlash2 drafter, every test above among them (`suite-summary.json`,
-`suite-inkling-host.log`, `suite-inkling-gpu.log`).
+`suite-inkling-host.txt`, `suite-inkling-gpu.txt`).
 
 ## Decode-path fidelity
 
@@ -151,8 +151,8 @@ kernels are unchanged, so the oMLX oracle gate was not rerun.
 `inkling-quality-dev`, the suite's quality workload, cannot run on this host for main or for V2. Its server, the
 native checkpoint at `--parallel 1 --context 32768` with the harness's 2 GiB prompt cache, refuses to start under the
 26 GB load limit on both binaries with the same estimate: "Inkling needs 26324461664 bytes including caches and
-reserves under a 26000000000-byte load limit; each session fits at most 22866 tokens" (`quality-native-main.log`,
-`quality-native-v2.log`, `quality-native-v2-summary.json`). That is main's state, not this change's, and the limit and
+reserves under a 26000000000-byte load limit; each session fits at most 22866 tokens" (`quality-native-main.txt`,
+`quality-native-v2.txt`, `quality-native-v2-summary.json`). That is main's state, not this change's, and the limit and
 context are campaign rules, so it is reported rather than worked around. The workload's `quality-grammar` step also
 builds the structured-output library in the frozen baseline worktree `.work/wt/baseline`, which is absent here; the
 runs below set `BASELINE_WT` to each binary's own tree, so `libtfgrammar` is built from the pinned xgrammar beside
@@ -179,7 +179,8 @@ output and constrained tool choice.
 One `dflash-widths` process each on `code-1024` (1,024-token state) under `TF_METAL4_TIMELINE=12`, in the same
 session, on main's kernels (`profile-base-1k`) and on V2 (`profile-after-1k`): every width and the one-row batch
 step ran 20 times from identical states and the timeline stamped 12 rounds of each after 8 warm ones. A stamp a
-dispatch adds about 5 µs, so these spans attribute cost and are not timings. ms a round, main → V2:
+dispatch adds about 5 µs, so these spans attribute cost and are not timings. The timelines are kept as
+`profile-base-1k.txt` and `profile-after-1k.txt` (`run.py attribution` reads either). ms a round, main → V2:
 
 | Category | batch | group-1 | group-2 | group-4 | group-8 |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -453,7 +454,7 @@ Rested at 1K the eight-row verify takes 34.3 ms against its 17.0 ms weight floor
   the floor from 3.0 to 11.6 ms. The rest, 3.9 ms, is the kernels' excess over their bytes. At eight rows of real
   picks gate/up runs at 1.25× its floor and down at 1.42×, and an expert with eight live rows costs about twice its
   bytes: eight experts each routed all eight rows take 97 µs of gate/up against a 46 µs floor and 55 µs of down
-  against 23 (`harness-experts.log`). The products themselves are about half of that: the gate/up's 663,552 8x8x8
+  against 23 (`harness-experts.txt`). The products themselves are about half of that: the gate/up's 663,552 8x8x8
   products take 42 µs at the measured 16.2 TFLOP/s.
 - **Attention, +1.8 ms.** Each row's split kernel stages its stream's keys and values again; staging them once per
   stream would change the rows' per-split order (above).
@@ -536,7 +537,7 @@ python3 -I $D/quality_same.py $D/quality-main $D/quality-v2
 `run.py widths --rest 60` idles 60 s inside the GPU lock before its admission gates, so a rested run cannot start
 straight after another lane's model load. The MMA probes are Swift programs: `swiftc -O $D/mma-probe.swift -o P &&
 python3 campaign/heavy.py -- ./P 12` (12 is the operand spread), and `mma-edges.swift` and `mma-lanes.swift` the same
-way without an argument. `harness-experts.log` comes from a development harness that timed expert-kernel variants on
+way without an argument. `harness-experts.txt` comes from a development harness that timed expert-kernel variants on
 the same picks; its source is not part of this record. Each quality run writes `campaign/quality/results/RUN/`; the
 two oQ4e runs' directories were moved to `quality-main/` and `quality-v2/` here, and the tracked `latest-*` pointer
 restored.

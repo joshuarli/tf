@@ -1,0 +1,20 @@
+== real
+rows 1 gate/up (8.0 experts, floor 45.9 us): one-row 49.3, i2t_gate_up 52.9 equal, gu_s3 52.6 equal, gu_s4 58.2 equal, gu84_s2 55.7 equal, gu84_s3 64.2 equal us
+rows 1 down (8.0 experts, floor 22.9 us): one-row 35.2, i2t_down 27.2 equal us
+rows 2 gate/up (13.2 experts, floor 75.8 us): one-row 91.5, V1 94.2, i2t_gate_up 88.0 equal, gu_s3 87.7 equal, gu_s4 88.1 equal, gu84_s2 90.8 equal, gu84_s3 90.3 equal us
+rows 2 down (13.2 experts, floor 37.9 us): one-row 66.4, V1 56.2, i2t_down 51.2 equal us
+rows 4 gate/up (20.3 experts, floor 116.2 us): one-row 182.7, V1 159.3, i2t_gate_up 149.6 equal, gu_s3 140.8 equal, gu_s4 149.7 equal, gu84_s2 144.5 equal, gu84_s3 149.5 equal us
+rows 4 down (20.3 experts, floor 58.1 us): one-row 128.4, V1 96.6, i2t_down 79.9 equal us
+rows 8 gate/up (30.7 experts, floor 175.9 us): one-row 352.7, V1 282.2, i2t_gate_up 223.6 equal, gu_s3 220.7 equal, gu_s4 225.2 equal, gu84_s2 221.8 equal, gu84_s3 220.9 equal us
+rows 8 down (30.7 experts, floor 87.9 us): one-row 259.0, V1 177.1, i2t_down 124.6 equal us
+== full8
+rows 1 gate/up (8.0 experts, floor 45.9 us): one-row 50.0, i2t_gate_up 53.6 equal, gu_s3 53.7 equal, gu_s4 53.4 equal, gu84_s2 55.3 equal, gu84_s3 54.8 equal us
+rows 1 down (8.0 experts, floor 22.9 us): one-row 35.5, i2t_down 28.2 equal us
+rows 2 gate/up (8.0 experts, floor 45.9 us): one-row 89.9, V1 69.8, i2t_gate_up 68.2 equal, gu_s3 67.8 equal, gu_s4 68.2 equal, gu84_s2 74.5 equal, gu84_s3 72.9 equal us
+rows 2 down (8.0 experts, floor 22.9 us): one-row 65.6, V1 47.1, i2t_down 51.1 equal us
+rows 4 gate/up (8.0 experts, floor 45.9 us): one-row 181.2, V1 134.5, i2t_gate_up 95.7 equal, gu_s3 94.8 equal, gu_s4 108.5 equal, gu84_s2 99.8 equal, gu84_s3 99.4 equal us
+rows 4 down (8.0 experts, floor 22.9 us): one-row 126.8, V1 76.6, i2t_down 53.0 equal us
+rows 8 gate/up (8.0 experts, floor 45.9 us): one-row 352.6, V1 243.7, i2t_gate_up 96.8 equal, gu_s3 96.3 equal, gu_s4 98.0 equal, gu84_s2 102.0 equal, gu84_s3 99.2 equal us
+rows 8 down (8.0 experts, floor 22.9 us): one-row 259.9, V1 131.5, i2t_down 54.6 equal us
+heavy: done: peak charged 1.3 GB of the 28 GB cap (footprint 1.3 GB, resident 1.2 GB, host wired growth 1.3 GB); host pressure worst 1, host swap +0 MB, host pageins 1016
+exit 0

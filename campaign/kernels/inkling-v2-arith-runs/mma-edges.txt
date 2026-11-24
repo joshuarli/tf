@@ -1,0 +1,7 @@
+steps 1: same 256000, both NaN (payload differs) 0, zero sign differs 0, other 0
+steps 9: same 256000, both NaN (payload differs) 0, zero sign differs 0, other 0
+mma_rate: 16.24 TFLOP/s (5.166 ms)
+mma_rate_h: 10.45 TFLOP/s (8.026 ms)
+fma_rate: 13.52 TFLOP/s (1.551 ms)
+heavy: done: peak charged 0.0 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.0 GB); host pressure worst 1, host swap +0 MB, host pageins 123
+exit 0

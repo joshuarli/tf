@@ -5,7 +5,7 @@ const inkling = tf.inkling2_loop;
 
 const History = struct { name: []const u8, token_ids: []const u32 };
 
-/// Each history from an empty cache: a batch step a token at width 1, else grouped verifies of `width` rows that commit.
+/// Each history from an empty cache: a batch step a token, or grouped verifies of `width` rows that all commit.
 pub fn main(init: std.process.Init, args: []const [:0]const u8) !void {
     if (args.len != 6) return error.ExpectedArgs;
     const gpa = init.gpa;

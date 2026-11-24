@@ -261,3 +261,69 @@ test "a grouped row's taps equal the batch step's taps at its position, across t
     }
     if (!ran) return error.SkipZigTest;
 }
+
+fn checkFused(path: []const u8) !void {
+    const gpa = std.testing.allocator;
+    const m = try model.Model.load(gpa, std.testing.io, path);
+    defer m.deinit();
+    const config = &m.config;
+    const parsed = try std.json.parseFromSlice([]const Prompt, gpa, prompts_json, .{});
+    defer parsed.deinit();
+    const agent = parsed.value[0].token_ids;
+    var ps = try prefill.PrefillScratch.init(m.device, config, 512);
+    defer ps.deinit();
+    var bs = try batch.BatchScratch.init(m.device, config, 8);
+    defer bs.deinit();
+    var verifier = try group.Verifier.init(m.device, config);
+    defer verifier.deinit();
+    const vocab = config.text.unpadded_vocab;
+    const logits = try gpa.alloc(f32, vocab);
+    defer gpa.free(logits);
+    const start = config.text.window - 3;
+    var split: [3]state.Cache = undefined;
+    for (&split) |*c| c.* = try state.Cache.init(m.device, config, config.text.window + 64);
+    defer for (&split) |*c| c.deinit();
+    try prefillTokens(m, &ps, &split[2], agent[0..start]);
+    var ids: [8]u32 = undefined;
+    ids[0] = agent[start];
+    var probe = try state.Cache.init(m.device, config, config.text.window + 64);
+    defer probe.deinit();
+    try cloneCache(m, &split[2], &probe);
+    for (1..4) |j| {
+        try batch.step(m, &bs, &.{&probe}, &.{ids[j - 1]}, logits);
+        ids[j] = argmaxAt(logits);
+    }
+    for (4..8) |j| ids[j] = @intCast(1000 + j);
+    const wrong = [_]u32{ ids[0], 1001, ids[2], ids[3] };
+    const cases = [_][]const u32{ ids[0..8], ids[0..5], ids[0..2], &wrong };
+    var seen: [3]bool = @splat(false);
+    for (cases) |rows| {
+        const width = rows.len;
+        try cloneCache(m, &split[2], &split[0]);
+        try cloneCache(m, &split[2], &split[1]);
+        const g0 = try verifier.group(&.{&split[0]}, &.{width});
+        try verifier.forward(m, &bs, &g0, rows);
+        const picks = try gpa.dupe(u32, try verifier.picks(m, bs.rows.logits, width));
+        defer gpa.free(picks);
+        const kept = group.acceptedDrafts(rows[1..], picks);
+        seen[if (kept == 0) 0 else if (kept == width - 1) 2 else 1] = true;
+        try verifier.commit(m, &g0, &.{kept});
+        const g1 = try verifier.group(&.{&split[1]}, &.{width});
+        const decided = try verifier.decide(m, &bs, &g1, rows, .commit);
+        try std.testing.expectEqualSlices(u32, picks, decided.picks);
+        try std.testing.expectEqual(kept, decided.accepted[0]);
+        try expectSameCache(m, &split[0], &split[1]);
+    }
+    try std.testing.expect(seen[0] and seen[1] and seen[2]);
+    std.debug.print("fused verify rounds {s}: zero, partial and full acceptance pick, accept and commit as forward, picks and commit\n", .{path});
+}
+
+test "a fused verify round picks, accepts and commits what forward, picks and commit do" {
+    var ran = false;
+    for ([_][*:0]const u8{ "TF_INKLING2_LOOP_DIR", "TF_INKLING2_LOOP_OQ4E_DIR" }) |name| {
+        const path = std.c.getenv(name) orelse continue;
+        try checkFused(std.mem.span(path));
+        ran = true;
+    }
+    if (!ran) return error.SkipZigTest;
+}

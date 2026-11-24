@@ -4,6 +4,7 @@
 pub const config = @import("config.zig");
 pub const Model = @import("model.zig").Model;
 pub const Tensor = @import("model.zig").Tensor;
+pub const Layer = @import("model.zig").Layer;
 pub const Cache = @import("state.zig").Cache;
 pub const Scratch = @import("state.zig").Scratch;
 pub const BatchScratch = @import("batch.zig").BatchScratch;
@@ -21,6 +22,7 @@ pub const Verification = @import("verify.zig").Verification;
 pub const verify = @import("verify.zig");
 pub const hybrid_drafts = @import("verify.zig").hybrid_drafts;
 pub const group = @import("group.zig");
+pub const rows = @import("rows.zig");
 pub const Taps = @import("taps.zig").Taps;
 pub const refuse = @import("refuse.zig");
 pub const kernels = @import("kernels.zig");
@@ -44,4 +46,6 @@ test {
     _ = @import("taps.zig");
     _ = @import("group.zig");
     _ = @import("group_test.zig");
+    _ = @import("rows.zig");
+    _ = @import("rows_test.zig");
 }

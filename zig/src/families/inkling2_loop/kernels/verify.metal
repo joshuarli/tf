@@ -328,3 +328,44 @@ struct i2v_argmax_args { uint vocab; };
     OUT[row] = (isnan(x[0]) || i == 0xffffffffu) ? 0u : i;
   }
 }
+
+struct i2v_stream { uint first, size; };
+
+[[kernel]] void i2v_accept(const device uint* IDS [[buffer(0)]], const device uint* T [[buffer(1)]],
+    constant i2v_stream* streams [[buffer(2)]], constant uint& count [[buffer(3)]], device uint* ACC [[buffer(4)]],
+    uint i [[thread_position_in_grid]]) {
+  if (i >= count) return;
+  const uint first = streams[i].first, size = streams[i].size;
+  uint n = 0u;
+  while (n + 1u < size && IDS[first + 1u + n] == T[first + n]) ++n;
+  ACC[i] = n;
+}
+
+struct i2v_round_row { device half* keys; device half* values; device float* conv[4]; uint pos, capacity, owner, j; };
+
+[[kernel]] void i2v_round_kv(const device half* KV [[buffer(0)]], constant i2v_commit_args& a [[buffer(1)]],
+    constant i2v_round_row* rows [[buffer(2)]], constant i2v_commit_slot* slots [[buffer(3)]],
+    const device uint* ACC [[buffer(4)]], uint3 p [[thread_position_in_grid]]) {
+  const uint i = p.x, row = p.y, slot = p.z / 2u, kind = p.z % 2u;
+  if (i >= a.kvw || row >= a.rows) return;
+  const i2v_round_row r = rows[row];
+  if (r.j >= ACC[r.owner] + 1u) return;
+  const i2v_commit_slot s = slots[slot];
+  const size_t base = ((size_t)s.locals_before * a.window + (size_t)s.globals_before * r.capacity) * a.kvw;
+  const size_t at = base + (size_t)(s.local ? r.pos % a.window : r.pos) * a.kvw + i;
+  const half v = KV[(((size_t)slot * 2u + kind) * a.stride + row) * a.kvw + i];
+  if (kind == 0u) r.keys[at] = v; else r.values[at] = v;
+}
+
+[[kernel]] void i2v_round_conv(const device float* CAP [[buffer(0)]], constant i2v_commit_args& a [[buffer(1)]],
+    constant i2v_round_row* rows [[buffer(2)]], const device uint* ACC [[buffer(3)]], uint3 p [[thread_position_in_grid]]) {
+  const uint c = p.x, row = p.y, slot = p.z / 4u, site = p.z % 4u;
+  const uint width = site < 2u ? a.kvw : a.hidden;
+  if (c >= width || row >= a.rows) return;
+  const i2v_round_row r = rows[row];
+  const uint kept = ACC[r.owner] + 1u;
+  if (r.j >= kept || r.j + a.ring < kept) return;
+  const uint site_at = site == 0u ? 0u : site == 1u ? a.kvw : site == 2u ? 2u * a.kvw : 2u * a.kvw + a.hidden;
+  const size_t src = (size_t)slot * a.stride * (2u * a.kvw + 2u * a.hidden) + (size_t)site_at * a.stride + (size_t)row * width + c;
+  r.conv[site][((size_t)slot * a.ring + r.pos % a.ring) * width + c] = CAP[src];
+}

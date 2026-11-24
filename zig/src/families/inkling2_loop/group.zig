@@ -22,15 +22,21 @@ const ConvArgs = extern struct { channels: u32, heads: u32, ring: u32, pos: u32,
 const CommitRow = extern struct { keys: u64, values: u64, conv: [4]u64, pos: u32, capacity: u32, keep: u32, conv_keep: u32 };
 const CommitSlot = extern struct { local: u32, locals_before: u32, globals_before: u32, pad: u32 = 0 };
 const CommitArgs = extern struct { kvw: u32, hidden: u32, rows: u32, stride: u32, slots: u32, window: u32, ring: u32 };
+const RoundRow = extern struct { keys: u64, values: u64, conv: [4]u64, pos: u32, capacity: u32, owner: u32, j: u32 };
+const Stream = extern struct { first: u32, size: u32 };
 
-const names = [_][:0]const u8{ "i2v_conv", "i2v_store_rel", "i2v_split", "i2v_commit_kv", "i2v_commit_conv", "i2v_argmax" };
-const Kernel = enum { conv, store_rel, split, commit_kv, commit_conv, argmax };
+const names = [_][:0]const u8{ "i2v_conv", "i2v_store_rel", "i2v_split", "i2v_commit_kv", "i2v_commit_conv", "i2v_argmax", "i2v_accept", "i2v_round_kv", "i2v_round_conv" };
+const Kernel = enum { conv, store_rel, split, commit_kv, commit_conv, argmax, accept, round_kv, round_conv };
+
+pub const Finish = enum { picks, commit };
+pub const Decided = struct { picks: []const u32, accepted: []const u32 };
 
 pub const Verifier = struct {
     kernels: [names.len]mtl.Pipeline,
     kv: mtl.Buffer,
     conv: prefill.ConvCapture,
     targets: mtl.Buffer,
+    accepted: mtl.Buffer,
     slots: [64]CommitSlot,
     slot_count: usize,
 
@@ -51,6 +57,8 @@ pub const Verifier = struct {
         v.conv = try prefill.ConvCapture.init(device, config, max_rows);
         errdefer v.conv.deinit();
         v.targets = try device.buffer(max_rows * 4, mtl.ResourceOptions.shared);
+        errdefer v.targets.deinit();
+        v.accepted = try device.buffer(max_rows * 4, mtl.ResourceOptions.shared);
         v.slot_count = config.slots();
         var locals: u32 = 0;
         var globals: u32 = 0;
@@ -67,6 +75,7 @@ pub const Verifier = struct {
         v.kv.deinit();
         v.conv.deinit();
         v.targets.deinit();
+        v.accepted.deinit();
     }
 
     fn pipe(v: *const Verifier, k: Kernel) mtl.Pipeline {
@@ -94,6 +103,68 @@ pub const Verifier = struct {
     pub fn forward(_: *const Verifier, m: *const Model, batch: *batch_mod.BatchScratch, g: *const Group, ids: []const u32) !void {
         if (ids.len != g.rows or ids.len > batch.rows.chunk) return error.BadGroup;
         try prefill.groupStep(m, batch, g, ids);
+    }
+
+    pub fn decide(v: *const Verifier, m: *const Model, batch: *batch_mod.BatchScratch, g: *const Group, ids: []const u32, finish: Finish) !Decided {
+        if (ids.len != g.rows or ids.len > batch.rows.chunk) return error.BadGroup;
+        try prefill.groupFinish(m, batch, g, ids, finish);
+        const accepted = v.accepted.slice(u32, g.caches.len);
+        if (finish == .commit) for (g.caches, accepted) |cache, a| {
+            cache.len += a + 1;
+        };
+        return .{ .picks = v.targets.slice(u32, g.rows), .accepted = accepted };
+    }
+
+    pub fn encodeFinish(v: *const Verifier, enc: mtl.ComputeEncoder, m: *const Model, ids: mtl.Buffer, logits: mtl.Buffer, g: *const Group, finish: Finish) void {
+        enc.setPipeline(v.pipe(.argmax));
+        enc.setBuffer(logits, 0, 0);
+        enc.setValue(@as(u32, m.config.text.unpadded_vocab), 1);
+        enc.setBuffer(v.targets, 0, 2);
+        enc.dispatchGroups(mtl.Size.of(g.rows, 1, 1), mtl.Size.of(1024, 1, 1));
+        if (finish == .picks) return;
+        var streams: [max_rows]Stream = undefined;
+        var at: u32 = 0;
+        for (g.sizes, 0..) |size, i| {
+            streams[i] = .{ .first = at, .size = @intCast(size) };
+            at += @intCast(size);
+        }
+        enc.setPipeline(v.pipe(.accept));
+        enc.setBuffer(ids, 0, 0);
+        enc.setBuffer(v.targets, 0, 1);
+        enc.setBytes(std.mem.sliceAsBytes(streams[0..g.caches.len]), 2);
+        enc.setValue(@as(u32, @intCast(g.caches.len)), 3);
+        enc.setBuffer(v.accepted, 0, 4);
+        enc.dispatchThreads(mtl.Size.of(g.caches.len, 1, 1), mtl.Size.of(32, 1, 1));
+        const c = &m.config;
+        var rows: [max_rows]RoundRow = undefined;
+        for (0..g.rows) |r| {
+            const cache = g.caches[g.owner[r]];
+            rows[r] = .{
+                .keys = cache.keys.gpuAddress(),
+                .values = cache.values.gpuAddress(),
+                .conv = .{ cache.k_conv.gpuAddress(), cache.v_conv.gpuAddress(), cache.attn_conv.gpuAddress(), cache.mlp_conv.gpuAddress() },
+                .pos = g.pos[r],
+                .capacity = @intCast(cache.capacity),
+                .owner = g.owner[r],
+                .j = @intCast(r - g.first[r]),
+            };
+        }
+        const kvw: usize = c.text.local.kv * c.text.local.dim;
+        const args = CommitArgs{ .kvw = @intCast(kvw), .hidden = c.text.hidden, .rows = @intCast(g.rows), .stride = max_rows, .slots = @intCast(v.slot_count), .window = c.text.window, .ring = state.ring };
+        for (g.caches) |cache| for ([_]mtl.Buffer{ cache.keys, cache.values, cache.k_conv, cache.v_conv, cache.attn_conv, cache.mlp_conv }) |buf| enc.useResource(buf, mtl.ResourceUsage.write);
+        enc.setPipeline(v.pipe(.round_kv));
+        enc.setBuffer(v.kv, 0, 0);
+        enc.setValue(args, 1);
+        enc.setBytes(std.mem.sliceAsBytes(rows[0..g.rows]), 2);
+        enc.setBytes(std.mem.sliceAsBytes(v.slots[0..v.slot_count]), 3);
+        enc.setBuffer(v.accepted, 0, 4);
+        enc.dispatchThreads(mtl.Size.of(kvw, g.rows, v.slot_count * 2), mtl.Size.of(256, 1, 1));
+        enc.setPipeline(v.pipe(.round_conv));
+        enc.setBuffer(v.conv.buffer, 0, 0);
+        enc.setValue(args, 1);
+        enc.setBytes(std.mem.sliceAsBytes(rows[0..g.rows]), 2);
+        enc.setBuffer(v.accepted, 0, 3);
+        enc.dispatchThreads(mtl.Size.of(@max(kvw, c.text.hidden), g.rows, v.slot_count * 4), mtl.Size.of(256, 1, 1));
     }
 
     pub fn picks(v: *const Verifier, m: *const Model, logits: mtl.Buffer, rows: usize) ![]const u32 {

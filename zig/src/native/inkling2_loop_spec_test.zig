@@ -220,6 +220,63 @@ test "inkling served speculation: tree rounds with lookup equal draft-off replie
     std.debug.print("inkling served speculation: {d} drafted replies equal their draft-off replies, and 4 equal a host without the drafter\n", .{drafted});
 }
 
+test "inkling host: full-chunk prefill keeps a repeated prompt equal to its cold reply and a fork equal to a store hit at a point inside a chunk" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const target = std.c.getenv("TF_INKLING2_LOOP_OQ4E_DIR") orelse return error.SkipZigTest;
+    if (unsetenv("INKLING_DRAFTER") != 0) return error.SetEnv;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const parsed = try std.json.parseFromSlice([]const Prompt, gpa, @import("inkling_prompts").text, .{});
+    defer parsed.deinit();
+    var named: std.StringHashMapUnmanaged([]const u32) = .empty;
+    defer named.deinit(gpa);
+    for (parsed.value) |p| try named.put(gpa, p.name, p.token_ids);
+    const code = named.get("code").?;
+    const source = try gpa.dupe(u32, named.get("agent").?);
+    defer gpa.free(source);
+    source[100] = if (source[100] == 1000) 1001 else 1000;
+    const point: u32 = 2432;
+    try std.testing.expect(source.len > point + 128 and source.len - 1 < 2048 + 1024);
+    const forked = try std.mem.concat(gpa, u32, &.{ source[0 .. point + 50], code[code.len / 2 ..] });
+    defer gpa.free(forked);
+    const grown = try std.mem.concat(gpa, u32, &.{ source, code[code.len / 2 ..] });
+    defer gpa.free(grown);
+    var board: Board = .{ .gpa = gpa, .io = io, .engine = undefined };
+    defer board.deinit();
+    try board.replies.ensureTotalCapacity(gpa, 8);
+    const o: api.Open = .{ .dir = std.mem.span(target), .model_type = "inkling2_loop", .lanes = 2, .lanes_fixed = true, .context = 8192, .prompt_cache_gib = 2 };
+    var two: struct { cold: *Reply, again: *Reply, fork: *Reply, grown: *Reply } = undefined;
+    {
+        const opened = try openHost(arena.allocator(), o);
+        defer opened.close(opened.ctx);
+        board.engine = opened.engine;
+        two.cold = try board.ask(source, 32, &.{}, false);
+        two.again = try board.ask(source, 32, &.{}, false);
+        two.fork = try board.ask(forked, 48, &.{}, false);
+        two.grown = try board.ask(grown, 48, &.{}, false);
+    }
+    var one_lane = o;
+    one_lane.lanes = 1;
+    const opened = try openHost(arena.allocator(), one_lane);
+    defer opened.close(opened.ctx);
+    board.engine = opened.engine;
+    const cold = try board.ask(source, 32, &.{}, false);
+    const grown_one = try board.ask(grown, 48, &.{}, false);
+    const hit = try board.ask(forked, 48, &.{}, false);
+    try std.testing.expectEqual(@as(u32, 0), two.cold.cached);
+    try std.testing.expectEqual(@as(u32, @intCast(source.len - 1)), two.again.cached);
+    try expectSame(two.again, two.cold);
+    try expectSame(cold, two.cold);
+    try std.testing.expectEqual(point, two.fork.cached);
+    try std.testing.expectEqual(point, hit.cached);
+    try expectSame(two.fork, hit);
+    try std.testing.expectEqual(@as(u32, @intCast(source.len)), two.grown.cached);
+    try std.testing.expectEqual(@as(u32, @intCast(source.len)), grown_one.cached);
+    try expectSame(two.grown, grown_one);
+    std.debug.print("inkling host: a repeated prompt, a fork at {d} and a store hit there reply as their references\n", .{point});
+}
+
 fn openHost(a: std.mem.Allocator, o: api.Open) !api.Opened {
     var problem: []const u8 = "";
     return try native.open(a, std.testing.allocator, std.testing.io, o, &problem) orelse {

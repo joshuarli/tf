@@ -362,16 +362,16 @@ pub const Host = struct {
         }
     }
 
-    fn store(h: *Host, slot: *Slot) !void {
-        if (!h.prefix_reuse or slot.cache.len == 0 or h.store_limit == 0) return;
-        const tokens = slot.resident.items;
+    fn store(h: *Host, slot: *Slot, len: usize, snapshot: ?*inkling.Cache.Rollback) !void {
+        if (!h.prefix_reuse or len == 0 or h.store_limit == 0) return;
+        const tokens = slot.resident.items[0..len];
         h.sequence += 1;
         if (prefix.duplicate(h.entries.items, tokens)) |i| {
             h.entries.items[i].last_used = h.sequence;
             return;
         }
-        const taps: usize = if (h.draft) |d| d.keepBytes(h.lane(slot), slot.cache.len) else 0;
-        const bytes = inkling.Cache.fixedBytes(&h.model.config) +| slot.cache.len *| inkling.Cache.bytesPerToken(&h.model.config) +| tokens.len *| @sizeOf(u32) +| taps;
+        const taps: usize = if (h.draft) |d| d.keepBytes(h.lane(slot), len) else 0;
+        const bytes = inkling.Cache.fixedBytes(&h.model.config) +| len *| inkling.Cache.bytesPerToken(&h.model.config) +| tokens.len *| @sizeOf(u32) +| taps;
         if (bytes > h.store_limit) return;
         while (prefix.eviction(h.entries.items, h.store_bytes, h.store_limit, bytes)) |i| {
             var old = h.entries.swapRemove(i);
@@ -383,12 +383,13 @@ pub const Host = struct {
         }
         const ids = try h.gpa.dupe(u32, tokens);
         errdefer h.gpa.free(ids);
-        var cache = try inkling.Cache.init(h.model.device, &h.model.config, slot.cache.len);
+        var cache = try inkling.Cache.init(h.model.device, &h.model.config, len);
         errdefer cache.deinit();
-        try cache.copyFrom(h.model.queue, &h.model.config, &slot.cache, slot.cache.len);
+        try cache.copyFrom(h.model.queue, &h.model.config, &slot.cache, len);
+        if (snapshot) |saved| try saved.copy(h.model.queue, &h.model.config, &cache, false);
         var rows: spec.Rows = .{};
         errdefer rows.deinit(h.gpa);
-        if (h.draft) |d| try d.keep(h.lane(slot), slot.cache.len, h.gpa, &rows);
+        if (h.draft) |d| try d.keep(h.lane(slot), len, h.gpa, &rows);
         try h.entries.append(h.gpa, .{ .tokens = ids, .cache = cache, .bytes = bytes, .last_used = h.sequence, .taps = rows });
         h.store_bytes += bytes;
         std.debug.print("inkling store: insert {d} tokens {d} bytes total {d}\n", .{ ids.len, bytes, h.store_bytes });
@@ -449,7 +450,7 @@ pub const Host = struct {
             slot.resident.appendSliceAssumeCapacity(r.prompt[0..f.point]);
             job.reused = f.point;
             if (h.draft) |d| d.restore(h.lane(slot), d.kept(f.source), f.point);
-            h.store(slot) catch |e| {
+            h.store(slot, slot.cache.len, null) catch |e| {
                 h.retire(slot, .failed, @errorName(e));
                 return;
             };
@@ -466,8 +467,7 @@ pub const Host = struct {
         std.debug.print("inkling session: slot {d}\n", .{choice.index});
         const prefill_start = h.now();
         var at = job.reused;
-        const first = ((r.prompt.len -| h.fork_window) + h.fork_interval - 1) / h.fork_interval * h.fork_interval;
-        var next = @max(h.fork_interval, @max(first, ((at + h.fork_interval - 1) / h.fork_interval) * h.fork_interval));
+        var next = prefix.firstPoint(r.prompt.len, at, h.fork_window, h.fork_interval);
         var saved: usize = 0;
         while (at < r.prompt.len) {
             if (h.cancelled(job)) {
@@ -475,28 +475,23 @@ pub const Host = struct {
                 h.retire(slot, .cancelled, "");
                 return;
             }
-            if (h.prefix_reuse and next == at and next < r.prompt.len and next > 0) {
-                slot.snapshots[saved].?.copyRows(h.model.queue, &h.model.config, &slot.cache, true, r.prompt.len - at) catch |e| {
-                    h.retire(slot, .failed, @errorName(e));
-                    return;
-                };
-                slot.points[saved] = at;
-                if (job.reused == 0 and saved == 0) h.store(slot) catch |e| {
-                    h.retire(slot, .failed, @errorName(e));
-                    return;
-                };
-                saved += 1;
-                next += h.fork_interval;
-            }
-            if (h.prefix_reuse and at == r.prompt.len - 1) h.store(slot) catch |e| {
+            if (h.prefix_reuse and at == r.prompt.len - 1) h.store(slot, slot.cache.len, null) catch |e| {
                 h.retire(slot, .failed, @errorName(e));
                 return;
             };
-            const remaining = if (h.prefix_reuse and at < r.prompt.len - 1) r.prompt.len - 1 - at else r.prompt.len - at;
-            const take = @min(h.prefill.chunk, @min(remaining, if (h.prefix_reuse and next > at) next - at else remaining));
+            const plan = prefix.chunk(at, r.prompt.len, h.prefill.chunk, h.prefix_reuse, next, h.fork_interval);
+            const take = plan.rows;
+            var captures: [8]inkling.PrefillScratch.Capture = undefined;
+            for (captures[0..plan.points], 0..) |*capture, i| {
+                const point = next + i * h.fork_interval;
+                capture.* = .{ .rollback = &slot.snapshots[saved + i].?, .at = point, .rows = r.prompt.len - point };
+            }
+            next = plan.next;
             h.prefill.taps = if (h.draft) |d| d.promptTaps() else null;
+            h.prefill.captures = captures[0..plan.points];
             const filled = inkling.prefillWant(h.model, &h.prefill, &slot.cache, r.prompt[at..][0..take], if (at + take == r.prompt.len) .last else .none);
             h.prefill.taps = null;
+            h.prefill.captures = &.{};
             filled catch |e| {
                 if (e == error.HalfActivationOverflow and h.prefill.half) {
                     std.debug.print("inkling prefill: half activation overflow at {d} of {d} prompt tokens; refilling in f32\n", .{ at, r.prompt.len });
@@ -513,7 +508,19 @@ pub const Host = struct {
                 return;
             };
             slot.resident.appendSliceAssumeCapacity(r.prompt[at..][0..take]);
-            if (h.draft) |d| d.absorb(h.lane(slot), d.prompt.bytes(0, take), take);
+            var absorbed: usize = 0;
+            for (captures[0..plan.points]) |capture| {
+                const rows = capture.at - at - absorbed;
+                if (h.draft) |d| d.absorb(h.lane(slot), d.prompt.bytes(absorbed, rows), rows);
+                absorbed += rows;
+                slot.points[saved] = capture.at;
+                if (job.reused == 0 and saved == 0) h.store(slot, capture.at, capture.rollback) catch |e| {
+                    h.retire(slot, .failed, @errorName(e));
+                    return;
+                };
+                saved += 1;
+            }
+            if (h.draft) |d| d.absorb(h.lane(slot), d.prompt.bytes(absorbed, take - absorbed), take - absorbed);
             at += take;
         }
         if (h.draft) |d| if (h.prefix_reuse) d.keepPrompt(h.lane(slot), slot.cache.len) catch |e| {

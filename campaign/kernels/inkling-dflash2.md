@@ -91,8 +91,9 @@ Committed tokens per round. Without the norm, all 1,530 rounds that offered draf
 
 ## Correctness
 
-- `python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu` exited 0. `inkling-host` passed 35/35.
-  `inkling-gpu` passed 14/14 steps and 123/123 tests, with none skipped: 115 already on main and the 8 below.
+- `python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu` exited 0 on `fff7591e7`
+  (`.work/suite/20261123T231107`, 9.6 min). `inkling-host` passed 35/35 on its first run. `inkling-gpu` passed
+  14/14 steps and 123/123 tests, with none skipped: 115 already on main and the 8 below.
 - Family module, both checkpoints:
   - Grouped logits, GPU picks and committed caches equal sequential batch decoding bit for bit. Three streams of
     4, 3 and 1 rows share a step, the first crossing the 1,024-row local ring; their commits keep partial

@@ -94,7 +94,7 @@ WORKLOADS = [
     Workload("inkling-gpu", "change", "inkling",
              "Metal forward, prefill, batched step, rollback, fork, verify, grouped verify, oQ4e affine kernels and "
              "DFlash2 speculation against the checkpoints",
-             "estimated 7 min", ("zig", "inkling-weights", "inkling-oq4e-weights", "inkling-dflash2-weights"),
+             "observed 9 min", ("zig", "inkling-weights", "inkling-oq4e-weights", "inkling-dflash2-weights"),
              ("python3", str(HEAVY), "--", "zig", "build", "test-inkling2-loop", "-Dcpu=apple_m1", "-j1", "--summary", "all"),
              env=(("TF_INKLING2_LOOP_DIR", str(INKLING)), ("TF_INKLING2_LOOP_OQ4E_DIR", str(INKLING_OQ4E)),
                   ("TF_INKLING2_DFLASH2_DIR", str(INKLING_DFLASH2)), ("INKLING_LOAD_LIMIT_GB", "26")), no_skips=True),

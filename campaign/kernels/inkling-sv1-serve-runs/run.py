@@ -209,23 +209,22 @@ def table(args) -> int:
     rows = [json.loads(line) for name in args.names for line in (HERE / f"{name}.jsonl").read_text().splitlines()]
     trials = [r for r in rows if r.get("kind") == "trial"]
     by = {(t["prompt"]["name"], t["mode"]): t for t in trials}
-    print("| Prompt | Prompt tokens | Off cold tok/s | On cold tok/s | On/off | Committed/round | Round ms | "
+    print("| Prompt | Prompt tokens | Off tok/s | Off ms/token | On tok/s | On/off | Committed/round | Round ms | "
           "Draft ms | Verify ms | Commit ms | Accepted/drafted | Valid |")
-    print("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |")
+    print("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |")
     for name in sorted({t["prompt"]["name"] for t in trials}, key=lambda n: (int(n.rsplit("-", 1)[1]), n)):
         off, on = by.get((name, "ar")), by.get((name, "drafter"))
         if not off or not on:
             continue
         a, b = off["requests"]["cold"], on["requests"]["cold"]
         spec = b.get("speculative") or {}
-        proposer = spec.get("proposer") or {}
-        rounds = spec.get("rounds") or 0
-        spec_rounds = proposer.get("rounds") or 0
-        phase = lambda key: proposer.get(key, 0) / spec_rounds if spec_rounds else float("nan")  # noqa: E731
-        print(f"| {name} | {b.get('prompt_tokens')} | {a['decode_tps']:.1f} | {b['decode_tps']:.1f} | "
-              f"{b['decode_tps'] / a['decode_tps']:.2f} | {(b['tokens'] - 1) / rounds:.2f} | "
-              f"{1000 * b['decode_s'] / rounds:.1f} | {phase('draft_ms'):.1f} | {phase('verify_ms'):.1f} | "
-              f"{phase('commit_ms'):.2f} | {spec.get('accepted')}/{spec.get('drafted')} | "
+        phases = spec.get("proposer") or {}
+        drafted = phases.get("rounds") or 0
+        mean = {key: phases.get(key, 0) / drafted for key in ("draft_ms", "verify_ms", "commit_ms")} if drafted else {}
+        print(f"| {name} | {b.get('prompt_tokens')} | {a['decode_tps']:.1f} | {1000 / a['decode_tps']:.1f} | "
+              f"{b['decode_tps']:.1f} | {b['decode_tps'] / a['decode_tps']:.2f} | {(b['tokens'] - 1) / spec['rounds']:.2f} | "
+              f"{sum(mean.values()):.1f} | {mean.get('draft_ms', 0):.1f} | {mean.get('verify_ms', 0):.1f} | "
+              f"{mean.get('commit_ms', 0):.2f} | {spec.get('accepted')}/{spec.get('drafted')} | "
               f"{off['valid'] and on['valid']} |")
     return 0
 

@@ -223,6 +223,63 @@ pub const Pipes = struct {
     }
 };
 
+pub const Rounding = struct {
+    experts: bool = false,
+    inputs: bool = false,
+
+    pub fn parse(text: ?[]const u8) error{BadInklingPrefillHalf}!Rounding {
+        const value = text orelse return .{};
+        if (std.mem.eql(u8, value, "experts")) return .{ .experts = true };
+        if (std.mem.eql(u8, value, "inputs")) return .{ .inputs = true };
+        if (std.mem.eql(u8, value, "both")) return .{ .experts = true, .inputs = true };
+        return error.BadInklingPrefillHalf;
+    }
+};
+
+test "half rounding accepts only the documented values" {
+    try std.testing.expectEqual(Rounding{}, try Rounding.parse(null));
+    try std.testing.expectEqual(Rounding{ .experts = true }, try Rounding.parse("experts"));
+    try std.testing.expectEqual(Rounding{ .inputs = true }, try Rounding.parse("inputs"));
+    try std.testing.expectEqual(Rounding{ .experts = true, .inputs = true }, try Rounding.parse("both"));
+    try std.testing.expectError(error.BadInklingPrefillHalf, Rounding.parse(""));
+    try std.testing.expectError(error.BadInklingPrefillHalf, Rounding.parse("Experts"));
+}
+
+pub const Tiles = struct {
+    tall: bool = false,
+    paired: bool = false,
+    attn64: bool = false,
+
+    pub const default: Tiles = .{ .paired = true, .attn64 = true };
+
+    pub fn parse(text: ?[]const u8) error{BadInklingPrefillTile}!Tiles {
+        const value = text orelse return default;
+        var out: Tiles = .{};
+        if (std.mem.eql(u8, value, "none")) return out;
+        var words = std.mem.splitScalar(u8, value, ',');
+        while (words.next()) |word| {
+            if (std.mem.eql(u8, word, "tall")) {
+                out.tall = true;
+            } else if (std.mem.eql(u8, word, "paired")) {
+                out.paired = true;
+            } else if (std.mem.eql(u8, word, "attn64")) {
+                out.attn64 = true;
+            } else return error.BadInklingPrefillTile;
+        }
+        return out;
+    }
+};
+
+test "tile options list the shapes in use" {
+    try std.testing.expectEqual(Tiles.default, try Tiles.parse(null));
+    try std.testing.expectEqual(Tiles{}, try Tiles.parse("none"));
+    try std.testing.expectEqual(Tiles{ .tall = true, .attn64 = true }, try Tiles.parse("tall,attn64"));
+    try std.testing.expectEqual(Tiles{ .paired = true }, try Tiles.parse("paired"));
+    try std.testing.expectError(error.BadInklingPrefillTile, Tiles.parse(""));
+    try std.testing.expectError(error.BadInklingPrefillTile, Tiles.parse("paired,"));
+    try std.testing.expectError(error.BadInklingPrefillTile, Tiles.parse("paired,wide"));
+}
+
 pub const ConvSite = enum { key, value, attention, mlp };
 
 pub const ConvCapture = struct {
@@ -320,9 +377,8 @@ pub const PrefillScratch = struct {
     /// The half path's expert matrices, attention and staged projections on tensor units; off is the shader cores.
     units: bool,
     fuse: bool,
-    half_rows_all: bool,
-    half_inputs: bool,
-    tall: bool,
+    rounding: Rounding,
+    tiles: Tiles,
     capture: ?mtl.Buffer,
     capture_row: usize,
     routes: ?mtl.Buffer,
@@ -355,10 +411,8 @@ pub const PrefillScratch = struct {
         s.half = true;
         s.units = true;
         s.fuse = true;
-        const rounding: []const u8 = if (std.c.getenv("INKLING_PREFILL_HALF")) |v| std.mem.span(v) else "";
-        s.half_rows_all = std.mem.eql(u8, rounding, "experts") or std.mem.eql(u8, rounding, "both");
-        s.half_inputs = std.mem.eql(u8, rounding, "inputs") or std.mem.eql(u8, rounding, "both");
-        s.tall = if (std.c.getenv("INKLING_PREFILL_TILE")) |v| std.mem.eql(u8, std.mem.span(v), "tall") else false;
+        s.rounding = try Rounding.parse(if (std.c.getenv("INKLING_PREFILL_HALF")) |v| std.mem.span(v) else null);
+        s.tiles = try Tiles.parse(if (std.c.getenv("INKLING_PREFILL_TILE")) |v| std.mem.span(v) else null);
         s.bf16_input = if (fast and device.tensorUnits()) try device.buffer(@max(chunk * @max(2 * h, @max(qw, @max(kvw, rank))) * 2, 16), mtl.ResourceOptions.private) else null;
         errdefer if (s.bf16_input) |buf| buf.deinit();
         s.half_overflow = if (fast or device.tensorUnits()) try device.buffer(16, mtl.ResourceOptions.shared) else null;
@@ -605,7 +659,7 @@ pub const PrefillScratch = struct {
         s.pipes.attn_units64 = null;
         s.pipes.half_rows = null;
         if (fast or device.tensorUnits()) {
-            const half_lib = try mtl.Library.fromSource(device, if (!device.tensorUnits()) half_source else if (s.half_rows_all) units_rows_source else units_source, opts);
+            const half_lib = try mtl.Library.fromSource(device, if (!device.tensorUnits()) half_source else if (s.rounding.experts) units_rows_source else units_source, opts);
             defer half_lib.deinit();
             if (device.tensorUnits()) {
                 s.pipes.wide_expert_nv = try mtl.Pipeline.init(device, half_lib, "i2p_expert_matrix_wide", false);
@@ -1172,8 +1226,8 @@ const Chunk = struct {
             .inputs = s.affine_stage_x orelse return null,
             .overflow = s.half_overflow orelse return null,
             .rows = c.n,
-            .half_inputs = s.half_inputs,
-            .tall = s.tall,
+            .half_inputs = s.rounding.inputs,
+            .tall = s.tiles.tall,
         };
     }
 
@@ -1244,7 +1298,7 @@ const Chunk = struct {
         const tiled = c.heads == 24 and c.kv == 8 and c.dim == 128;
         const attn_args = AttnB{ .heads = c.heads, .kv = c.kv, .dim = c.dim, .rel = c.drel, .extent = extent, .window = win, .base = c.base, .rows = c.n, .rmode = @intFromBool(c.ring), .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(c.dim))), .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha };
         if (tiled and s.half and s.pipes.half_attn != null and (s.fast or (c.n > 8 and c.m.affine_pipes != null))) {
-            if (s.units and s.fuse and s.pipes.attn_units64 != null) {
+            if (s.units and s.fuse and s.tiles.attn64 and s.pipes.attn_units64 != null) {
                 c.setP(s.pipes.attn_units64.?, attn_args, &.{ b(s.q), keybase, valbase, b(s.relbias), b(s.sink), A, b(s.attn), b(s.kh), b(s.vh), b(s.half_overflow.?) });
                 c.enc.dispatchGroups(mtl.Size.of(c.kv, (c.n + 63) / 64, 1), mtl.Size.of(384, 1, 1));
             } else if (s.units and s.pipes.attn_units != null) {
@@ -1434,7 +1488,7 @@ const Chunk = struct {
     }
 
     fn unitPipe(c: Chunk, single: mtl.Pipeline, which: usize) mtl.Pipeline {
-        if (c.batch != null or !c.s.fuse) return single;
+        if (c.batch != null or !c.s.fuse or !c.s.tiles.paired) return single;
         return c.s.pipes.paired[which] orelse single;
     }
 

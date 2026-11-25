@@ -7,7 +7,7 @@ This is the single plan for this repository: all current and future work, and th
 **Active 2026-11-24.**
 - Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**.
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
-- **Last accepted code: SC1 merge `1668d5caa`** (green on main with the serialized GPU test runs: `inkling-host` 24/24, `inkling-gpu` 180/180, peak 24.0 GB). Before it, V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
+- **Last accepted code: P5c merge `7f7cb75a3`** (green on main: `inkling-gpu` 181/181, peak 24.1 GB; oracle gate pass). Before it, SC1 merge `1668d5caa` (180/180), V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
 - **Open from P3c:** `code-c02` now falls into a repeatable reasoning loop, and oQ4e quality dev is 7/11 (base 6/11), below the fast profile's 8-case bar. Mean TTFT at four agents rose on the warm repetition; the cause is not traced.
 - **Parked branches** (all on `origin`), with item, cause and retry:
   - `lane/p3c-prefill` at `f0ff849e6`: commits the prefill scratch at setup. Two 1K pairs are inconclusive and it has not run the suite. Retry: the suite, then three first-pass pairs at 1K.
@@ -91,7 +91,7 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    Open: experts with 4–8 live rows still cost about 1.5× their bytes, and about 13 ms a round at every width sits
    in kernels dispatched from `prefill.zig` (mixes, norms, convolutions, router, controller, affine 4-bit experts),
    which V4 takes after P5c.
-3f. V4, after P5c merges (shares `prefill.zig`): the ~13 ms a round spent at every verify width in kernels that
+3f. V4, after PH2's flip lands (shares `prefill.zig`): the ~13 ms a round spent at every verify width in kernels that
    `prefill.zig` dispatches, measured per kernel at 1, 8 and 16 rows, then the 4–8-live-row expert cost.
 4. SV1, done and merged (`inkling-sv1-serve.md`). `INKLING_DRAFTER=<dir>` turns on served greedy DFlash2
    speculation, byte-identical to plain greedy across prompt-cache hits, forks and EOS (133/133 in `inkling-gpu`).
@@ -108,15 +108,17 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    −0.23 points; full quality 29/44 on both; Pi 7/8 on both (`read-and-answer` fails on both). It swaps one runaway
    for another, repeatably: exact loops on `code-c02`, which half passes; half loops on `retrieval-t01`, which exact
    answers. Both are tracked under Q3.
-5e. PH2, after P5c merges (shares `prefill.zig`): make `both` the default prefill, add an explicit exact value
+5e. PH2, running in `.work/wt/ph2` (`lane/ph2-default`), parent-owned: make `both` the default prefill, add an explicit exact value
    (`INKLING_PREFILL_HALF=off`), rerun the oracle gate and the served curve, and record the flip under Execution
    boundary's contract changes.
-5b. P5c, running (code and tests; timing via `.work/tmp/p5c-timing-go`, first in the timing queue):
-   `lane/p5c-chunks` in `.work/wt/p5c-chunks` (scope `usrn_265d53ea-e1a8-4a21-a50b-9bb72e300e69`), receipt
-   `inkling-p5c-chunks.md`. The host's fork-point chunking: prompts are cut on a 128-row grid and end with a 128-row
-   chunk, a 0–127-row tail and a one-row chunk, which run near 600 tok/s; with prefix reuse off 1K serves 1,693
-   tok/s. Keep reuse, forks and the len-1 store while prefilling in full chunks; then the first request's
-   unexplained 2.5–3.7 s.
+5b. P5c, done and merged `7f7cb75a3` (`inkling-p5c-chunks.md`). Served prompts prefill in 1,024-row chunks that
+   capture fork snapshots inside them. Six interleaved pairs: 1.175× (CI 1.109–1.245); 1K held-out 1.56×, 4K 1.12×,
+   8K 1.06×, 16K and 31.7K 1.03×; best 1,859 tok/s at 1K, 1,826 at 4K. Decision 20 passes (KL 1.001×, top-1
+   −0.13 points, held-out 99.90%, quality dev 8/11 vs 7/11). Contract change: a one-token warm-up through slot 0 at
+   load, then zeroed, cuts the first request from 2.4–2.9 s to 1.03–1.06 s; it adds 0.75–1.81 s to load and 1.57 GB
+   to ready footprint at one 32K slot (0.63 GB at eight 4K slots); peak stays 18.98 GB. Open: dev 1K prompts still
+   end in a 2–8-row chunk plus the lone last token (4–30% short of reuse-off); storing the full prompt's state with
+   its logits would remove the one-row chunk.
 3e. SC1, done and merged `1668d5caa` (`inkling-sc1-chain.md`). A tree
    round is GPU-bound: 35–41 ms, of which verify GPU 30.6–35.2 and drafter GPU 3.2–4.3; the host idles the GPU
    1.0–1.3 ms (2.7–3.3%). Draft end → verify start is 0.73–0.99 ms (selector ~0.2, the verify's CPU encode in

@@ -1,0 +1,65 @@
+{
+  "before": {
+    "time": "2026-11-25T06:19:36-0800",
+    "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+    "thermal_warning": false,
+    "memory_pressure": "System-wide memory free percentage: 82%",
+    "gpu_gate": "gpu-gate-ready: gpu_other=27.4% util=0%/0% pressure=1 swap=0/s compressor=52262/s window=1s\ngpu-gate-ready: GPU time users: ghostty pid=83603 17.9%; WindowServer pid=623 9.5%;",
+    "perf": "perf-gate-ready: constrained  cores=18 load=18.51 (1.03/core) mem_free=81% (38.9 of 48.0 GiB) swap=8844/10240 MiB disk_free=332 GiB lanes_by_memory=9",
+    "load": [
+      18.509765625,
+      20.4091796875,
+      14.66796875
+    ]
+  },
+  "attempts": [
+    {
+      "exit": 75,
+      "seconds": 2.5
+    },
+    {
+      "exit": 75,
+      "seconds": 4.6
+    },
+    {
+      "exit": 75,
+      "seconds": 4.6
+    },
+    {
+      "exit": 75,
+      "seconds": 4.8
+    },
+    {
+      "exit": 75,
+      "seconds": 4.6
+    },
+    {
+      "exit": 75,
+      "seconds": 4.5
+    },
+    {
+      "exit": 75,
+      "seconds": 4.5
+    },
+    {
+      "exit": 0,
+      "seconds": 165.5
+    }
+  ],
+  "rest_s": 0.0,
+  "timed": true,
+  "after": {
+    "time": "2026-11-25T06:26:23-0800",
+    "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+    "thermal_warning": false,
+    "memory_pressure": "System-wide memory free percentage: 83%",
+    "gpu_gate": "gpu-gate-ready: gpu_other=35.3% util=0%/0% pressure=1 swap=0/s compressor=494/s window=1s\ngpu-gate-ready: GPU time users: ghostty pid=83603 19.8%; WindowServer pid=623 15.5%;",
+    "perf": "perf-gate-ready: constrained  cores=18 load=2.16 (0.12/core) mem_free=83% (39.8 of 48.0 GiB) swap=8836/10240 MiB disk_free=331 GiB lanes_by_memory=9",
+    "load": [
+      2.16015625,
+      10.57861328125,
+      12.47607421875
+    ]
+  },
+  "env": {}
+}

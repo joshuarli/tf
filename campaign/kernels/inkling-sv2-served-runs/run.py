@@ -73,7 +73,7 @@ def session(args) -> int:
     for order, mode in enumerate(modes):
         flags, env = flags_env(mode, drafter)
         named = flags + [f"{k}={v}" for k, v in env.items()]
-        with harness.Server(binary, model, flags, 2, harness.TMP / f"sv2-{args.name}-{mode}.log", env) as server:
+        with harness.Server(binary, model, flags, 2, harness.TMP / f"sv2-{Path(args.name).name}-{mode}.log", env) as server:
             served = server.models()[0]
             for cell in sorted(by_cell):
                 group = by_cell[cell]
@@ -120,7 +120,7 @@ def eos(args) -> int:
     got: dict = {}
     for mode in MODES:
         flags, env = flags_env(mode, drafter)
-        with harness.Server(binary, model, flags, 2, harness.TMP / f"sv2-{args.name}-{mode}.log", env) as server:
+        with harness.Server(binary, model, flags, 2, harness.TMP / f"sv2-{Path(args.name).name}-{mode}.log", env) as server:
             served = server.models()[0]
             for i, text in enumerate(SHORTS):
                 reply = ask(server.base, served, [{"role": "user", "content": text}], draft=mode == "spec",

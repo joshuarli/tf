@@ -21,7 +21,7 @@ pids="$pids $head"
 tries=0
 until curl -s "http://127.0.0.1:$port/health" > /dev/null; do
   tries=$((tries + 1))
-  if [ "$tries" -gt 600 ] || ! kill -0 "$head" 2>/dev/null; then echo "server did not start"; tail -n 5 "$log"/rank*.log; exit 1; fi
+  if [ "$tries" -gt 600 ] || ! kill -0 "$head" 2>/dev/null; then printf '%s\n' "server did not start"; tail -n 5 "$log"/rank*.log; exit 1; fi
   sleep 2
 done
 python3 "$here/serve_check.py" "http://127.0.0.1:$port" m 64

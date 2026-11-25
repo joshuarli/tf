@@ -21,7 +21,7 @@ log "stop production"; (cd $SERVE_DIR && env -i HOME=$HOME PATH=/usr/local/bin:/
 poll() { # poll FILE: one line per change of (states, bytes) from rank 0's /metrics
   local last=""; while :; do
     m=$(curl -s -m 2 http://127.0.0.1:18080/metrics | grep -E "^tensorfold:prompt_cache_(states|bytes) " | tr "\n" " ")
-    [[ -n "$m" && "$m" != "$last" ]] && { echo "$(date +%s.%N) $m" >> $1; last=$m; }; sleep 0.2; done
+    [[ -n "$m" && "$m" != "$last" ]] && { echo "$(python3 -c 'import time; n=time.time_ns(); print("%d.%09d" % divmod(n, 1000000000))') $m" >> $1; last=$m; }; sleep 0.2; done
 }
 run_cfg() { # run_cfg NAME BINARY "ENV"
   local cfg=$1 bin=$2 penv=$3

@@ -27,7 +27,7 @@ done
 cp "$src/rpc/Makefile" "$src/rpc/"*.c "$src/rpc/"*.h "$out/mcdma/rpc/"
 cp "$src/tests/stub_link_verbs.c" "$out/mcdma/tests/"
 for f in LICENSE PROVENANCE.md; do [ -f "$src/$f" ] && cp "$src/$f" "$out/mcdma/"; done
-sum() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
+sum() { sha256sum "$1" | cut -d' ' -f1; }
 {
   echo "tensorfold_commit $(git -C "$root" rev-parse HEAD) ($(git -C "$root" status --porcelain | wc -l | tr -d ' ') uncommitted paths at bundling)"
   echo "branch $(git -C "$root" rev-parse --abbrev-ref HEAD)"

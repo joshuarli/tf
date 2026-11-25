@@ -9,7 +9,7 @@ done
 pkill -KILL -f "[t]ensorfold-native serve" 2>/dev/null; ssh -o BatchMode=yes RANK1_RING_IP "pkill -KILL -f \"[t]ensorfold-native serve\"" 2>/dev/null
 for i in $(seq 1 30); do
   g=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader | wc -l); h=$(ssh -o BatchMode=yes RANK1_RING_IP "nvidia-smi --query-compute-apps=pid --format=csv,noheader | wc -l")
-  l0=$(flock -n $GPU_LOCK true && echo free || echo held); l1=$(ssh -o BatchMode=yes RANK1_RING_IP "flock -n $GPU_LOCK true && echo free || echo held")
+  l0=$(python3 "$WORK/TensorFold-pr/campaign/flock.py" 0 "$GPU_LOCK" && echo free || echo held); l1=$(ssh -o BatchMode=yes RANK1_RING_IP "python3 '$WORK/TensorFold-pr/campaign/flock.py' 0 '$GPU_LOCK' && echo free || echo held")
   [[ "$g" == 0 && "$h" == 0 && "$l0" == free && "$l1" == free ]] && { echo "both ranks stopped, GPUs and locks free after $((i*2 + 2)) s"; exit 0; }; sleep 2
 done
 echo "ranks not fully stopped: gpu0=$g gpu1=$h lock0=$l0 lock1=$l1"; exit 1

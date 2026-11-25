@@ -20,7 +20,7 @@ export TF_GLM_HOST_CACHE=${TF_GLM_HOST_CACHE:-1}
 echo "rank $rank launch-pr.sh start $(date -u +%H:%M:%S) binary=$binary live_half=${TF_GLM_KV_LIVE_HALF:-unset}"
 if [[ $(ulimit -Sl) != unlimited || $(ulimit -Hl) != unlimited ]]; then sudo -n prlimit --pid $$ --memlock=unlimited:unlimited; fi
 echo "rank $rank memlock soft=$(ulimit -Sl) hard=$(ulimit -Hl)"
-flock -w 60 $GPU_LOCK taskset -c 0-4,10-14 "$binary" serve "$model" \
+python3 "$WORK/TensorFold-pr/campaign/flock.py" 60 "$GPU_LOCK" taskset -c 0-4,10-14 "$binary" serve "$model" \
   --backend cuda --host 127.0.0.1 --port 18080 --name kvprobe-native --context "${PROBE_CONTEXT:-32768}" \
   --parallel 1 --prompt-cache-gib "${PROBE_PROMPT_CACHE_GIB:-16}" --keep-warm 0 --idle-unload 0 --no-update-check "$@"
 rc=$?; echo "rank $rank: engine exited rc=$rc at $(date -u +%H:%M:%S)"; exit $rc

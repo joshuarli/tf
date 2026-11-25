@@ -21,7 +21,7 @@ if [ -z "${TF_TP_ROCE_HCA:-}${NCCL_IB_HCA:-}" ]; then
         exit 3
     fi
     if [ "$rc" -ne 0 ]; then
-        echo "error: $BIN hca exited $rc: $(grep -h '^FAIL\|^error' "$OUT/hca.log" | tail -n 1 | grep . || tail -n 1 "$OUT/hca.log") ($OUT/hca.log)" >&2
+        echo "error: $BIN hca exited $rc: $(grep -hE '^FAIL|^error' "$OUT/hca.log" | tail -n 1 | grep . || tail -n 1 "$OUT/hca.log") ($OUT/hca.log)" >&2
         exit 3
     fi
     if ! echo "$PICK" | grep -Eqx 'NCCL_IB_HCA=[A-Za-z0-9_.-]+(,[A-Za-z0-9_.-]+)*'; then
@@ -38,8 +38,8 @@ step() { # NAME BACKEND ARGS...: this host's rank; log OUT/NAME.log ending with 
     local name=$1 backend=$2; shift 2
     PORT=$((PORT + 10))
     ( TF_TP_RANK=$RANK TF_TP_MASTER=$MASTER TF_TP_PORT=$PORT TF_COMM_BACKEND=$backend TF_TP_ROCE_FALLBACK=error \
-        timeout 900 "$BIN" "$@"; echo "EXIT rank $RANK rc $? at $(date +%s.%N)" ) > "$OUT/$name.log" 2>&1
-    echo "$name: $(grep -h '^SUMMARY\|^PASS roce-host\|^INJECT\|^EXIT' "$OUT/$name.log" | tr '\n' ' ')"
+        timeout 900 "$BIN" "$@"; echo "EXIT rank $RANK rc $? at $(python3 -c 'import time; n=time.time_ns(); print("%d.%09d" % divmod(n, 1000000000))')" ) > "$OUT/$name.log" 2>&1
+    echo "$name: $(grep -hE '^SUMMARY|^PASS roce-host|^INJECT|^EXIT' "$OUT/$name.log" | tr '\n' ' ')"
 }
 step roce-host roce roce-host
 step suite-roce roce suite

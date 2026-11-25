@@ -34,6 +34,6 @@ timeout 600 docker run --rm --network none -v "${OUT:?}:/out" -v "${EXT:?}:/ext:
   cuobjdump -symbols /out/zig-out/fatbin/nemotron_ops.fatbin > /out/symbols-nemotron_ops.txt
   exit $bad' > "${OUT:?}/sass.log" 2>&1 || rc=1
 cat "${OUT:?}/sass.log"
-grep -h 'STT_FUNC.*STO_ENTRY\|STO_ENTRY' "${OUT:?}"/symbols-*.txt | awk '{print $NF}' | sort -u > "${OUT:?}/entries.txt"
+grep -hE 'STT_FUNC.*STO_ENTRY|STO_ENTRY' "${OUT:?}"/symbols-*.txt | awk '{print $NF}' | sort -u > "${OUT:?}/entries.txt"
 echo "build rc=$rc"
 exit $rc

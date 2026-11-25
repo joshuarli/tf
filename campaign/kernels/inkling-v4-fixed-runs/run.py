@@ -7,6 +7,7 @@ usage:
   run.py phasetable NAME[,NAME...]
   run.py phasecompare BEFORE[,BEFORE...] AFTER[,AFTER...]
   run.py plaincompare BEFORE[,BEFORE...] AFTER[,AFTER...]
+  run.py hashcompare BEFORE AFTER
   run.py attribution LOG ROUND[=LABEL] ...
   run.py kernels RUNNER PROMPTS.json NAME [--reps 24] [--picks PICKS.json] [--variants all|NAME,...]
   run.py costs NAME[,NAME...]
@@ -623,6 +624,29 @@ def plaincompare(args: argparse.Namespace) -> None:
     print_interval("process pairs", per_pair)
 
 
+def hash_keys(name: str) -> dict:
+    out: dict = {}
+    for r in records(name):
+        if r["kind"] == "hash":
+            out[(r["prompt"], r["what"], r["width"])] = r["sha256"]
+        elif r["kind"] == "exact":
+            out[(r["prompt"], "exact", r["width"])] = str(r["equal_steps"])
+    return out
+
+
+def hashcompare(args: argparse.Namespace) -> None:
+    """Two builds' `dflash-widths ... hashes` records key by key: the prefill, one-row step and grouped verify hashes
+    and each width's count of rows equal to their one-row steps. Exits 1 if any differ."""
+    before, after = hash_keys(args.before), hash_keys(args.after)
+    differ = sorted(k for k in before.keys() | after.keys() if before.get(k) != after.get(k))
+    print(f"{args.before} against {args.after}: {len(before)} and {len(after)} records, "
+          f"{len(before.keys() & after.keys()) - len(differ)} equal, {len(differ)} differ")
+    for key in differ[:20]:
+        print(f"differs: {key}")
+    if differ:
+        raise SystemExit(1)
+
+
 def costtable(args: argparse.Namespace) -> None:
     """The plan's verify cost table from timed tree rounds: each width's mean verify ms in the rounds that verified it
     (20 or more), rested widths runs (`--widths`) scaled by the in-round to rested ratio of the nearest measured widths
@@ -865,7 +889,7 @@ def main() -> None:
     a.add_argument("--reps", type=int, default=7)
     a.add_argument("--rest", type=float, default=0.0)
     a.add_argument("--cells", default="0,1,8,16")
-    for name in ("phasecompare", "plaincompare"):
+    for name in ("phasecompare", "plaincompare", "hashcompare"):
         a = sub.add_parser(name)
         a.add_argument("before")
         a.add_argument("after")
@@ -902,7 +926,7 @@ def main() -> None:
      "picks": picks, "kernels": kernels, "attribution": attribution, "budgets": budgets,
      "widthcompare": widthcompare, "same": same, "kerneltable": kerneltable, "modeled": modeled,
      "variants": variants, "costtable": costtable, "phases": phases, "phasetable": phasetable,
-     "phasecompare": phasecompare, "plaincompare": plaincompare}[args.action](args)
+     "phasecompare": phasecompare, "plaincompare": plaincompare, "hashcompare": hashcompare}[args.action](args)
 
 
 if __name__ == "__main__":

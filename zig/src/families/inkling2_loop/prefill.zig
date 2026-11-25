@@ -39,6 +39,9 @@ test "profile accepts only the documented values" {
 
 pub const WantLogits = enum { none, last, all };
 
+pub const Phase = enum { edges, attn_input, controllers, projections, attn_prologue, attn_store, attn_core, oproj, attn_output, mlp_input, router, experts, affine_experts, mlp_output, head };
+pub const Phases = std.EnumSet(Phase);
+
 const Dense = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32 };
 const Cap = extern struct { n: u32, k: u32, rows: u32, cap: f32 };
 const RouterA = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32 };
@@ -358,6 +361,7 @@ pub const PrefillScratch = struct {
     captures: []const Capture,
     taps: ?*const @import("taps.zig").Taps,
     gpu_seconds: f64,
+    phases: Phases,
 
     pub fn init(device: mtl.Device, c: *const cfg.Config, chunk: usize) !PrefillScratch {
         return initRows(device, c, chunk, chunk);
@@ -410,6 +414,7 @@ pub const PrefillScratch = struct {
         s.captures = &.{};
         s.taps = null;
         s.gpu_seconds = 0;
+        s.phases = .full;
         s.chunk = chunk;
         s.logit_rows = @min(@max(logit_rows, 1), chunk);
         s.h = @intCast(h);
@@ -755,6 +760,17 @@ const Chunk = struct {
     ring: bool = false,
     count: usize = 0,
     batch: ?*BatchContext = null,
+    real: mtl.ComputeEncoder = undefined,
+    sink: ?mtl.ComputeEncoder = null,
+
+    fn encFor(c: Chunk, p: Phase) mtl.ComputeEncoder {
+        const sink = c.sink orelse return c.enc;
+        return if (c.s.phases.contains(p)) c.real else sink;
+    }
+
+    fn enter(c: *Chunk, p: Phase) void {
+        c.enc = c.encFor(p);
+    }
 
     fn isLocal(c: Chunk, slot: usize) bool {
         const m = c.m;
@@ -936,7 +952,8 @@ const Chunk = struct {
         c.enc.dispatchThreads(mtl.Size.of(count, 1, 1), mtl.Size.of(256, 1, 1));
     }
 
-    fn tap(c: Chunk, visit: u32) void {
+    fn tap(c: *Chunk, visit: u32) void {
+        c.enter(.edges);
         if (c.s.taps) |taps| taps.encode(c.enc, visit, c.s.x, 0, c.n);
     }
 
@@ -1100,9 +1117,9 @@ const Chunk = struct {
         c.enc.dispatchThreads(mtl.Size.of(c.heads * (extent + 1), c.n, 1), mtl.Size.of(256, 1, 1));
     }
 
-    fn batchAttention(c: Chunk, lay: *const Layer, slot: u32, full: bool, extent: u32, batch: *BatchContext) void {
+    fn batchAttention(c: *Chunk, lay: *const Layer, slot: u32, full: bool, extent: u32, batch: *BatchContext) void {
         if (batch.group) |g| {
-            g.attend(c.enc, c.m, lay.attn.rel_bias, slot, full, extent, .{ .q = c.s.q, .k = c.s.kc, .v = c.s.vc, .r = c.s.r, .sink = c.s.sink, .relbias = c.s.relbias, .out = c.s.attn, .parts = batch.scratch.parts, .combine = batch.scratch.combine });
+            g.attend(c.encFor(.attn_store), c.encFor(.attn_core), c.m, lay.attn.rel_bias, slot, full, extent, .{ .q = c.s.q, .k = c.s.kc, .v = c.s.vc, .r = c.s.r, .sink = c.s.sink, .relbias = c.s.relbias, .out = c.s.attn, .parts = batch.scratch.parts, .combine = batch.scratch.combine });
             return;
         }
         const s = c.s;
@@ -1111,6 +1128,7 @@ const Chunk = struct {
         var rows: [8]BatchRow = undefined;
         var store_rows: [8]BatchStoreRow = undefined;
         var max_splits: u32 = 0;
+        c.enter(.attn_store);
         for (batch.caches, 0..) |cache, row| {
             const pos: u32 = @intCast(cache.len);
             const at = cache.row(&c.m.config, slot, pos);
@@ -1127,6 +1145,11 @@ const Chunk = struct {
         c.setP(s.pipes.batch_store_rel, rel_args, &.{ b(s.kc), b(s.vc), b(s.r), t(lay.attn.rel_bias), A, b(s.relbias) });
         c.enc.setBytes(std.mem.sliceAsBytes(store_rows[0..batch.caches.len]), 6);
         c.enc.dispatchGroups(mtl.Size.of(c.kv + (c.heads * (extent + 1) + 255) / 256, c.n, 1), mtl.Size.of(256, 1, 1));
+        c.enter(.attn_core);
+        if (c.sink != null) for (batch.caches) |cache| {
+            c.enc.useResource(cache.keys, mtl.ResourceUsage.read | mtl.ResourceUsage.write);
+            c.enc.useResource(cache.values, mtl.ResourceUsage.read | mtl.ResourceUsage.write);
+        };
         c.enc.setPipeline(batch.scratch.split);
         c.enc.setBuffer(s.q, 0, 0);
         c.enc.setBuffer(s.relbias, 0, 1);
@@ -1242,11 +1265,12 @@ const Chunk = struct {
         }, inputs);
     }
 
-    fn attention(c: Chunk, lay: *const Layer, slot: u32, full: bool, ins: [3]In, push: bool) bool {
+    fn attention(c: *Chunk, lay: *const Layer, slot: u32, full: bool, ins: [3]In, push: bool) bool {
         const s = c.s;
         const text = &c.m.config.text;
         const extent: u32 = if (full) text.rel_extent else text.window;
         const fused = c.batch != null and lay.attn.q.affine != null;
+        c.enter(.projections);
         const staged = !fused and c.stagedProjections(lay, ins, full);
         const ready = fused or staged;
         const clips = staged and c.dim == rows_mod.clip_dim and c.drel == rows_mod.clip_rel;
@@ -1256,6 +1280,7 @@ const Chunk = struct {
         if (c.batch == null and !clips) c.clipScaled(b(s.r), lay.attn.r_scale, c.heads, c.drel, text.rel_clip);
         const ring = c.rings(slot);
         if (!ready) c.lin(lay.attn.k, ins[1], b(s.k));
+        c.enter(.attn_prologue);
         c.convolve(b(s.k), b(s.kc), lay.attn.k_conv, lay.attn.k_dyn, ins[1], b(s.kdyn), ring[0], c.kvw, if (full) c.kv else 0, @intFromBool(full), slot, .key, ready);
         if (c.batch != null) {
             c.setP(s.pipes.clip3, Clip3B{ .heads = c.heads, .kv = c.kv, .dim = c.dim, .rel = c.drel, .q_threshold = text.qk_clip, .rel_threshold = text.rel_clip }, &.{ b(s.q), t(lay.attn.q_scale), b(s.r), t(lay.attn.r_scale), b(s.kc), A });
@@ -1296,23 +1321,27 @@ const Chunk = struct {
         c.kvStore(slot);
         }
         if (!ready) c.lin(lay.attn.gate, ins[0], b(s.gate));
+        c.enter(.attn_output);
         const gated = if (c.stage()) |st_| staged_mod.gatedProjection(st_, lay.attn.o, s.projout, s.attn, s.gate) else false;
         if (!gated) {
             c.flat(.sig_mul, Pair{ .count = c.qw * c.n }, &.{ b(s.attn), b(s.gate), A, b(s.attn) }, @as(usize, c.qw) * c.n);
+            c.enter(.oproj);
             c.lin(lay.attn.o, .{ .buf = b(s.attn), .xs = 1, .xb = 0 }, b(s.projout));
+            c.enter(.attn_output);
         }
         if (!push and c.convolveAdd(b(s.projout), if (s.capture != null) b(s.o) else null, lay.attn_post, ring[2], slot, .attention, b(s.x))) return true;
         c.convolve(b(s.projout), b(s.o), lay.attn_post, null, undefined, b(s.projout), ring[2], c.h, 0, 0, slot, .attention, false);
         return false;
     }
 
-    fn experts(c: Chunk, lay: *const Layer, input: B, slot: u32) void {
+    fn experts(c: *Chunk, lay: *const Layer, input: B, slot: u32) void {
         const m = c.m;
         const cc = &m.config;
         const s = c.s;
         const E: u32 = cc.text.experts;
         const K: u32 = cc.text.topk;
         const inter: u32 = cc.text.expert_inter;
+        c.enter(.router);
         if (c.batch != null or lay.router.dtype == .f32) {
             c.lin(lay.router, .{ .buf = input, .xs = 1, .xb = 0 }, b(s.router));
         } else {
@@ -1334,6 +1363,7 @@ const Chunk = struct {
             c.copyN(t(lay.router_bias), bo(routes, (start + @as(usize, c.n) * (K + E)) * 4), E);
         }
         const slots: u32 = c.n * K;
+        c.enter(if (lay.precision == .affine4) .affine_experts else .experts);
         if (lay.precision == .affine4) {
             const p = m.affine_pipes.?;
             if (c.n > 8 and s.half) {
@@ -1503,6 +1533,7 @@ const Chunk = struct {
         const normed = [3]B{ b(s.n0), b(s.n1), b(s.n2) };
         var fused_norm = false;
         if (index > 0) {
+            c.enter(.attn_input);
             const q = m.weights.attn_queries[index - 1];
             const norms: []const Tensor = if (full) &.{ lay.q_norm, lay.k_norm, lay.v_norm } else &.{lay.q_norm};
             fused_norm = bank == null and c.mixNorm(b(s.x), q, bo(s.mixout, 0), norms, normed);
@@ -1516,7 +1547,9 @@ const Chunk = struct {
         }
 
         if (bank) |bk| {
+            c.enter(.attn_input);
             const msg = c.messages(bk, ip);
+            c.enter(.controllers);
             const ctl: [3]Controller = .{ lay.controllers[0] orelse return error.MissingController, lay.controllers[1] orelse return error.MissingController, lay.controllers[2] orelse return error.MissingController };
             const use_batch = if (c.batch != null and c.m.affine_pipes != null) blk: {
                 for (ctl) |item| if (item.down.dtype != .f32 or item.gain.dtype != .f32 or item.forget.dtype != .f32) break :blk false;
@@ -1535,6 +1568,7 @@ const Chunk = struct {
         }
 
         for (0..3) |j| c.record(slot, j, ins[j]);
+        c.enter(.attn_input);
         if (fused_norm) {
             ins = if (full) .{ .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, .{ .buf = b(s.n1), .xs = 1, .xb = 0 }, .{ .buf = b(s.n2), .xs = 1, .xb = 0 } } else .{ .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, .{ .buf = b(s.n0), .xs = 1, .xb = 0 } };
         } else if (full or bank != null) {
@@ -1550,21 +1584,26 @@ const Chunk = struct {
         const push = ip % text.block == 0;
         const added = c.attention(lay, slot, full, ins, push);
         c.record(slot, 6, .{ .buf = b(s.o), .xs = 1, .xb = 0 });
+        c.enter(.attn_output);
         if (push) {
             c.pushBlock();
         } else if (!added) c.addN(b(s.x), b(s.o), @as(usize, c.n) * c.h);
 
         c.record(slot, 7, .{ .buf = b(s.x), .xs = 1, .xb = 0 });
         const mlp_query = m.weights.mlp_queries[index];
+        c.enter(.mlp_input);
         const mlp_fused = bank == null and c.mixNorm(b(s.x), mlp_query, bo(s.mixout, 0), &.{lay.mlp_norm}, .{ b(s.m0), b(s.m0), b(s.m0) });
         if (!mlp_fused and !c.mixNorm(b(s.x), mlp_query, bo(s.mixout, 0), &.{}, normed)) c.mixBlocks(b(s.x), mlp_query, bo(s.mixout, 0));
         if (bank) |_| {
             const ctl = lay.controllers[3] orelse return error.MissingController;
+            c.enter(.controllers);
             c.control(ctl, .{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, .{ .buf = b(s.msg), .xs = 4, .xb = 3 }, bo(s.mixout, 0), 1, 0);
+            c.enter(.mlp_input);
         }
         if (!mlp_fused) c.rmsW(.{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, t(lay.mlp_norm), b(s.m0), 1, 0, c.h, text.eps);
         c.experts(lay, b(s.m0), slot);
         const slots = c.rings(slot);
+        c.enter(.mlp_output);
         if (!c.convolveAdd(b(s.moe), null, lay.mlp_post, slots[3], slot, .mlp, b(s.x))) {
             c.convolve(b(s.moe), b(s.aconv), lay.mlp_post, null, undefined, b(s.moe), slots[3], c.h, 0, 0, slot, .mlp, false);
             if (c.batch == null) c.addN(b(s.x), b(s.aconv), @as(usize, c.n) * c.h);
@@ -1656,7 +1695,7 @@ pub fn groupFinish(m: *const Model, s: *@import("batch.zig").BatchScratch, group
     try run(m, &s.rows, group.caches[0], ids, .all, &context);
 }
 
-const group_rounds = [_][]const u8{ "inkling2-group-1", "inkling2-group-2", "inkling2-group-3", "inkling2-group-4", "inkling2-group-5", "inkling2-group-6", "inkling2-group-7", "inkling2-group-8" };
+const group_rounds = [_][]const u8{ "inkling2-group-1", "inkling2-group-2", "inkling2-group-3", "inkling2-group-4", "inkling2-group-5", "inkling2-group-6", "inkling2-group-7", "inkling2-group-8", "inkling2-group-9", "inkling2-group-10", "inkling2-group-11", "inkling2-group-12", "inkling2-group-13", "inkling2-group-14", "inkling2-group-15", "inkling2-group-16" };
 
 fn roundName(batch: ?*BatchContext, rows: usize) []const u8 {
     const context = batch orelse return "inkling2-prefill";
@@ -1700,6 +1739,9 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
         .ring = ring,
         .batch = batch,
     };
+    c.real = c.enc;
+    if (batch != null and !s.phases.eql(.full)) c.sink = m.queue.commandBuffer().compute(.serial);
+    c.enter(.edges);
     if (m.weights.embed.affine) |q| {
         c.setP(m.affine_pipes.?.embed, EmbedA{ .width = s.h, .rows = c.n, .eps = text.eps }, &.{ b(s.ids), t(m.weights.embed), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), t(m.weights.embed_norm), A, b(s.x) });
     } else c.setP(s.pipes.embed, EmbedA{ .width = s.h, .rows = c.n, .eps = text.eps }, &.{ b(s.ids), t(m.weights.embed), t(m.weights.embed_norm), A, b(s.x) });
@@ -1713,6 +1755,7 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
         if (i % 6 == 5) rounds.flush(&c);
     }
     const prelude = c.count;
+    c.enter(.edges);
     c.copyN(b(s.x), b(s.prelude), @as(usize, c.n) * c.h);
     const span = config.loop.core_end - config.loop.core_start;
     var pass: u32 = 0;
@@ -1722,6 +1765,7 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
         if (pass > 0) {
             const bn = c.count - (prelude + 1);
             if (profiling) try rounds.next(&c, try std.fmt.bufPrint(&profile_name, "inkling2-pass-{d}-copy", .{pass}));
+            c.enter(.edges);
             c.setP(s.pipes.pass_copy, PassCopy{ .width = c.h, .stride = st.mix_states, .start = @intCast(prelude + 1), .count = @intCast(bn) }, &.{ b(s.blocks), b(s.x), b(s.prelude), b(s.bank), b(s.passout), A });
             c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
             stored = .{ .states = b(s.bank), .out = b(s.passout), .n = bn };
@@ -1744,6 +1788,7 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
         try profileOccupancy(&rounds, &c, @intCast(i), "inkling2-occupancy");
     }
     if (profiling) try rounds.next(&c, "inkling2-head");
+    c.enter(.head);
     c.mixBlocks(b(s.x), m.weights.output_query, bo(s.mixout, 0));
     c.rmsW(.{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, t(m.weights.norm), b(s.n0), 1, 0, c.h, text.eps);
     if (s.taps) |taps| taps.encode(c.enc, taps.final, s.n0, 0, c.n);
@@ -1754,7 +1799,10 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
         .all => c.headModel(m.weights.unembed, .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, b(s.logits), text.unpadded_vocab),
     }
     if (batch) |context| if (context.group) |g| if (context.finish) |finish| g.verifier.encodeFinish(c.enc, m, s.ids, s.logits, g, finish);
-    c.enc.end();
+    if (c.sink) |sink| {
+        sink.end();
+        c.real.end();
+    } else c.enc.end();
     rounds.cb.commit();
     rounds.cb.wait();
     s.gpu_seconds = 0;

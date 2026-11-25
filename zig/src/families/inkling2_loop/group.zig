@@ -394,7 +394,7 @@ pub const Group = struct {
 
     pub const AttnBuffers = struct { q: mtl.Buffer, k: mtl.Buffer, v: mtl.Buffer, r: mtl.Buffer, sink: mtl.Buffer, relbias: mtl.Buffer, out: mtl.Buffer, parts: mtl.Buffer, combine: mtl.Pipeline };
 
-    pub fn attend(g: *const Group, enc: mtl.ComputeEncoder, m: *const Model, rel_bias: Tensor, slot: u32, full: bool, extent: u32, bufs: AttnBuffers) void {
+    pub fn attend(g: *const Group, store: mtl.ComputeEncoder, enc: mtl.ComputeEncoder, m: *const Model, rel_bias: Tensor, slot: u32, full: bool, extent: u32, bufs: AttnBuffers) void {
         const v = g.verifier;
         const config = &m.config;
         const text = &config.text;
@@ -423,17 +423,17 @@ pub const Group = struct {
         }
         const kh = (@as(usize, slot) * 2 + 0) * max_rows * kvw * 2;
         const vh = (@as(usize, slot) * 2 + 1) * max_rows * kvw * 2;
-        enc.setPipeline(v.pipe(.store_rel));
-        enc.setBuffer(bufs.k, 0, 0);
-        enc.setBuffer(bufs.v, 0, 1);
-        enc.setBuffer(bufs.r, 0, 2);
-        enc.setBuffer(rel_bias.buffer, rel_bias.offset, 3);
-        enc.setValue(RelArgs{ .heads = heads, .kv = kv, .dim = dim, .rel = text.d_rel, .extent = extent, .window = 0, .pos = 0, .tau = @intFromBool(full), .scale = 0, .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha, .eps = text.eps }, 4);
-        enc.setBuffer(bufs.relbias, 0, 5);
-        enc.setBytes(std.mem.sliceAsBytes(positions[0..g.rows]), 6);
-        enc.setBuffer(v.kv, kh, 7);
-        enc.setBuffer(v.kv, vh, 8);
-        enc.dispatchGroups(mtl.Size.of(kv + (heads * (extent + 1) + 255) / 256, g.rows, 1), mtl.Size.of(256, 1, 1));
+        store.setPipeline(v.pipe(.store_rel));
+        store.setBuffer(bufs.k, 0, 0);
+        store.setBuffer(bufs.v, 0, 1);
+        store.setBuffer(bufs.r, 0, 2);
+        store.setBuffer(rel_bias.buffer, rel_bias.offset, 3);
+        store.setValue(RelArgs{ .heads = heads, .kv = kv, .dim = dim, .rel = text.d_rel, .extent = extent, .window = 0, .pos = 0, .tau = @intFromBool(full), .scale = 0, .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha, .eps = text.eps }, 4);
+        store.setBuffer(bufs.relbias, 0, 5);
+        store.setBytes(std.mem.sliceAsBytes(positions[0..g.rows]), 6);
+        store.setBuffer(v.kv, kh, 7);
+        store.setBuffer(v.kv, vh, 8);
+        store.dispatchGroups(mtl.Size.of(kv + (heads * (extent + 1) + 255) / 256, g.rows, 1), mtl.Size.of(256, 1, 1));
         enc.setPipeline(v.pipe(.split));
         enc.setBuffer(bufs.q, 0, 0);
         enc.setBuffer(bufs.relbias, 0, 1);

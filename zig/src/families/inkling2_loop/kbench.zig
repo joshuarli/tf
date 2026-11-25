@@ -184,3 +184,120 @@ fn timeIt(m: *inkling.Model, reps: usize, kind: Kind, cs: Case, shared: bool, io
     }
     return cb.gpuSeconds() * 1e6 / @as(f64, @floatFromInt(reps));
 }
+
+const spec = @import("dflash_spec.zig");
+const Phases = @TypeOf(@as(inkling.PrefillScratch, undefined).phases);
+const Phase = Phases.Key;
+
+pub const Prompt = struct { name: []const u8, ids: []const u32 };
+
+fn phaseSet(list: []const Phase) Phases {
+    var set = Phases.initOne(.edges);
+    for (list) |p| set.insert(p);
+    return set;
+}
+
+fn without(list: []const Phase) Phases {
+    var set = Phases.full;
+    for (list) |p| set.remove(p);
+    return set;
+}
+
+fn setName(set: Phases, buf: []u8) ![]const u8 {
+    if (set.eql(.full)) return "all";
+    var w = std.Io.Writer.fixed(buf);
+    const left = Phases.full.differenceWith(set);
+    if (left.count() < set.count()) {
+        try w.writeAll("all");
+        var it = left.iterator();
+        while (it.next()) |p| try w.print("-{s}", .{@tagName(p)});
+        return w.buffered();
+    }
+    var it = set.iterator();
+    var first = true;
+    while (it.next()) |p| {
+        try w.print("{s}{s}", .{ if (first) "" else "+", @tagName(p) });
+        first = false;
+    }
+    return w.buffered();
+}
+
+pub fn phases(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, reps: usize, widths: []const usize, out: *std.ArrayList(u8)) !void {
+    var verifier = try inkling.group.Verifier.init(m.device, &m.config);
+    defer verifier.deinit();
+    var bs = try inkling.group.scratch(m.device, &m.config);
+    defer bs.deinit();
+    var ps = try inkling.PrefillScratch.init(m.device, &m.config, spec.prefill_chunk);
+    defer ps.deinit();
+    var rollback = try inkling.Cache.Rollback.initRows(m.device, &m.config, inkling.group.max_rows);
+    defer rollback.deinit();
+    const vocab: usize = m.config.text.unpadded_vocab;
+    const logits = try gpa.alloc(f32, vocab);
+    defer gpa.free(logits);
+    var sets: [2 * Phases.len + 6]Phases = undefined;
+    sets[0] = phaseSet(&.{});
+    var count: usize = 1;
+    var all = Phases.full;
+    var each = all.iterator();
+    while (each.next()) |p| if (p != .edges) {
+        sets[count] = phaseSet(&.{p});
+        sets[count + 1] = without(&.{p});
+        count += 2;
+    };
+    sets[count] = phaseSet(&.{ .router, .experts });
+    sets[count + 1] = phaseSet(&.{ .router, .affine_experts });
+    sets[count + 2] = without(&.{ .router, .experts });
+    sets[count + 3] = without(&.{ .experts, .affine_experts });
+    sets[count + 4] = without(&.{ .router, .experts, .affine_experts });
+    sets[count + 5] = .full;
+    count += 6;
+    const samples = try gpa.alloc(std.ArrayList(f64), count);
+    defer gpa.free(samples);
+    for (samples) |*s| s.* = .empty;
+    defer for (samples) |*s| s.deinit(gpa);
+    defer bs.rows.phases = .full;
+    for (prompts) |prompt| {
+        var cache = try inkling.Cache.init(m.device, &m.config, prompt.ids.len + inkling.group.max_rows);
+        defer cache.deinit();
+        const first = try spec.prefillPlain(m, &ps, &cache, prompt.ids);
+        var rows: [inkling.group.max_rows]u32 = undefined;
+        rows[0] = first;
+        try rollback.copy(m.queue, &m.config, &cache, true);
+        for (0..rows.len - 1) |i| {
+            try inkling.batchStep(m, &bs, &.{&cache}, &.{rows[i]}, logits);
+            rows[i + 1] = spec.argmax(logits);
+        }
+        try rollback.copy(m.queue, &m.config, &cache, false);
+        for (widths) |width| {
+            for (samples) |*s| s.clearRetainingCapacity();
+            for (0..reps + 1) |rep| for (0..count) |k| {
+                const i = (k + rep) % count;
+                bs.rows.phases = sets[i];
+                const ms = try phaseStep(m, &verifier, &bs, &cache, &rollback, rows[0..@max(width, 1)], width == 0, logits);
+                if (rep > 0) try samples[i].append(gpa, ms);
+            };
+            bs.rows.phases = .full;
+            for (sets[0..count], samples) |set, *list| {
+                std.mem.sort(f64, list.items, {}, std.sort.asc(f64));
+                var name: [256]u8 = undefined;
+                const label = try setName(set, &name);
+                const p50 = list.items[list.items.len / 2];
+                try out.print(gpa, "{{\"kind\":\"phase\",\"prompt\":\"{s}\",\"context\":{d},\"width\":{d},\"path\":\"{s}\",\"set\":\"{s}\",\"reps\":{d},\"gpu_ms_p50\":{d:.4},\"gpu_ms_min\":{d:.4},\"gpu_ms_max\":{d:.4}}}\n", .{ prompt.name, cache.len, @max(width, 1), if (width == 0) "batch_step" else "grouped", label, reps, p50, list.items[0], list.items[list.items.len - 1] });
+                std.debug.print("phases {s}: context={d} width={d} {s}: gpu p50={d:.3} ms\n", .{ prompt.name, cache.len, width, label, p50 });
+            }
+        }
+    }
+}
+
+fn phaseStep(m: *inkling.Model, verifier: *inkling.group.Verifier, bs: *inkling.BatchScratch, cache: *inkling.Cache, rollback: *inkling.Cache.Rollback, rows: []const u32, single: bool, logits: []f32) !f64 {
+    if (single) {
+        try rollback.copy(m.queue, &m.config, cache, true);
+        try inkling.batchStep(m, bs, &.{cache}, rows[0..1], logits);
+        const ms = bs.rows.gpu_seconds * 1e3;
+        try rollback.copy(m.queue, &m.config, cache, false);
+        return ms;
+    }
+    const g = try verifier.group(&.{cache}, &.{rows.len});
+    try verifier.forward(m, bs, &g, rows);
+    return bs.rows.gpu_seconds * 1e3;
+}

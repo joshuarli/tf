@@ -7,7 +7,7 @@ This is the single plan for this repository: all current and future work, and th
 **Active 2026-11-24.**
 - Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**.
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
-- **Last accepted code: P5c merge `7f7cb75a3`** (green on main: `inkling-gpu` 181/181, peak 24.1 GB; oracle gate pass). Before it, SC1 merge `1668d5caa` (180/180), V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
+- **Last accepted code: PH2 merge `291240211`** (half prefill by default; green on its lane `d129b60f8`, identical code: `inkling-gpu` 181/181, oracle pass). Before it, P5c merge `7f7cb75a3` (181/181), SC1 merge `1668d5caa` (180/180), V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
 - **Open from P3c:** `code-c02` now falls into a repeatable reasoning loop, and oQ4e quality dev is 7/11 (base 6/11), below the fast profile's 8-case bar. Mean TTFT at four agents rose on the warm repetition; the cause is not traced.
 - **Parked branches** (all on `origin`), with item, cause and retry:
   - `lane/p3c-prefill` at `f0ff849e6`: commits the prefill scratch at setup. Two 1K pairs are inconclusive and it has not run the suite. Retry: the suite, then three first-pass pairs at 1K.
@@ -91,7 +91,7 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    Open: experts with 4–8 live rows still cost about 1.5× their bytes, and about 13 ms a round at every width sits
    in kernels dispatched from `prefill.zig` (mixes, norms, convolutions, router, controller, affine 4-bit experts),
    which V4 takes after P5c.
-3f. V4, after PH2's flip lands (shares `prefill.zig`): the ~13 ms a round spent at every verify width in kernels that
+3f. V4, running: `lane/v4-fixed` in `.work/wt/v4-fixed` (scope `usrn_efaf5753-38cf-48f8-bb80-9bf4f568284c`, base `d129b60f8`; timing via `.work/tmp/v4-timing-go`), receipt `inkling-v4-fixed.md`: the ~13 ms a round spent at every verify width in kernels that
    `prefill.zig` dispatches, measured per kernel at 1, 8 and 16 rows, then the 4–8-live-row expert cost.
 4. SV1, done and merged (`inkling-sv1-serve.md`). `INKLING_DRAFTER=<dir>` turns on served greedy DFlash2
    speculation, byte-identical to plain greedy across prompt-cache hits, forks and EOS (133/133 in `inkling-gpu`).
@@ -108,9 +108,11 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    −0.23 points; full quality 29/44 on both; Pi 7/8 on both (`read-and-answer` fails on both). It swaps one runaway
    for another, repeatably: exact loops on `code-c02`, which half passes; half loops on `retrieval-t01`, which exact
    answers. Both are tracked under Q3.
-5e. PH2, running in `.work/wt/ph2` (`lane/ph2-default`), parent-owned: make `both` the default prefill, add an explicit exact value
-   (`INKLING_PREFILL_HALF=off`), rerun the oracle gate and the served curve, and record the flip under Execution
-   boundary's contract changes.
+5e. PH2, done and merged `291240211` (`inkling-ph2-default.md`). Contract change: `INKLING_PREFILL_HALF` unset
+   now serves `both`; `off` is the exact path. Requalified on P5c's schedule under Decision 19: oracle KL 1.021×,
+   top-1 −0.23 points; full quality 29/44 against exact's 28/44 (half loses `retrieval-t01`, gains `code-c15` and
+   `retrieval-t04`); runaways 2 against 3; Pi 7/8 on both. The dev set alone reads 7/11 against 8/11, so the
+   long-reasoning runaways are judged on the full set. Served curve under the default: pending.
 5b. P5c, done and merged `7f7cb75a3` (`inkling-p5c-chunks.md`). Served prompts prefill in 1,024-row chunks that
    capture fork snapshots inside them. Six interleaved pairs: 1.175× (CI 1.109–1.245); 1K held-out 1.56×, 4K 1.12×,
    8K 1.06×, 16K and 31.7K 1.03×; best 1,859 tok/s at 1K, 1,826 at 4K. Decision 20 passes (KL 1.001×, top-1

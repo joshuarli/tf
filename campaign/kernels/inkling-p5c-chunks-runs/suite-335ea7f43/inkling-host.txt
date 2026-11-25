@@ -1,0 +1,14 @@
+Build Summary: 10/10 steps succeeded; 24/24 tests passed
+test-inkling2-loop-host success
++- run test 24 pass (24 total) 760ms MaxRSS:111M
+|  +- compile test debug native cached 103ms MaxRSS:34M
+|     +- run exe test-allocator-runner-source (test_runner.zig) cached
+|        +- compile exe test-allocator-runner-source safe native cached 102ms MaxRSS:33M
++- run test cached
+|  +- compile test debug native cached 80ms MaxRSS:34M
+|     +- run exe test-allocator-runner-source (test_runner.zig) (+1 more reused dependencies)
++- run test cached
+   +- compile test debug native cached 126ms MaxRSS:34M
+      +- run exe test-allocator-runner-source (test_runner.zig) (+1 more reused dependencies)
+      +- WriteFile inkling_host_facade.zig cached
+

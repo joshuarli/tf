@@ -1,0 +1,82 @@
+17:37:16 first-main-a
+curve 1024 rep 5: 1003 tokens (0 cached) in 0.970 s, 1034 tok/s
+tensorfold ready in 26.6 s; conditions valid=True
+first-main-a: valid try 1
+17:38:05 first-lane-a
+curve 1024 rep 5: 1003 tokens (0 cached) in 0.569 s, 1764 tok/s
+tensorfold ready in 28.9 s; conditions valid=True
+first-lane-a: valid try 1
+17:38:54 first-fault-a
+curve 1024 rep 5: 1003 tokens (0 cached) in 0.566 s, 1773 tok/s
+tensorfold ready in 25.4 s; conditions valid=False
+first-fault-a: valid try 1
+17:39:38 s1-main-a
+curve 31744 rep 1: 32125 tokens (0 cached) in 25.355 s, 1267 tok/s
+tensorfold ready in 21.9 s; conditions valid=False
+s1-main-a: valid try 1
+17:42:45 s1-lane-a
+curve 31744 rep 1: 32125 tokens (0 cached) in 22.443 s, 1431 tok/s
+tensorfold ready in 24.3 s; conditions valid=True
+s1-lane-a: valid try 1
+17:45:44 s1-lane-b
+curve 31744 rep 1: 32125 tokens (0 cached) in 21.573 s, 1489 tok/s
+tensorfold ready in 26.2 s; conditions valid=True
+s1-lane-b: valid try 1
+17:48:34 s1-main-b
+curve 31744 rep 1: 32125 tokens (0 cached) in 22.285 s, 1442 tok/s
+tensorfold ready in 19.1 s; conditions valid=True
+s1-main-b: valid try 1
+17:51:25 s1-main-c
+curve 31744 rep 1: 32125 tokens (0 cached) in 22.400 s, 1434 tok/s
+tensorfold ready in 13.8 s; conditions valid=False
+s1-main-c: valid try 1
+17:54:13 s1-lane-c
+curve 31744 rep 1: 32125 tokens (0 cached) in 21.541 s, 1491 tok/s
+tensorfold ready in 19.3 s; conditions valid=True
+s1-lane-c: valid try 1
+17:56:55 s1-lane-noreuse (INKLING_PREFIX_REUSE=0)
+curve 31744 rep 1: 32125 tokens (0 cached) in 21.430 s, 1499 tok/s
+tensorfold ready in 13.7 s; conditions valid=False
+s1-lane-noreuse: valid try 1
+17:59:30 first-fault-b
+curve 1024 rep 5: 1003 tokens (0 cached) in 0.586 s, 1713 tok/s
+tensorfold ready in 10.0 s; conditions valid=True
+first-fault-b: valid try 1
+17:59:58 first-lane-b
+curve 1024 rep 5: 1003 tokens (0 cached) in 0.556 s, 1805 tok/s
+tensorfold ready in 8.0 s; conditions valid=False
+first-lane-b: valid try 1
+18:00:24 first-main-b
+curve 1024 rep 5: 1003 tokens (0 cached) in 0.945 s, 1061 tok/s
+tensorfold ready in 5.8 s; conditions valid=True
+first-main-b: valid try 1
+18:00:49 s2-lane-d
+curve 31744 rep 1: 32125 tokens (0 cached) in 21.751 s, 1477 tok/s
+tensorfold ready in 5.7 s; conditions valid=False
+s2-lane-d: valid try 1
+18:03:17 s2-main-d
+curve 31744 rep 1: 32125 tokens (0 cached) in 22.130 s, 1452 tok/s
+tensorfold ready in 10.4 s; conditions valid=False
+s2-main-d: valid try 1
+18:05:59 s2-main-e
+curve 31744 rep 1: 32125 tokens (0 cached) in 22.064 s, 1456 tok/s
+tensorfold ready in 12.3 s; conditions valid=False
+s2-main-e: valid try 1
+18:08:43 s2-lane-e
+curve 31744 rep 1: 32125 tokens (0 cached) in 22.626 s, 1420 tok/s
+tensorfold ready in 9.1 s; conditions valid=True
+s2-lane-e: valid try 1
+18:11:21 s2-lane-f
+curve 31744 rep 1: 32125 tokens (0 cached) in 21.772 s, 1476 tok/s
+tensorfold ready in 26.8 s; conditions valid=True
+s2-lane-f: valid try 2
+18:15:11 s2-main-f
+curve 31744 rep 1: 32125 tokens (0 cached) in 22.075 s, 1455 tok/s
+tensorfold ready in 12.0 s; conditions valid=True
+s2-main-f: valid try 1
+18:17:54 s2-lane-noreuse (INKLING_PREFIX_REUSE=0)
+curve 31744 rep 1: 32125 tokens (0 cached) in 21.418 s, 1500 tok/s
+tensorfold ready in 9.1 s; conditions valid=True
+s2-lane-noreuse: valid try 1
+18:20:24 session done
+session exit 0

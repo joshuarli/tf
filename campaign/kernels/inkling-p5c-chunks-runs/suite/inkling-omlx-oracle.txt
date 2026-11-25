@@ -1,0 +1,112 @@
+cd /Users/josh/repos/tf/.work/wt/p5c-chunks && zig build tf-inkling2-loop-run -Dcpu=apple_m1 -j1
+INKLING_LOAD_LIMIT_GB=26 /Applications/Xcode.app/Contents/Developer/usr/bin/make -C /Users/josh/repos/tf/.work/wt/p5c-chunks/campaign -f parity/inkling2-mini/parity.mk metal-logits \
+		RUNNER_MODE=prefill PREFILL_CHUNK=512 RUNNER=/Users/josh/repos/tf/.work/wt/p5c-chunks/zig-out/bin/tf-inkling2-loop-run \
+		INKLING_DIR=/Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd METAL_LOGITS=/Users/josh/repos/tf/.work/parity/inkling2-mini/omlx-gate/lane_p5c-chunks-prefill-512
+harbour.bin: no output file
+inkling2_loop prefill: 1336 tokens in 1700.2 ms, 785.8 tok/s chunk 512
+heavy: done: peak charged 19.8 GB of the 28 GB cap (footprint 17.9 GB, resident 19.7 GB, host wired growth 19.8 GB); host pressure worst 1, host swap +4 MB, host pageins 5451370
+harbour.bin: receipt written for 1336 rows
+cells_code.bin: no output file
+inkling2_loop prefill: 1178 tokens in 2625.2 ms, 448.7 tok/s chunk 512
+heavy: done: peak charged 20.2 GB of the 28 GB cap (footprint 17.9 GB, resident 17.0 GB, host wired growth 20.2 GB); host pressure worst 1, host swap -8 MB, host pageins 2280802
+cells_code.bin: receipt written for 1178 rows
+greeting.bin: no output file
+inkling2_loop prefill: 25 tokens in 2011.8 ms, 12.4 tok/s chunk 512
+heavy: done: peak charged 22.1 GB of the 28 GB cap (footprint 17.5 GB, resident 13.8 GB, host wired growth 22.1 GB); host pressure worst 1, host swap +0 MB, host pageins 5395165
+greeting.bin: receipt written for 25 rows
+explain_sliding.bin: no output file
+inkling2_loop prefill: 34 tokens in 975.9 ms, 34.8 tok/s chunk 512
+heavy: done: peak charged 20.8 GB of the 28 GB cap (footprint 17.3 GB, resident 15.0 GB, host wired growth 20.8 GB); host pressure worst 1, host swap +0 MB, host pageins 2390604
+explain_sliding.bin: receipt written for 34 rows
+unit_test.bin: no output file
+inkling2_loop prefill: 32 tokens in 2085.4 ms, 15.3 tok/s chunk 512
+heavy: done: peak charged 25.7 GB of the 28 GB cap (footprint 17.5 GB, resident 13.2 GB, host wired growth 25.7 GB); host pressure worst 1, host swap -128 MB, host pageins 8788786
+unit_test.bin: receipt written for 32 rows
+refactor.bin: no output file
+inkling2_loop prefill: 36 tokens in 2182.8 ms, 16.5 tok/s chunk 512
+heavy: done: peak charged 19.3 GB of the 28 GB cap (footprint 17.5 GB, resident 11.9 GB, host wired growth 19.3 GB); host pressure worst 2, host swap -8 MB, host pageins 5138051
+refactor.bin: receipt written for 36 rows
+math_mod.bin: no output file
+inkling2_loop prefill: 36 tokens in 536.4 ms, 67.1 tok/s chunk 512
+heavy: done: peak charged 19.8 GB of the 28 GB cap (footprint 16.1 GB, resident 19.8 GB, host wired growth 19.1 GB); host pressure worst 2, host swap +0 MB, host pageins 1552710
+math_mod.bin: receipt written for 36 rows
+math_frac.bin: no output file
+inkling2_loop prefill: 44 tokens in 1874.0 ms, 23.5 tok/s chunk 512
+heavy: done: peak charged 17.5 GB of the 28 GB cap (footprint 17.5 GB, resident 11.6 GB, host wired growth 17.5 GB); host pressure worst 1, host swap +0 MB, host pageins 310715
+math_frac.bin: receipt written for 44 rows
+dialogue.bin: no output file
+inkling2_loop prefill: 44 tokens in 789.6 ms, 55.7 tok/s chunk 512
+heavy: done: peak charged 17.2 GB of the 28 GB cap (footprint 17.2 GB, resident 15.3 GB, host wired growth 16.9 GB); host pressure worst 1, host swap +0 MB, host pageins 198505
+dialogue.bin: receipt written for 44 rows
+list_steps.bin: no output file
+inkling2_loop prefill: 30 tokens in 2198.4 ms, 13.6 tok/s chunk 512
+heavy: done: peak charged 17.5 GB of the 28 GB cap (footprint 17.5 GB, resident 17.4 GB, host wired growth 13.5 GB); host pressure worst 2, host swap -8 MB, host pageins 177976
+list_steps.bin: receipt written for 30 rows
+structured.bin: no output file
+inkling2_loop prefill: 35 tokens in 572.3 ms, 61.2 tok/s chunk 512
+heavy: done: peak charged 16.5 GB of the 28 GB cap (footprint 16.5 GB, resident 15.1 GB, host wired growth 1.1 GB); host pressure worst 1, host swap +0 MB, host pageins 104734
+structured.bin: receipt written for 35 rows
+summary.bin: no output file
+inkling2_loop prefill: 35 tokens in 613.7 ms, 57.0 tok/s chunk 512
+heavy: done: peak charged 17.5 GB of the 28 GB cap (footprint 17.5 GB, resident 14.6 GB, host wired growth 14.2 GB); host pressure worst 1, host swap +0 MB, host pageins 118771
+summary.bin: receipt written for 35 rows
+sql.bin: no output file
+inkling2_loop prefill: 33 tokens in 1952.5 ms, 16.9 tok/s chunk 512
+heavy: done: peak charged 17.5 GB of the 28 GB cap (footprint 17.5 GB, resident 13.8 GB, host wired growth 13.0 GB); host pressure worst 1, host swap +0 MB, host pageins 183365
+sql.bin: receipt written for 33 rows
+prose_review.bin: no output file
+inkling2_loop prefill: 35 tokens in 638.9 ms, 54.8 tok/s chunk 512
+heavy: done: peak charged 20.3 GB of the 28 GB cap (footprint 15.4 GB, resident 20.3 GB, host wired growth 0.0 GB); host pressure worst 1, host swap +0 MB, host pageins 171505
+prose_review.bin: receipt written for 35 rows
+code_trace.bin: no output file
+inkling2_loop prefill: 45 tokens in 2104.4 ms, 21.4 tok/s chunk 512
+heavy: done: peak charged 17.3 GB of the 28 GB cap (footprint 17.3 GB, resident 15.4 GB, host wired growth 11.6 GB); host pressure worst 1, host swap +0 MB, host pageins 230057
+code_trace.bin: receipt written for 45 rows
+token_budget.bin: no output file
+inkling2_loop prefill: 37 tokens in 2594.0 ms, 14.3 tok/s chunk 512
+heavy: done: peak charged 17.5 GB of the 28 GB cap (footprint 17.5 GB, resident 15.1 GB, host wired growth 16.0 GB); host pressure worst 2, host swap +0 MB, host pageins 306139
+token_budget.bin: receipt written for 37 rows
+~/.local/bin/uv run --frozen --project /Users/josh/repos/tf/.work/wt/p5c-chunks/campaign/ref python -I -B /Users/josh/repos/tf/.work/wt/p5c-chunks/campaign/parity/inkling2-mini/omlx_gate.py gate --gate /Users/josh/repos/tf/.work/wt/p5c-chunks/campaign/parity/inkling2-mini/omlx_gate.json --oracle /Users/josh/repos/tf/.work/parity/inkling2-mini/omlx-ref \
+		--cand /Users/josh/repos/tf/.work/parity/inkling2-mini/omlx-gate/lane_p5c-chunks-prefill-512 --runner /Users/josh/repos/tf/.work/wt/p5c-chunks/zig-out/bin/tf-inkling2-loop-run --model /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd \
+		--json /Users/josh/repos/tf/.work/parity/inkling2-mini/omlx-gate/lane_p5c-chunks-prefill-512.json --report /Users/josh/repos/tf/.work/parity/inkling2-mini/omlx-gate/lane_p5c-chunks-prefill-512.md
+# Inkling 2 Mini: TensorFold against the oMLX oracle
+
+- oracle: /Users/josh/repos/tf/.work/parity/inkling2-mini/omlx-ref (digest b01512f0396eeb23, oMLX 0.8.3 e72868dac12d on MLX 0.32.4, 2,048-token forwards, MTP off)
+- candidate: /Users/josh/repos/tf/.work/parity/inkling2-mini/omlx-gate/lane_p5c-chunks-prefill-512
+- runner sha256: 8666d720eea24a54c578709447f660c487917d2f947050a67f09fc29da94a447
+- model identity: 7b1841c868807cd5df91a76646f550f6b0bd2ff803f4078b1009d540fd34195a
+- arithmetic policy: f32-activations+prefill-512
+- positions: 3015 over 16 histories
+- top-1 agreement: 2863/3015 (94.96%); 50 reference rows tie for the maximum
+- top-1 agreement where the reference's top-2 margin is at least 0.1: 2750/2872 (95.75%)
+- mean KL, mean of history means: 0.0194994; row-weighted: 0.0639952
+- max KL: 14.2476 at cells_code position 378
+- max absolute logit difference: 26.23
+- non-finite logits: reference 0, candidate 0
+
+| history | rows | top-1 | top-1 % | confident top-1 % | mean KL | max KL | max KL position | max abs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| harbour | 1336 | 1244 | 93.11 | 94.37 | 0.03916 | 4.284 | 1300 | 15.3 |
+| cells_code | 1178 | 1130 | 95.93 | 96.22 | 0.1148 | 14.25 | 378 | 26.2 |
+| greeting | 25 | 25 | 100.00 | 100.00 | 0.003636 | 0.02615 | 23 | 1.87 |
+| explain_sliding | 34 | 32 | 94.12 | 93.75 | 0.005628 | 0.05557 | 7 | 4.54 |
+| unit_test | 32 | 30 | 93.75 | 96.77 | 0.03928 | 1.021 | 28 | 8.26 |
+| refactor | 36 | 34 | 94.44 | 94.29 | 0.008512 | 0.05565 | 7 | 6.53 |
+| math_mod | 36 | 35 | 97.22 | 97.06 | 0.006921 | 0.1183 | 34 | 4.54 |
+| math_frac | 44 | 42 | 95.45 | 97.62 | 0.008641 | 0.08055 | 31 | 5.24 |
+| dialogue | 44 | 43 | 97.73 | 97.67 | 0.004588 | 0.0558 | 7 | 4.54 |
+| list_steps | 30 | 30 | 100.00 | 100.00 | 0.005437 | 0.02582 | 26 | 2.53 |
+| structured | 35 | 35 | 100.00 | 100.00 | 0.007188 | 0.05603 | 7 | 4.54 |
+| summary | 35 | 35 | 100.00 | 100.00 | 0.008553 | 0.05564 | 7 | 4.54 |
+| sql | 33 | 32 | 96.97 | 96.77 | 0.04265 | 1.023 | 31 | 15.9 |
+| prose_review | 35 | 34 | 97.14 | 100.00 | 0.006068 | 0.05532 | 7 | 4.54 |
+| code_trace | 45 | 45 | 100.00 | 100.00 | 0.004597 | 0.05572 | 7 | 4.54 |
+| token_budget | 37 | 37 | 100.00 | 100.00 | 0.006382 | 0.05588 | 7 | 4.64 |
+
+Lowest top-1: harbour (93.11%), unit_test (93.75%), explain_sliding (94.12%).
+Highest mean KL: cells_code (0.1148), sql (0.04265), unit_test (0.03928).
+
+Baseline c053f52b2: top-1 2861/3015, mean KL 0.0195085, row-weighted 0.0641971, max KL 8.01205 (reported, not gated).
+Thresholds: top-1 at least 94.392%, mean KL at most 0.0292627, row-weighted mean KL at most 0.0962956, no non-finite logits.
+
+omlx-oracle gate: pass

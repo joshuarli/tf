@@ -1,0 +1,1026 @@
+test-inkling2-loop
++- run test stderr
+inkling prefix: reused 0 of 3 prompt tokens
+inkling session: slot 0
+inkling store: insert 36 tokens 174727312 bytes total 174727312
+inkling prefill: 0.578414 seconds
+inkling prefix: reused 0 of 37 prompt tokens
+inkling store: hit 36 of 37 prompt tokens
+inkling session: slot 1
+inkling prefill: 0.020188 seconds
+inkling prefix: reused 36 of 37 prompt tokens
+inkling served speculation: code: 128 tokens in 28 rounds, 154 drafted, 99 accepted, 0 cached, 14 lookup rows, 14 kept
+inkling store: hit 36 of 37 prompt tokens
+inkling session: slot 0
+inkling prefill: 0.025234 seconds
+inkling prefix: reused 36 of 37 prompt tokens
+inkling store: hit 36 of 37 prompt tokens
+inkling session: slot 1
+inkling prefill: 0.015947 seconds
+inkling prefix: reused 36 of 37 prompt tokens
+inkling served speculation: eos: 10 tokens in 2 rounds, 14 drafted, 8 accepted, 36 cached, 0 lookup rows, 0 kept
+inkling session: slot 0
+inkling store: insert 2432 tokens 290315776 bytes total 465043088
+inkling store: insert 2571 tokens 294871084 bytes total 759914172
+inkling prefill: 1.326058 seconds
+inkling prefix: reused 0 of 2572 prompt tokens
+inkling store: hit 2571 of 2572 prompt tokens
+inkling session: slot 1
+inkling prefill: 0.043645 seconds
+inkling prefix: reused 2571 of 2572 prompt tokens
+inkling served speculation: agent: 192 tokens in 51 rounds, 250 drafted, 140 accepted, 0 cached, 28 lookup rows, 15 kept
+inkling session: slot 0
+inkling store: insert 2587 tokens 295395436 bytes total 1055309608
+inkling prefill: 0.725973 seconds
+inkling prefix: reused 2572 of 2588 prompt tokens
+inkling store: hit 2587 of 2588 prompt tokens
+inkling session: slot 1
+inkling prefill: 0.043203 seconds
+inkling prefix: reused 2587 of 2588 prompt tokens
+inkling served speculation: grown: 160 tokens in 36 rounds, 202 drafted, 123 accepted, 2572 cached, 42 lookup rows, 32 kept
+inkling session: slot 0
+inkling store: insert 2432 tokens 290315776 bytes total 1345625384
+inkling store: insert 2571 tokens 294871084 bytes total 1640496468
+inkling prefill: 1.860056 seconds
+inkling store: insert 2560 tokens 294289408 bytes total 1934785876
+inkling fork: from slot 0 at 2560 of 2560 prompt tokens
+inkling session: slot 1
+inkling store: evict 36 tokens 174727312 bytes
+inkling store: insert 2578 tokens 295100488 bytes total 2055159052
+inkling prefill: 0.904241 seconds
+inkling prefix: reused 0 of 2572 prompt tokens
+inkling prefix: reused 2560 of 2579 prompt tokens
+inkling store: hit 2571 of 2572 prompt tokens
+inkling session: slot 0
+inkling prefill: 0.049279 seconds
+inkling prefix: reused 2571 of 2572 prompt tokens
+inkling store: hit 2578 of 2579 prompt tokens
+inkling session: slot 0
+inkling prefill: 0.033407 seconds
+inkling prefix: reused 2578 of 2579 prompt tokens
+inkling served speculation: fork: 160 tokens in 76 rounds, 154 drafted, 83 accepted, 2560 cached, 54 lookup rows, 31 kept
+inkling session: slot 1
+inkling store: evict 2571 tokens 294871084 bytes
+inkling store: insert 31 tokens 174471292 bytes total 1934759260
+inkling prefill: 0.194445 seconds
+inkling session: slot 0
+inkling store: insert 29 tokens 174368884 bytes total 2109128144
+inkling prefill: 0.162893 seconds
+inkling prefix: reused 0 of 30 prompt tokens
+inkling prefix: reused 0 of 32 prompt tokens
+inkling store: hit 31 of 32 prompt tokens
+inkling session: slot 1
+inkling prefill: 0.027687 seconds
+inkling prefix: reused 31 of 32 prompt tokens
+inkling store: hit 29 of 30 prompt tokens
+inkling session: slot 0
+inkling prefill: 0.136542 seconds
+inkling prefix: reused 29 of 30 prompt tokens
+inkling served speculation: two lanes: 192 tokens in 91 rounds, 145 drafted, 100 accepted, 0 cached, 38 lookup rows, 38 kept
+inkling store: hit 2432 of 2612 prompt tokens
+inkling session: slot 1
+inkling store: evict 2587 tokens 295395436 bytes
+inkling store: insert 2611 tokens 296181964 bytes total 2109914672
+inkling prefill: 0.520429 seconds
+inkling prefix: reused 2432 of 2612 prompt tokens
+inkling store: hit 2611 of 2612 prompt tokens
+inkling session: slot 0
+inkling prefill: 0.041552 seconds
+inkling prefix: reused 2611 of 2612 prompt tokens
+inkling served speculation: lookup: 96 tokens in 22 rounds, 144 drafted, 73 accepted, 2432 cached, 89 lookup rows, 45 kept
+inkling store: hit 2611 of 2612 prompt tokens
+inkling session: slot 0
+inkling prefill: 0.038406 seconds
+inkling prefix: reused 2611 of 2612 prompt tokens
+inkling store: hit 2611 of 2612 prompt tokens
+inkling session: slot 0
+inkling prefill: 0.032609 seconds
+inkling prefix: reused 2611 of 2612 prompt tokens
+inkling served speculation: lookup eos: 11 tokens in 3 rounds, 27 drafted, 9 accepted, 2611 cached, 27 lookup rows, 9 kept
+inkling session: slot 0
+inkling store: insert 36 tokens 174063760 bytes total 174063760
+inkling prefill: 0.494467 seconds
+inkling prefix: reused 0 of 37 prompt tokens
+inkling session: slot 1
+inkling store: insert 2432 tokens 252585472 bytes total 426649232
+inkling store: insert 2571 tokens 257140780 bytes total 683790012
+inkling prefill: 1.396757 seconds
+inkling prefix: reused 0 of 2572 prompt tokens
+inkling session: slot 0
+inkling store: insert 31 tokens 173899900 bytes total 857689912
+inkling prefill: 0.161470 seconds
+inkling session: slot 1
+inkling store: insert 29 tokens 173834356 bytes total 1031524268
+inkling prefill: 0.151680 seconds
+inkling prefix: reused 0 of 30 prompt tokens
+inkling prefix: reused 0 of 32 prompt tokens
+inkling served speculation: 10 drafted replies equal their draft-off replies, and 4 equal a host without the drafter
+inkling session: slot 0
+inkling store: insert 2432 tokens 252585472 bytes total 252585472
+inkling store: insert 2571 tokens 257140780 bytes total 509726252
+inkling prefill: 3.139482 seconds
+inkling prefix: reused 0 of 2572 prompt tokens
+inkling store: hit 2571 of 2572 prompt tokens
+inkling session: slot 1
+inkling prefill: 0.033144 seconds
+inkling prefix: reused 2571 of 2572 prompt tokens
+inkling fork: from slot 0 at 2432 of 2482 prompt tokens
+inkling session: slot 1
+inkling store: insert 2500 tokens 254813968 bytes total 764540220
+inkling prefill: 0.234342 seconds
+inkling prefix: reused 2432 of 2501 prompt tokens
+inkling session: slot 0
+inkling store: insert 2590 tokens 257763448 bytes total 1022303668
+inkling prefill: 0.148233 seconds
+inkling prefix: reused 2572 of 2591 prompt tokens
+inkling session: slot 0
+inkling store: insert 2432 tokens 252585472 bytes total 252585472
+inkling store: insert 2571 tokens 257140780 bytes total 509726252
+inkling prefill: 3.841485 seconds
+inkling prefix: reused 0 of 2572 prompt tokens
+inkling session: slot 0
+inkling store: insert 2590 tokens 257763448 bytes total 767489700
+inkling prefill: 0.146119 seconds
+inkling prefix: reused 2572 of 2591 prompt tokens
+inkling store: hit 2432 of 2501 prompt tokens
+inkling session: slot 0
+inkling store: insert 2500 tokens 254813968 bytes total 1022303668
+inkling prefill: 0.232022 seconds
+inkling prefix: reused 2432 of 2501 prompt tokens
+inkling host: a repeated prompt, a fork at 2432 and a store hit there reply as their references
+inkling prefix: reused 0 of 3 prompt tokens
+inkling prefix: reused 0 of 3 prompt tokens
+failed command: ./.zig-cache/o/870e5e8cdc16d72e4f705845f13a9df7/test --cache-dir=./.zig-cache --seed=0xf47bdce9 --listen=-
+
+test-inkling2-loop
++- run test stderr
+  q [3072x2304]: 3072 sampled rows, new worst err 4.186e-7 ratio 0.0000 failed 0, old worst ratio 0.0000 failed 0, old/new drift 4.768e-7
+  r [384x2304]: 384 sampled rows, new worst err 3.271e-7 ratio 0.0000 failed 0, old worst ratio 0.0000 failed 0, old/new drift 4.172e-7
+  k [1024x2304]: 1024 sampled rows, new worst err 3.634e-7 ratio 0.0000 failed 0, old worst ratio 0.0000 failed 0, old/new drift 4.768e-7
+  v [1024x2304]: 1024 sampled rows, new worst err 3.935e-7 ratio 0.0000 failed 0, old worst ratio 0.0000 failed 0, old/new drift 5.066e-7
+  sink [24x2304]: 24 sampled rows, new worst err 2.095e-7 ratio 0.0000 failed 0, old worst ratio 0.0000 failed 0, old/new drift 3.576e-7
+  gate [3072x2304]: 3072 sampled rows, new worst err 3.565e-7 ratio 0.0000 failed 0, old worst ratio 0.0000 failed 0, old/new drift 4.768e-7
+  o [2304x3072]: 2304 sampled rows, new worst err 4.981e-7 ratio 0.0000 failed 0, old worst ratio 0.0000 failed 0, old/new drift 5.215e-7
+  kdyn [32x2304]: 32 sampled rows, new worst err 2.611e-7 ratio 0.0000 failed 0, old worst ratio 0.0000 failed 0, old/new drift 3.576e-7
+  down [64x4608]: 64 sampled rows, new worst err 3.295e-7 ratio 0.0000 failed 0, old worst ratio 0.0000 failed 0, old/new drift 2.980e-7
+  gain [2304x64]: 2304 sampled rows, new worst err 3.026e-7 ratio 0.0019 failed 0, old worst ratio 0.0019 failed 0, old/new drift 0.000e0
+  forget [2304x64]: 2304 sampled rows, new worst err 1.614e-7 ratio 0.0018 failed 0, old worst ratio 0.0018 failed 0, old/new drift 0.000e0
+  router [128x2304]: 128 sampled rows, new worst err 2.271e-7 ratio 0.0000 failed 0, old worst ratio 0.0000 failed 0, old/new drift 3.278e-7
+  unembed [201024x2304] cap: 3142 sampled rows, new worst err 3.652e-7 ratio 0.0000 failed 0, old worst ratio 0.0000 failed 0, old/new drift 8.345e-7
+  fusedx-qrsg: fusedx matches singles bit for bit over 6552 rows, rerun identical, bound worst ratio 0.0000 failed 0
+  fusedx-full8: fusedx matches singles bit for bit over 8664 rows, rerun identical, bound worst ratio 0.0000 failed 0
+  fused-gf: matches singles bit for bit over 4608 rows, bound worst ratio 0.0009 failed 0
+  fusedx-gf: fusedx matches singles bit for bit over 4608 rows, rerun identical, bound worst ratio 0.0009 failed 0
+self-consistency row diffs 0e0 0e0 0e0 0e0
+chunk 1: logits 0e0 keys 0e0 values 0e0 conv 0e0 mlp 0e0 bound 1.5e-5
+chunk 4: logits 0e0 keys 0e0 values 0e0 conv 0e0 mlp 0e0 bound 1.5e-5
+chunk 5: logits 0e0 keys 0e0 values 0e0 conv 0e0 mlp 0e0 bound 1.5e-5
+long chunk 17 vs 12: logits 0e0 keys 0e0 values 0e0
+long chunk 24 vs 12: logits 0e0 keys 0e0 values 0e0
+long chunk 48 vs 12: logits 0e0 keys 0e0 values 0e0
+gemm n=3072 k=2304 rows=1 maxdiff=0e0
+gemm n=3072 k=2304 rows=7 maxdiff=0e0
+gemm n=3072 k=2304 rows=128 maxdiff=0e0
+gemm n=384 k=2304 rows=1 maxdiff=0e0
+gemm n=384 k=2304 rows=7 maxdiff=0e0
+gemm n=384 k=2304 rows=128 maxdiff=0e0
+gemm n=24 k=2304 rows=1 maxdiff=0e0
+gemm n=24 k=2304 rows=7 maxdiff=0e0
+gemm n=24 k=2304 rows=128 maxdiff=0e0
+gemm n=1024 k=2304 rows=1 maxdiff=0e0
+gemm n=1024 k=2304 rows=7 maxdiff=0e0
+gemm n=1024 k=2304 rows=128 maxdiff=0e0
+gemm n=32 k=2304 rows=1 maxdiff=0e0
+gemm n=32 k=2304 rows=7 maxdiff=0e0
+gemm n=32 k=2304 rows=128 maxdiff=0e0
+gemm n=2304 k=3072 rows=1 maxdiff=0e0
+gemm n=2304 k=3072 rows=7 maxdiff=0e0
+gemm n=2304 k=3072 rows=128 maxdiff=0e0
+gemm n=128 k=2304 rows=1 maxdiff=0e0
+gemm n=128 k=2304 rows=7 maxdiff=0e0
+gemm n=128 k=2304 rows=128 maxdiff=0e0
+gemm n=64 k=4608 rows=1 maxdiff=0e0
+gemm n=64 k=4608 rows=7 maxdiff=0e0
+gemm n=64 k=4608 rows=128 maxdiff=0e0
+gemm n=2304 k=64 rows=1 maxdiff=0e0
+gemm n=2304 k=64 rows=7 maxdiff=0e0
+gemm n=2304 k=64 rows=128 maxdiff=0e0
+gemm n=200058 k=2304 rows=1 maxdiff=0e0
+gemm n=200058 k=2304 rows=7 maxdiff=0e0
+gemm n=200058 k=2304 rows=128 maxdiff=0e0
+gemm n=3072 k=2304 rows=1 maxdiff=0e0
+gemm fp64 n=3072 k=2304 rows=1 worst_bound_ratio=3.056732569742335e-5
+gemm n=3072 k=2304 rows=7 maxdiff=0e0
+gemm fp64 n=3072 k=2304 rows=7 worst_bound_ratio=4.741566777106822e-5
+gemm n=3072 k=2304 rows=35 maxdiff=0e0
+gemm fp64 n=3072 k=2304 rows=35 worst_bound_ratio=7.040520980851721e-5
+gemm n=3072 k=2304 rows=128 maxdiff=0e0
+gemm fp64 n=3072 k=2304 rows=128 worst_bound_ratio=7.180100438906679e-5
+gemm n=3072 k=2304 rows=512 maxdiff=0e0
+gemm fp64 n=3072 k=2304 rows=512 worst_bound_ratio=7.180100438906679e-5
+gemm n=384 k=2304 rows=1 maxdiff=0e0
+gemm fp64 n=384 k=2304 rows=1 worst_bound_ratio=4.807779198849428e-5
+gemm n=384 k=2304 rows=7 maxdiff=0e0
+gemm fp64 n=384 k=2304 rows=7 worst_bound_ratio=5.155811648564682e-5
+gemm n=384 k=2304 rows=35 maxdiff=0e0
+gemm fp64 n=384 k=2304 rows=35 worst_bound_ratio=7.040520980851721e-5
+gemm n=384 k=2304 rows=128 maxdiff=0e0
+gemm fp64 n=384 k=2304 rows=128 worst_bound_ratio=7.180100438906679e-5
+gemm n=384 k=2304 rows=512 maxdiff=0e0
+gemm fp64 n=384 k=2304 rows=512 worst_bound_ratio=7.180100438906679e-5
+gemm n=24 k=2304 rows=1 maxdiff=0e0
+gemm fp64 n=24 k=2304 rows=1 worst_bound_ratio=4.004026410202892e-5
+gemm n=24 k=2304 rows=7 maxdiff=0e0
+gemm fp64 n=24 k=2304 rows=7 worst_bound_ratio=4.387222483562882e-5
+gemm n=24 k=2304 rows=35 maxdiff=0e0
+gemm fp64 n=24 k=2304 rows=35 worst_bound_ratio=5.3360420875380815e-5
+gemm n=24 k=2304 rows=128 maxdiff=0e0
+gemm fp64 n=24 k=2304 rows=128 worst_bound_ratio=7.180100438906679e-5
+gemm n=24 k=2304 rows=512 maxdiff=0e0
+gemm fp64 n=24 k=2304 rows=512 worst_bound_ratio=7.180100438906679e-5
+gemm n=1024 k=2304 rows=1 maxdiff=0e0
+gemm fp64 n=1024 k=2304 rows=1 worst_bound_ratio=5.122207990637057e-5
+gemm n=1024 k=2304 rows=7 maxdiff=0e0
+gemm fp64 n=1024 k=2304 rows=7 worst_bound_ratio=5.291028366317712e-5
+gemm n=1024 k=2304 rows=35 maxdiff=0e0
+gemm fp64 n=1024 k=2304 rows=35 worst_bound_ratio=7.040520980851721e-5
+gemm n=1024 k=2304 rows=128 maxdiff=0e0
+gemm fp64 n=1024 k=2304 rows=128 worst_bound_ratio=7.180100438906679e-5
+gemm n=1024 k=2304 rows=512 maxdiff=0e0
+gemm fp64 n=1024 k=2304 rows=512 worst_bound_ratio=7.180100438906679e-5
+gemm n=32 k=2304 rows=1 maxdiff=0e0
+gemm fp64 n=32 k=2304 rows=1 worst_bound_ratio=4.004026410202892e-5
+gemm n=32 k=2304 rows=7 maxdiff=0e0
+gemm fp64 n=32 k=2304 rows=7 worst_bound_ratio=4.387222483562882e-5
+gemm n=32 k=2304 rows=35 maxdiff=0e0
+gemm fp64 n=32 k=2304 rows=35 worst_bound_ratio=5.3360420875380815e-5
+gemm n=32 k=2304 rows=128 maxdiff=0e0
+gemm fp64 n=32 k=2304 rows=128 worst_bound_ratio=7.180100438906679e-5
+gemm n=32 k=2304 rows=512 maxdiff=0e0
+gemm fp64 n=32 k=2304 rows=512 worst_bound_ratio=7.180100438906679e-5
+gemm n=2304 k=3072 rows=1 maxdiff=0e0
+gemm fp64 n=2304 k=3072 rows=1 worst_bound_ratio=1.9556360808923754e-5
+gemm n=2304 k=3072 rows=7 maxdiff=0e0
+gemm fp64 n=2304 k=3072 rows=7 worst_bound_ratio=3.27370660157194e-5
+gemm n=2304 k=3072 rows=35 maxdiff=0e0
+gemm fp64 n=2304 k=3072 rows=35 worst_bound_ratio=5.171882131049696e-5
+gemm n=2304 k=3072 rows=128 maxdiff=0e0
+gemm fp64 n=2304 k=3072 rows=128 worst_bound_ratio=2.929756923096098e-5
+gemm n=2304 k=3072 rows=512 maxdiff=0e0
+gemm fp64 n=2304 k=3072 rows=512 worst_bound_ratio=2.811467504357788e-5
+gemm n=128 k=2304 rows=1 maxdiff=0e0
+gemm fp64 n=128 k=2304 rows=1 worst_bound_ratio=3.501300280377199e-5
+gemm n=128 k=2304 rows=7 maxdiff=0e0
+gemm fp64 n=128 k=2304 rows=7 worst_bound_ratio=7.31427366302513e-5
+gemm n=128 k=2304 rows=35 maxdiff=0e0
+gemm fp64 n=128 k=2304 rows=35 worst_bound_ratio=7.040520980851721e-5
+gemm n=128 k=2304 rows=128 maxdiff=0e0
+gemm fp64 n=128 k=2304 rows=128 worst_bound_ratio=7.552272285596829e-5
+gemm n=128 k=2304 rows=512 maxdiff=0e0
+gemm fp64 n=128 k=2304 rows=512 worst_bound_ratio=5.4649691289768794e-5
+gemm n=64 k=4608 rows=1 maxdiff=0e0
+gemm fp64 n=64 k=4608 rows=1 worst_bound_ratio=3.266368566258012e-5
+gemm n=64 k=4608 rows=7 maxdiff=0e0
+gemm fp64 n=64 k=4608 rows=7 worst_bound_ratio=3.479533525401603e-5
+gemm n=64 k=4608 rows=35 maxdiff=0e0
+gemm fp64 n=64 k=4608 rows=35 worst_bound_ratio=3.8152316313173764e-5
+gemm n=64 k=4608 rows=128 maxdiff=0e0
+gemm fp64 n=64 k=4608 rows=128 worst_bound_ratio=3.266368566258012e-5
+gemm n=64 k=4608 rows=512 maxdiff=0e0
+gemm fp64 n=64 k=4608 rows=512 worst_bound_ratio=3.774396403972963e-5
+gemm n=2304 k=64 rows=1 maxdiff=0e0
+gemm fp64 n=2304 k=64 rows=1 worst_bound_ratio=1.7309231429729222e-3
+gemm n=2304 k=64 rows=7 maxdiff=0e0
+gemm fp64 n=2304 k=64 rows=7 worst_bound_ratio=1.8129292371901454e-3
+gemm n=2304 k=64 rows=35 maxdiff=0e0
+gemm fp64 n=2304 k=64 rows=35 worst_bound_ratio=1.7309231429729222e-3
+gemm n=2304 k=64 rows=128 maxdiff=0e0
+gemm fp64 n=2304 k=64 rows=128 worst_bound_ratio=2.876026318391626e-3
+gemm n=2304 k=64 rows=512 maxdiff=0e0
+gemm fp64 n=2304 k=64 rows=512 worst_bound_ratio=1.8129292371901454e-3
+gemm n=200058 k=2304 rows=1 maxdiff=0e0
+gemm fp64 n=200058 k=2304 rows=1 worst_bound_ratio=5.002409519352514e-5
+gemm n=200058 k=2304 rows=7 maxdiff=0e0
+gemm fp64 n=200058 k=2304 rows=7 worst_bound_ratio=6.347305324341283e-5
+gemm n=200058 k=2304 rows=35 maxdiff=0e0
+gemm fp64 n=200058 k=2304 rows=35 worst_bound_ratio=5.011640541400221e-5
+gemm n=200058 k=2304 rows=128 maxdiff=0e0
+gemm fp64 n=200058 k=2304 rows=128 worst_bound_ratio=6.996430710363931e-5
+gemm n=200058 k=2304 rows=512 maxdiff=0e0
+gemm fp64 n=200058 k=2304 rows=512 worst_bound_ratio=6.996430710363931e-5
+gemm n=3072 k=2304 rows=1 maxdiff=1.2397766e-5
+gemm fp64 n=3072 k=2304 rows=1 worst_bound_ratio=1.521609887514319e-5
+gemm n=3072 k=2304 rows=2 maxdiff=1.2397766e-5
+gemm fp64 n=3072 k=2304 rows=2 worst_bound_ratio=1.6685714131124065e-5
+gemm n=3072 k=2304 rows=4 maxdiff=1.335144e-5
+gemm fp64 n=3072 k=2304 rows=4 worst_bound_ratio=2.2699695450134174e-5
+gemm n=3072 k=2304 rows=8 maxdiff=1.4305115e-5
+gemm fp64 n=3072 k=2304 rows=8 worst_bound_ratio=2.2699695450134174e-5
+gemm n=3072 k=2304 rows=16 maxdiff=1.4305115e-5
+gemm fp64 n=3072 k=2304 rows=16 worst_bound_ratio=2.2699695450134174e-5
+gemm n=384 k=2304 rows=1 maxdiff=1.2397766e-5
+gemm fp64 n=384 k=2304 rows=1 worst_bound_ratio=1.8182254758697665e-5
+gemm n=384 k=2304 rows=2 maxdiff=1.2397766e-5
+gemm fp64 n=384 k=2304 rows=2 worst_bound_ratio=1.8182254758697665e-5
+gemm n=384 k=2304 rows=4 maxdiff=1.335144e-5
+gemm fp64 n=384 k=2304 rows=4 worst_bound_ratio=2.415710598814306e-5
+gemm n=384 k=2304 rows=8 maxdiff=1.4305115e-5
+gemm fp64 n=384 k=2304 rows=8 worst_bound_ratio=2.4198042124118458e-5
+gemm n=384 k=2304 rows=16 maxdiff=1.4305115e-5
+gemm fp64 n=384 k=2304 rows=16 worst_bound_ratio=2.5000813171265778e-5
+gemm n=24 k=2304 rows=1 maxdiff=1.001358e-5
+gemm fp64 n=24 k=2304 rows=1 worst_bound_ratio=1.8182254758697665e-5
+gemm n=24 k=2304 rows=2 maxdiff=1.001358e-5
+gemm fp64 n=24 k=2304 rows=2 worst_bound_ratio=1.8182254758697665e-5
+gemm n=24 k=2304 rows=4 maxdiff=1.001358e-5
+gemm fp64 n=24 k=2304 rows=4 worst_bound_ratio=2.2699695450134174e-5
+gemm n=24 k=2304 rows=8 maxdiff=1.1444092e-5
+gemm fp64 n=24 k=2304 rows=8 worst_bound_ratio=2.2699695450134174e-5
+gemm n=24 k=2304 rows=16 maxdiff=1.2397766e-5
+gemm fp64 n=24 k=2304 rows=16 worst_bound_ratio=2.2699695450134174e-5
+gemm n=1024 k=2304 rows=1 maxdiff=1.2397766e-5
+gemm fp64 n=1024 k=2304 rows=1 worst_bound_ratio=1.747432776330388e-5
+gemm n=1024 k=2304 rows=2 maxdiff=1.2397766e-5
+gemm fp64 n=1024 k=2304 rows=2 worst_bound_ratio=1.747432776330388e-5
+gemm n=1024 k=2304 rows=4 maxdiff=1.335144e-5
+gemm fp64 n=1024 k=2304 rows=4 worst_bound_ratio=2.2699695450134174e-5
+gemm n=1024 k=2304 rows=8 maxdiff=1.4305115e-5
+gemm fp64 n=1024 k=2304 rows=8 worst_bound_ratio=2.2699695450134174e-5
+gemm n=1024 k=2304 rows=16 maxdiff=1.4305115e-5
+gemm fp64 n=1024 k=2304 rows=16 worst_bound_ratio=2.2699695450134174e-5
+gemm n=32 k=2304 rows=1 maxdiff=1.001358e-5
+gemm fp64 n=32 k=2304 rows=1 worst_bound_ratio=1.8182254758697665e-5
+gemm n=32 k=2304 rows=2 maxdiff=1.001358e-5
+gemm fp64 n=32 k=2304 rows=2 worst_bound_ratio=1.8182254758697665e-5
+gemm n=32 k=2304 rows=4 maxdiff=1.001358e-5
+gemm fp64 n=32 k=2304 rows=4 worst_bound_ratio=2.2699695450134174e-5
+gemm n=32 k=2304 rows=8 maxdiff=1.1444092e-5
+gemm fp64 n=32 k=2304 rows=8 worst_bound_ratio=2.2699695450134174e-5
+gemm n=32 k=2304 rows=16 maxdiff=1.2397766e-5
+gemm fp64 n=32 k=2304 rows=16 worst_bound_ratio=2.2699695450134174e-5
+gemm n=2304 k=3072 rows=1 maxdiff=1.5735626e-5
+gemm fp64 n=2304 k=3072 rows=1 worst_bound_ratio=1.6688778825548514e-5
+gemm n=2304 k=3072 rows=2 maxdiff=1.5735626e-5
+gemm fp64 n=2304 k=3072 rows=2 worst_bound_ratio=1.7761995273626635e-5
+gemm n=2304 k=3072 rows=4 maxdiff=1.7166138e-5
+gemm fp64 n=2304 k=3072 rows=4 worst_bound_ratio=1.7761995273626635e-5
+gemm n=2304 k=3072 rows=8 maxdiff=1.7166138e-5
+gemm fp64 n=2304 k=3072 rows=8 worst_bound_ratio=1.7761995273626635e-5
+gemm n=2304 k=3072 rows=16 maxdiff=1.8119812e-5
+gemm fp64 n=2304 k=3072 rows=16 worst_bound_ratio=1.798049301483006e-5
+gemm n=128 k=2304 rows=1 maxdiff=1.2397766e-5
+gemm fp64 n=128 k=2304 rows=1 worst_bound_ratio=1.8182254758697665e-5
+gemm n=128 k=2304 rows=2 maxdiff=1.2397766e-5
+gemm fp64 n=128 k=2304 rows=2 worst_bound_ratio=1.8182254758697665e-5
+gemm n=128 k=2304 rows=4 maxdiff=1.2397766e-5
+gemm fp64 n=128 k=2304 rows=4 worst_bound_ratio=2.415710598814306e-5
+gemm n=128 k=2304 rows=8 maxdiff=1.2397766e-5
+gemm fp64 n=128 k=2304 rows=8 worst_bound_ratio=2.4198042124118458e-5
+gemm n=128 k=2304 rows=16 maxdiff=1.3828278e-5
+gemm fp64 n=128 k=2304 rows=16 worst_bound_ratio=2.4387569473050915e-5
+gemm n=64 k=4608 rows=1 maxdiff=2.4795532e-5
+gemm fp64 n=64 k=4608 rows=1 worst_bound_ratio=1.1866837081913477e-5
+gemm n=64 k=4608 rows=2 maxdiff=3.0517578e-5
+gemm fp64 n=64 k=4608 rows=2 worst_bound_ratio=1.2101398882202914e-5
+gemm n=64 k=4608 rows=4 maxdiff=3.0517578e-5
+gemm fp64 n=64 k=4608 rows=4 worst_bound_ratio=1.2101398882202914e-5
+gemm n=64 k=4608 rows=8 maxdiff=3.0517578e-5
+gemm fp64 n=64 k=4608 rows=8 worst_bound_ratio=1.2516148755383511e-5
+gemm n=64 k=4608 rows=16 maxdiff=3.71933e-5
+gemm fp64 n=64 k=4608 rows=16 worst_bound_ratio=1.4729418330626095e-5
+gemm n=2304 k=64 rows=1 maxdiff=9.536743e-7
+gemm fp64 n=2304 k=64 rows=1 worst_bound_ratio=5.99902143112876e-4
+gemm n=2304 k=64 rows=2 maxdiff=9.536743e-7
+gemm fp64 n=2304 k=64 rows=2 worst_bound_ratio=6.030749052644539e-4
+gemm n=2304 k=64 rows=4 maxdiff=9.536743e-7
+gemm fp64 n=2304 k=64 rows=4 worst_bound_ratio=8.575571292266295e-4
+gemm n=2304 k=64 rows=8 maxdiff=9.536743e-7
+gemm fp64 n=2304 k=64 rows=8 worst_bound_ratio=9.752026824884582e-4
+gemm n=2304 k=64 rows=16 maxdiff=9.536743e-7
+gemm fp64 n=2304 k=64 rows=16 worst_bound_ratio=1.0023052157306937e-3
+gemm n=200058 k=2304 rows=1 maxdiff=1.2397766e-5
+gemm fp64 n=200058 k=2304 rows=1 worst_bound_ratio=2.142274556538556e-5
+gemm n=200058 k=2304 rows=2 maxdiff=1.2397766e-5
+gemm fp64 n=200058 k=2304 rows=2 worst_bound_ratio=2.142274556538556e-5
+gemm n=200058 k=2304 rows=4 maxdiff=1.335144e-5
+gemm fp64 n=200058 k=2304 rows=4 worst_bound_ratio=2.362923468613377e-5
+gemm n=200058 k=2304 rows=8 maxdiff=1.4305115e-5
+gemm fp64 n=200058 k=2304 rows=8 worst_bound_ratio=2.362923468613377e-5
+gemm n=200058 k=2304 rows=16 maxdiff=1.4305115e-5
+gemm fp64 n=200058 k=2304 rows=16 worst_bound_ratio=2.43888033619555e-5
+expert mx=false gu=true rows=1 worst=5.266333295494974e-5
+expert mx=false gu=true rows=3 worst=5.266333295494974e-5
+expert mx=false gu=true rows=8 worst=5.266333295494974e-5
+expert mx=false gu=true rows=15 worst=5.266333295494974e-5
+expert mx=false gu=true rows=16 worst=1.259263131139221e-4
+expert mx=false gu=true rows=32 worst=1.7364351401738531e-4
+expert mx=false gu=true rows=128 worst=1.7364351401738531e-4
+expert mx=false gu=false rows=1 worst=4.719709895795177e-6
+expert mx=false gu=false rows=3 worst=5.326775934122452e-6
+expert mx=false gu=false rows=8 worst=6.8565197821612855e-6
+expert mx=false gu=false rows=15 worst=6.8565197821612855e-6
+expert mx=false gu=false rows=16 worst=5.4885527639214615e-5
+expert mx=false gu=false rows=32 worst=5.4885527639214615e-5
+expert mx=false gu=false rows=128 worst=5.4885527639214615e-5
+expert mx=true gu=true rows=1 worst=5.501683503439381e-6
+expert mx=true gu=true rows=3 worst=5.501683503439381e-6
+expert mx=true gu=true rows=8 worst=1.4574532173128318e-5
+expert mx=true gu=true rows=15 worst=1.888031798031875e-4
+expert mx=true gu=true rows=16 worst=1.888031798031875e-4
+expert mx=true gu=true rows=32 worst=1.1437896209898213e-3
+expert mx=true gu=true rows=128 worst=3.2367437156661794e-3
+expert mx=true gu=false rows=1 worst=1.1328768596285954e-4
+expert mx=true gu=false rows=3 worst=1.1328768596285954e-4
+expert mx=true gu=false rows=8 worst=1.5520070146521903e-3
+expert mx=true gu=false rows=15 worst=1.5520070146521903e-3
+expert mx=true gu=false rows=16 worst=1.5520070146521903e-3
+expert mx=true gu=false rows=32 worst=1.5520070146521903e-3
+expert mx=true gu=false rows=128 worst=1.5520070146521903e-3
+expert mx=false gu=true rows=1 worst=2.61765324829355e-5
+expert mx=false gu=true rows=2 worst=3.210429602518161e-5
+expert mx=false gu=true rows=4 worst=4.185264396205923e-5
+expert mx=false gu=true rows=8 worst=4.185264396205923e-5
+expert mx=false gu=false rows=1 worst=6.3441795994378936e-6
+expert mx=false gu=false rows=2 worst=6.3441795994378936e-6
+expert mx=false gu=false rows=4 worst=6.3441795994378936e-6
+expert mx=false gu=false rows=8 worst=7.73668903875091e-6
+expert mx=true gu=true rows=1 worst=1.2594646761954209e-5
+expert mx=true gu=true rows=2 worst=1.2594646761954209e-5
+expert mx=true gu=true rows=4 worst=3.2983292344113124e-4
+expert mx=true gu=true rows=8 worst=3.2983292344113124e-4
+expert mx=true gu=false rows=1 worst=1.2445245647541014e-4
+expert mx=true gu=false rows=2 worst=1.83981070676964e-4
+expert mx=true gu=false rows=4 worst=1.83981070676964e-4
+expert mx=true gu=false rows=8 worst=1.83981070676964e-4
+attention base=0 window=0 rows=35 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=0 rows=1 fp64=2.2873518912280844e-8 original=0e0
+attention base=0 window=0 rows=7 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=0 rows=9 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=0 rows=17 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=0 rows=33 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=0 rows=63 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=0 rows=100 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=0 rows=128 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=1024 rows=35 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=1024 rows=1 fp64=2.2873518912280844e-8 original=0e0
+attention base=0 window=1024 rows=7 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=1024 rows=9 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=1024 rows=17 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=1024 rows=33 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=1024 rows=63 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=1024 rows=100 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=1024 rows=128 fp64=5.59940185329566e-8 original=0e0
+attention base=900 window=0 rows=35 fp64=6.504336304367225e-9 original=0e0
+attention base=900 window=0 rows=1 fp64=3.6955085376370878e-9 original=0e0
+attention base=900 window=0 rows=7 fp64=5.6003672834186585e-9 original=0e0
+attention base=900 window=0 rows=9 fp64=5.6003672834186585e-9 original=0e0
+attention base=900 window=0 rows=17 fp64=6.504336304367225e-9 original=0e0
+attention base=900 window=0 rows=33 fp64=6.504336304367225e-9 original=0e0
+attention base=900 window=0 rows=63 fp64=6.504336304367225e-9 original=0e0
+attention base=900 window=0 rows=100 fp64=6.504336304367225e-9 original=0e0
+attention base=900 window=0 rows=128 fp64=6.8820732387637334e-9 original=0e0
+attention base=900 window=1024 rows=35 fp64=5.751393244903674e-9 original=0e0
+attention base=900 window=1024 rows=1 fp64=4.356736172349274e-9 original=0e0
+attention base=900 window=1024 rows=7 fp64=5.3016608720334035e-9 original=0e0
+attention base=900 window=1024 rows=9 fp64=5.3016608720334035e-9 original=0e0
+attention base=900 window=1024 rows=17 fp64=5.3016608720334035e-9 original=0e0
+attention base=900 window=1024 rows=33 fp64=5.751393244903674e-9 original=0e0
+attention base=900 window=1024 rows=63 fp64=5.794188602656e-9 original=0e0
+attention base=900 window=1024 rows=100 fp64=7.161215720245806e-9 original=0e0
+attention base=900 window=1024 rows=128 fp64=7.161215720245806e-9 original=0e0
+attention base=5000 window=0 rows=1 fp64=3.728023866879111e-9 original=0e0
+attention base=5000 window=0 rows=7 fp64=4.474726406902482e-9 original=0e0
+attention base=5000 window=0 rows=128 fp64=5.941710595432949e-9 original=0e0
+attention base=5000 window=1024 rows=1 fp64=2.5329610991130236e-9 original=0e0
+attention base=5000 window=1024 rows=7 fp64=5.841141109425713e-9 original=0e0
+attention base=5000 window=1024 rows=128 fp64=6.7121607547245e-9 original=0e0
+expert units worst up=1.5612222993759417e-2 down=1.3417795940995347e-5
+affine units worst up=9.609139677584366e-4 down=2.652406692504883e-6
+oq4e units vs simdgroup prefill: logits_max_diff=2.2102737e-1 scale=2.2759865e1 argmax=220,220
+attention base=100 window=48 rows=45: units worst 1.5664184405676795e-4, simdgroup worst 1.5917983529173396e-4
+attention base=70 window=0 rows=37: units worst 1.7360277767275445e-4, simdgroup worst 1.736176788339483e-4
+split stage n=200 k=320 rows=77: worst error/bound 0.0111
+split stage n=96 k=2304 rows=130: worst error/bound 0.0009
+verify same-width commit width=1 accepted=0 exact
+verify same-width commit width=1 accepted=1 exact
+verify same-width commit width=2 accepted=0 exact
+verify same-width commit width=2 accepted=1 exact
+verify same-width commit width=2 accepted=2 exact
+verify same-width commit width=4 accepted=0 exact
+verify same-width commit width=4 accepted=1 exact
+verify same-width commit width=4 accepted=2 exact
+verify same-width commit width=4 accepted=3 exact
+verify same-width commit width=4 accepted=4 exact
+verify same-width commit width=8 accepted=0 exact
+verify same-width commit width=8 accepted=1 exact
+verify same-width commit width=8 accepted=2 exact
+verify same-width commit width=8 accepted=3 exact
+verify same-width commit width=8 accepted=4 exact
+verify same-width commit width=8 accepted=5 exact
+verify same-width commit width=8 accepted=7 exact
+verify same-width commit width=8 accepted=8 exact
+verify same-width commit width=16 accepted=0 exact
+verify same-width commit width=16 accepted=1 exact
+verify same-width commit width=16 accepted=2 exact
+verify same-width commit width=16 accepted=3 exact
+verify same-width commit width=16 accepted=4 exact
+verify same-width commit width=16 accepted=5 exact
+verify same-width commit width=16 accepted=7 exact
+verify same-width commit width=16 accepted=8 exact
+verify same-width commit width=16 accepted=15 exact
+verify same-width commit width=16 accepted=16 exact
+batch width=1 row=0 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=2 row=0 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=2 row=1 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=4 row=0 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=4 row=1 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=4 row=2 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=4 row=3 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=4 row=0 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=4 row=1 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=4 row=2 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=4 row=3 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=8 row=0 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=8 row=1 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=8 row=2 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=8 row=3 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=8 row=4 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=8 row=5 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=8 row=6 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=8 row=7 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+rows alone and grouped /Users/josh/models/Inkling-2-Mini@ed40e7da625f: 35 rows of batch steps at widths 2-8 equal their one-row steps bit for bit
+rows alone and grouped /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd: 35 rows of batch steps at widths 2-8 equal their one-row steps bit for bit
+grouped rows alone and shared /Users/josh/models/Inkling-2-Mini@ed40e7da625f: 46 rows in groups of 2-8 equal their one-row steps bit for bit
+grouped rows alone and shared /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd: 46 rows in groups of 2-8 equal their one-row steps bit for bit
+concurrent replies /Users/josh/models/Inkling-2-Mini@ed40e7da625f: 8 greedy streams of 6 tokens joining and leaving equal their solo replies bit for bit
+concurrent replies /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd: 8 greedy streams of 6 tokens joining and leaving equal their solo replies bit for bit
+grouped verification /Users/josh/models/Inkling-2-Mini@ed40e7da625f: rows 8, logits, picks and caches equal batch decoding bit for bit
+grouped verification /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd: rows 8, logits, picks and caches equal batch decoding bit for bit
+grouped taps /Users/josh/models/Inkling-2-Mini@ed40e7da625f: 8 rows from position 1021 equal one-row batch steps' taps bit for bit
+grouped taps /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd: 8 rows from position 1021 equal one-row batch steps' taps bit for bit
+fused verify rounds /Users/josh/models/Inkling-2-Mini@ed40e7da625f: zero, partial and full acceptance pick, accept and commit as forward, picks and commit
+fused verify rounds /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd: zero, partial and full acceptance pick, accept and commit as forward, picks and commit
+tree verification /Users/josh/models/Inkling-2-Mini@ed40e7da625f: 37 rows of trees up to 8 rows equal their paths' one-row steps (logits, picks, taps) bit for bit; 15 commits keep sequential decoding's caches
+tree verification /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd: 54 rows of trees up to 16 rows equal their paths' one-row steps (logits, picks, taps) bit for bit; 15 commits keep sequential decoding's caches
+few-row dense test: 120 cases byte-equal to the one-row kernel
+few-row projections test: 28 cases byte-equal to the one-row kernel
+attention test: worst old-vs-ref 1.3113022e-6, new-vs-ref 7.301569e-7, old-vs-new 1.4901161e-6, bound 5.52444e-3
+ring test: worst pair 1.7881393e-6, worst vs-ref 1.6093254e-6, bound 2.3642753e-3
+staged split test: 58 cases byte-equal to the serial kernel and across batch rows
+batched depth mix test: 25 cases byte-equal to the prefill mixes
+gathered expert test: 63 cases byte-equal to the per-slot kernels
+failed command: ./.zig-cache/o/281b31cf95663910ba0c57f922c0f165/test --cache-dir=./.zig-cache --seed=0xf47bdce9 --listen=-
+
+test-inkling2-loop
++- run test stderr
+self-consistency row diffs 0e0 0e0 0e0 0e0
+chunk 1: logits 0e0 keys 0e0 values 0e0 conv 0e0 mlp 0e0 bound 1.5e-5
+chunk 4: logits 0e0 keys 0e0 values 0e0 conv 0e0 mlp 0e0 bound 1.5e-5
+chunk 5: logits 0e0 keys 0e0 values 0e0 conv 0e0 mlp 0e0 bound 1.5e-5
+long chunk 17 vs 12: logits 0e0 keys 0e0 values 0e0
+long chunk 24 vs 12: logits 0e0 keys 0e0 values 0e0
+long chunk 48 vs 12: logits 0e0 keys 0e0 values 0e0
+gemm n=3072 k=2304 rows=1 maxdiff=0e0
+gemm n=3072 k=2304 rows=7 maxdiff=0e0
+gemm n=3072 k=2304 rows=128 maxdiff=0e0
+gemm n=384 k=2304 rows=1 maxdiff=0e0
+gemm n=384 k=2304 rows=7 maxdiff=0e0
+gemm n=384 k=2304 rows=128 maxdiff=0e0
+gemm n=24 k=2304 rows=1 maxdiff=0e0
+gemm n=24 k=2304 rows=7 maxdiff=0e0
+gemm n=24 k=2304 rows=128 maxdiff=0e0
+gemm n=1024 k=2304 rows=1 maxdiff=0e0
+gemm n=1024 k=2304 rows=7 maxdiff=0e0
+gemm n=1024 k=2304 rows=128 maxdiff=0e0
+gemm n=32 k=2304 rows=1 maxdiff=0e0
+gemm n=32 k=2304 rows=7 maxdiff=0e0
+gemm n=32 k=2304 rows=128 maxdiff=0e0
+gemm n=2304 k=3072 rows=1 maxdiff=0e0
+gemm n=2304 k=3072 rows=7 maxdiff=0e0
+gemm n=2304 k=3072 rows=128 maxdiff=0e0
+gemm n=128 k=2304 rows=1 maxdiff=0e0
+gemm n=128 k=2304 rows=7 maxdiff=0e0
+gemm n=128 k=2304 rows=128 maxdiff=0e0
+gemm n=64 k=4608 rows=1 maxdiff=0e0
+gemm n=64 k=4608 rows=7 maxdiff=0e0
+gemm n=64 k=4608 rows=128 maxdiff=0e0
+gemm n=2304 k=64 rows=1 maxdiff=0e0
+gemm n=2304 k=64 rows=7 maxdiff=0e0
+gemm n=2304 k=64 rows=128 maxdiff=0e0
+gemm n=200058 k=2304 rows=1 maxdiff=0e0
+gemm n=200058 k=2304 rows=7 maxdiff=0e0
+gemm n=200058 k=2304 rows=128 maxdiff=0e0
+gemm n=3072 k=2304 rows=1 maxdiff=0e0
+gemm fp64 n=3072 k=2304 rows=1 worst_bound_ratio=3.056732569742335e-5
+gemm n=3072 k=2304 rows=7 maxdiff=0e0
+gemm fp64 n=3072 k=2304 rows=7 worst_bound_ratio=4.741566777106822e-5
+gemm n=3072 k=2304 rows=35 maxdiff=0e0
+gemm fp64 n=3072 k=2304 rows=35 worst_bound_ratio=7.040520980851721e-5
+gemm n=3072 k=2304 rows=128 maxdiff=0e0
+gemm fp64 n=3072 k=2304 rows=128 worst_bound_ratio=7.180100438906679e-5
+gemm n=3072 k=2304 rows=512 maxdiff=0e0
+gemm fp64 n=3072 k=2304 rows=512 worst_bound_ratio=7.180100438906679e-5
+gemm n=384 k=2304 rows=1 maxdiff=0e0
+gemm fp64 n=384 k=2304 rows=1 worst_bound_ratio=4.807779198849428e-5
+gemm n=384 k=2304 rows=7 maxdiff=0e0
+gemm fp64 n=384 k=2304 rows=7 worst_bound_ratio=5.155811648564682e-5
+gemm n=384 k=2304 rows=35 maxdiff=0e0
+gemm fp64 n=384 k=2304 rows=35 worst_bound_ratio=7.040520980851721e-5
+gemm n=384 k=2304 rows=128 maxdiff=0e0
+gemm fp64 n=384 k=2304 rows=128 worst_bound_ratio=7.180100438906679e-5
+gemm n=384 k=2304 rows=512 maxdiff=0e0
+gemm fp64 n=384 k=2304 rows=512 worst_bound_ratio=7.180100438906679e-5
+gemm n=24 k=2304 rows=1 maxdiff=0e0
+gemm fp64 n=24 k=2304 rows=1 worst_bound_ratio=4.004026410202892e-5
+gemm n=24 k=2304 rows=7 maxdiff=0e0
+gemm fp64 n=24 k=2304 rows=7 worst_bound_ratio=4.387222483562882e-5
+gemm n=24 k=2304 rows=35 maxdiff=0e0
+gemm fp64 n=24 k=2304 rows=35 worst_bound_ratio=5.3360420875380815e-5
+gemm n=24 k=2304 rows=128 maxdiff=0e0
+gemm fp64 n=24 k=2304 rows=128 worst_bound_ratio=7.180100438906679e-5
+gemm n=24 k=2304 rows=512 maxdiff=0e0
+gemm fp64 n=24 k=2304 rows=512 worst_bound_ratio=7.180100438906679e-5
+gemm n=1024 k=2304 rows=1 maxdiff=0e0
+gemm fp64 n=1024 k=2304 rows=1 worst_bound_ratio=5.122207990637057e-5
+gemm n=1024 k=2304 rows=7 maxdiff=0e0
+gemm fp64 n=1024 k=2304 rows=7 worst_bound_ratio=5.291028366317712e-5
+gemm n=1024 k=2304 rows=35 maxdiff=0e0
+gemm fp64 n=1024 k=2304 rows=35 worst_bound_ratio=7.040520980851721e-5
+gemm n=1024 k=2304 rows=128 maxdiff=0e0
+gemm fp64 n=1024 k=2304 rows=128 worst_bound_ratio=7.180100438906679e-5
+gemm n=1024 k=2304 rows=512 maxdiff=0e0
+gemm fp64 n=1024 k=2304 rows=512 worst_bound_ratio=7.180100438906679e-5
+gemm n=32 k=2304 rows=1 maxdiff=0e0
+gemm fp64 n=32 k=2304 rows=1 worst_bound_ratio=4.004026410202892e-5
+gemm n=32 k=2304 rows=7 maxdiff=0e0
+gemm fp64 n=32 k=2304 rows=7 worst_bound_ratio=4.387222483562882e-5
+gemm n=32 k=2304 rows=35 maxdiff=0e0
+gemm fp64 n=32 k=2304 rows=35 worst_bound_ratio=5.3360420875380815e-5
+gemm n=32 k=2304 rows=128 maxdiff=0e0
+gemm fp64 n=32 k=2304 rows=128 worst_bound_ratio=7.180100438906679e-5
+gemm n=32 k=2304 rows=512 maxdiff=0e0
+gemm fp64 n=32 k=2304 rows=512 worst_bound_ratio=7.180100438906679e-5
+gemm n=2304 k=3072 rows=1 maxdiff=0e0
+gemm fp64 n=2304 k=3072 rows=1 worst_bound_ratio=1.9556360808923754e-5
+gemm n=2304 k=3072 rows=7 maxdiff=0e0
+gemm fp64 n=2304 k=3072 rows=7 worst_bound_ratio=3.27370660157194e-5
+gemm n=2304 k=3072 rows=35 maxdiff=0e0
+gemm fp64 n=2304 k=3072 rows=35 worst_bound_ratio=5.171882131049696e-5
+gemm n=2304 k=3072 rows=128 maxdiff=0e0
+gemm fp64 n=2304 k=3072 rows=128 worst_bound_ratio=2.929756923096098e-5
+gemm n=2304 k=3072 rows=512 maxdiff=0e0
+gemm fp64 n=2304 k=3072 rows=512 worst_bound_ratio=2.811467504357788e-5
+gemm n=128 k=2304 rows=1 maxdiff=0e0
+gemm fp64 n=128 k=2304 rows=1 worst_bound_ratio=3.501300280377199e-5
+gemm n=128 k=2304 rows=7 maxdiff=0e0
+gemm fp64 n=128 k=2304 rows=7 worst_bound_ratio=7.31427366302513e-5
+gemm n=128 k=2304 rows=35 maxdiff=0e0
+gemm fp64 n=128 k=2304 rows=35 worst_bound_ratio=7.040520980851721e-5
+gemm n=128 k=2304 rows=128 maxdiff=0e0
+gemm fp64 n=128 k=2304 rows=128 worst_bound_ratio=7.552272285596829e-5
+gemm n=128 k=2304 rows=512 maxdiff=0e0
+gemm fp64 n=128 k=2304 rows=512 worst_bound_ratio=5.4649691289768794e-5
+gemm n=64 k=4608 rows=1 maxdiff=0e0
+gemm fp64 n=64 k=4608 rows=1 worst_bound_ratio=3.266368566258012e-5
+gemm n=64 k=4608 rows=7 maxdiff=0e0
+gemm fp64 n=64 k=4608 rows=7 worst_bound_ratio=3.479533525401603e-5
+gemm n=64 k=4608 rows=35 maxdiff=0e0
+gemm fp64 n=64 k=4608 rows=35 worst_bound_ratio=3.8152316313173764e-5
+gemm n=64 k=4608 rows=128 maxdiff=0e0
+gemm fp64 n=64 k=4608 rows=128 worst_bound_ratio=3.266368566258012e-5
+gemm n=64 k=4608 rows=512 maxdiff=0e0
+gemm fp64 n=64 k=4608 rows=512 worst_bound_ratio=3.774396403972963e-5
+gemm n=2304 k=64 rows=1 maxdiff=0e0
+gemm fp64 n=2304 k=64 rows=1 worst_bound_ratio=1.7309231429729222e-3
+gemm n=2304 k=64 rows=7 maxdiff=0e0
+gemm fp64 n=2304 k=64 rows=7 worst_bound_ratio=1.8129292371901454e-3
+gemm n=2304 k=64 rows=35 maxdiff=0e0
+gemm fp64 n=2304 k=64 rows=35 worst_bound_ratio=1.7309231429729222e-3
+gemm n=2304 k=64 rows=128 maxdiff=0e0
+gemm fp64 n=2304 k=64 rows=128 worst_bound_ratio=2.876026318391626e-3
+gemm n=2304 k=64 rows=512 maxdiff=0e0
+gemm fp64 n=2304 k=64 rows=512 worst_bound_ratio=1.8129292371901454e-3
+gemm n=200058 k=2304 rows=1 maxdiff=0e0
+gemm fp64 n=200058 k=2304 rows=1 worst_bound_ratio=5.002409519352514e-5
+gemm n=200058 k=2304 rows=7 maxdiff=0e0
+gemm fp64 n=200058 k=2304 rows=7 worst_bound_ratio=6.347305324341283e-5
+gemm n=200058 k=2304 rows=35 maxdiff=0e0
+gemm fp64 n=200058 k=2304 rows=35 worst_bound_ratio=5.011640541400221e-5
+gemm n=200058 k=2304 rows=128 maxdiff=0e0
+gemm fp64 n=200058 k=2304 rows=128 worst_bound_ratio=6.996430710363931e-5
+gemm n=200058 k=2304 rows=512 maxdiff=0e0
+gemm fp64 n=200058 k=2304 rows=512 worst_bound_ratio=6.996430710363931e-5
+gemm n=3072 k=2304 rows=1 maxdiff=1.2397766e-5
+gemm fp64 n=3072 k=2304 rows=1 worst_bound_ratio=1.521609887514319e-5
+gemm n=3072 k=2304 rows=2 maxdiff=1.2397766e-5
+gemm fp64 n=3072 k=2304 rows=2 worst_bound_ratio=1.6685714131124065e-5
+gemm n=3072 k=2304 rows=4 maxdiff=1.335144e-5
+gemm fp64 n=3072 k=2304 rows=4 worst_bound_ratio=2.2699695450134174e-5
+gemm n=3072 k=2304 rows=8 maxdiff=1.4305115e-5
+gemm fp64 n=3072 k=2304 rows=8 worst_bound_ratio=2.2699695450134174e-5
+gemm n=3072 k=2304 rows=16 maxdiff=1.4305115e-5
+gemm fp64 n=3072 k=2304 rows=16 worst_bound_ratio=2.2699695450134174e-5
+gemm n=384 k=2304 rows=1 maxdiff=1.2397766e-5
+gemm fp64 n=384 k=2304 rows=1 worst_bound_ratio=1.8182254758697665e-5
+gemm n=384 k=2304 rows=2 maxdiff=1.2397766e-5
+gemm fp64 n=384 k=2304 rows=2 worst_bound_ratio=1.8182254758697665e-5
+gemm n=384 k=2304 rows=4 maxdiff=1.335144e-5
+gemm fp64 n=384 k=2304 rows=4 worst_bound_ratio=2.415710598814306e-5
+gemm n=384 k=2304 rows=8 maxdiff=1.4305115e-5
+gemm fp64 n=384 k=2304 rows=8 worst_bound_ratio=2.4198042124118458e-5
+gemm n=384 k=2304 rows=16 maxdiff=1.4305115e-5
+gemm fp64 n=384 k=2304 rows=16 worst_bound_ratio=2.5000813171265778e-5
+gemm n=24 k=2304 rows=1 maxdiff=1.001358e-5
+gemm fp64 n=24 k=2304 rows=1 worst_bound_ratio=1.8182254758697665e-5
+gemm n=24 k=2304 rows=2 maxdiff=1.001358e-5
+gemm fp64 n=24 k=2304 rows=2 worst_bound_ratio=1.8182254758697665e-5
+gemm n=24 k=2304 rows=4 maxdiff=1.001358e-5
+gemm fp64 n=24 k=2304 rows=4 worst_bound_ratio=2.2699695450134174e-5
+gemm n=24 k=2304 rows=8 maxdiff=1.1444092e-5
+gemm fp64 n=24 k=2304 rows=8 worst_bound_ratio=2.2699695450134174e-5
+gemm n=24 k=2304 rows=16 maxdiff=1.2397766e-5
+gemm fp64 n=24 k=2304 rows=16 worst_bound_ratio=2.2699695450134174e-5
+gemm n=1024 k=2304 rows=1 maxdiff=1.2397766e-5
+gemm fp64 n=1024 k=2304 rows=1 worst_bound_ratio=1.747432776330388e-5
+gemm n=1024 k=2304 rows=2 maxdiff=1.2397766e-5
+gemm fp64 n=1024 k=2304 rows=2 worst_bound_ratio=1.747432776330388e-5
+gemm n=1024 k=2304 rows=4 maxdiff=1.335144e-5
+gemm fp64 n=1024 k=2304 rows=4 worst_bound_ratio=2.2699695450134174e-5
+gemm n=1024 k=2304 rows=8 maxdiff=1.4305115e-5
+gemm fp64 n=1024 k=2304 rows=8 worst_bound_ratio=2.2699695450134174e-5
+gemm n=1024 k=2304 rows=16 maxdiff=1.4305115e-5
+gemm fp64 n=1024 k=2304 rows=16 worst_bound_ratio=2.2699695450134174e-5
+gemm n=32 k=2304 rows=1 maxdiff=1.001358e-5
+gemm fp64 n=32 k=2304 rows=1 worst_bound_ratio=1.8182254758697665e-5
+gemm n=32 k=2304 rows=2 maxdiff=1.001358e-5
+gemm fp64 n=32 k=2304 rows=2 worst_bound_ratio=1.8182254758697665e-5
+gemm n=32 k=2304 rows=4 maxdiff=1.001358e-5
+gemm fp64 n=32 k=2304 rows=4 worst_bound_ratio=2.2699695450134174e-5
+gemm n=32 k=2304 rows=8 maxdiff=1.1444092e-5
+gemm fp64 n=32 k=2304 rows=8 worst_bound_ratio=2.2699695450134174e-5
+gemm n=32 k=2304 rows=16 maxdiff=1.2397766e-5
+gemm fp64 n=32 k=2304 rows=16 worst_bound_ratio=2.2699695450134174e-5
+gemm n=2304 k=3072 rows=1 maxdiff=1.5735626e-5
+gemm fp64 n=2304 k=3072 rows=1 worst_bound_ratio=1.6688778825548514e-5
+gemm n=2304 k=3072 rows=2 maxdiff=1.5735626e-5
+gemm fp64 n=2304 k=3072 rows=2 worst_bound_ratio=1.7761995273626635e-5
+gemm n=2304 k=3072 rows=4 maxdiff=1.7166138e-5
+gemm fp64 n=2304 k=3072 rows=4 worst_bound_ratio=1.7761995273626635e-5
+gemm n=2304 k=3072 rows=8 maxdiff=1.7166138e-5
+gemm fp64 n=2304 k=3072 rows=8 worst_bound_ratio=1.7761995273626635e-5
+gemm n=2304 k=3072 rows=16 maxdiff=1.8119812e-5
+gemm fp64 n=2304 k=3072 rows=16 worst_bound_ratio=1.798049301483006e-5
+gemm n=128 k=2304 rows=1 maxdiff=1.2397766e-5
+gemm fp64 n=128 k=2304 rows=1 worst_bound_ratio=1.8182254758697665e-5
+gemm n=128 k=2304 rows=2 maxdiff=1.2397766e-5
+gemm fp64 n=128 k=2304 rows=2 worst_bound_ratio=1.8182254758697665e-5
+gemm n=128 k=2304 rows=4 maxdiff=1.2397766e-5
+gemm fp64 n=128 k=2304 rows=4 worst_bound_ratio=2.415710598814306e-5
+gemm n=128 k=2304 rows=8 maxdiff=1.2397766e-5
+gemm fp64 n=128 k=2304 rows=8 worst_bound_ratio=2.4198042124118458e-5
+gemm n=128 k=2304 rows=16 maxdiff=1.3828278e-5
+gemm fp64 n=128 k=2304 rows=16 worst_bound_ratio=2.4387569473050915e-5
+gemm n=64 k=4608 rows=1 maxdiff=2.4795532e-5
+gemm fp64 n=64 k=4608 rows=1 worst_bound_ratio=1.1866837081913477e-5
+gemm n=64 k=4608 rows=2 maxdiff=3.0517578e-5
+gemm fp64 n=64 k=4608 rows=2 worst_bound_ratio=1.2101398882202914e-5
+gemm n=64 k=4608 rows=4 maxdiff=3.0517578e-5
+gemm fp64 n=64 k=4608 rows=4 worst_bound_ratio=1.2101398882202914e-5
+gemm n=64 k=4608 rows=8 maxdiff=3.0517578e-5
+gemm fp64 n=64 k=4608 rows=8 worst_bound_ratio=1.2516148755383511e-5
+gemm n=64 k=4608 rows=16 maxdiff=3.71933e-5
+gemm fp64 n=64 k=4608 rows=16 worst_bound_ratio=1.4729418330626095e-5
+gemm n=2304 k=64 rows=1 maxdiff=9.536743e-7
+gemm fp64 n=2304 k=64 rows=1 worst_bound_ratio=5.99902143112876e-4
+gemm n=2304 k=64 rows=2 maxdiff=9.536743e-7
+gemm fp64 n=2304 k=64 rows=2 worst_bound_ratio=6.030749052644539e-4
+gemm n=2304 k=64 rows=4 maxdiff=9.536743e-7
+gemm fp64 n=2304 k=64 rows=4 worst_bound_ratio=8.575571292266295e-4
+gemm n=2304 k=64 rows=8 maxdiff=9.536743e-7
+gemm fp64 n=2304 k=64 rows=8 worst_bound_ratio=9.752026824884582e-4
+gemm n=2304 k=64 rows=16 maxdiff=9.536743e-7
+gemm fp64 n=2304 k=64 rows=16 worst_bound_ratio=1.0023052157306937e-3
+gemm n=200058 k=2304 rows=1 maxdiff=1.2397766e-5
+gemm fp64 n=200058 k=2304 rows=1 worst_bound_ratio=2.142274556538556e-5
+gemm n=200058 k=2304 rows=2 maxdiff=1.2397766e-5
+gemm fp64 n=200058 k=2304 rows=2 worst_bound_ratio=2.142274556538556e-5
+gemm n=200058 k=2304 rows=4 maxdiff=1.335144e-5
+gemm fp64 n=200058 k=2304 rows=4 worst_bound_ratio=2.362923468613377e-5
+gemm n=200058 k=2304 rows=8 maxdiff=1.4305115e-5
+gemm fp64 n=200058 k=2304 rows=8 worst_bound_ratio=2.362923468613377e-5
+gemm n=200058 k=2304 rows=16 maxdiff=1.4305115e-5
+gemm fp64 n=200058 k=2304 rows=16 worst_bound_ratio=2.43888033619555e-5
+expert mx=false gu=true rows=1 worst=5.266333295494974e-5
+expert mx=false gu=true rows=3 worst=5.266333295494974e-5
+expert mx=false gu=true rows=8 worst=5.266333295494974e-5
+expert mx=false gu=true rows=15 worst=5.266333295494974e-5
+expert mx=false gu=true rows=16 worst=1.259263131139221e-4
+expert mx=false gu=true rows=32 worst=1.7364351401738531e-4
+expert mx=false gu=true rows=128 worst=1.7364351401738531e-4
+expert mx=false gu=false rows=1 worst=4.719709895795177e-6
+expert mx=false gu=false rows=3 worst=5.326775934122452e-6
+expert mx=false gu=false rows=8 worst=6.8565197821612855e-6
+expert mx=false gu=false rows=15 worst=6.8565197821612855e-6
+expert mx=false gu=false rows=16 worst=5.4885527639214615e-5
+expert mx=false gu=false rows=32 worst=5.4885527639214615e-5
+expert mx=false gu=false rows=128 worst=5.4885527639214615e-5
+expert mx=true gu=true rows=1 worst=5.501683503439381e-6
+expert mx=true gu=true rows=3 worst=5.501683503439381e-6
+expert mx=true gu=true rows=8 worst=1.4574532173128318e-5
+expert mx=true gu=true rows=15 worst=1.888031798031875e-4
+expert mx=true gu=true rows=16 worst=1.888031798031875e-4
+expert mx=true gu=true rows=32 worst=1.1437896209898213e-3
+expert mx=true gu=true rows=128 worst=3.2367437156661794e-3
+expert mx=true gu=false rows=1 worst=1.1328768596285954e-4
+expert mx=true gu=false rows=3 worst=1.1328768596285954e-4
+expert mx=true gu=false rows=8 worst=1.5520070146521903e-3
+expert mx=true gu=false rows=15 worst=1.5520070146521903e-3
+expert mx=true gu=false rows=16 worst=1.5520070146521903e-3
+expert mx=true gu=false rows=32 worst=1.5520070146521903e-3
+expert mx=true gu=false rows=128 worst=1.5520070146521903e-3
+expert mx=false gu=true rows=1 worst=2.61765324829355e-5
+expert mx=false gu=true rows=2 worst=3.210429602518161e-5
+expert mx=false gu=true rows=4 worst=4.185264396205923e-5
+expert mx=false gu=true rows=8 worst=4.185264396205923e-5
+expert mx=false gu=false rows=1 worst=6.3441795994378936e-6
+expert mx=false gu=false rows=2 worst=6.3441795994378936e-6
+expert mx=false gu=false rows=4 worst=6.3441795994378936e-6
+expert mx=false gu=false rows=8 worst=7.73668903875091e-6
+expert mx=true gu=true rows=1 worst=1.2594646761954209e-5
+expert mx=true gu=true rows=2 worst=1.2594646761954209e-5
+expert mx=true gu=true rows=4 worst=3.2983292344113124e-4
+expert mx=true gu=true rows=8 worst=3.2983292344113124e-4
+expert mx=true gu=false rows=1 worst=1.2445245647541014e-4
+expert mx=true gu=false rows=2 worst=1.83981070676964e-4
+expert mx=true gu=false rows=4 worst=1.83981070676964e-4
+expert mx=true gu=false rows=8 worst=1.83981070676964e-4
+attention base=0 window=0 rows=35 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=0 rows=1 fp64=2.2873518912280844e-8 original=0e0
+attention base=0 window=0 rows=7 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=0 rows=9 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=0 rows=17 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=0 rows=33 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=0 rows=63 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=0 rows=100 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=0 rows=128 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=1024 rows=35 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=1024 rows=1 fp64=2.2873518912280844e-8 original=0e0
+attention base=0 window=1024 rows=7 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=1024 rows=9 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=1024 rows=17 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=1024 rows=33 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=1024 rows=63 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=1024 rows=100 fp64=5.59940185329566e-8 original=0e0
+attention base=0 window=1024 rows=128 fp64=5.59940185329566e-8 original=0e0
+attention base=900 window=0 rows=35 fp64=6.504336304367225e-9 original=0e0
+attention base=900 window=0 rows=1 fp64=3.6955085376370878e-9 original=0e0
+attention base=900 window=0 rows=7 fp64=5.6003672834186585e-9 original=0e0
+attention base=900 window=0 rows=9 fp64=5.6003672834186585e-9 original=0e0
+attention base=900 window=0 rows=17 fp64=6.504336304367225e-9 original=0e0
+attention base=900 window=0 rows=33 fp64=6.504336304367225e-9 original=0e0
+attention base=900 window=0 rows=63 fp64=6.504336304367225e-9 original=0e0
+attention base=900 window=0 rows=100 fp64=6.504336304367225e-9 original=0e0
+attention base=900 window=0 rows=128 fp64=6.8820732387637334e-9 original=0e0
+attention base=900 window=1024 rows=35 fp64=5.751393244903674e-9 original=0e0
+attention base=900 window=1024 rows=1 fp64=4.356736172349274e-9 original=0e0
+attention base=900 window=1024 rows=7 fp64=5.3016608720334035e-9 original=0e0
+attention base=900 window=1024 rows=9 fp64=5.3016608720334035e-9 original=0e0
+attention base=900 window=1024 rows=17 fp64=5.3016608720334035e-9 original=0e0
+attention base=900 window=1024 rows=33 fp64=5.751393244903674e-9 original=0e0
+attention base=900 window=1024 rows=63 fp64=5.794188602656e-9 original=0e0
+attention base=900 window=1024 rows=100 fp64=7.161215720245806e-9 original=0e0
+attention base=900 window=1024 rows=128 fp64=7.161215720245806e-9 original=0e0
+attention base=5000 window=0 rows=1 fp64=3.728023866879111e-9 original=0e0
+attention base=5000 window=0 rows=7 fp64=4.474726406902482e-9 original=0e0
+attention base=5000 window=0 rows=128 fp64=5.941710595432949e-9 original=0e0
+attention base=5000 window=1024 rows=1 fp64=2.5329610991130236e-9 original=0e0
+attention base=5000 window=1024 rows=7 fp64=5.841141109425713e-9 original=0e0
+attention base=5000 window=1024 rows=128 fp64=6.7121607547245e-9 original=0e0
+expert units worst up=1.5612222993759417e-2 down=1.3417795940995347e-5
+affine units worst up=9.609139677584366e-4 down=2.652406692504883e-6
+oq4e units vs simdgroup prefill: logits_max_diff=2.2102737e-1 scale=2.2759865e1 argmax=220,220
+attention base=100 window=48 rows=45: units worst 1.5664184405676795e-4, simdgroup worst 1.5917983529173396e-4
+attention base=70 window=0 rows=37: units worst 1.7360277767275445e-4, simdgroup worst 1.736176788339483e-4
+split stage n=200 k=320 rows=77: worst error/bound 0.0111
+split stage n=96 k=2304 rows=130: worst error/bound 0.0009
+verify same-width commit width=1 accepted=0 exact
+verify same-width commit width=1 accepted=1 exact
+verify same-width commit width=2 accepted=0 exact
+verify same-width commit width=2 accepted=1 exact
+verify same-width commit width=2 accepted=2 exact
+verify same-width commit width=4 accepted=0 exact
+verify same-width commit width=4 accepted=1 exact
+verify same-width commit width=4 accepted=2 exact
+verify same-width commit width=4 accepted=3 exact
+verify same-width commit width=4 accepted=4 exact
+verify same-width commit width=8 accepted=0 exact
+verify same-width commit width=8 accepted=1 exact
+verify same-width commit width=8 accepted=2 exact
+verify same-width commit width=8 accepted=3 exact
+verify same-width commit width=8 accepted=4 exact
+verify same-width commit width=8 accepted=5 exact
+verify same-width commit width=8 accepted=7 exact
+verify same-width commit width=8 accepted=8 exact
+verify same-width commit width=16 accepted=0 exact
+verify same-width commit width=16 accepted=1 exact
+verify same-width commit width=16 accepted=2 exact
+verify same-width commit width=16 accepted=3 exact
+verify same-width commit width=16 accepted=4 exact
+verify same-width commit width=16 accepted=5 exact
+verify same-width commit width=16 accepted=7 exact
+verify same-width commit width=16 accepted=8 exact
+verify same-width commit width=16 accepted=15 exact
+verify same-width commit width=16 accepted=16 exact
+batch width=1 row=0 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=2 row=0 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=2 row=1 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=4 row=0 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=4 row=1 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=4 row=2 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=4 row=3 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=4 row=0 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=4 row=1 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=4 row=2 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=4 row=3 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=8 row=0 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=8 row=1 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=8 row=2 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=8 row=3 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=8 row=4 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=8 row=5 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=8 row=6 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+batch width=8 row=7 logits_max=0e0 cache_max=0e0 absolute_tolerance=1.5e-5
+rows alone and grouped /Users/josh/models/Inkling-2-Mini@ed40e7da625f: 35 rows of batch steps at widths 2-8 equal their one-row steps bit for bit
+rows alone and grouped /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd: 35 rows of batch steps at widths 2-8 equal their one-row steps bit for bit
+grouped rows alone and shared /Users/josh/models/Inkling-2-Mini@ed40e7da625f: 46 rows in groups of 2-8 equal their one-row steps bit for bit
+grouped rows alone and shared /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd: 46 rows in groups of 2-8 equal their one-row steps bit for bit
+concurrent replies /Users/josh/models/Inkling-2-Mini@ed40e7da625f: 8 greedy streams of 6 tokens joining and leaving equal their solo replies bit for bit
+concurrent replies /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd: 8 greedy streams of 6 tokens joining and leaving equal their solo replies bit for bit
+grouped verification /Users/josh/models/Inkling-2-Mini@ed40e7da625f: rows 8, logits, picks and caches equal batch decoding bit for bit
+grouped verification /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd: rows 8, logits, picks and caches equal batch decoding bit for bit
+grouped taps /Users/josh/models/Inkling-2-Mini@ed40e7da625f: 8 rows from position 1021 equal one-row batch steps' taps bit for bit
+grouped taps /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd: 8 rows from position 1021 equal one-row batch steps' taps bit for bit
+fused verify rounds /Users/josh/models/Inkling-2-Mini@ed40e7da625f: zero, partial and full acceptance pick, accept and commit as forward, picks and commit
+fused verify rounds /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd: zero, partial and full acceptance pick, accept and commit as forward, picks and commit
+tree verification /Users/josh/models/Inkling-2-Mini@ed40e7da625f: 37 rows of trees up to 8 rows equal their paths' one-row steps (logits, picks, taps) bit for bit; 15 commits keep sequential decoding's caches
+tree verification /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd: 54 rows of trees up to 16 rows equal their paths' one-row steps (logits, picks, taps) bit for bit; 15 commits keep sequential decoding's caches
+few-row dense test: 120 cases byte-equal to the one-row kernel
+few-row projections test: 28 cases byte-equal to the one-row kernel
+attention test: worst old-vs-ref 1.3113022e-6, new-vs-ref 7.301569e-7, old-vs-new 1.4901161e-6, bound 5.52444e-3
+ring test: worst pair 1.7881393e-6, worst vs-ref 1.6093254e-6, bound 2.3642753e-3
+staged split test: 58 cases byte-equal to the serial kernel and across batch rows
+batched depth mix test: 25 cases byte-equal to the prefill mixes
+gathered expert test: 63 cases byte-equal to the per-slot kernels
+failed command: ./.zig-cache/o/6e15dc38600ec7985081afa348123a42/test --cache-dir=./.zig-cache --seed=0xf47bdce9 --listen=-
+
+test-inkling2-loop
++- run test stderr
+dflash2 speculation: 4 prompts, 1024 tokens equal plain greedy; 273 rounds, 72 zero, 140 partial, 58 full
+dflash2 forced drafts: full, zero and partial acceptance, a limit at token 76 and an EOS at 13 inside a block, equal plain greedy and its caches
+dflash2 lookup: 8 of 21 rounds drafted from before the drafter's window and accepted 34 drafts; 96 tokens equal plain greedy and its caches
+dflash2 tree speculation: 4 prompts, 1024 tokens and their caches equal plain greedy; 260 rounds, 4 past 8 rows, 4 accepted past depth 7, 10 took a later branch, 39 zero; 178 lookup rows, 156 accepted
+dflash2 forced trees: a 15-row path, none, a later branch, a limit inside a tree and an EOS at 20 inside one, equal plain greedy and its caches
+dflash2 tree lookup: 128 tokens and caches equal plain greedy in 27 rounds; 105 lookup rows, 62 accepted, 0 rounds accepted past depth 7
+failed command: ./.zig-cache/o/966cb67609340990977eccd3c44a2946/test --cache-dir=./.zig-cache --seed=0xf47bdce9 --listen=-
+
+test-inkling2-loop
++- run test stderr
+oq4e prefill half=false logits_max_diff=0e0 scale=2.191902e1
+oq4e prefill half=true logits_max_diff=2.3427582e-1 scale=2.191902e1
+oq4e chunk 1100 vs 512 half=false logits_max_diff=0e0
+oq4e chunk 1100 vs 512 half=true logits_max_diff=2.368927e-1
+prefetched affine projections: 15 cases byte-equal to the serial kernels
+attention test: worst old-vs-ref 1.3113022e-6, new-vs-ref 7.301569e-7, old-vs-new 1.4901161e-6, bound 5.52444e-3
+ring test: worst pair 1.7881393e-6, worst vs-ref 1.6093254e-6, bound 2.3642753e-3
+staged split test: 58 cases byte-equal to the serial kernel and across batch rows
+batched depth mix test: 25 cases byte-equal to the prefill mixes
+gathered expert test: 63 cases byte-equal to the per-slot kernels
+failed command: ./.zig-cache/o/5726ff0a3f52be5fc1fe569a752cf142/test --cache-dir=./.zig-cache --seed=0xf47bdce9 --listen=-
+
+Build Summary: 17/17 steps succeeded; 179/179 tests passed
+test-inkling2-loop success
++- run test 63 pass (63 total) 6m MaxRSS:20G
+|  +- compile test fast native-native cached 208ms MaxRSS:34M
+|     +- run exe test-allocator-runner-source (test_runner.zig) cached
+|        +- compile exe test-allocator-runner-source safe native cached 100ms MaxRSS:33M
++- run test 64 pass (64 total) 9m MaxRSS:20G
+|  +- compile test debug native-native cached 308ms MaxRSS:34M
+|     +- run exe test-allocator-runner-source (test_runner.zig) (+1 more reused dependencies)
++- run test 31 pass (31 total) 1m MaxRSS:19G
+|  +- compile test debug native-native cached 207ms MaxRSS:34M
+|     +- run exe test-allocator-runner-source (test_runner.zig) (+1 more reused dependencies)
++- run test 10 pass (10 total) 3m MaxRSS:20G
+|  +- compile test fast native-native cached 217ms MaxRSS:34M
+|     +- run exe test-allocator-runner-source (test_runner.zig) (+1 more reused dependencies)
+|     +- WriteFile draft_ids.txt cached
+|     +- WriteFile xsum.metal cached
+|     +- WriteFile inkling-dflash2-unused.zig cached
++- run test 11 pass (11 total) 1m MaxRSS:20G
+   +- compile test fast native-native success 18s MaxRSS:1G
+      +- run exe test-allocator-runner-source (test_runner.zig) (+1 more reused dependencies)
+      +- WriteFile prompts.json cached
+      +- WriteFile draft_ids.txt (reused)
+      +- WriteFile xsum.metal (reused)
+      +- WriteFile inkling-dflash2-unused.zig (reused)
+
+heavy: done: peak charged 21.6 GB of the 28 GB cap (footprint 21.6 GB, resident 20.3 GB, host wired growth 5.8 GB); host pressure worst 2, host swap +649 MB, host pageins 52584772

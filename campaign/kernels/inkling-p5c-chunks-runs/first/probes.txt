@@ -1,0 +1,23 @@
+18:23:22 probe-main-a
+load {'lock_wait_s': 13.368, 'startup_s': 0.068, 'engine_load_s': 13.4, 'spawn_to_ready_s': 13.436}; memory {'ready_bytes': 17406767608, 'steady_bytes': 18975519248, 'peak_bytes': 18975650320, 'process_lifetime_peak_bytes': 18975945232, 'device_peak_bytes': 18975650320, 'samples': 64, 'source': 'GET /memory (proc_pid_rusage physical footprint)'}; valid True
+probe-main-a: valid try 1
+18:23:58 probe-lane-a
+load {'lock_wait_s': 11.125, 'startup_s': 0.167, 'engine_load_s': 11.2, 'spawn_to_ready_s': 11.292}; memory {'ready_bytes': 17406718528, 'steady_bytes': 18975601216, 'peak_bytes': 18975748672, 'process_lifetime_peak_bytes': 18976125504, 'device_peak_bytes': 18975748672, 'samples': 52, 'source': 'GET /memory (proc_pid_rusage physical footprint)'}; valid False
+probe-lane-a: valid try 1
+18:24:28 probe-warm-a
+load {'lock_wait_s': 7.27, 'startup_s': 1.97, 'engine_load_s': 8.8, 'spawn_to_ready_s': 9.24}; memory {'ready_bytes': 18974273968, 'steady_bytes': 18975715760, 'peak_bytes': 18975830448, 'process_lifetime_peak_bytes': 18976141744, 'device_peak_bytes': 18975830448, 'samples': 46, 'source': 'GET /memory (proc_pid_rusage physical footprint)'}; valid False
+probe-warm-a: valid try 1
+18:24:55 probe-warm-b
+load {'lock_wait_s': 6.509, 'startup_s': 0.861, 'engine_load_s': 7.3, 'spawn_to_ready_s': 7.37}; memory {'ready_bytes': 18974339576, 'steady_bytes': 18975519224, 'peak_bytes': 18975601144, 'process_lifetime_peak_bytes': 18975961592, 'device_peak_bytes': 18975601144, 'samples': 47, 'source': 'GET /memory (proc_pid_rusage physical footprint)'}; valid False
+probe-warm-b: valid try 1
+18:25:20 probe-lane-b
+load {'lock_wait_s': 9.052, 'startup_s': 0.116, 'engine_load_s': 9.1, 'spawn_to_ready_s': 9.167}; memory {'ready_bytes': 17524158992, 'steady_bytes': 18975306280, 'peak_bytes': 18975453736, 'process_lifetime_peak_bytes': 18975781416, 'device_peak_bytes': 18975453736, 'samples': 55, 'source': 'GET /memory (proc_pid_rusage physical footprint)'}; valid True
+probe-lane-b: valid try 1
+18:25:48 probe-main-b
+load {'lock_wait_s': 6.3, 'startup_s': 0.137, 'engine_load_s': 6.4, 'spawn_to_ready_s': 6.438}; memory {'ready_bytes': 17406816784, 'steady_bytes': 18975617552, 'peak_bytes': 18975699472, 'process_lifetime_peak_bytes': 18976027152, 'device_peak_bytes': 18975699472, 'samples': 60, 'source': 'GET /memory (proc_pid_rusage physical footprint)'}; valid False
+probe-main-b: valid try 2
+18:27:17 probe-fault-a
+load {'lock_wait_s': 6.154, 'startup_s': 1.171, 'engine_load_s': 7.2, 'spawn_to_ready_s': 7.325}; memory {'ready_bytes': 18953974216, 'steady_bytes': 18975994336, 'peak_bytes': 18976125408, 'process_lifetime_peak_bytes': 18988773832, 'device_peak_bytes': 18976125408, 'samples': 53, 'source': 'GET /memory (proc_pid_rusage physical footprint)'}; valid False
+probe-fault-a: valid try 1
+18:27:44 probes done
+exit 0

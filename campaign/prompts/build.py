@@ -50,8 +50,12 @@ GLOBS = {
                    "docs/**/*.md", "*.yml", "*.yaml", "*.sb"],
 }
 
+# Generated material: model outputs, benchmark and quality results, run records and receipts. A prompt built from
+# them would feed earlier model answers and measurements back in as "unseen" input.
+GENERATED_PARTS = ("campaign/runs", "campaign/quality/results", "campaign/kernels/", "docs/receipts/",
+                   "campaign/ledger.md", "campaign/report.md")
 SKIP_PARTS = ("node_modules", ".work", "zig-out", ".zig-cache", "fixtures/golden", "/golden/",
-              "campaign/prompts", "campaign/runs")
+              "campaign/prompts", *GENERATED_PARTS)
 MIN_BYTES, MAX_BYTES = 1024, 512 * 1024
 
 

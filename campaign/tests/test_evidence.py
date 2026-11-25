@@ -419,6 +419,14 @@ class Uncertainty(unittest.TestCase):
         self.assertEqual(summary["pairs"], 1)
 
 
+# Frozen prompts whose sources include generated material (receipts, run records, a quality result). They stay as
+# regression workloads; no qualification claim rests on them as unseen input.
+REGRESSION_ONLY_PROMPTS = {"prose-32768", "structured-1024", "structured-4096", "structured-32768",
+                           "heldout-prose-32768", "heldout-structured-1024", "heldout-structured-4096",
+                           "heldout-structured-32768", "qualify-prose-1024", "qualify-prose-4096",
+                           "qualify-structured-4096"}
+
+
 class Corpus(unittest.TestCase):
     manifest = json.loads((CAMPAIGN / "prompts" / "manifest.json").read_text(encoding="utf-8"))
 
@@ -450,6 +458,12 @@ class Corpus(unittest.TestCase):
         mine = [s["path"] for prompts in selected.values() for p in prompts for s in p["sources"]]
         self.assertEqual(cited & set(mine), set())
         self.assertEqual(len(mine), len(set(mine)))
+
+    def test_no_prompt_cites_generated_material_beyond_the_frozen_regression_list(self):
+        build = load(CAMPAIGN / "prompts" / "build.py", "prompts_build")
+        cited = {(p["name"], s["path"]) for p in self.manifest["prompts"] for s in p["sources"]
+                 if any(part in s["path"] for part in build.GENERATED_PARTS)}
+        self.assertEqual({name for name, _ in cited}, REGRESSION_ONLY_PROMPTS)
 
     def test_dev_selector_still_returns_the_dev_prompts(self):
         selected = bench.select(self.manifest, [1024, 4096, 32768], "all")

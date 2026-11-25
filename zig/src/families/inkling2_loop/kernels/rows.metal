@@ -335,25 +335,27 @@ struct i2r_controls_args { uint h, rank, rows, msg0; uint xs[3], xb[3]; };
     const device float* X2 [[buffer(2)]], const device float* MSG [[buffer(3)]], const device float* W0 [[buffer(4)]],
     const device float* W1 [[buffer(5)]], const device float* W2 [[buffer(6)]], constant i2r_controls_args& a [[buffer(7)]],
     device float* OUT [[buffer(8)]], uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
-  threadgroup float part[8];
+  threadgroup float part[2][8];
   threadgroup float inv[2];
   const uint j = group.z, row = group.y;
   const device float* cur = (j == 0u ? X0 : j == 1u ? X1 : X2) + size_t(a.xb[j] + row * a.xs[j]) * a.h;
   const device float* msg = MSG + size_t(a.msg0 + j + row * 4u) * a.h;
-  for (uint which = 0; which < 2u; ++which) {
-    const device float* src = which == 0u ? cur : msg;
-    float sum = 0.0f;
-    for (uint i = tid; i < a.h; i += 256u) sum = fma(src[i], src[i], sum);
-    sum = simd_sum(sum);
-    if (tid % 32u == 0u) part[tid / 32u] = sum;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (tid == 0u) {
-      float total = 0.0f;
-      for (uint i = 0; i < 8u; ++i) total += part[i];
-      inv[which] = 1.0f / sqrt(total / float(a.h) + 1e-6f);
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+  float sums[2] = { 0.0f, 0.0f };
+  for (uint i = tid; i < a.h; i += 256u) {
+    sums[0] = fma(cur[i], cur[i], sums[0]);
+    sums[1] = fma(msg[i], msg[i], sums[1]);
   }
+  for (uint which = 0; which < 2u; ++which) {
+    const float sum = simd_sum(sums[which]);
+    if (tid % 32u == 0u) part[which][tid / 32u] = sum;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tid < 2u) {
+    float total = 0.0f;
+    for (uint i = 0; i < 8u; ++i) total += part[tid][i];
+    inv[tid] = 1.0f / sqrt(total / float(a.h) + 1e-6f);
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
   const uint col = group.x * 8u + tid / 32u, lane = tid % 32u;
   if (col >= a.rank) return;
   const uint width = 2u * a.h;

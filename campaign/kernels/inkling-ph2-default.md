@@ -60,5 +60,26 @@ python3 -I campaign/suite/suite.py run --names inkling-omlx-oracle
 ```
 
 Results: `inkling-ph2-default-runs/quality/{off,half,half-dev}/`, `inkling-ph2-default-runs/pi/{off,half}.json`,
-the oracle summary in `oracle-half.txt` and the run logs in `logs/`. The served prefill curve under the new
-default is measured separately (roadmap Status).
+the oracle summary in `oracle-half.txt` and the run logs in `logs/`.
+
+## Served prefill under the new default
+
+One frozen main binary (`291240211`, sha256 in `curves/bin.sha256`), `serve_curve.py` through the gated
+`curves/trial.sh`, three interleaved pairs of half default and `INKLING_PREFILL_HALF=off` in one session (`curves/session.sh`,
+`curves/session.log`). Pair a's trials carry `conditions valid=False` (post-load host flag) and are left out below;
+every trial passed its CPU, GPU and compiler gates on the first try. Unseen prompts, prefix cache cold, client tok/s:
+
+| Length | Half default (b, c) | Exact `off` (b, c) | Half / exact |
+| --- | --- | --- | --- |
+| 1K held-out (3 prompts) | 2,013–2,124, median 2,063 | 1,636–1,830, median 1,733 | 1.21, 1.17 |
+| 1K dev (3 prompts) | 1,739–1,933, median 1,839 | 1,446–1,756, median 1,591 | 1.19, 1.12 |
+| 4K | 2,073–2,251, median 2,130 | 1,679–1,916, median 1,757 | 1.21, 1.20 |
+| 8K | 1,945–2,179, median 2,072 | 1,597–1,833, median 1,697 | 1.22, 1.20 |
+| 16K | 1,895–1,914, median 1,905 | 1,574–1,599, median 1,585 | 1.20, 1.20 |
+| 31.7K | 1,771–1,779, median 1,777 | 1,494–1,504, median 1,497 | 1.19, 1.19 |
+
+Decision 17's 2,000 tok/s is met at 1K held-out, 4K and 8K (medians), and missed at 1K dev, 16K and near the cap.
+The 1K dev prompts end in a 2–8-row chunk plus the lone last token (P5c's open item); 16K and the cap are bound by
+attention over the long context. The first request of each process (1,258 tokens, warmed slot) took 0.87–0.89 s
+under half and 0.98–1.12 s under exact. Including pair a, half/exact is 1.21 geometric mean over lengths and pairs.
+One session only: this confirms the flip's speed, it is not a Decision 11 promotion.

@@ -43,6 +43,24 @@ pub const Round = struct {
     total_ns: u64,
 };
 
+pub const Times = tf.qwen27.dflash.runtime_frame.Times;
+
+/// A tree round on `mtl.clock` (host seconds) and the GPU's clock, kept while `INKLING_ROUND_SPLIT` is set.
+pub const Split = struct {
+    /// Host seconds: the round's start, the drafter's call and return, the tree built, the verify's return, the end.
+    start: f64 = 0,
+    draft_call: f64 = 0,
+    draft_return: f64 = 0,
+    planned: f64 = 0,
+    verified: f64 = 0,
+    done: f64 = 0,
+    /// The drafter's frames (none when the round left it out) and the verify's GPU seconds.
+    drafter: Times = .{},
+    verify_gpu: f64 = 0,
+    rows: u32 = 0,
+    accepted: u32 = 0,
+};
+
 pub const Proposer = struct { ptr: *anyopaque, call: *const fn (*anyopaque, u32, u64, []u32) anyerror!void };
 /// Supplies a tree round's drafter tree in place of the drafter: the slices stay valid until the next call.
 pub const TreeProposer = struct { ptr: *anyopaque, call: *const fn (*anyopaque, u32, u64) anyerror!inkling.verify.Drafted };
@@ -66,6 +84,8 @@ pub const Speculator = struct {
     plan: inkling.verify.Plan,
     gathered: []u8,
     a: std.mem.Allocator,
+    /// Tree rounds' splits, printed as `inkling2 split` lines when a run ends (null: `INKLING_ROUND_SPLIT` unset).
+    splits: ?std.ArrayList(Split) = null,
 
     pub fn init(model: *inkling.Model, drafter: *dflash.Drafter, visits: []const u32) !Speculator {
         var verifier = try inkling.group.Verifier.init(model.device, &model.config);
@@ -80,10 +100,12 @@ pub const Speculator = struct {
         const gathered = try drafter.a.alloc(u8, inkling.group.max_rows * taps.rowBytes());
         var plan = inkling.verify.Plan.init();
         plan.most = verifier.limit;
-        return .{ .model = model, .drafter = drafter, .verifier = verifier, .batch = batch, .prefill = ps, .taps = taps, .plan = plan, .gathered = gathered, .a = drafter.a };
+        const split = if (std.c.getenv("INKLING_ROUND_SPLIT")) |v| v[0] != 0 and v[0] != '0' else false;
+        return .{ .model = model, .drafter = drafter, .verifier = verifier, .batch = batch, .prefill = ps, .taps = taps, .plan = plan, .gathered = gathered, .a = drafter.a, .splits = if (split) .empty else null };
     }
 
     pub fn deinit(s: *Speculator) void {
+        if (s.splits) |*list| list.deinit(s.a);
         s.a.free(s.gathered);
         s.taps.deinit();
         s.prefill.deinit();
@@ -119,6 +141,10 @@ pub const Speculator = struct {
         if (s.drafter.committed() != cache.len) return error.DraftContextBehind;
         if (s.depth == 0 or s.depth > dflash.depth) return error.BadDraftDepth;
         if (s.lookup) |l| if (l.tokens.items.len != cache.len) return error.LookupBehind else try l.append(&.{first});
+        defer if (s.splits) |*list| {
+            for (list.items) |x| std.debug.print("inkling2 split {{\"start\":{d:.7},\"draft_call\":{d:.7},\"draft_return\":{d:.7},\"planned\":{d:.7},\"verified\":{d:.7},\"done\":{d:.7},\"d_committed\":{d:.7},\"d_returned\":{d:.7},\"d_start\":{d:.7},\"d_end\":{d:.7},\"d_busy\":{d:.7},\"d_buffers\":{d},\"d_frames\":{d},\"v_gpu\":{d:.7},\"rows\":{d},\"accepted\":{d}}}\n", .{ x.start, x.draft_call, x.draft_return, x.planned, x.verified, x.done, x.drafter.committed, x.drafter.returned, x.drafter.start, x.drafter.end, x.drafter.busy, x.drafter.buffers, x.drafter.frames, x.verify_gpu, x.rows, x.accepted });
+            list.clearRetainingCapacity();
+        };
         var pending = first;
         while (tokens.items.len < limit and std.mem.indexOfScalar(u32, eos, pending) == null) {
             if (s.mode == .tree) {
@@ -171,6 +197,9 @@ pub const Speculator = struct {
     }
 
     fn treeRound(s: *Speculator, cache: *inkling.Cache, pending: *u32, limit: usize, eos: []const u32, a: std.mem.Allocator, tokens: *std.ArrayList(u32), rounds: ?*std.ArrayList(Round)) !bool {
+        var split: Split = .{};
+        const timing = s.splits != null;
+        if (timing) split.start = mtl.clock.seconds();
         const t0 = now();
         const remaining = limit - tokens.items.len;
         if (cache.len >= cache.capacity) return error.ContextFull;
@@ -190,17 +219,25 @@ pub const Speculator = struct {
             if (s.tree_proposer) |p| {
                 drafted = try p.call(p.ptr, pending.*, cache.len);
             } else {
+                if (timing) {
+                    split.draft_call = mtl.clock.seconds();
+                    s.drafter.model.backend.frame.times = &split.drafter;
+                }
+                defer s.drafter.model.backend.frame.times = null;
                 proposal = try s.drafter.proposeTree(pending.*, s.plan.nodes, s.plan.children);
+                if (timing) split.draft_return = mtl.clock.seconds();
                 drafted = .{ .tokens = proposal.?.tokens, .parents = proposal.?.parents, .scores = proposal.?.scores };
             }
         }
         const tree = s.plan.build(pending.*, drafted, chain[0..chained], match_length, offered + 1);
+        if (timing) split.planned = mtl.clock.seconds();
         const t1 = now();
         const position = cache.len;
         const g = try s.verifier.tree(&.{cache}, &.{tree.rows}, tree.shape());
         s.batch.rows.taps = &s.taps;
         defer s.batch.rows.taps = null;
         const decided = try s.verifier.decide(s.model, &s.batch, &g, tree.tokens[0..tree.rows], .commit);
+        if (timing) split.verified = mtl.clock.seconds();
         const t2 = now();
         var line: [inkling.group.max_rows]usize = undefined;
         const path = g.line(0, decided.last[0], &line);
@@ -228,6 +265,13 @@ pub const Speculator = struct {
         if (s.lookup) |l| try l.append(tokens.items[tokens.items.len - emitted ..]);
         pending.* = tokens.items[tokens.items.len - 1];
         const t5 = now();
+        if (s.splits) |*list| {
+            split.done = mtl.clock.seconds();
+            split.verify_gpu = s.batch.rows.gpu_seconds;
+            split.rows = @intCast(tree.rows);
+            split.accepted = @intCast(path.len - 1);
+            try list.append(s.a, split);
+        }
         if (rounds) |list| {
             var r: Round = .{ .position = position, .offered = @intCast(tree.rows - 1), .accepted = @intCast(path.len - 1), .emitted = emitted, .drafts = @splat(0), .parents = @splat(0), .source = .tree, .looked = @intCast(tree.looked()), .looked_accepted = looked_accepted, .expected = @floatCast(tree.expected), .hits = hits, .match = tree.match, .drafted = drafted != null, .draft_ns = t1 - t0, .verify_ns = t2 - t1, .select_ns = t3 - t2, .commit_ns = t4 - t3, .host_ns = t5 - t4, .total_ns = t5 - t0 };
             @memcpy(r.drafts[0 .. tree.rows - 1], tree.tokens[1..tree.rows]);

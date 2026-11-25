@@ -12,10 +12,26 @@ fn failed(cb: mtl.CommandBuffer) bool {
     return true;
 }
 
+/// Frames' command buffers on `mtl.clock` (host) and the GPU's clock, summed over every frame finished while set.
+pub const Times = struct {
+    /// Host seconds: the first frame's first commit, and the last frame's return from its wait.
+    committed: f64 = 0,
+    returned: f64 = 0,
+    /// GPU seconds: the first buffer's start, the last buffer's end, and the buffers' spans summed.
+    start: f64 = 0,
+    end: f64 = 0,
+    busy: f64 = 0,
+    buffers: u32 = 0,
+    frames: u32 = 0,
+};
+
 pub const Frame = struct {
     allocator: std.mem.Allocator,
     device: mtl.Device,
     queue: mtl.Queue,
+    /// When set, `finish` adds each frame's buffers to it (null: no clock is read).
+    times: ?*Times = null,
+    committed: f64 = 0,
     pool: std.ArrayList(mtl.Buffer) = .empty,
     entries: std.ArrayList(Entry) = .empty,
     cursor: usize = 0,
@@ -92,6 +108,7 @@ pub const Frame = struct {
         if (f.fence == null) f.fence = mtl.objc.msg(?mtl.objc.Id, f.device.id, "newFence", .{}) orelse return error.NoFence;
         mtl.objc.msg(void, f.encoder.id, "updateFence:", .{f.fence.?});
         f.encoder.end();
+        if (f.times != null and f.part_count == 0) f.committed = mtl.clock.seconds();
         f.cb.commit();
         f.parts[f.part_count] = f.cb;
         f.part_count += 1;
@@ -102,6 +119,7 @@ pub const Frame = struct {
     pub fn finish(f: *Frame) !void {
         if (!f.active or f.completed or f.borrowed) return error.DraftFrameNotActive;
         f.encoder.end();
+        if (f.times != null and f.part_count == 0) f.committed = mtl.clock.seconds();
         f.cb.commit();
         f.cb.wait();
         f.completed = true;
@@ -110,11 +128,32 @@ pub const Frame = struct {
             if (failed(cb)) return error.DraftGpuFailure;
         }
         if (failed(f.cb)) return error.DraftGpuFailure;
+        if (f.times) |t| f.time(t);
         if (f.hold.trace) |t| {
             var seconds = f.cb.gpuSeconds();
             for (f.parts[0..f.part_count]) |cb| seconds += cb.gpuSeconds();
             t.record(.drafter, seconds);
         }
+    }
+    fn time(f: *const Frame, t: *Times) void {
+        const returned = mtl.clock.seconds();
+        var start = f.cb.gpuStart();
+        var end = f.cb.gpuEnd();
+        var busy = end - start;
+        for (f.parts[0..f.part_count]) |cb| {
+            start = @min(start, cb.gpuStart());
+            end = @max(end, cb.gpuEnd());
+            busy += cb.gpuSeconds();
+        }
+        if (t.frames == 0) {
+            t.committed = f.committed;
+            t.start = start;
+        }
+        t.end = end;
+        t.returned = returned;
+        t.busy += busy;
+        t.buffers += @intCast(f.part_count + 1);
+        t.frames += 1;
     }
     pub fn release(f: *Frame) void {
         if (f.active and !f.completed and !f.borrowed) {

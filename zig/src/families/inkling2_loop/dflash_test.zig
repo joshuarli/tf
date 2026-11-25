@@ -543,3 +543,52 @@ test "a tree round merges the lookup chain from before the drafter's window, as 
     std.debug.print("dflash2 tree lookup: {d} tokens and caches equal plain greedy in {d} rounds; {d} lookup rows, {d} accepted, {d} rounds accepted past depth 7\n", .{ n, tally.rounds, tally.looked, tally.looked_accepted, tally.deep });
     try std.testing.expect(tally.looked_accepted > 0);
 }
+
+/// Plain greedy steps of `ids` on `bs` from a fresh cache: the tokens, and each step's logits hashed.
+fn plainOn(s: *spec.Speculator, bs: *inkling.BatchScratch, ids: []const u32, steps: usize, out: *std.ArrayList(u32), hashes: *std.ArrayList(u64)) !void {
+    const a = std.testing.allocator;
+    const m = s.model;
+    var cache = try inkling.Cache.init(m.device, &m.config, ids.len + steps + inkling.group.max_rows);
+    defer cache.deinit();
+    const logits = try a.alloc(f32, m.config.text.unpadded_vocab);
+    defer a.free(logits);
+    try out.append(a, try spec.prefillPlain(m, &s.prefill, &cache, ids));
+    while (out.items.len < steps) {
+        try inkling.batchStep(m, bs, &.{&cache}, &.{out.items[out.items.len - 1]}, logits);
+        try hashes.append(a, std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(logits)));
+        try out.append(a, spec.argmax(logits));
+    }
+}
+
+test "plain greedy steps keep their logits on a fresh one-row scratch and on the verify scratch before and after speculation" {
+    const loaded = try load(.{ .bits = 4 }) orelse return error.SkipZigTest;
+    defer loaded.model.deinit();
+    defer loaded.drafter.deinit();
+    const a = std.testing.allocator;
+    var s = try spec.Speculator.init(loaded.model, loaded.drafter, dflash.tap_ids);
+    defer s.deinit();
+    var lookup = spec.Lookup.init(a);
+    defer lookup.deinit();
+    s.lookup = &lookup;
+    s.mode = .tree;
+    const parsed = try std.json.parseFromSlice([]const Prompt, a, prompts_json, .{});
+    defer parsed.deinit();
+    var fresh = try inkling.BatchScratch.init(loaded.model.device, &loaded.model.config, 1);
+    defer fresh.deinit();
+    var tokens: [4]std.ArrayList(u32) = @splat(.empty);
+    defer for (&tokens) |*t| t.deinit(a);
+    var hashes: [4]std.ArrayList(u64) = @splat(.empty);
+    defer for (&hashes) |*h| h.deinit(a);
+    var tally: TreeTally = .{};
+    for (0..4) |k| {
+        if (k == 2) {
+            for (parsed.value) |p| _ = try compareTree(&s, p.token_ids, 101, &.{}, &tally, false);
+        }
+        try plainOn(&s, if (k == 0 or k == 3) &fresh else &s.batch, parsed.value[1].token_ids, 96, &tokens[k], &hashes[k]);
+    }
+    var first: [4]usize = @splat(0);
+    for (1..4) |k| first[k] = std.mem.indexOfDiff(u64, hashes[0].items, hashes[k].items) orelse hashes[0].items.len;
+    std.debug.print("plain scratches: first logits difference from a fresh one-row scratch at step {d} (unused verify scratch), {d} (after {d} speculative rounds), {d} (fresh again), of {d}\n", .{ first[1], first[2], tally.rounds, first[3], hashes[0].items.len });
+    for (1..4) |k| try std.testing.expectEqualSlices(u32, tokens[0].items, tokens[k].items);
+    for (1..4) |k| try std.testing.expectEqual(hashes[0].items.len, first[k]);
+}

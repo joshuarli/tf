@@ -15,9 +15,12 @@ pub fn modelType(config: json.Value) ?[]const u8 {
 
 /// A drafter made for one family and shape: the target's hidden size and layer count.
 const Known = struct { model_type: []const u8, hidden: i64, layers: i64, repo: []const u8 };
-const known_drafters = [_]Known{.{ .model_type = "qwen3_5", .hidden = 5120, .layers = 64, .repo = "z-lab/Qwen3.8-27B-DFlash2" }};
+const known_drafters = [_]Known{
+    .{ .model_type = "qwen3_5", .hidden = 5120, .layers = 64, .repo = "z-lab/Qwen3.8-27B-DFlash2" },
+    .{ .model_type = "inkling2_loop", .hidden = 2304, .layers = 24, .repo = "incoai/Inkling-2-Mini-DFlash2" },
+};
 
-/// The repo ID of the drafter made for this checkpoint's family and shape (Qwen3.8-27B's DFlash2), else null.
+/// The repo ID of the drafter made for this checkpoint's family and shape (Qwen3.8-27B's or Inkling 2 Mini's DFlash2), else null.
 pub fn knownDrafter(config: json.Value) ?[]const u8 {
     const kind = modelType(config) orelse return null;
     for (known_drafters) |d| {

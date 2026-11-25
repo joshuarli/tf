@@ -151,6 +151,8 @@ test "a known drafter is named only for a target of its family and shape" {
         .{ .config = "{\"model_type\": \"qwen3_5\", \"hidden_size\": 2048, \"num_hidden_layers\": 40}", .drafter = null },
         .{ .config = "{\"model_type\": \"qwen3_5\", \"hidden_size\": 5120}", .drafter = null },
         .{ .config = "{\"model_type\": \"nemotron_h\", \"hidden_size\": 5120, \"num_hidden_layers\": 64}", .drafter = null },
+        .{ .config = "{\"model_type\": \"inkling2_loop\", \"text_config\": {\"hidden_size\": 2304, \"num_hidden_layers\": 24}}", .drafter = "incoai/Inkling-2-Mini-DFlash2" },
+        .{ .config = "{\"model_type\": \"inkling2_loop\", \"text_config\": {\"hidden_size\": 2304, \"num_hidden_layers\": 12}}", .drafter = null },
         .{ .config = "[]", .drafter = null },
     };
     for (cases) |c| {

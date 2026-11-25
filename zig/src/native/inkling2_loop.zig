@@ -60,17 +60,24 @@ fn readEos(gpa: std.mem.Allocator, io: std.Io, dir: []const u8, fallback: u32) u
     return fallback;
 }
 
+/// The DFlash2 drafter's directory: INKLING_DRAFTER (empty: none) or serve's --drafter, which serve also fills with
+/// the known drafter it finds in local files; none while serving `--no-drafts`.
+fn drafterDir(env: ?[]const u8, flag: ?[]const u8, drafts: bool) error{TwoDrafters}!?[]const u8 {
+    if (env != null and flag != null) return error.TwoDrafters;
+    const dir = env orelse flag orelse return null;
+    return if (drafts and dir.len > 0) dir else null;
+}
+
 pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Open, problem: *[]const u8) !?api.Opened {
     if (o.vision != null) {
         problem.* = inkling.refuse.vision;
         return null;
     }
-    if (o.drafts and o.drafter != null) {
-        problem.* = "Inkling 2 Mini serves its DFlash2 drafter from INKLING_DRAFTER, not --drafter";
-        return null;
-    }
     const drafter_env: ?[]const u8 = if (std.c.getenv("INKLING_DRAFTER")) |v| std.mem.span(v) else null;
-    const drafter: ?[]const u8 = if (drafter_env) |dir| (if (o.drafts and dir.len > 0) dir else null) else null;
+    const drafter = drafterDir(drafter_env, o.drafter, o.drafts) catch {
+        problem.* = "Inkling 2 Mini takes its DFlash2 drafter from INKLING_DRAFTER or --drafter, not both";
+        return null;
+    };
     const bits_env: ?[]const u8 = if (std.c.getenv("INKLING_DRAFTER_BITS")) |v| std.mem.span(v) else null;
     const bits = drafterBits(bits_env) catch {
         problem.* = "INKLING_DRAFTER_BITS must be 4 (prepared q4) or 0 (bf16)";
@@ -192,11 +199,13 @@ test "the registry's open refuses --vision by name before any weight is read" {
     try std.testing.expectEqualStrings(tf.inkling2_loop_refuse.vision, problem);
 }
 
-test "the registry's open refuses --drafter by name before any weight is read" {
-    var problem: []const u8 = "";
-    const o = api.Open{ .dir = "no-weights", .model_type = "inkling2_loop", .drafter = "no-head" };
-    try std.testing.expectEqual(null, try open(std.testing.allocator, std.testing.allocator, std.testing.io, o, &problem));
-    try std.testing.expect(std.mem.indexOf(u8, problem, "INKLING_DRAFTER") != null);
+test "the drafter comes from INKLING_DRAFTER or --drafter, never both, and only while drafting" {
+    try std.testing.expectEqualStrings("env", (try drafterDir("env", null, true)).?);
+    try std.testing.expectEqualStrings("flag", (try drafterDir(null, "flag", true)).?);
+    try std.testing.expectEqual(null, try drafterDir(null, null, true));
+    try std.testing.expectEqual(null, try drafterDir("", null, true));
+    try std.testing.expectEqual(null, try drafterDir("env", null, false));
+    try std.testing.expectError(error.TwoDrafters, drafterDir("env", "flag", true));
 }
 
 test "drafter bits default to prepared q4 and take only 4 or 0" {

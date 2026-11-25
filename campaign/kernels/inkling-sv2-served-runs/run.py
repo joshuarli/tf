@@ -18,7 +18,7 @@ sys.path.insert(0, str(CAMPAIGN / "kernels" / "inkling-sv1-serve-runs"))
 
 import bench  # noqa: E402
 import harness  # noqa: E402
-from run import FOLLOW, KEY, PINS, Log, ask, drafted, same  # noqa: E402
+from run import FOLLOW, KEY, PINS, SHORT, Log, ask, drafted, same  # noqa: E402
 
 MODES = ("ar", "idle", "spec")
 CURVE = CAMPAIGN / "comparators" / "prefill_curve.py"
@@ -104,6 +104,37 @@ def session(args) -> int:
                            check=True)
     print(f"trials in {path}; replies in {log.path}", flush=True)
     return 0
+
+
+SHORTS = (SHORT, "Name the capital of France in one word.", "List three primary colours, comma separated, nothing else.")
+
+
+def eos(args) -> int:
+    """Short prompts that end on the model's own EOS before 1,024 tokens, served by each mode: every reply must equal
+    `ar`'s and stop on EOS, and only `spec` drafts."""
+    os.environ.pop("INKLING_DRAFTER", None)
+    binary = Path(args.bin).expanduser().resolve()
+    model, drafter = harness.model_dir(KEY), harness.drafter_env(KEY)
+    log = Log(HERE / f"{args.name}.checks.jsonl")
+    log.row(kind="run", binary=str(binary), binary_sha256=harness.sha256_file(binary), drafter=drafter)
+    got: dict = {}
+    for mode in MODES:
+        flags, env = flags_env(mode, drafter)
+        with harness.Server(binary, model, flags, 2, harness.TMP / f"sv2-{args.name}-{mode}.log", env) as server:
+            served = server.models()[0]
+            for i, text in enumerate(SHORTS):
+                reply = ask(server.base, served, [{"role": "user", "content": text}], draft=mode == "spec",
+                            max_tokens=1024, ignore_eos=False)
+                log.row(kind="reply", prompt=f"short-{i}", phase="natural", mode=mode, **reply)
+                got[(i, mode)] = reply
+    for i in range(len(SHORTS)):
+        base = got[(i, "ar")]
+        for mode in MODES:
+            r = got[(i, mode)]
+            log.check(same(r, base) and r["finish_reason"] == "stop" and (mode == "spec") == (drafted(r) > 0),
+                      f"short-{i} {mode}: {r['completion_tokens']} tokens, {r['finish_reason']}, drafted {drafted(r)}")
+    print(f"{len(log.problems)} differences; records in {log.path}", flush=True)
+    return 1 if log.problems else 0
 
 
 def trials(names) -> list[dict]:
@@ -224,10 +255,13 @@ def main() -> int:
     p.add_argument("--cells", default="1024,4096")
     p.add_argument("--curve", default="1024,4096,16384,31744", help="unseen prefill lengths, one-token replies")
     p.add_argument("--rotate", type=int, default=0, help="start the mode order at this offset (0, 1 or 2)")
+    p = sub.add_parser("eos")
+    p.add_argument("--bin", default=str(harness.REPO / "zig-out/native/bin/tensorfold-native"))
+    p.add_argument("--name", required=True)
     for action in ("equal", "table"):
         sub.add_parser(action).add_argument("names", nargs="+")
     args = parser.parse_args()
-    return {"session": session, "equal": equal, "table": table}[args.action](args)
+    return {"session": session, "eos": eos, "equal": equal, "table": table}[args.action](args)
 
 
 if __name__ == "__main__":

@@ -12,8 +12,8 @@ reverted. The lane keeps the round-split instrumentation and a bit-identical sel
 Decision 17 budget, and removing every host gap would not change that: the verify's and the drafter's GPU time are
 the levers.
 
-**Base.** Main is `b77ed8fd0`, whose Zig equals the DF2b merge `53a3b8894`. The lane is `lane/sc1-chain` at
-`89f479658`; the reverted chain is `4716d11f6`, `2c49d4489` and `4e44a9870`.
+**Base.** Main is `b77ed8fd0`, whose Zig equals the DF2b merge `53a3b8894`. The lane is `lane/sc1-chain`, its code
+final at `6c4e53305`. The chained draft is `4716d11f6`, `2c49d4489` and `4e44a9870`, reverted in `89f479658`.
 
 ## Where a round's time goes
 
@@ -149,11 +149,19 @@ same story: 37.0 to 49.9 ms against budgets of 14.6 to 37.6 ms. In order of size
 
 ## Correctness
 
-- The lane's code changes nothing a round computes: the split only reads clocks, and the selector test holds its
-  edges bit-equal.
-- `zig build test-flint-draft-host` and `zig build test-qwen27` exit 0 on `89f479658`. One earlier `test-qwen27` run
-  failed in `safetensors_copied_test` ("close drops cache after unmapping": expected 0, found 2), passed on rerun, and
-  passes on main. It is host page-cache state, not this lane.
+The lane's code changes nothing a round computes: the split only reads clocks, and the selector test holds every
+edge bit-equal. On the lane's final commit `6c4e53305`:
+
+- `python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu` exits 0 (`.work/suite/20261124T163752`).
+  `inkling-host` passes 10/10 steps and 35/35 tests. `inkling-gpu` passes 17/17 steps and 180/180 tests with none
+  skipped: main's 179 and the plain-scratch test. Every speculative reply equals plain greedy, with its caches,
+  through forced zero, partial and full acceptance, a limit and an EOS inside a block or a tree, lookup rounds, and
+  the served host's prompt reuse, fork, two lanes and EOS inside a lookup round. Peak charged memory was 21.6 GB.
+- `zig build test-flint-draft-host` passes 47/47 steps and 87/87 tests. `zig build test-qwen27` passes 48/48 steps and
+  201/206 tests with 5 skipped; main has 200/205, and the new one is the selector's bit-identity test. The selector's
+  trees are unchanged, so Flint's DFlash2 output is too.
+- One earlier `test-qwen27` run failed in `safetensors_copied_test` ("close drops cache after unmapping": expected 0,
+  found 2). It passed on rerun and passes on main; it is host page-cache state, not this lane.
 - `tools/zig/lean_new.py` against `b77ed8fd0`: 256 problems on both, 0 new.
 
 ## Conditions
@@ -184,16 +192,29 @@ python3 -I $D/run.py split attr-plain-a
 ```
 
 The `.log` files are not tracked. Their `inkling2 split` and `dflash` lines are, as `NAME.txt`, which `split` reads
-when the log is absent. `INKLING_DRAFT_CHAIN` exists only in the chain's builds (`2c49d4489`; chaining is on unless it is `0`). The builds at
-`c66de7b4a` and `0a9fc969e` read the split switch as `TF_INKLING_ROUND_SPLIT`. `run.py bench … --split` runs the same
-processes behind the admission gates.
+when the log is absent. `INKLING_DRAFT_CHAIN` exists only in the chain's builds (`2c49d4489`), where chaining is on
+unless it is `0`. The builds at `c66de7b4a` and `0a9fc969e` read the split switch as `TF_INKLING_ROUND_SPLIT`.
+`run.py bench … --split` runs the same processes behind the admission gates.
+
+## Plain greedy across scratches
+
+A chain-era test chose an EOS token from plain greedy on the speculator's 16-row verify scratch after speculation.
+That run disagreed by token 45 with plain greedy on a fresh one-row scratch on the 37-token "code" fixture. A state
+leak in the verify scratch would break the determinism rules, so `dflash_test.zig` now holds it ("plain greedy steps
+keep their logits …"). The test hashes each of 95 greedy steps' logits in four runs and compares each with the first:
+
+1. a fresh one-row `BatchScratch`;
+2. the speculator's verify scratch, never used;
+3. the same verify scratch after 97 tree rounds of speculation on all four fixtures;
+4. a fresh one-row scratch again.
+
+All four agree on every step's logits bit for bit, so neither the scratch nor speculation changes plain greedy, and
+repeated runs agree. The run ran unchained speculation; the chain-era disagreement is not explained. The code read
+for it found no carrier: on one row, every kernel is chosen by the row count and reads only rows written in the same
+step, and the convolutions skip history before position 0.
 
 ## Open problems
 
-- **Plain greedy across scratches.** One chain-era test chose an EOS token from plain greedy on the speculator's
-  16-row verify scratch, reused after speculation. That plain run disagreed with plain greedy on a fresh one-row scratch
-  by token 45 of the 37-token "code" fixture. A focused device test (`dflash_test.zig`, "plain greedy steps keep their
-  logits …") compares every step's logits on a fresh one-row scratch, the verify scratch before and after
-  speculation, and a fresh scratch again. It runs after V3's timing block; its result decides whether this is a state
-  leak in the verify scratch.
 - **The verify's encode.** 0.6 ms a round of GPU idle is in `prefill.zig`'s `run` (P5c's and V3's files).
+- **The chained draft, if revived.** Its draft-side machinery is in `4716d11f6`..`4e44a9870`. A GPU-side version needs
+  a hook between the verify's commit and its wait. Rerun the plain-scratch test with chaining on before trusting it.

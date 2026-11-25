@@ -272,6 +272,8 @@ pub fn phases(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt
             for (samples) |*s| s.clearRetainingCapacity();
             for (0..reps + 1) |rep| for (0..count) |k| {
                 const i = (k + rep) % count;
+                bs.rows.phases = .full;
+                _ = try phaseStep(m, &verifier, &bs, &cache, &rollback, rows[0..@max(width, 1)], width == 0, logits);
                 bs.rows.phases = sets[i];
                 const ms = try phaseStep(m, &verifier, &bs, &cache, &rollback, rows[0..@max(width, 1)], width == 0, logits);
                 if (rep > 0) try samples[i].append(gpa, ms);

@@ -53,6 +53,7 @@ SYSTEM, USER, TEXT, END = 200002, 200000, 200004, 200010
 GATE = ('sleep "$REST"; gpu-gate-ready -1 || exit 75; perf-gate-ready || exit 75; "$@"; result=$?; '
         'perf-gate-ready -1 || exit 75; exit "$result"')
 Q_EDGES = (0.02, 0.05, 0.1, 0.2, 0.3, 0.45, 0.6, 0.75, 0.9)
+ATTEMPTS, BACKOFF_S = 30, 300
 LENGTH_EDGES = (4, 6, 10, 18)
 DEPTHS = 7
 
@@ -118,7 +119,7 @@ def gated(name: str, command: list[str], env: dict[str, str], rest: float = 0.0,
     full_env = dict(os.environ, TMPDIR=str(SCRATCH), INKLING_LOAD_LIMIT_GB="26", REST=str(rest),
                     GPU_GATE_MAX_GPU_PCT="60", GPU_GATE_MAX_UTIL_PCT="60", PERF_GATE_MAX_BUSY_CORES="4", **env)
     wrapped = ["sh", "-c", GATE, "sh", *command] if timed else command
-    for attempt in range(12):
+    for attempt in range(ATTEMPTS):
         start = time.time()
         with log.open("a") as f:
             f.write(f"# attempt {attempt} {time.strftime('%H:%M:%S')}: {' '.join(command)}\n")
@@ -128,7 +129,7 @@ def gated(name: str, command: list[str], env: dict[str, str], rest: float = 0.0,
         host["attempts"].append({"exit": code, "seconds": round(time.time() - start, 1)})
         if code != 75:
             break
-        time.sleep(30)
+        time.sleep(BACKOFF_S)
     host["after"] = readings()
     host["env"] = env
     (HERE / f"{name}.host.json").write_text(json.dumps(host, indent=2) + "\n")
@@ -774,14 +775,17 @@ def shapes(args: argparse.Namespace) -> None:
 CATEGORIES = (
     ("routed experts, NVFP4", ("i2p_gu", "i2p_down", "i2t_gate_up", "i2t_down", "i2e_")),
     ("routed experts, affine 4-bit", ("i2a_expert_",)),
-    ("router, pick, combine", ("i2a_float", "i2p_routepick", "i2p_combine")),
+    ("router and pick", ("i2a_float", "i2p_routepick")),
+    ("expert combine", ("i2p_combine",)),
     ("attention projections", ("i2a_batch_projections", "i2t_projections")),
     ("o-projection and head", ("i2a_dense", "i2r_dense", "i2t_dense")),
-    ("attention", ("i2v_split", "i2_batch_split", "i2_batch_combine", "i2v_store_rel", "i2p_batch_store_rel", "i2p_clip3",
-                   "i2_sig_mul")),
+    ("k/v convolutions, clips and stores", ("i2_batch_qkv", "i2v_qkv", "i2p_clip3", "i2v_store_rel", "i2p_batch_store_rel")),
+    ("attention core", ("i2v_split", "i2_batch_split", "i2_batch_combine")),
+    ("attention gate", ("i2_sig_mul",)),
     ("convolutions", ("i2v_conv", "i2p_batch_conv")),
-    ("controllers", ("i2_controls_", "i2v_controls_", "i2p_rms_pair", "i2a_batch_float_control")),
-    ("depth mixes and norms", ("i2_batch_mix", "i2p_gather_rms", "i2p_rms", "i2p_scatter", "i2p_pass_copy", "i2_add")),
+    ("controllers", ("i2_controls_", "i2v_controls_", "i2r_controls_", "i2p_rms_pair", "i2a_batch_float_control")),
+    ("depth mixes and norms", ("i2_batch_mix", "i2pr_batch_mix", "i2pr_mix_norm", "i2p_gather_rms", "i2p_rms",
+                               "i2p_scatter", "i2p_pass_copy", "i2_add")),
 )
 
 

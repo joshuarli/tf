@@ -1,5 +1,6 @@
-"""SV2 served runs: plain decode, `INKLING_DRAFTER` with `--no-drafts`, and active speculation over the same prompts, one
-session a call, and the tables that pair them across sessions."""
+"""Served runs: plain decode, a loaded drafter with per-request `draft: false`, and active speculation over the same
+prompts, one session a call, and the tables that pair them within sessions. The 512-token trials measure
+fixed-window generation throughput, not completed answers (see `tasks.py` in inkling-q4-qualify-runs)."""
 
 import argparse
 import json
@@ -21,13 +22,50 @@ import harness  # noqa: E402
 from bench_evidence import token_equal  # noqa: E402
 from run import FOLLOW, KEY, PINS, SHORT, Log, ask, drafted, same  # noqa: E402
 
-MODES = ("ar", "idle", "spec")
+MODES = ("ar", "disabled", "spec")
 CURVE = CAMPAIGN / "comparators" / "prefill_curve.py"
+DRAFTER_LOADED = "DFlash2 drafter"
 
 
 def flags_env(mode: str, drafter: dict) -> tuple[list[str], dict]:
-    """`ar` names no drafter; `idle` names it with `--no-drafts`, which drops it at load; `spec` loads it and drafts."""
-    return {"ar": (["--no-drafts"], {}), "idle": (["--no-drafts"], drafter), "spec": ([], drafter)}[mode]
+    """`ar` names no drafter (`--no-drafts`); `disabled` and `spec` load it, and `disabled`'s requests send
+    `draft: false` (`request_draft`)."""
+    return {"ar": (["--no-drafts"], {}), "disabled": ([], drafter), "spec": ([], drafter)}[mode]
+
+
+def request_draft(mode: str) -> bool | None:
+    """The request's draft field: `disabled` turns drafting off per request; the others keep the server default."""
+    return False if mode == "disabled" else None
+
+
+def configuration(mode: str, model: Path, hashes: dict, drafter: dict, cache_gib: int) -> dict:
+    """What produced a result. Fixed engine facts name their source; the rest are this run's settings."""
+    half = os.environ.get("INKLING_PREFILL_HALF")
+    return {"checkpoint": {"dir": str(model), "hashes": hashes},
+            "kv_cache": "f16 keys and values (engine fixed: zig/src/families/inkling2_loop/state.zig)",
+            "prefill_rounding": "half experts and inputs (INKLING_PREFILL_HALF unset)" if half is None
+            else f"INKLING_PREFILL_HALF={half}",
+            "decode_arithmetic": "f32 one-row kernels; grouped verify rows bit-equal to them (Decision 18)",
+            "drafter": None if mode == "ar" else {"dir": drafter["INKLING_DRAFTER"], "bits": "prepared q4",
+                                                   "request_draft": request_draft(mode)},
+            "lookup": "prompt lookup chains in tree rounds" if mode == "spec" else None,
+            "sampler": {"temperature": 0, "seed": bench.SEED, "greedy": True},
+            "context": 32768, "prompt_cache_gib": cache_gib}
+
+
+def gate(path: Path, engine: str, phase: str, own: set[int]) -> None:
+    """One host-conditions record beside a prefill curve; a curve with reasons on either side is not valid."""
+    reasons = harness.conditions(own)["pressure_reasons"]
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"schema": 1, "kind": "conditions", "engine": engine, "phase": phase,
+                                 "reasons": reasons}, sort_keys=True) + "\n")
+
+
+def check_drafter(server: harness.Server, mode: str) -> None:
+    """The runtime state the mode claims: a loaded drafter for `disabled` and `spec`, none for `ar`."""
+    loaded = DRAFTER_LOADED in Path(server.log_path).read_text(encoding="utf-8", errors="replace")
+    if loaded != (mode != "ar"):
+        raise SystemExit(f"{mode}: the server {'loaded' if loaded else 'did not load'} a drafter")
 
 
 def settle(server: harness.Server, limit_s: float = 180) -> None:
@@ -76,6 +114,8 @@ def session(args) -> int:
         named = flags + [f"{k}={v}" for k, v in env.items()]
         with harness.Server(binary, model, flags, 2, harness.TMP / f"sv2-{Path(args.name).name}-{mode}.log", env) as server:
             served = server.models()[0]
+            check_drafter(server, mode)
+            log.row(kind="server", mode=mode, flags=named, configuration=configuration(mode, model, hashes, drafter, 2))
             for cell in sorted(by_cell):
                 group = by_cell[cell]
                 for prompt in group:
@@ -91,7 +131,7 @@ def session(args) -> int:
                     bench.trial(path, run_id=args.name, experiment="sv2", session=args.name, engine=engine,
                                 binary=identity, model_key=KEY, mode=mode, flags=named, cell=cell, cache_gib=2,
                                 pair=args.rotate, order=order, prompt=prompt, server=server, model_id=served,
-                                hashes=hashes, identity=contract)
+                                hashes=hashes, identity=contract, draft=request_draft(mode))
                     messages = [{"role": "user", "content": (harness.REPO / prompt["path"]).read_text(encoding="utf-8")}]
                     first = ask(server.base, served, messages, draft=mode == "spec")
                     turn = messages + [{"role": "assistant", "content": first["message"].get("content") or ""},
@@ -100,9 +140,12 @@ def session(args) -> int:
                     log.row(kind="reply", prompt=prompt["name"], phase="first", mode=mode, **first)
                     log.row(kind="reply", prompt=prompt["name"], phase="fork", mode=mode, **fork)
             settle(server)
+            curve_path = HERE / f"{args.name}.curve.jsonl"
+            own = harness.process_tree(server.process.pid)
+            gate(curve_path, f"{args.name}-{mode}", "before", own)
             subprocess.run([sys.executable, "-I", str(CURVE), "--base", server.base, "--engine", f"{args.name}-{mode}",
-                            "--lengths", args.curve, "--reps", "2", "--out", str(HERE / f"{args.name}.curve.jsonl")],
-                           check=True)
+                            "--lengths", args.curve, "--reps", "2", "--out", str(curve_path)], check=True)
+            gate(curve_path, f"{args.name}-{mode}", "after", own)
     print(f"trials in {path}; replies in {log.path}", flush=True)
     return 0
 
@@ -229,50 +272,76 @@ def interval(ratios: list[float]) -> tuple[float, float, float]:
     return math.exp(mean), math.exp(mean - half), math.exp(mean + half)
 
 
+def session_of(run_id: str) -> str:
+    return Path(run_id).name
+
+
+def curve_rates(names: list[str]) -> dict:
+    """Per session, mode and length, the median client prefill tok/s of curves whose host conditions passed on both
+    sides; ungated curves (recorded before gating) are kept but marked."""
+    out: dict = {}
+    for name in names:
+        rows = curves([name])
+        gates = {(r["engine"], r["phase"]): r["reasons"] for r in rows if r["kind"] == "conditions"}
+        for mode in MODES:
+            engine = f"{name}-{mode}"
+            if any(gates.get((engine, ph)) for ph in ("before", "after")):
+                continue
+            gated = (engine, "before") in gates and (engine, "after") in gates
+            for r in rows:
+                if r["kind"] == "curve" and r["engine"] == engine:
+                    out.setdefault((session_of(name), mode, r["target"]), {"rates": [], "gated": gated})["rates"].append(
+                        r["client_prefill_tps"])
+    return {k: {"tps": statistics.median(v["rates"]), "gated": v["gated"]} for k, v in out.items()}
+
+
 def table(args) -> int:
-    """Decode tok/s by prompt and mode (median over sessions), `spec`/`ar` and `idle`/`ar` per session with a 95%
-    interval, prefill tok/s (cold, engine) and peak footprint; then the default rule's verdict per prompt."""
+    """Fixed-window generation throughput (512 tokens): decode tok/s by prompt and mode, median over sessions with
+    each mode's valid count, and `spec`/`ar` and `disabled`/`ar` over valid same-session pairs only (n pairs, 95%
+    interval when n >= 2). Then unseen prefill paired within sessions."""
     ts = [t for t in trials(args.names) if t["valid"]]
     by: dict = {}
     for t in ts:
-        by.setdefault((t["prompt"]["name"], t["cell"]), {}).setdefault(t["mode"], {})[t["run_id"]] = t
-    print("| Prompt | ar tok/s | idle tok/s | spec tok/s | spec/ar (95%) | idle/ar (95%) | Prefill tok/s ar / spec | "
-          "Committed/round | Peak GB ar / spec |")
-    print("| --- | ---: | ---: | ---: | --- | --- | --- | ---: | --- |")
-    verdicts = []
+        by.setdefault((t["prompt"]["name"], t["cell"]), {}).setdefault(t["mode"], {})[session_of(t["run_id"])] = t
+    present = [m for m in ("ar", "disabled", "idle", "spec") if any(m in v for v in by.values())]
+    print("| Prompt | " + " | ".join(f"{m} tok/s (n)" for m in present) + " | spec/ar: pairs, ratio (95%) | "
+          "disabled/ar: pairs, ratio (95%) | Committed/round (spec) |")
+    print("| --- | " + " | ".join("---:" for _ in present) + " | --- | --- | ---: |")
+    tps = lambda t: t["requests"]["cold"].get("decode_tps")
     for (name, cell), modes in sorted(by.items(), key=lambda kv: (kv[0][1], kv[0][0])):
         def med(mode, f):
             vals = [f(t) for t in modes.get(mode, {}).values() if f(t) is not None]
-            return statistics.median(vals) if vals else None
-        tps = lambda t: t["requests"]["cold"].get("decode_tps")
-        pre = lambda t: t["requests"]["cold"].get("engine_prefill_tps")
-        peak = lambda t: ((t.get("footprint") or {}).get("peak_bytes") or 0) / 1e9 or None
-        cpr = lambda t: t["requests"]["cold"].get("committed_per_verification")
+            return (statistics.median(vals), len(vals)) if vals else (None, 0)
         def ratio(mode):
-            rs = [modes[mode][s]["requests"]["cold"]["decode_tps"] / modes["ar"][s]["requests"]["cold"]["decode_tps"]
-                  for s in modes.get(mode, {}) if s in modes.get("ar", {})]
-            return interval(rs) if rs else None
-        spec, idle = ratio("spec"), ratio("idle")
-        fmt = lambda r: f"{r[0]:.3f} ({r[1]:.3f}–{r[2]:.3f})" if r else "—"
-        num = lambda v, p=1: f"{v:.{p}f}" if v is not None else "—"
-        print(f"| {name} | {num(med('ar', tps))} | {num(med('idle', tps))} | {num(med('spec', tps))} | {fmt(spec)} | "
-              f"{fmt(idle)} | {num(med('ar', pre), 0)} / {num(med('spec', pre), 0)} | {num(med('spec', cpr), 2)} | "
-              f"{num(med('ar', peak), 2)} / {num(med('spec', peak), 2)} |")
-        if spec:
-            verdicts.append((name, spec[1] > 1.0))
+            rs = [tps(modes[mode][s]) / tps(modes["ar"][s]) for s in modes.get(mode, {}) if s in modes.get("ar", {})]
+            if not rs:
+                return "0 pairs"
+            g, lo, hi = interval(rs)
+            return f"{len(rs)}, {g:.3f}" + (f" ({lo:.3f}–{hi:.3f})" if len(rs) >= 2 else "")
+        cells = []
+        for m in present:
+            v, n = med(m, tps)
+            cells.append(f"{v:.1f} ({n})" if v is not None else "— (0)")
+        cpr, _ = med("spec", lambda t: t["requests"]["cold"].get("committed_per_verification"))
+        print(f"| {name} | " + " | ".join(cells) + f" | {ratio('spec')} | {ratio('disabled')} | "
+              f"{f'{cpr:.2f}' if cpr is not None else '—'} |")
+    rates = curve_rates(args.names)
     print()
-    print("| Unseen prefill tokens | ar tok/s | idle tok/s | spec tok/s | spec/ar |")
-    print("| ---: | ---: | ---: | ---: | ---: |")
-    rows = [r for r in curves(args.names) if r["kind"] == "curve"]
-    for target in sorted({r["target"] for r in rows}):
-        med = {m: statistics.median([r["client_prefill_tps"] for r in rows
-                                     if r["target"] == target and r["engine"].endswith(f"-{m}")] or [float("nan")])
-               for m in MODES}
-        print(f"| {target:,} | {med['ar']:.0f} | {med['idle']:.0f} | {med['spec']:.0f} | {med['spec'] / med['ar']:.3f} |")
-    print()
-    for name, wins in verdicts:
-        print(f"{name}: spec {'beats' if wins else 'does not beat'} ar (lower bound {'>' if wins else '<='} 1)")
-    print("default rule:", "met" if verdicts and all(w for _, w in verdicts) else "not met")
+    print("| Unseen prefill tokens | ar tok/s (sessions) | disabled/ar: pairs, ratio (95%) | spec/ar: pairs, ratio (95%) | gated |")
+    print("| ---: | ---: | --- | --- | --- |")
+    for target in sorted({k[2] for k in rates}):
+        sessions = sorted({k[0] for k in rates if k[2] == target})
+        ar = [rates[(s, "ar", target)]["tps"] for s in sessions if (s, "ar", target) in rates]
+        def paired(mode):
+            rs = [rates[(s, mode, target)]["tps"] / rates[(s, "ar", target)]["tps"] for s in sessions
+                  if (s, mode, target) in rates and (s, "ar", target) in rates]
+            if not rs:
+                return "0 pairs"
+            g, lo, hi = interval(rs)
+            return f"{len(rs)}, {g:.3f}" + (f" ({lo:.3f}–{hi:.3f})" if len(rs) >= 2 else "")
+        gated = all(v["gated"] for k, v in rates.items() if k[2] == target)
+        print(f"| {target:,} | {statistics.median(ar):.0f} ({len(ar)}) | {paired('disabled')} | {paired('spec')} | "
+              f"{'yes' if gated else 'no (recorded before gating)'} |" if ar else f"| {target:,} | — | — | — | — |")
     return 0
 
 

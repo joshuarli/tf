@@ -7,10 +7,12 @@ export PATH="/opt/homebrew/bin:$HOME/.local/bin:$PATH" TMPDIR=/Users/josh/repos/
 mkdir -p "$3/native/lib" "$here/quality"
 cp /Users/josh/repos/tf/zig-out/native/lib/libtfgrammar.dylib "$3/native/lib/"
 cd "$2/campaign"
+# run.py exits non-zero below the profile's bar; the result is still the record, so keep it and report the status.
+status=0
 python3 heavy.py -- env PYTHONDONTWRITEBYTECODE=1 uv run --project . python quality/run.py --model inkling2-mini-oq4e \
-  --set dev --bin "$3/native/bin/tensorfold-native"
+  --set dev --bin "$3/native/bin/tensorfold-native" || status=$?
 run=
 for dir in quality/results/inkling2-mini-oq4e-dev-*; do run=$dir; done
 [ -d "$run" ] || { echo "no quality run directory" >&2; exit 1; }
 cp -R "$run" "$here/quality/$1-$(basename "$run")"
-echo "copied $run to $here/quality/$1-$(basename "$run")"
+echo "copied $run to $here/quality/$1-$(basename "$run") (quality run exit $status)"

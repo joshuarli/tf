@@ -24,8 +24,8 @@ $H uv run --frozen --project ref python -I -B parity/inkling2-mini/omlx_gate.py 
 tail -4 "$D/oracle/lane-vs-main-served.log"
 for n in 1024 1033 1100; do
   echo "## $n held-out code tokens"
-  echo "lane against main reuse-on: $($H python3 -I "$spread" "$D/probe/main-on-$n.bin" "$D/probe/lane-$n.bin")"
-  echo "main reuse-off against main reuse-on: $($H python3 -I "$spread" "$D/probe/main-on-$n.bin" "$D/probe/main-off-$n.bin")"
-  echo "lane against main reuse-off: $($H python3 -I "$spread" "$D/probe/main-off-$n.bin" "$D/probe/lane-$n.bin")"
+  echo "lane against main reuse-on: $($H uv run --frozen --project ref python -I -B "$spread" "$D/probe/main-on-$n.bin" "$D/probe/lane-$n.bin")"
+  echo "main reuse-off against main reuse-on: $($H uv run --frozen --project ref python -I -B "$spread" "$D/probe/main-on-$n.bin" "$D/probe/main-off-$n.bin")"
+  echo "lane against main reuse-off: $($H uv run --frozen --project ref python -I -B "$spread" "$D/probe/main-off-$n.bin" "$D/probe/lane-$n.bin")"
 done > "$D/probe-spread.txt"
 cat "$D/probe-spread.txt"

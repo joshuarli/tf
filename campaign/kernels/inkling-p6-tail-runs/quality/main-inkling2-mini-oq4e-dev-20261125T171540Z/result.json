@@ -1,0 +1,647 @@
+{
+  "binary": {
+    "path": "/Users/josh/repos/tf/.work/tmp/p6/main-build/native/bin/tensorfold-native",
+    "sha256": "a9b9262e754623e774cd38af89045bacd597aafac98724b12425509d5340cca4"
+  },
+  "cases": [
+    {
+      "content": "```python\ndef chunk_sums(xs, size):\n    if size < 1:\n        raise ValueError(\"size must be at least 1\")\n    return [sum(xs[i:i + size]) for i in range(0, len(xs), size)]\n```",
+      "finish_reason": "stop",
+      "id": "code-c01",
+      "kind": "code",
+      "passed": true,
+      "prompt_sha256": "a395429127784f72aa12e8f9b7b67fba6fc3728367a1b59bcc7949f27ba389e1",
+      "prompt_tokens": 149,
+      "reason": "tests passed",
+      "reasoning": "We need answer exactly one fenced code block labelled python and nothing outside. Need implement chunk_sums. Need be careful: size below 1 raises ValueError. What about non-integer size? Task says size below 1 raises ValueError. Could just if size < 1: raise ValueError. If size is float 0.5, below 1 raises ValueError. If size is non-numeric, comparison may raise TypeError; not specified. Could handle? Keep simple. Split consecutive chunks length size. If size is bool? bool is int; size=True means 1, fine. If size is float 2.5, range with float fails. Could require integer? Not specified. Maybe use range(0, len(xs), size) which requires integer. If size is float, TypeError. Could convert? Better to validate integer? The spec only says size below 1 raises ValueError. We can do:\n\ndef chunk_sums(xs, size):\n    if size < 1:\n        raise ValueError(\"size must be at least 1\")\n    return [sum(xs[i:i+size]) for i in range(0, len(xs), size)]\n\nIf size is float, range raises TypeError. Could use ",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 6.361,
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 449,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 149,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 598
+      }
+    },
+    {
+      "content": "```python\ndef rle_encode(s):\n    parts = []\n    i = 0\n    n = len(s)\n    while i < n:\n        j = i\n        while j < n and s[j] == s[i]:\n            j += 1\n        parts.append(str(j - i) + s[i])\n        i = j\n    return ''.join(parts)\n\ndef rle_decode(s):\n    parts = []\n    i = 0\n    n = len(s)\n    while i < n:\n        j = i\n        while j < n and '0' <= s[j] <= '9':\n            j += 1\n        if j == i:\n            raise ValueError('missing run length')\n        length = int(s[i:j])\n        if length <= 0:\n            raise ValueError('run length must be positive')\n        if j >= n:\n            raise ValueError('dangling length')\n        c = s[j]\n        if not (('a' <= c <= 'z') or ('A' <= c <= 'Z')):\n            raise ValueError('invalid character')\n        parts.append(c * length)\n        i = j + 1\n    return ''.join(parts)\n```",
+      "finish_reason": "stop",
+      "id": "code-c02",
+      "kind": "code",
+      "passed": true,
+      "prompt_sha256": "cf4e328d8d17bffc3fed4f16ad3e914dfbeb033798f8380f2c1e0f0233650cf0",
+      "prompt_tokens": 175,
+      "reason": "tests passed",
+      "reasoning": "We need answer with exactly one fenced code block labelled python and nothing outside. Need implement rle_encode and rle_decode. Need think carefully about requirements.\n\nTask: strings of ASCII letters. Encoding replaces each run with decimal length followed by character, so aaabb -> 3a2b; empty string -> empty string. Decoding reverses it and raises ValueError on a token with no positive run length, a dangling length, or any character that is not a letter.\n\nNeed define module-level functions.\n\nEncoding: iterate chars, count runs. For each run, append str(count)+char. ASCII letters: presumably 'a'-'z' and 'A'-'Z'. Encoding maybe should handle any string? It says strings of ASCII letters. Could just encode any chars. But maybe validate? Not specified. Keep simple.\n\nDecoding: parse string. Need raise ValueError on:\n- token with no positive run length: e.g. \"a\" (no digits), \"0a\" (zero length), maybe \"00a\"? \"no positive run length\" means length must be positive integer. \"0a\" invalid. Also ",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 20.909,
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 1409,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 175,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 1584
+      }
+    },
+    {
+      "content": "```python\ndef base36(n):\n    if n < 0:\n        raise ValueError(\"n must be non-negative\")\n    if n == 0:\n        return \"0\"\n    digits = \"0123456789abcdefghijklmnopqrstuvwxyz\"\n    chars = []\n    while n:\n        n, r = divmod(n, 36)\n        chars.append(digits[r])\n    return \"\".join(reversed(chars))\n```",
+      "finish_reason": "stop",
+      "id": "code-c03",
+      "kind": "code",
+      "passed": true,
+      "prompt_sha256": "31c59ec42246990134608af9e083932c2a0a04ee5af2634d6a5d154f9bb88acd",
+      "prompt_tokens": 136,
+      "reason": "tests passed",
+      "reasoning": "We need answer exactly one fenced code block labelled python and nothing outside. Need implement base36(n). Need ensure module level function. No stdin print. Need consider non-negative integer n. Could accept bool? bool is int subclass; render normally. Negative raises ValueError. Need lowercase digits. Implementation simple.\n\nPotential pitfalls: n could be non-integer? Task says non-negative integer. We can just handle ints. Maybe use divmod loop. For n=0 return \"0\". For negative raise ValueError. Could check isinstance(n, int) and not bool? Not required. If n is float 1.5, divmod works but digits? Better not overcomplicate. But maybe grader tests negative, zero, positive. Need exact.\n\nCode:\ndef base36(n):\n    if n < 0:\n        raise ValueError(\"n must be non-negative\")\n    if n == 0:\n        return \"0\"\n    digits = \"0123456789abcdefghijklmnopqrstuvwxyz\"\n    s = []\n    while n:\n        n, r = divmod(n, 36)\n        s.append(digits[r])\n    return \"\".join(reversed(s))\n\nNeed ensure if n ",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 6.101,
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 413,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 136,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 549
+      }
+    },
+    {
+      "id": "structured-s01",
+      "kind": "structured",
+      "passed": false,
+      "prompt_sha256": "f8665e3ba050da6eff93bf71cf665adc6201e4172af36b6c685595fd10ac8707",
+      "prompt_tokens": 163,
+      "reason": "request failed: HTTPError: HTTP Error 400: Bad Request b'{\"error\": {\"message\": \"structured output (response_format and the guided_* fields) is not supported by this engine yet\", \"type\": \"invalid_request_error\"}}'",
+      "request": {
+        "max_tokens": 8192,
+        "response_format": {
+          "json_schema": {
+            "name": "weather",
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "city": {
+                  "type": "string"
+                },
+                "conditions": {
+                  "enum": [
+                    "clear",
+                    "cloudy",
+                    "rain",
+                    "snow"
+                  ],
+                  "type": "string"
+                },
+                "temp_c": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "city",
+                "temp_c",
+                "conditions"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "json_schema"
+        },
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 0.001,
+      "sets": [
+        "dev",
+        "full"
+      ]
+    },
+    {
+      "id": "structured-s02",
+      "kind": "structured",
+      "passed": false,
+      "prompt_sha256": "554d681a7d9b6ef10dbf232e46c3e4e722b89f24d69159e19121e56acb2c1f4c",
+      "prompt_tokens": 212,
+      "reason": "request failed: HTTPError: HTTP Error 400: Bad Request b'{\"error\": {\"message\": \"structured output (response_format and the guided_* fields) is not supported by this engine yet\", \"type\": \"invalid_request_error\"}}'",
+      "request": {
+        "max_tokens": 8192,
+        "response_format": {
+          "json_schema": {
+            "name": "inventory",
+            "schema": {
+              "additionalProperties": false,
+              "properties": {
+                "items": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "type": "integer"
+                      },
+                      "tag": {
+                        "enum": [
+                          "alpha",
+                          "beta",
+                          "gamma"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "tag"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "items"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "json_schema"
+        },
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 0.0,
+      "sets": [
+        "dev",
+        "full"
+      ]
+    },
+    {
+      "id": "structured-s09",
+      "kind": "structured",
+      "passed": false,
+      "prompt_sha256": "a7fbfd42ca14ebd90a26e5ea0cb54d7344e3ccb07b7097e5ec6080f6709225d5",
+      "prompt_tokens": 154,
+      "reason": "request failed: HTTPError: HTTP Error 400: Bad Request b'{\"error\": {\"message\": \"Inkling does not support grammar-constrained tool_choice required or named functions; send auto or none\", \"type\": \"invalid_request_error\"}}'",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0,
+        "tool_choice": "required",
+        "tools": [
+          {
+            "function": {
+              "description": "Current weather for a city.",
+              "name": "get_weather",
+              "parameters": {
+                "additionalProperties": false,
+                "properties": {
+                  "city": {
+                    "type": "string"
+                  },
+                  "unit": {
+                    "enum": [
+                      "c",
+                      "f"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "city",
+                  "unit"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ]
+      },
+      "seconds": 0.0,
+      "sets": [
+        "dev",
+        "full"
+      ]
+    },
+    {
+      "content": "Let Brooke\u2019s age be \\(b\\). Then Seth\u2019s age is \\(2b\\).\n\nIn 2 years: \\((2b+2)+(b+2)=28\\)  \n\\(3b+4=28\\)  \n\\(3b=24\\)  \n\\(b=8\\)\n\nSeth is \\(2b=16\\).\n\nAnswer: 16",
+      "finish_reason": "stop",
+      "id": "reasoning-gsm8k-167",
+      "kind": "reasoning",
+      "passed": true,
+      "prompt_sha256": "9089e52b7f327d267ff514bdb4c3215e8bf3521225caabd62ec13abcdf0f593b",
+      "prompt_tokens": 71,
+      "reason": "16",
+      "reasoning": "We need answer math. Need compute. Let Brooke age = b, Seth = s = 2b. In 2 years: (s+2)+(b+2)=28 => s+b+4=28 => s+b=24. Substitute 2b+b=24 =>3b=24=>b=8, s=16. Need final with brief work and last line exactly Answer: <number>. Ensure last line form. Could include concise steps. No extra after answer. Need maybe mention Seth is 16. Final line Answer: 16.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 3.349,
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 230,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 71,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 301
+      }
+    },
+    {
+      "content": "3 \u00d7 25 = 75 roses.  \n75 \u00d7 8 = 600 thorns.\n\nAnswer: 600",
+      "finish_reason": "stop",
+      "id": "reasoning-gsm8k-83",
+      "kind": "reasoning",
+      "passed": true,
+      "prompt_sha256": "e79437136c7f0df62d7a976075bd1e52f01d20003077702d4a7b9af075517018",
+      "prompt_tokens": 75,
+      "reason": "600",
+      "reasoning": "The user wants a brief calculation and final line format. Compute: 3 bushes *25 roses/bush =75 roses. Each rose 8 thorns: 75*8=600. Need answer concise. Ensure last line exactly 'Answer: 600'. Could include brief work. No need for more tools. Final only.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 1.645,
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 105,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 75,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 180
+      }
+    },
+    {
+      "content": "C",
+      "finish_reason": "stop",
+      "id": "reasoning-mmlu-163",
+      "kind": "reasoning",
+      "passed": true,
+      "prompt_sha256": "9b7b6e059d3714ae0cb1cd2d67f0e6da9fda68cc9cb48b28a1e8be16fe6e8f58",
+      "prompt_tokens": 74,
+      "reason": "C",
+      "reasoning": "The user wants the letter only. Need answer anatomy. Blood flows from right ventricle through pulmonary valve into pulmonary trunk/arteries to lungs. Options: C pulmonary arteries. Need final only letter. Ensure no extra text.",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 0.963,
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 56,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 74,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 130
+      }
+    },
+    {
+      "content": "",
+      "finish_reason": "length",
+      "id": "retrieval-t01",
+      "kind": "retrieval",
+      "passed": false,
+      "prompt_sha256": "305a2def4d4f89a2b7ebc23cdc585ccb904c617fc292303c316f4ed2355a7cde",
+      "prompt_tokens": 5270,
+      "reason": "truncated at 8192 tokens: no [[...]] answer",
+      "reasoning": "The user asks: \"According to the facility records in the text, what is the access code for the Zephyr Point relay station? End your reply with the code in double square brackets, like [[AB-0000]].\"\n\nThe text includes a line: \"Facility record ZX-51: the access code for the Zephyr Point relay station is QX-7419. The Zephyr Point relay station was inspected on 14 March.\"\n\nSo the answer is QX-7419. Need to end with [[QX-7419]].\n\nBut wait \u2014 the user also asked for a technical review of the excerpts. The prompt says: \"You are reviewing a large native inference codebase. Below are consecutive excerpts ... Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text.\"\n\nThen there's the facility record and the question. This looks like a prompt-injection / data-exfiltration style test? Actually the faci",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 157.587,
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 8192,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 5270,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 13462
+      }
+    },
+    {
+      "content": "The excerpts build toward a narrow claim: the native engine paths are not just plausible, they are measurable and, for the Nemotron case, close to reference behavior. The evidence is the Nemotron table (drafted replies equal `\"draft\": false`, 2/4 concurrent streams equal solo runs, three-turn chats equal a cache-off server, cold-prompt and decode timings, and a precision KL/top-token comparison), plus the DeepSeek asset-preparation flow and the MiniMax H3 Metal test tool as separate, explicitly non-serving or experimental paths.\n\nThe weakest inference is that these results generalize beyond the Nemotron CUDA case: the DeepSeek notes say the native engine remains experimental and that CPU/host results do not qualify a checkpoint or GPU, and the MiniMax note says it is a test tool beside the engine, not a lane-core change. So the evidence supports \u201cthis path is measurable and mostly exact on the tested Nemotron setup,\u201d not \u201call three paths are production-ready.\u201d\n\nA settling measurement would be a controlled A/B on the target hardware with the same prompts, precision, concurrency and cache settings, comparing token-level outputs and latency against the reference/cache-off baseline; for DeepSeek, actually executing the GPU path rather than only the CPU/asset-generation steps.\n\n[[VN-6403]]",
+      "finish_reason": "stop",
+      "id": "retrieval-t02",
+      "kind": "retrieval",
+      "passed": true,
+      "prompt_sha256": "ff3d93f71803843d308410cc54fb1b160e4d5bbbce50400519864a874293b312",
+      "prompt_tokens": 4633,
+      "reason": "VN-6403",
+      "reasoning": "The user asks: \"According to the facility records in the text, what is the access code for the Ferngate water tower? End your reply with the code in double square brackets, like [[AB-0000]].\"\n\nWe need answer based on text. There is a line in first doc: \"Facility record ZX-52: the access code for the Ferngate water tower is VN-6403. The Ferngate water tower was inspected on 14 March.\" This is a facility record in the text. Need provide code. But need consider safety? The user included a prompt injection-ish? They ask according to facility records in the text. The text contains an access code for a water tower. Is this sensitive? It's in provided documents. The request is to extract a code from provided text. Could be a security-sensitive access code? We need assess. The code \"VN-6403\" for Ferngate water tower. It might be a facility access code. The user asks to restate central claim etc? Actually the user's full prompt includes a meta-task: \"The following are consecutive excerpts from ",
+      "request": {
+        "max_tokens": 8192,
+        "seed": 1234,
+        "temperature": 0
+      },
+      "seconds": 65.91,
+      "sets": [
+        "dev",
+        "full"
+      ],
+      "tool_calls": [],
+      "usage": {
+        "completion_tokens": 3425,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 4633,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 8058
+      }
+    }
+  ],
+  "completion": {
+    "complete": false,
+    "context_excluded": 1,
+    "qualification": "run `quality-qualify --result <this file> --baseline <frozen result>`",
+    "requested": 12,
+    "scored": 11,
+    "scoring_failures": 3
+  },
+  "excluded": [
+    {
+      "id": "retrieval-t05",
+      "kind": "retrieval",
+      "max_tokens": 8192,
+      "prompt_tokens": 43076,
+      "reason": "campaign context budget exceeded: 43076 rendered prompt tokens + 8192 reply tokens > 32768; prompt must fit 24576 tokens; the fixture was not truncated"
+    }
+  ],
+  "host": {
+    "context_tokens": 32768,
+    "efficiency_cores": 12,
+    "gpu_cores": 40,
+    "load_limit_gb": 26,
+    "memory_bytes": 51539607552,
+    "metal": "Metal 4",
+    "os": "macOS 26B123",
+    "performance_cores": 6,
+    "product": "Apple M5 Max",
+    "recommended_max_working_set_bytes": 40200896512
+  },
+  "invalid_reasons": [],
+  "model": {
+    "dir": "/Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd",
+    "hashes": {
+      "aggregate_sha256": "4496e94e73bcc7ea170c39e7cc19b2a71c3927c5f10adaf34486df849890d067",
+      "config": [
+        {
+          "name": "inkling-2-mini-oq4e-mtp/chat_template.jinja",
+          "sha256": "53a9035f3255945704b5857657cfb00c1165090c0641c4f782a0cbf268cc16dc",
+          "size": 6868
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/config.json",
+          "sha256": "748bb4b83536f53a6088efa7c227a0ff33a0177214b306d46e6659d0ffa058a4",
+          "size": 24033
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/generation_config.json",
+          "sha256": "a08737c07a65a8fdf69f7cf086576210e5aad4b241437090b26d7b0c4f7905f7",
+          "size": 98
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/model.safetensors.index.json",
+          "sha256": "b4004624596ed521094a7b2c054e12687d91a85082d5cb73e8b4935b96488e7d",
+          "size": 90429
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/processor_config.json",
+          "sha256": "d7350adce18c8be4b607f261c8f0f7eabbf720bb7aaf648a43d4f8372bbacc2d",
+          "size": 461
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/special_tokens_map.json",
+          "sha256": "c16f44b3594563d82743ddb0417a2be1bfe3e2000dfad2da4b8f32554593e1a0",
+          "size": 529
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/tokenizer.json",
+          "sha256": "7f332727f9a3f093dd452a39cc978e6757627e5dad1b0673aa4e75174f236dd6",
+          "size": 26178678
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/tokenizer_config.json",
+          "sha256": "bf09342d285139fd37ce10c70878af1d52cb390e9901e10248654293a80ee636",
+          "size": 13235
+        }
+      ],
+      "other": [
+        {
+          "name": "inkling-2-mini-oq4e-mtp/.gitattributes",
+          "sha256": "34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930",
+          "size": 1570
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/README.md",
+          "sha256": "0169fca4308aea7d0a972b65d654e0859276a6ed84c30cb60127395728169163",
+          "size": 2258
+        }
+      ],
+      "revision": "3eea042751cd296b7266628a8342c1749242e1fe",
+      "sources_lock_sha256": "5006581ae851ff7aaa2d8e9cbc923351c0a03761b721fa48d844c54adf204570",
+      "weights": [
+        {
+          "name": "inkling-2-mini-oq4e-mtp/model-00001-of-00004.safetensors",
+          "sha256": "373cb3fc7ac7062b26c5e0b7076ababf0a1e30e645559a5459bb02bc04a9c52d",
+          "size": 5077690550
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/model-00002-of-00004.safetensors",
+          "sha256": "707f7027e43c4c8fd44acc14a8809acbacea8096c13599461ab2df95367ed9fb",
+          "size": 5063799732
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/model-00003-of-00004.safetensors",
+          "sha256": "913fd1e825cc296957c77ae05e0fac846ce8359dd343a36cd4bd069f87c748dc",
+          "size": 5256611079
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/model-00004-of-00004.safetensors",
+          "sha256": "fefe61b2e58b41aabc44e1113c8d903aac0fb2472322eaba0bba78fc75de1ada",
+          "size": 813590578
+        },
+        {
+          "name": "inkling-2-mini-oq4e-mtp/mtp.safetensors",
+          "sha256": "7c3b651317f01f73bcf4e1dceba66ef8b7e1a1eac6bc171e882e690a4b10a1d2",
+          "size": 635801416
+        }
+      ]
+    },
+    "key": "inkling-2-mini-oq4e-mtp"
+  },
+  "pressure_after": {
+    "free_percent": 77,
+    "gpu_gate": {
+      "status": "quiet"
+    },
+    "therm": {
+      "cpu_speed_limit": null,
+      "raw": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+      "warnings": false
+    },
+    "vm_pressure_level": 1
+  },
+  "pressure_before": {
+    "free_percent": 80,
+    "gpu_gate": {
+      "status": "quiet"
+    },
+    "therm": {
+      "cpu_speed_limit": null,
+      "raw": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+      "warnings": false
+    },
+    "vm_pressure_level": 1
+  },
+  "protocol": {
+    "context_tokens": 32768,
+    "drafts": "product default",
+    "max_tokens": 8192,
+    "prompt_cache_gib": 2,
+    "sandbox": "sandbox-exec, no network, writes only in .work/quality/<run>/<case>",
+    "seed": 1234,
+    "temperature": 0
+  },
+  "recorded_at": "2026-11-25T17:15:40.601145+00:00",
+  "run_id": "inkling2-mini-oq4e-dev-20261125T171540Z",
+  "schema": 1,
+  "seconds": 302.9,
+  "server": {
+    "argv": [
+      "/Users/josh/repos/tf/.work/tmp/p6/main-src/campaign/.venv/bin/python",
+      "/Users/josh/repos/tf/.work/tmp/p6/main-src/campaign/heavy.py",
+      "--",
+      "/Users/josh/repos/tf/.work/tmp/p6/main-build/native/bin/tensorfold-native",
+      "serve",
+      "/Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "51696",
+      "--parallel",
+      "1",
+      "--prompt-cache-gib",
+      "2",
+      "--no-update-check",
+      "--context",
+      "32768",
+      "--temperature",
+      "0"
+    ],
+    "engine_load_s": 38.9,
+    "lock_wait_s": 36.792,
+    "served": "Inkling-2-Mini-oQ4e-mtp@3eea042751cd",
+    "spawn_to_ready_s": 39.302,
+    "startup_s": 2.51
+  },
+  "set": "dev",
+  "suite": {
+    "cases": 12,
+    "cases_sha256": "65ae002d2d185ebb1501b731160d22681a92d14ccfd2113181864e05887b7e46",
+    "manifest_sha256": "63637eafa982bfea99e95b3c33a19e968f09051a924726833a389b7a09cea826"
+  },
+  "totals": {
+    "cases": 11,
+    "failed": 4,
+    "kinds": {
+      "code": {
+        "cases": 3,
+        "failed": 0,
+        "passed": 3
+      },
+      "reasoning": {
+        "cases": 3,
+        "failed": 0,
+        "passed": 3
+      },
+      "retrieval": {
+        "cases": 2,
+        "failed": 1,
+        "passed": 1
+      },
+      "structured": {
+        "cases": 3,
+        "failed": 3,
+        "passed": 0
+      }
+    },
+    "passed": 7
+  }
+}

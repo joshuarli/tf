@@ -5,7 +5,7 @@ This is the single plan for this repository: all current and future work, and th
 ## Status
 
 **Active 2026-11-24.**
-- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. SV2 (5c) is running on `lane/sv2-serve`; P6 is parked on `lane/p6-tail`.
+- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. SV2 (5c) is merged; next ready is SC2 (5d). P6 is parked on `lane/p6-tail`.
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
 - Acceptance flow (2026-11-24): lanes prove changes with filtered GPU tests; the parent runs the full suite once on an integration commit of main plus the lane and fast-forwards main on green, instead of a lane suite and a second main suite.
 - **Last accepted code: V4 merge `ec925cb41`** (fused fixed-cost verify kernels; integrated main green: `inkling-host` ok, `inkling-gpu` 186/186, oracle pass at 94.73% top-1 and mean KL 0.0199). Before it, PH2 merge `291240211` (half prefill by default; `inkling-gpu` 181/181), P5c merge `7f7cb75a3` (181/181), SC1 merge `1668d5caa` (180/180), V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
@@ -146,13 +146,16 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    or timing result exists and no acceptance is claimed. V4 has since changed `prefill.zig` on main, which this lane
    does not own: retry by rebasing onto current main, re-running the correctness checks, then `tests.sh`, `d20.sh`,
    `quality.sh`, and only then the gated `tail.sh`, `session.sh` and `profile.sh`.
-5c. SV2, running: `lane/sv2-serve` in `.work/wt/sv2-serve` (base `ec925cb41`), receipt `inkling-sv2-served.md`,
-   harness `inkling-sv2-served-runs/run.py`, untouched prompts `campaign/prompts/qualify/`. The integrated served path. Rebuild the planner's fixed cost table from sustained
-   in-round measurements; freeze the tree policy and qualify it on a small untouched prompt set (the "holdout"
-   prompts fitted acceptance priors and are now calibration data). Run the HTTP server with plain decoding, a loaded
-   but disabled drafter, and active speculation over the 1K/4K classes, unseen prefill to the cap, prefix hits and
-   forks, fixed-length replies and natural EOS, re-paired across separate sessions. Speculation becomes the default
-   only if it beats plain decode on every class and stays within Decision 8's 4 GiB draft residency.
+5c. SV2, done and merged (`inkling-sv2-served.md`). Speculation is now the served default. On six untouched
+   qualify prompts (`campaign/prompts/qualify/`) over three rotated sessions, speculative decode is 1.43–2.43× plain
+   (every lower 95% bound above 1; code/prose/structured-1024 148/172/127 tok/s, 4K 101–113). Every reply is
+   byte-equal to plain across cold, cached, forked and natural-EOS requests. The drafter adds 0.42–0.56 GB at ready
+   and 0.81 GB at peak; unseen prefill is unchanged to the cap (0.98–1.01×), and a loaded drafter that does not draft
+   costs nothing. Contract change: serve pairs Inkling 2 Mini with `incoai/Inkling-2-Mini-DFlash2` from the local
+   Hugging Face cache, and `--drafter` names it, like `INKLING_DRAFTER` (giving both is refused). `--no-drafts` and
+   `--drafter none` serve plain. The cost table is refitted to V4's in-round costs: neutral, 0.998× (CI
+   0.961–1.036). Decision 17's 200 tok/s still holds only on code-1024; the routed experts past one row remain the
+   cost. Sessions a and b ran back to back, so SC2 re-pairs on a quiet host.
 5d. SC2, after SV2: one pinned scorecard for the integrated configuration (served prefill curve, committed decode
    by class, round time and accepted work, quality, peak footprint), with V3's and DF2b's round pairs re-paired on a
    quiet host across separate sessions. Every target miss names its dominant measured

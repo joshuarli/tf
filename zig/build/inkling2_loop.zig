@@ -145,7 +145,7 @@ pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.B
     b.step("test-inkling2-loop-dflash2", "Inkling 2 Mini's DFlash2 drafter: config refusals and greedy speculation against plain decoding").dependOn(&dflash_run.step);
     step.dependOn(&dflash_run.step);
     test_step.dependOn(&dflash_run.step);
-    const served_test = b.addTest(.{ .root_module = servedModule(b, target, draft), .filters = &.{ "inkling served speculation:", "the registry's open", "drafter bits", "copy drafts", "prefix reuse defaults", "a bad INKLING_LOAD_LIMIT_GB", "inkling host:" } });
+    const served_test = b.addTest(.{ .root_module = servedModule(b, target, draft), .filters = &.{ "inkling served speculation:", "the registry's open", "the drafter comes from", "drafter bits", "copy drafts", "prefix reuse defaults", "a bad INKLING_LOAD_LIMIT_GB", "inkling host:" } });
     compile.dependOn(&served_test.step);
     const served_run = gpuRun(b, served_test);
     b.step("test-inkling2-loop-served", "Inkling 2 Mini's served host with its DFlash2 drafter: replies equal draft-off replies").dependOn(&served_run.step);

@@ -1,0 +1,237 @@
+# attempt 0 14:47:23: /Users/josh/repos/tf/.work/tmp/v3/run-final/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v3-experts/campaign/kernels/inkling-v3-experts-runs/code-1024.json dflash-widths 20 /Users/josh/repos/tf/.work/wt/v3-experts/campaign/kernels/inkling-v3-experts-runs/profile-lane-8.jsonl 0.0 0,1,2,4,8
+exact code-1024: width=1 rows bit-equal to one-row steps 1/1 max_abs_diff=0e0
+exact code-1024: width=2 rows bit-equal to one-row steps 2/2 max_abs_diff=0e0
+exact code-1024: width=4 rows bit-equal to one-row steps 4/4 max_abs_diff=0e0
+exact code-1024: width=8 rows bit-equal to one-row steps 8/8 max_abs_diff=0e0
+info: metal 4 timeline: inkling2-batch, 12 rounds after 8 warm: 1 encoders, 1302 stages and 1302 dispatches a round
+info: metal 4 timeline: inkling2-batch: 22.093 ms a round from the first stamp to the last, 22.093 in stages, 0.000 between encoders
+info: metal 4 timeline: inkling2-batch by kernel: ms a round, stages a round, us a stage
+info:      2.508   48.0     52.3  i2a_batch_projections
+info:      2.479   44.0     56.3  i2p_gu
+info:      2.328  192.0     12.1  i2p_batch_conv
+info:      1.899   49.0     38.8  i2a_dense
+info:      1.622   44.0     36.9  i2e_down1
+info:      1.255   96.0     13.1  i2_batch_mix
+info:      1.102   48.0     23.0  i2_batch_split
+info:      1.032   72.0     14.3  i2a_float
+info:      0.866   48.0     18.0  i2_batch_combine
+info:      0.726   48.0     15.1  i2p_routepick
+info:      0.664   48.0     13.8  i2p_batch_store_rel
+info:      0.634  120.0      5.3  i2p_gather_rms
+info:      0.612   24.0     25.5  i2_batch_mix4
+info:      0.529   48.0     11.0  i2p_clip3
+info:      0.505   48.0     10.5  i2p_combine
+info:      0.497   69.0      7.2  i2p_rms
+info:      0.464   48.0      9.7  i2_sig_mul
+info:      0.449   24.0     18.7  i2p_rms_pair
+info:      0.431   24.0     17.9  i2_controls_norm
+info:      0.345   24.0     14.4  i2_controls_down
+info:      0.300   24.0     12.5  i2_controls_apply
+info:      0.229   28.0      8.2  i2p_rms3
+info:      0.203    4.0     50.8  i2a_expert_up
+info:      0.141   24.0      5.9  i2a_batch_float_control
+info:      0.108   40.0      2.7  i2_add
+info: metal 4 timeline: inkling2-batch: the longest single stages, us a round
+info:   stage 1301 of encoder 1:    872.5  i2a_dense
+info:   stage  640 of encoder 1:    354.5  i2a_batch_projections
+info:   stage  960 of encoder 1:    348.0  i2p_batch_conv
+info:   stage  400 of encoder 1:    346.7  i2_batch_combine
+info:   stage 1200 of encoder 1:    342.3  i2a_float
+info:   stage 1120 of encoder 1:    340.8  i2a_float
+info:   stage   80 of encoder 1:    338.0  i2p_batch_conv
+info:   stage  880 of encoder 1:    332.3  i2p_batch_conv
+info:   stage 1280 of encoder 1:    332.0  i2p_clip3
+info:   stage  560 of encoder 1:    329.9  i2p_rms_pair
+info:   stage  480 of encoder 1:    326.0  i2_batch_mix4
+info:   stage  720 of encoder 1:    325.8  i2p_routepick
+info:   stage  800 of encoder 1:    324.1  i2p_batch_store_rel
+info:   stage  320 of encoder 1:    322.3  i2p_combine
+info:   stage 1040 of encoder 1:    318.7  i2_controls_norm
+info: metal 4 timeline: inkling2-group-4, 12 rounds after 8 warm: 1 encoders, 1302 stages and 1302 dispatches a round
+info: metal 4 timeline: inkling2-group-4: 31.874 ms a round from the first stamp to the last, 31.874 in stages, 0.000 between encoders
+info: metal 4 timeline: inkling2-group-4 by kernel: ms a round, stages a round, us a stage
+info:      6.698   44.0    152.2  i2e_gate_up
+info:      4.103   44.0     93.3  i2e_down
+info:      3.527   48.0     73.5  i2t_projections_8_2
+info:      2.333  192.0     12.2  i2v_conv
+info:      2.282   49.0     46.6  i2t_dense_8_2
+info:      1.729   48.0     36.0  i2v_split
+info:      1.248   96.0     13.0  i2_batch_mix
+info:      1.014   72.0     14.1  i2a_float
+info:      0.823   48.0     17.1  i2_batch_combine
+info:      0.745   48.0     15.5  i2v_store_rel
+info:      0.704  120.0      5.9  i2p_gather_rms
+info:      0.704   48.0     14.7  i2p_routepick
+info:      0.601   24.0     25.1  i2_batch_mix4
+info:      0.585    4.0    146.2  i2a_expert_up
+info:      0.541   24.0     22.6  i2_controls_apply
+info:      0.531   48.0     11.1  i2p_clip3
+info:      0.504   48.0     10.5  i2p_combine
+info:      0.494   69.0      7.2  i2p_rms
+info:      0.478   48.0     10.0  i2_sig_mul
+info:      0.425   24.0     17.7  i2p_rms_pair
+info:      0.420   24.0     17.5  i2_controls_norm
+info:      0.394   24.0     16.4  i2_controls_down
+info:      0.330    4.0     82.4  i2a_expert_down
+info:      0.256   24.0     10.7  i2a_batch_float_control
+info:      0.220   28.0      7.8  i2p_rms3
+info: metal 4 timeline: inkling2-group-4: the longest single stages, us a round
+info:   stage 1301 of encoder 1:   1119.8  i2t_dense_8_2
+info:   stage  640 of encoder 1:    368.5  i2t_projections_8_2
+info:   stage   80 of encoder 1:    334.9  i2v_conv
+info:   stage  160 of encoder 1:    331.1  i2v_conv
+info:   stage  480 of encoder 1:    317.0  i2_batch_mix4
+info:   stage  240 of encoder 1:    314.2  i2_sig_mul
+info:   stage  400 of encoder 1:    313.7  i2_batch_combine
+info:   stage  320 of encoder 1:    313.7  i2p_combine
+info:   stage  880 of encoder 1:    313.5  i2v_conv
+info:   stage 1280 of encoder 1:    310.2  i2p_clip3
+info:   stage  800 of encoder 1:    307.8  i2v_store_rel
+info:   stage  960 of encoder 1:    305.5  i2v_conv
+info:   stage 1120 of encoder 1:    303.2  i2a_float
+info:   stage  560 of encoder 1:    301.7  i2p_rms_pair
+info:   stage 1040 of encoder 1:    295.1  i2_controls_norm
+info: metal 4 timeline: inkling2-group-8, 12 rounds after 8 warm: 1 encoders, 1302 stages and 1302 dispatches a round
+info: metal 4 timeline: inkling2-group-8: 40.591 ms a round from the first stamp to the last, 40.591 in stages, 0.000 between encoders
+info: metal 4 timeline: inkling2-group-8 by kernel: ms a round, stages a round, us a stage
+info:     10.405   44.0    236.5  i2e_gate_up
+info:      6.083   44.0    138.2  i2e_down
+info:      3.554   48.0     74.0  i2t_projections_8_2
+info:      2.723   48.0     56.7  i2v_split
+info:      2.353   49.0     48.0  i2t_dense_8_2
+info:      2.259  192.0     11.8  i2v_conv
+info:      1.257   96.0     13.1  i2_batch_mix
+info:      1.136   72.0     15.8  i2a_float
+info:      1.022   24.0     42.6  i2_controls_apply
+info:      1.020    4.0    255.1  i2a_expert_up
+info:      0.945   48.0     19.7  i2v_store_rel
+info:      0.902   48.0     18.8  i2_batch_combine
+info:      0.708  120.0      5.9  i2p_gather_rms
+info:      0.687   48.0     14.3  i2p_routepick
+info:      0.627   24.0     26.1  i2_batch_mix4
+info:      0.609   48.0     12.7  i2p_clip3
+info:      0.591    4.0    147.7  i2a_expert_down
+info:      0.576   24.0     24.0  i2_controls_down
+info:      0.526   48.0     11.0  i2p_combine
+info:      0.525   69.0      7.6  i2p_rms
+info:      0.469   48.0      9.8  i2_sig_mul
+info:      0.445   24.0     18.6  i2p_rms_pair
+info:      0.415   24.0     17.3  i2_controls_norm
+info:      0.348   24.0     14.5  i2a_batch_float_control
+info:      0.223   28.0      8.0  i2p_rms3
+info: metal 4 timeline: inkling2-group-8: the longest single stages, us a round
+info:   stage 1301 of encoder 1:   1209.5  i2t_dense_8_2
+info:   stage  640 of encoder 1:    397.9  i2t_projections_8_2
+info:   stage  480 of encoder 1:    338.8  i2_batch_mix4
+info:   stage  400 of encoder 1:    335.0  i2_batch_combine
+info:   stage   80 of encoder 1:    330.4  i2v_conv
+info:   stage  240 of encoder 1:    327.2  i2_sig_mul
+info:   stage  160 of encoder 1:    324.9  i2v_conv
+info:   stage  560 of encoder 1:    315.6  i2p_rms_pair
+info:   stage 1200 of encoder 1:    311.7  i2a_float
+info:   stage  800 of encoder 1:    310.9  i2v_store_rel
+info:   stage  320 of encoder 1:    310.7  i2p_combine
+info:   stage  720 of encoder 1:    304.1  i2p_routepick
+info:   stage 1280 of encoder 1:    301.5  i2p_clip3
+info:   stage  960 of encoder 1:    298.3  i2v_conv
+info:   stage 1120 of encoder 1:    298.1  i2a_float
+info: metal 4 timeline: inkling2-group-1, 12 rounds after 8 warm: 1 encoders, 1302 stages and 1302 dispatches a round
+info: metal 4 timeline: inkling2-group-1: 21.890 ms a round from the first stamp to the last, 21.890 in stages, 0.000 between encoders
+info: metal 4 timeline: inkling2-group-1 by kernel: ms a round, stages a round, us a stage
+info:      2.577   48.0     53.7  i2a_batch_projections
+info:      2.465   44.0     56.0  i2p_gu
+info:      2.297  192.0     12.0  i2v_conv
+info:      1.875   49.0     38.3  i2a_dense
+info:      1.594   44.0     36.2  i2e_down1
+info:      1.245   96.0     13.0  i2_batch_mix
+info:      1.136   48.0     23.7  i2v_split
+info:      1.016   72.0     14.1  i2a_float
+info:      0.826   48.0     17.2  i2_batch_combine
+info:      0.706   48.0     14.7  i2p_routepick
+info:      0.661   48.0     13.8  i2v_store_rel
+info:      0.658  120.0      5.5  i2p_gather_rms
+info:      0.601   24.0     25.0  i2_batch_mix4
+info:      0.538   69.0      7.8  i2p_rms
+info:      0.507   48.0     10.6  i2p_clip3
+info:      0.459   48.0      9.6  i2p_combine
+info:      0.413   24.0     17.2  i2_controls_norm
+info:      0.412   48.0      8.6  i2_sig_mul
+info:      0.409   24.0     17.0  i2p_rms_pair
+info:      0.347   24.0     14.5  i2_controls_down
+info:      0.299   24.0     12.4  i2_controls_apply
+info:      0.229   28.0      8.2  i2p_rms3
+info:      0.200    4.0     50.1  i2a_expert_up
+info:      0.144   24.0      6.0  i2a_batch_float_control
+info:      0.124   40.0      3.1  i2_add
+info: metal 4 timeline: inkling2-group-1: the longest single stages, us a round
+info:   stage 1301 of encoder 1:    850.6  i2a_dense
+info:   stage  640 of encoder 1:    331.7  i2a_batch_projections
+info:   stage  400 of encoder 1:    313.8  i2_batch_combine
+info:   stage 1120 of encoder 1:    300.9  i2a_float
+info:   stage   80 of encoder 1:    298.0  i2v_conv
+info:   stage 1200 of encoder 1:    297.2  i2a_float
+info:   stage  480 of encoder 1:    295.5  i2_batch_mix4
+info:   stage  720 of encoder 1:    293.8  i2p_routepick
+info:   stage 1280 of encoder 1:    291.2  i2p_clip3
+info:   stage  960 of encoder 1:    290.3  i2v_conv
+info:   stage  880 of encoder 1:    284.8  i2v_conv
+info:   stage  800 of encoder 1:    282.3  i2v_store_rel
+info:   stage  320 of encoder 1:    280.4  i2p_combine
+info:   stage  240 of encoder 1:    280.1  i2_sig_mul
+info:   stage  160 of encoder 1:    278.8  i2v_conv
+info: metal 4 timeline: inkling2-group-2, 12 rounds after 8 warm: 1 encoders, 1302 stages and 1302 dispatches a round
+info: metal 4 timeline: inkling2-group-2: 26.080 ms a round from the first stamp to the last, 26.080 in stages, 0.000 between encoders
+info: metal 4 timeline: inkling2-group-2 by kernel: ms a round, stages a round, us a stage
+info:      4.172   44.0     94.8  i2e_gate_up
+info:      3.057   48.0     63.7  i2a_batch_projections
+info:      2.679   44.0     60.9  i2e_down
+info:      2.295  192.0     12.0  i2v_conv
+info:      1.267   48.0     26.4  i2v_split
+info:      1.258   96.0     13.1  i2_batch_mix
+info:      1.133   48.0     23.6  i2t_dense_8_2
+info:      1.041   72.0     14.5  i2a_float
+info:      0.986    1.0    986.2  i2r_dense_ahead_2
+info:      0.871   48.0     18.2  i2_batch_combine
+info:      0.708   48.0     14.7  i2p_routepick
+info:      0.703   48.0     14.6  i2v_store_rel
+info:      0.669  120.0      5.6  i2p_gather_rms
+info:      0.638   24.0     26.6  i2_batch_mix4
+info:      0.523   48.0     10.9  i2p_combine
+info:      0.507   69.0      7.4  i2p_rms
+info:      0.507   48.0     10.6  i2p_clip3
+info:      0.462   48.0      9.6  i2_sig_mul
+info:      0.454   24.0     18.9  i2_controls_norm
+info:      0.426   24.0     17.7  i2p_rms_pair
+info:      0.344   24.0     14.3  i2_controls_down
+info:      0.338   24.0     14.1  i2_controls_apply
+info:      0.320    4.0     80.1  i2a_expert_up
+info:      0.236   28.0      8.4  i2p_rms3
+info:      0.167   24.0      7.0  i2a_batch_float_control
+info: metal 4 timeline: inkling2-group-2: the longest single stages, us a round
+info:   stage 1301 of encoder 1:    986.2  i2r_dense_ahead_2
+info:   stage  640 of encoder 1:    373.0  i2a_batch_projections
+info:   stage  480 of encoder 1:    359.0  i2_batch_mix4
+info:   stage 1040 of encoder 1:    350.6  i2_controls_norm
+info:   stage  400 of encoder 1:    345.0  i2_batch_combine
+info:   stage  800 of encoder 1:    341.2  i2v_store_rel
+info:   stage 1120 of encoder 1:    340.7  i2a_float
+info:   stage  880 of encoder 1:    339.7  i2v_conv
+info:   stage  320 of encoder 1:    338.1  i2p_combine
+info:   stage  960 of encoder 1:    331.1  i2v_conv
+info:   stage 1200 of encoder 1:    330.2  i2a_float
+info:   stage 1280 of encoder 1:    327.7  i2p_clip3
+info:   stage  240 of encoder 1:    326.3  i2_sig_mul
+info:   stage  720 of encoder 1:    319.1  i2p_routepick
+info:   stage  160 of encoder 1:    318.5  i2v_conv
+widths code-1024: context=1024 batch_step width=1 p50=16.049 ms p90=26.772 ms forward p50=16.049 ms gpu p50=15.471 ms
+widths code-1024: context=1024 grouped width=1 p50=23.944 ms p90=26.899 ms forward p50=23.734 ms gpu p50=21.087 ms
+widths code-1024: context=1024 grouped width=2 p50=28.476 ms p90=32.020 ms forward p50=28.251 ms gpu p50=25.693 ms
+widths code-1024: context=1024 grouped width=4 p50=34.106 ms p90=37.803 ms forward p50=33.857 ms gpu p50=31.590 ms
+widths code-1024: context=1024 grouped width=8 p50=43.270 ms p90=45.865 ms forward p50=43.032 ms gpu p50=40.187 ms
+routes code-1024: width=1 distinct experts a visit mean=8.00 min=8 max=8
+routes code-1024: width=2 distinct experts a visit mean=13.23 min=10 max=16
+routes code-1024: width=4 distinct experts a visit mean=20.27 min=14 max=29
+routes code-1024: width=8 distinct experts a visit mean=30.69 min=17 max=39
+routes code-1024: width=12 distinct experts a visit mean=37.25 min=18 max=50
+routes code-1024: width=16 distinct experts a visit mean=41.79 min=21 max=59
+heavy: done: peak charged 18.5 GB of the 28 GB cap (footprint 18.5 GB, resident 17.1 GB, host wired growth 18.1 GB); host pressure worst 2, host swap +0 MB, host pageins 338411

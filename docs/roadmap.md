@@ -112,7 +112,11 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    now serves `both`; `off` is the exact path. Requalified on P5c's schedule under Decision 19: oracle KL 1.021×,
    top-1 −0.23 points; full quality 29/44 against exact's 28/44 (half loses `retrieval-t01`, gains `code-c15` and
    `retrieval-t04`); runaways 2 against 3; Pi 7/8 on both. The dev set alone reads 7/11 against 8/11, so the
-   long-reasoning runaways are judged on the full set. Served curve under the default: pending.
+   long-reasoning runaways are judged on the full set. Served curve under the default (three interleaved pairs
+   against `off`, one session): Decision 17's 2,000 tok/s is met at 1K held-out (median 2,063), 4K (2,130) and 8K
+   (2,072); missed at 1K dev (1,839, the short last chunk), 16K (1,905) and 31.7K (1,777). Half is 1.17–1.22× exact
+   at every length; first request 0.87–0.89 s. Next for prefill: the 1K dev tail (store the full prompt's state with
+   its logits) and a profile of 16K and the cap.
 5b. P5c, done and merged `7f7cb75a3` (`inkling-p5c-chunks.md`). Served prompts prefill in 1,024-row chunks that
    capture fork snapshots inside them. Six interleaved pairs: 1.175× (CI 1.109–1.245); 1K held-out 1.56×, 4K 1.12×,
    8K 1.06×, 16K and 31.7K 1.03×; best 1,859 tok/s at 1K, 1,826 at 4K. Decision 20 passes (KL 1.001×, top-1

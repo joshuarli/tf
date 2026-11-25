@@ -79,7 +79,7 @@ every trial passed its CPU, GPU and compiler gates on the first try. Unseen prom
 | 31.7K | 1,771–1,779, median 1,777 | 1,494–1,504, median 1,497 | 1.19, 1.19 |
 
 Decision 17's 2,000 tok/s is met at 1K held-out, 4K and 8K (medians), and missed at 1K dev, 16K and near the cap.
-The 1K dev prompts end in a 2–8-row chunk plus the lone last token (P5c's open item); 16K and the cap are bound by
-attention over the long context. The first request of each process (1,258 tokens, warmed slot) took 0.87–0.89 s
+The 1K dev prompts end in a 2–8-row chunk plus the lone last token (P5c's open item); 16K and the cap fall off with
+length, and this receipt did not profile why. The first request of each process (1,258 tokens, warmed slot) took 0.87–0.89 s
 under half and 0.98–1.12 s under exact. Including pair a, half/exact is 1.21 geometric mean over lengths and pairs.
 One session only: this confirms the flip's speed, it is not a Decision 11 promotion.

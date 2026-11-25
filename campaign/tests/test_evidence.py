@@ -442,6 +442,15 @@ class Corpus(unittest.TestCase):
         selected = bench.select(self.manifest, [1024, 4096, 32768], "heldout")
         bench.verify_prompts(selected)
 
+    def test_qualify_prompts_cite_no_source_another_set_cites(self):
+        selected = bench.select(self.manifest, [1024, 4096, 32768], "qualify")
+        bench.verify_prompts(selected)
+        self.assertEqual([len(selected.get(cell, [])) for cell in (1024, 4096, 32768)], [3, 3, 0])
+        cited = {s["path"] for p in self.manifest["prompts"] if p["set"] != "qualify" for s in p["sources"]}
+        mine = [s["path"] for prompts in selected.values() for p in prompts for s in p["sources"]]
+        self.assertEqual(cited & set(mine), set())
+        self.assertEqual(len(mine), len(set(mine)))
+
     def test_dev_selector_still_returns_the_dev_prompts(self):
         selected = bench.select(self.manifest, [1024, 4096, 32768], "all")
         self.assertEqual(sum(len(prompts) for prompts in selected.values()), 9)

@@ -52,6 +52,8 @@ def requested_set(wanted: str) -> str:
         return "dev"
     if value in ("heldout", "holdout"):
         return "holdout"
+    if value == "qualify":
+        return "qualify"
     return "names"
 
 
@@ -62,9 +64,7 @@ def select(manifest: dict, cells: list[int], wanted: str) -> dict[int, list[dict
     for prompt in manifest["prompts"]:
         if prompt["cell"] not in cells:
             continue
-        if requested == "dev" and prompt["set"] != "dev":
-            continue
-        if requested == "holdout" and prompt["set"] != "holdout":
+        if requested != "names" and prompt["set"] != requested:
             continue
         if requested == "names" and prompt["name"] not in names:
             continue

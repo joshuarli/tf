@@ -1,0 +1,180 @@
+The following are consecutive excerpts from engineering notes and design documents. Reason carefully about the argument they build. Restate the central claim in your own words, set out the evidence offered for it, identify the weakest inference and why it is weak, and say what measurement or observation would settle it.
+
+===== docs/receipts/flashnext-gather-early/noise-rule.md =====
+| invocation | prompt | streams | M1 | B0a | B1a | B1b | B0b | M2 | B0 vs M | B1 vs M | B1 vs B0 | tokens a round M / B0 / B1 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| openai_t0 | fibonacci-raw | 1 | 73.9 | 71.8 | 72.1 | 73.0 | 72.7 | 72.1 | -1.0% level | -0.7% level | +0.3% level | 5.224 / 5.224 / 5.224 |
+| openai_t0 | gpu-chat-no-think | 1 | 47.3 | 46.0 | 46.1 | 46.7 | 46.6 | 46.1 | -0.7% level | -0.6% level | +0.2% level | 2.813 / 2.813 / 2.813 |
+| conc_t0 | chat | 1 | 46.5 | 45.9 | 46.7 | 46.7 | 46.6 | 46.2 | -0.2% level | +0.8% level | +1.0% level | 2.813 / 2.813 / 2.813 |
+| conc_t0 | chat | 2 | 86.6 | 85.7 | 87.0 | 87.1 | 86.3 | 86.1 | -0.4% level | +0.8% level | +1.2% faster | 2.510 / 2.510 / 2.510 |
+| conc_t0 | chat | 4 | 156.6 | 154.7 | 158.0 | 158.2 | 156.4 | 155.4 | -0.3% level | +1.3% faster | +1.6% faster | 2.510 / 2.510 / 2.510 |
+| conc_t0 | chat | 6 | 210.7 | 208.6 | 213.7 | 213.6 | 210.9 | 209.3 | -0.1% level | +1.7% faster | +1.9% faster | 2.510 / 2.510 / 2.510 |
+| conc_t0 | chat | 8 | 257.9 | 255.3 | 262.0 | 262.2 | 255.1 | 255.9 | -0.7% level | +2.0% faster | +2.7% faster | 2.510 / 2.510 / 2.510 |
+| conc_t0 | code | 1 | 73.5 | 71.9 | 72.9 | 72.7 | 72.6 | 72.2 | -0.8% level | -0.1% level | +0.8% level | 5.224 / 5.224 / 5.224 |
+| conc_t0 | code | 2 | 139.2 | 137.2 | 139.0 | 138.8 | 137.9 | 137.1 | -0.4% level | +0.5% level | +1.0% level | 4.830 / 4.830 / 4.830 |
+| conc_t0 | code | 4 | 243.7 | 239.8 | 245.5 | 245.2 | 242.1 | 240.7 | -0.5% level | +1.3% faster | +1.8% faster | 4.830 / 4.830 / 4.830 |
+| conc_t0 | code | 6 | 307.5 | 304.4 | 312.1 | 312.0 | 307.8 | 305.5 | -0.1% level | +1.8% faster | +1.9% faster | 4.491 / 4.491 / 4.491 |
+| conc_t0 | code | 8 | 373.9 | 369.1 | 379.3 | 379.8 | 371.9 | 369.0 | -0.3% level | +2.2% faster | +2.4% faster | 4.491 / 4.491 / 4.491 |
+
+Verdicts (first pair): B0 vs M: 0 faster, 12 level, 0 slower; B1 vs M: 6 faster, 6 level, 0 slower; B1 vs B0: 7 faster, 5 level, 0 slower
+
+| streams | cells | B0 vs M mean | verdicts | B1 vs M mean | verdicts |
+|---|---|---|---|---|---|
+| 1 | 2 | -0.52% | 0 faster, 2 level, 0 slower | +0.34% | 0 faster, 2 level, 0 slower |
+| 2 | 2 | -0.42% | 0 faster, 2 level, 0 slower | +0.68% | 0 faster, 2 level, 0 slower |
+| 4 | 2 | -0.40% | 0 faster, 2 level, 0 slower | +1.32% | 2 faster, 0 level, 0 slower |
+| 6 | 2 | -0.12% | 0 faster, 2 level, 0 slower | +1.77% | 2 faster, 0 level, 0 slower |
+| 8 | 2 | -0.46% | 0 faster, 2 level, 0 slower | +2.10% | 2 faster, 0 level, 0 slower |
+
+Rerun (one per flagged cell; a repeat of slower is a loss):
+No cell was slower in the first pair, so no rerun was taken.
+Losses: 0
+
+
+===== docs/recipes/inkling-2-mini.md =====
+# Inkling 2 Mini (`inkling2_loop`)
+
+The concurrent Inkling host serves no drafts. It accepts `INKLING_COPY_DRAFTS` and ignores it
+(`zig/src/native/inkling2_loop_host.zig:581`). The [copy verification receipt](../../campaign/kernels/inkling-verify.md)
+records the earlier single-stream copy drafts.
+
+This page records the graph of `thinkingmachines/Inkling-2-Mini` as read from the pinned llama.cpp reference
+(commit `40b7a546defe1f60edd1338c719552ffc58c89a0`) and the checkpoint's own config, index, quantization config and
+chat template. It is the prior-art map for the native `inkling2_loop` family (I1–I3).
+
+Citations are `file:line` in the llama.cpp tree at that commit unless the file is named explicitly. Checkpoint
+paths are relative to `~/models/Inkling-2-Mini@ed40e7da625f` (revision `ed40e7da625f594fc9c4990f5f66be24873c22d7`,
+20.2 GB, Apache-2.0).
+
+## Weights
+
+| fact | value | source |
+| --- | --- | --- |
+| architecture | `Inkling2LoopForConditionalGeneration`, `model_type: inkling2_loop` | `config.json:3-6` |
+| text hidden size | 2304 | `config.json:12` |
+| physical layers | 24 | `config.json:13` |
+| attention | 24 query heads, 8 KV heads, head 128 | `config.json:15-17` |
+| vocabulary | 201,024 padded, 200,058 unpadded, EOS 200006 | `config.json:14,51,7` |
+| context | 1,048,576 | `config.json:10` |
+| experts | 128 routed, 8 per token, no shared expert, FFN 1152 | `config.json:59-62` |
+| quantization | ModelOpt `NVFP4` at the top level, mixed per tensor below | `config.json:118-121` |
+
+`model.safetensors.index.json` is one 19.5 GB file plus a 0.64 GB `mtp.safetensors`. `mtp.safetensors` is the native
+draft head; llama.cpp's converter skips it (`conversion/inkling2.py:188`) and the text graph never reads it. Vision
+weights live in the same checkpoint and are out of scope here.
+
+### Per-tensor NVFP4 and MXFP8
+
+`hf_quant_config.json` has five `model.parameter_groups`:
+
+| `weight_transform` | tensors | layers | storage |
+| --- | --- | --- | --- |
+| `nvfp4_nearest` | 40 (`w13_weight`, `w2_weight`) | 0–19 | `U8` nibble pairs + `F8_E4M3` block scales + `F32` per-expert `amax` and one `outer_scale_denominator` |
+| `mxfp8_nearest` | 8 | 20–23 | `F8_E4M3` weights + `U8` UE8M0 block scales |
+| `cast` | the rest | all | BF16 (a few `F32`: clip scales, `gate.bias`, attention-residual queries, conv weights, rel bias) |
+
+Shapes per layer: `w13_weight` is `[128, 2304, 1152]` for NVFP4 (two interleaved 1152-row halves, two 4-bit values a
+byte; 2304 logical rows = 2 × FFN 1152) and `[128, 2304, 2304]` for MXFP8 (one byte a value). `w2_weight` is
+`[128, 2304, 576]` and `[128, 2304, 1152]`. The scale tensors are `[128, 2304, cols/16]` (NVFP4) and
+`[128, 2304, cols/32]` (MXFP8); `w13_weight_amax` is `[128]`, `w13_weight_outer_scale_denominator` is `[1]`.
+
+Decoding is the converter's (`conversion/inkling2.py:33-65`):
+
+- NVFP4: `v = E2M1[nibble] × E4M3[block_scale] × (amax[expert] / denominator)`, block 16 along the input dimension;
+  the low nibble is the even column.
+- MXFP8: `v = E4M3[byte] × 2^(scale_byte − 127)`, block 32; no `amax` or denominator is allowed
+  (`conversion/inkling2.py:134-139`).
+
+The converter rejects NaN scale bytes, a block shape other than `(1,16)`/`(1,32)`, and any floating-point expert
+weight that still has quantization companions (`conversion/inkling2.py:143-160`).
+
+## Architecture
+
+### 24 layers, two attention types
+
+`local_layer_ids` lists 20 of the 24 layers: `0-4, 6-10, 12-16, 18-22` (`config.json:28-49`). Those are
+`hybrid_sliding` with a **1024-token sliding window** (`config.json:56`); the other four, **layers 5, 11, 17 and 23**,
+are `hybrid` (full attention). The converter derives `layer_types` from that list when the config omits it
+(`conversion/inkling2.py:108-114`).
+
+The two types differ in more than the mask:
+
+- SWA layers normalise one attention input with `attn_norm` and reuse it for Q, K and V (`src/models/inkling2.cpp:316-318`);
+  full layers have separate `q_input_norm`, `k_input_norm` and `v_input_norm` (`src/models/inkling2.cpp:319-322`).
+- SWA K/V convolutions are static; full K/V convolutions add per-token taps projected from the same input
+  (`src/models/inkling2.cpp:328-331`).
+- Full layers multiply Q and the relative states by the log-scaled position factor `tau`
+  (`src/models/inkling2.cpp:339-342`); SWA layers do not.
+
+There is no RoPE. Position enters only through the relative bias and `tau` (`src/models/inkling2.cpp:59-60`).
+
+### The core loop: layers 6–18, three passes, rank 64
+
+`loop_config` is `core_start 6`, `core_end 18`, `num_passes 3`, `gate_rank 64`, `is_varloop false`
+(`config.json:67-73`).
+
+llama.cpp assigns one KV/conv *cache slot* per executed layer instance: 24 physical layers plus
+`(3−1) × (18−6) = 24` extra slots, **48 in total** (`src/models/inkling2-loop.cpp:24-30`). Each pass keeps its own
+KV and convolution state; the physical weights are shared pointer-for-pointer
+(`src/models/inkling2-loop.cpp:64-67`), and a slot maps back to its physical layer with
+`layer_phys(il) = il < 24 ? il : 6 + (il − 24) mod 12` (`src/models/inkling2-loop.cpp:3-5`).
+
+Execution order (`src/models/inkling2-loop.cpp:74-112`):
+
+1. layers 0–5 once; the result is the *prelude*.
+2. pass 0 over physical layers 6–17 (slots 6–17).
+3. passes 1 and 2 restart from the prelude each time, over slots 24–35 and 36–47; at each core layer the graph
+   mixes a message from the previous pass into the Q, K, V and FFN inputs.
+4. layers 18–23 once, on the final pass's output.
+
+Later passes do not see the previous pass through the KV cache: each pass recomputes its own K/V from its own inputs,
+and its cache slot is separate. The only cross-pass path is the message.
+
+**Messages.** Per core layer `i` the checkpoint has four rank-64 controllers; the converter stacks
+`middle_cycle_cross_pass_queries[2i]`, `..._kv_queries[2i]`, `..._kv_queries[2i+1]`, `..._queries[2i+1]` into the
+four query rows `[Q, K, V, FFN]` (`conversion/inkling2.py:315-329`). Each pass's *bank* is the previous pass's
+block outputs after the first core block plus the previous pass's final output
+(`src/models/inkling2-loop.cpp:88-97`); the message is a depth attention over that bank, and a controller applies it:
+`out = (1 − tanh(f(c)))·x + tanh(g(c))·message`, where `c = [rms(x), rms(message)]`, `f`/`g` are the controller
+`forget`/`gain` matrices, and the `down` matrix is rank 64 (`src/models/inkling2.cpp:240-248`).
+
+The 12 core layers carry `controllers.{attn,k,v,mlp}.{down,gain,forget}_weight`
+(shapes `[64,4608]`, `[2304,64]`, `[2304,64]`); no other layer does.
+
+### Attention-residual blocks
+
+Every layer except layer 0 has a learned attention-input query: `[n_embd, 3]` for full layers, `[n_embd, 1]` for
+SWA (`src/models/inkling2.cpp:145-147`). The query mixes the depth of earlier block outputs and the current state:
+
+```
+states = rms_norm([blocks in reverse order, cur])          # no weight, eps 1e-6
+w      = softmax(statesᵀ · query / sqrt(n_embd))            # over the depth axis
+mixed  = Σ_i w_i · states_i
+```
+
+(`src/models/inkling2.cpp:178-191`.) The full-layer three queries become the Q, K and V inputs; the SWA single query
+is shared (`src/models/inkling2.cpp:296-303`). The FFN input is mixed the same way with one per-layer query
+(`src/models/inkling2.cpp:390`), and the final hidden state with `output_query` (`src/models/inkling2.cpp:423-424`).
+
+Residual streams restart every `n_layers_per_attn_res_block = 6` executed positions (`config.json:57`). At those
+positions the pre-attention state is pushed as a new block state instead of being added to the attention output; at
+all other positions it is added (`src/models/inkling2.cpp:379-384`). The boundaries are at executed positions 0 (prelude), 6 and 12 of every pass, and 18 (the first post-loop layer);
+the output mix therefore averages four block states plus the final state.
+
+### Relative positions and log scaling
+
+`d_rel = 16`, `rel_extent = 1024` (`config.json:18-19`). Each token projects `R = x·W_r` to
+`[n_head, d_rel]`, clips it, and builds one bias row per backward distance:
+
+```
+table[t, h, d]     = Σ_r attn_rel_bias[r, d] · R[t, h, r] − sinks[t, h]     # d ∈ [0, 1024)
+kq_b[t, h, j]      = table[t, h, distance] with distance = t − j, or the zero row at index 1024 if outside
+```
+
+(`src/models/inkling2.cpp:356-366`.) The bias table has shape `[16, 1024]` and is padded with a **zero** row before
+the projection (`src/models/inkling2.cpp:357`); that zero row is what out-of-window distances get. The learned sink
+is subtracted from every row, then a zero-valued sink logit is added to the softmax denominator: for SWA layers the
+out-of-window row becomes `−sink`, for full layers distances past 1024 read the zero row.
+
+**The bias is applied after the softmax scale.** This llama.cpp routes `kq_b` through the attention mask
+(`src/llama-graph.cpp:4508`: `kq_mask = ggml_add(kq_b, kq

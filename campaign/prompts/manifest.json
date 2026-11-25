@@ -797,6 +797,150 @@
       ],
       "instruction": "The following are consecutive excerpts from configuration and documentation files. Read them and return exactly one JSON object, with no prose around it, matching this schema: {\"summary\": string, \"components\": [{\"name\": string, \"kind\": string}], \"decisions\": [{\"id\": string, \"reason\": string}]}. Use names that appear in the excerpts and keep every string under forty words.",
       "measured_cache_state": "cold"
+    },
+    {
+      "name": "qualify-code-1024",
+      "set": "qualify",
+      "topic": "code",
+      "cell": 1024,
+      "path": "campaign/prompts/qualify/qualify-code-1024.txt",
+      "sha256": "93eb24cbefb6927caea301b8491bdca7096c70d9c3dadc5fd8df93862ddd53de",
+      "bytes": 3119,
+      "local_content_tokens": 1022,
+      "measured_prompt_tokens": null,
+      "sources_sha256": "70389da3605076d6d512f57c75934912c7f902a927d1e5c6967d00f6afa48cf8",
+      "sources": [
+        {
+          "path": "zig/src/cuda/qlinear_test.zig",
+          "sha256": "febaf1b7d8a941f23ab5782e4ae239f6f8c52bfbed1049f5493a682478e8a0fb",
+          "bytes": 3958,
+          "complete": false
+        }
+      ],
+      "instruction": "You are reviewing a large native inference codebase. Below are consecutive excerpts from several source files, each introduced by a line of the form ===== path =====. Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text."
+    },
+    {
+      "name": "qualify-code-4096",
+      "set": "qualify",
+      "topic": "code",
+      "cell": 4096,
+      "path": "campaign/prompts/qualify/qualify-code-4096.txt",
+      "sha256": "78d9b3faf2388b1843ac3fadbe6dd074ce8ae6443797ba8b10c4abb617dfaebb",
+      "bytes": 12207,
+      "local_content_tokens": 4094,
+      "measured_prompt_tokens": null,
+      "sources_sha256": "e124d4721e2d72e0fc49b028e53db1936422bb1baa75cae0a951b57decc990a5",
+      "sources": [
+        {
+          "path": "zig/src/families/qwen4/ple_reference.zig",
+          "sha256": "11c24a9c419cb0382ae2de359a503af42cd0777db7e49c0be7dba25278119bdd",
+          "bytes": 7612,
+          "complete": true
+        },
+        {
+          "path": "zig/src/cuda/exl3_block_lin2.zig",
+          "sha256": "e297a874e9f3535c3f42587cf91ed239209b226331d6aa004430f70f17e0f0b9",
+          "bytes": 5039,
+          "complete": false
+        }
+      ],
+      "instruction": "You are reviewing a large native inference codebase. Below are consecutive excerpts from several source files, each introduced by a line of the form ===== path =====. Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text."
+    },
+    {
+      "name": "qualify-prose-1024",
+      "set": "qualify",
+      "topic": "prose",
+      "cell": 1024,
+      "path": "campaign/prompts/qualify/qualify-prose-1024.txt",
+      "sha256": "f50f556ae4e10bb3ec2a4b42ecbfb59c711206de113340a8fae72c6579ec7432",
+      "bytes": 3400,
+      "local_content_tokens": 1022,
+      "measured_prompt_tokens": null,
+      "sources_sha256": "c04163bf7cd39b264b29793f1a053d0736e5e4270b8a3caa3fc2bf1bc9c710a3",
+      "sources": [
+        {
+          "path": "docs/receipts/tp-tcp-kind-e0378087/README.md",
+          "sha256": "a9e244ac021aae5300c22ed117f7575a079727b90c3400f14182079d34646c6d",
+          "bytes": 1164,
+          "complete": true
+        },
+        {
+          "path": "campaign/kernels/inkling-p4-prefill.md",
+          "sha256": "e1fbdbbb3985a604ec7a3861dbc8338d2eb31822b4bcbf9250d75f7e209ea50d",
+          "bytes": 28272,
+          "complete": false
+        }
+      ],
+      "instruction": "The following are consecutive excerpts from engineering notes and design documents. Reason carefully about the argument they build. Restate the central claim in your own words, set out the evidence offered for it, identify the weakest inference and why it is weak, and say what measurement or observation would settle it."
+    },
+    {
+      "name": "qualify-prose-4096",
+      "set": "qualify",
+      "topic": "prose",
+      "cell": 4096,
+      "path": "campaign/prompts/qualify/qualify-prose-4096.txt",
+      "sha256": "8493d84d46ada3b09bf5a3dd4878b2d74a5ace375313873b93c7dd0b42894047",
+      "bytes": 11992,
+      "local_content_tokens": 4094,
+      "measured_prompt_tokens": null,
+      "sources_sha256": "02c8052ad025d8da614e3fbb42b920b001563bfb36bc79d48899ef3832ee94d8",
+      "sources": [
+        {
+          "path": "docs/receipts/flashnext-gather-early/noise-rule.md",
+          "sha256": "08fd05e844f553725297c69c5d34ae081d206e307b474f6f015911a2e3056c7c",
+          "bytes": 2645,
+          "complete": true
+        },
+        {
+          "path": "docs/recipes/inkling-2-mini.md",
+          "sha256": "be9ce02a1a9842b2ea8bed9b626ba6ec0c782e668f16b101885fa792ab3a22f6",
+          "bytes": 16563,
+          "complete": false
+        }
+      ],
+      "instruction": "The following are consecutive excerpts from engineering notes and design documents. Reason carefully about the argument they build. Restate the central claim in your own words, set out the evidence offered for it, identify the weakest inference and why it is weak, and say what measurement or observation would settle it."
+    },
+    {
+      "name": "qualify-structured-1024",
+      "set": "qualify",
+      "topic": "structured",
+      "cell": 1024,
+      "path": "campaign/prompts/qualify/qualify-structured-1024.txt",
+      "sha256": "fdff0b1293ff706013dd05e76a0fc024aab26e84078ed9504078d69eddaaf374",
+      "bytes": 3265,
+      "local_content_tokens": 1022,
+      "measured_prompt_tokens": null,
+      "sources_sha256": "f3d08db844326b7904d7baf0000d9b951eea14e0c494d336764335f507c02d96",
+      "sources": [
+        {
+          "path": "zig/src/families/inkling2_loop/fixtures/model_header.json",
+          "sha256": "4b1fa8297cb1a0f6484c707bef69e7f0f81d08325ccf2c5b25b86d528f64acf2",
+          "bytes": 148408,
+          "complete": false
+        }
+      ],
+      "instruction": "The following are consecutive excerpts from configuration and documentation files. Read them and return exactly one JSON object, with no prose around it, matching this schema: {\"summary\": string, \"components\": [{\"name\": string, \"kind\": string}], \"decisions\": [{\"id\": string, \"reason\": string}]}. Use names that appear in the excerpts and keep every string under forty words."
+    },
+    {
+      "name": "qualify-structured-4096",
+      "set": "qualify",
+      "topic": "structured",
+      "cell": 4096,
+      "path": "campaign/prompts/qualify/qualify-structured-4096.txt",
+      "sha256": "a225fd5a0c3818f0fd4085797966e89c35e3adeb5705352dabaf701a8be04057",
+      "bytes": 15545,
+      "local_content_tokens": 4094,
+      "measured_prompt_tokens": null,
+      "sources_sha256": "513a09d1c376801db7a4b078efe8e540a734fee7cba8c020b01cb8d8c3c8471a",
+      "sources": [
+        {
+          "path": "campaign/quality/results/inkling2-mini-oq4e-dev-20261124T003126Z/result.json",
+          "sha256": "f8435cc8c1f5fa88e05db54d94ae44b42647991576a4d9f06e26bc0de7d2608b",
+          "bytes": 30377,
+          "complete": false
+        }
+      ],
+      "instruction": "The following are consecutive excerpts from configuration and documentation files. Read them and return exactly one JSON object, with no prose around it, matching this schema: {\"summary\": string, \"components\": [{\"name\": string, \"kind\": string}], \"decisions\": [{\"id\": string, \"reason\": string}]}. Use names that appear in the excerpts and keep every string under forty words."
     }
   ],
   "measured_by": {

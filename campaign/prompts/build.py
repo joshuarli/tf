@@ -20,6 +20,8 @@ import harness  # noqa: E402
 LENGTHS = (1024, 4096, 32768)
 TOPICS = ("code", "prose", "structured")
 SETS = ("dev", "holdout")
+QUALIFY = "qualify"
+QUALIFY_LENGTHS = (1024, 4096)
 
 INSTRUCTIONS = {
     "code": (
@@ -122,9 +124,12 @@ def exact_prefix(tokenizer: FlintTokenizer, text: str, tokens: int) -> tuple[str
 
 
 def assemble(topic: str, length: int, set_name: str, tokenizer: FlintTokenizer,
-             forbidden: list[str]) -> tuple[str, list[dict]]:
-    halves = partition(pool(topic, forbidden))
-    candidates = order(halves[set_name], set_name, topic)
+             forbidden: list[str], cited: frozenset[str] = frozenset()) -> tuple[str, list[dict]]:
+    if set_name == QUALIFY:
+        sources = [p for p in pool(topic, forbidden) if p.relative_to(REPO).as_posix() not in cited]
+    else:
+        sources = partition(pool(topic, forbidden))[set_name]
+    candidates = order(sources, set_name, topic)
     if not candidates:
         raise ValueError(f"no usable {set_name} sources for {topic}")
     instruction = INSTRUCTIONS[topic]
@@ -187,7 +192,32 @@ def write_corpus(tokenizer: FlintTokenizer, lengths: list[int]) -> dict:
     return manifest
 
 
-def measure(manifest: dict, binary: Path, model: Path, log_path: Path) -> None:
+def append_qualify(tokenizer: FlintTokenizer, manifest: dict) -> None:
+    """Append the qualify set: prompts whose sources no dev or holdout prompt cites, so no fitted prior has seen them."""
+    if any(prompt["set"] == QUALIFY for prompt in manifest["prompts"]):
+        raise SystemExit("the manifest already has the qualify set")
+    forbidden = ["\x00", "<<<", ">>>", "<|", "|>", *tokenizer.added]
+    cited = frozenset(source["path"] for prompt in manifest["prompts"] for source in prompt["sources"])
+    for topic in TOPICS:
+        for length in QUALIFY_LENGTHS:
+            name = f"{QUALIFY}-{topic}-{length}"
+            content, sources = assemble(topic, length, QUALIFY, tokenizer, forbidden, cited)
+            cited |= {source["path"] for source in sources}
+            relative = f"campaign/prompts/{QUALIFY}/{name}.txt"
+            target = REPO / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            manifest["prompts"].append({
+                "name": name, "set": QUALIFY, "topic": topic, "cell": length, "path": relative,
+                "sha256": hashlib.sha256(content.encode()).hexdigest(), "bytes": len(content.encode()),
+                "local_content_tokens": len(tokenizer.encode(content)),
+                "measured_prompt_tokens": None, "sources_sha256": source_hash(sources), "sources": sources,
+                "instruction": INSTRUCTIONS[topic],
+            })
+            print(f"built {relative} ({len(content.encode())} bytes)", file=sys.stderr)
+
+
+def measure(manifest: dict, binary: Path, model: Path, log_path: Path, set_name: str | None = None) -> None:
     environment = harness.conditions()
     if environment["pressure_reasons"]:
         raise SystemExit(f"host is not in a measurable state: {environment['pressure_reasons']}")
@@ -198,6 +228,8 @@ def measure(manifest: dict, binary: Path, model: Path, log_path: Path) -> None:
         model_id = served[0]
         print(f"serving {model_id}; startup {server.timing()}", file=sys.stderr)
         for prompt in manifest["prompts"]:
+            if set_name is not None and prompt["set"] != set_name:
+                continue
             text = (REPO / prompt["path"]).read_text(encoding="utf-8")
             item = {"name": prompt["name"], "kind": "chat", "prompt": text,
                     "thinking_switch": False, "thinking_applicable": None}
@@ -210,7 +242,7 @@ def measure(manifest: dict, binary: Path, model: Path, log_path: Path) -> None:
             ttft = run.get("ttft_s")
             print(f"measured {prompt['name']}: {measured} prompt tokens "
                   f"(cold {'{:.2f}s'.format(ttft) if ttft is not None else 'unmeasured'})", file=sys.stderr)
-        manifest["measured_by"] = {"binary_sha256": harness.sha256_file(binary), "host": harness.host_summary()}
+        manifest["measured_by" if set_name is None else f"{set_name}_measured_by"] = {"binary_sha256": harness.sha256_file(binary), "host": harness.host_summary()}
 
 
 def main() -> int:
@@ -218,6 +250,8 @@ def main() -> int:
     parser.add_argument("--lengths", default=",".join(str(n) for n in LENGTHS))
     parser.add_argument("--measure", action="store_true", help="confirm every prompt with the served tokenizer")
     parser.add_argument("--check", action="store_true", help="verify the committed manifest against local counts")
+    parser.add_argument("--qualify", action="store_true",
+                        help="append the qualify set to the committed manifest, leaving dev and holdout unchanged")
     parser.add_argument("--binary", type=Path, default=harness.BASELINE_BIN)
     parser.add_argument("--model-dir", type=Path, default=None)
     args = parser.parse_args()
@@ -237,6 +271,16 @@ def main() -> int:
                 bad.append(f"{prompt['name']}: no confirmed served length")
         print("\n".join(bad) if bad else f"{len(manifest['prompts'])} prompts verified", file=sys.stderr)
         return 1 if bad else 0
+    if args.qualify:
+        manifest = json.loads(harness.PROMPT_MANIFEST.read_bytes())
+        append_qualify(tokenizer, manifest)
+        if args.measure:
+            harness.TMP.mkdir(parents=True, exist_ok=True)
+            measure(manifest, args.binary, args.model_dir or harness.model_dir("flint-int4"),
+                    harness.TMP / "prompts-measure-qualify.log", QUALIFY)
+        harness.PROMPT_MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        print(f"wrote {harness.PROMPT_MANIFEST} with {len(manifest['prompts'])} prompts", file=sys.stderr)
+        return 0
     manifest = write_corpus(tokenizer, lengths)
     if args.measure:
         model = args.model_dir or harness.model_dir("flint-int4")

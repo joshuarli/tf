@@ -1,0 +1,46 @@
+The following are consecutive excerpts from engineering notes and design documents. Reason carefully about the argument they build. Restate the central claim in your own words, set out the evidence offered for it, identify the weakest inference and why it is weak, and say what measurement or observation would settle it.
+
+===== docs/receipts/tp-tcp-kind-e0378087/README.md =====
+# tcp-host at e0378087b
+
+`tf-tp-test tcp-host` between two hosts, built `zig build tf-tp-test -Doptimize=ReleaseSafe` at e0378087b with Zig
+0.17.0. Both hosts: AMD Ryzen AI Max+ 395, 128 GB, Linux 7.2.7. Link: USB4 networking (`thunderbolt_net`), two cables,
+each its own interface and /24, MTU 1500. One TCP socket rides one cable, so the run was made once per cable, with
+`TF_TP_MASTER` set to rank 0's address on that cable. No `rto_min` on the routes and no `net.ipv4.tcp_rto_min_us`, so
+the kernel's 200 ms minimum RTO applied.
+
+| Files | Run |
+|---|---|
+| `tcp-host-cable1-rank*.log` | cable 1 |
+| `tcp-host-cable2-rank*.log` | cable 2 |
+| `tcp-host-killed-rank*.log` | cable 1, rank 1 killed with SIGKILL 3 s in: rank 0 ends `error: PeerFailed`, exit 1 |
+| `tcp-host-killed-timed-rank*.log` | the same, timed: each log ends with the wrapper's line; rank 0 exited 0.228 s after the kill was sent (over ssh), 3.2 s in, during the bit-for-bit pass |
+
+Each rank 0 log holds the PASS line and the RESULT lines (median and p90 of 500 back-to-back calls a size;
+`gb_s_p50` is one rank's shard bytes over the median). A killed rank 1 prints nothing before it dies.
+
+
+===== campaign/kernels/inkling-p4-prefill.md =====
+# P4: Inkling 2 Mini oQ4e served prefill toward 2,000 tok/s
+
+Item P4 of Decision 17. Lane `lane/p4-prefill`, head `665006b84`, against main's code at `3881b3d8c` (main's later
+commits change no code). M5 Max, oQ4e `3eea042751cd`, greedy, served chunk 1,024 rows, context 32,768,
+`INKLING_LOAD_LIMIT_GB=26`. Raw runs are in [`inkling-p4-prefill-runs/`](inkling-p4-prefill-runs/).
+
+**Verdict.** The default path meets 2,000 tok/s at no length, on main or on the lane. Every default-on change keeps
+the prefill bytes, and the oMLX gate on the lane gives D2's numbers exactly. Against main, the lane cuts the GPU span
+per 512 rows to 0.81-0.94× in paired split timelines, and the everything-else bucket alone falls by about half.
+Served throughput rises 1-12% at 4K-31.7K in both paired trials. At 1K the two pairs disagree (0.89× and 1.02×), so
+1K is inconclusive.
+
+The opt-in `INKLING_PREFILL_HALF=both` changes bytes and stays off by default. It served 2,048 tok/s at 4K and 2,059
+at 8K in one valid trial, 1.18-1.36× the lane default bracketing it, and it passes the oMLX gate. But it agrees with
+the exact path's top-1 on 97.49% of the rows whose margin is at least 0.1, short of the roadmap's 99.5%, so it cannot
+become the default as it stands. Quality dev with it scores 7/11, as the exact path does: it loses one case and
+gains one.
+
+The 1K and held-out 1K prompts are slow because of the served host's fork-point chunking, not the kernels. With
+prefix reuse off the lane serves 1K at 1,693 tok/s, held-out as fast as dev, and the first request at 985 tok/s.
+That host change (`zig/src/native/inkling2_loop_host.zig`, outside P4's files) is the next prefill lever. The parked
+scratch commit `f0ff849e6` (here `d9e41207a`) stays: it cut the median first request from 2.89 to 2.45 s, inside a
+1.2

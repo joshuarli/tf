@@ -14,6 +14,32 @@ pub fn detect(text: anytype) bool {
     return std.mem.indexOf(u8, text.templateSource(), invoke) != null;
 }
 
+/// Generated tokens inside thinking messages, each counted from its `<|message_model|>` through its
+/// `<|end_message|>` (an unclosed one through the last token); the marker tokens are single ids in this tokenizer.
+pub fn reasoningTokens(tokens: []const u32, text: anytype) usize {
+    const ids = .{ text.tokenId(start), text.tokenId(thinking), text.tokenId(end_message) };
+    const open = ids[0] orelse return 0;
+    const think = ids[1] orelse return 0;
+    const close = ids[2] orelse return 0;
+    var count: usize = 0;
+    var message_at: ?usize = null;
+    var in_thinking = false;
+    for (tokens, 0..) |t, i| {
+        if (t == open) {
+            message_at = i;
+            in_thinking = false;
+        } else if (t == think and message_at != null) {
+            in_thinking = true;
+        } else if (t == close) {
+            if (in_thinking) count += i + 1 - message_at.?;
+            message_at = null;
+            in_thinking = false;
+        }
+    }
+    if (in_thinking) count += tokens.len - message_at.?;
+    return count;
+}
+
 pub const End = @import("recipient_reply.zig").End;
 pub const Reading = struct {
     reasoning: bool = true,

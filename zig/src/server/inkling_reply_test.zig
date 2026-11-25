@@ -65,3 +65,19 @@ test "Inkling checkpoint template and tokenizer round trip assistant calls" {
     try std.testing.expectEqualStrings("Reading.", parsed.content);
     try std.testing.expectEqual(@as(usize, 2), parsed.calls.?.len);
 }
+
+test "Inkling reasoning tokens count thinking messages from their opening marker through their end, unclosed or not" {
+    const Text = struct {
+        pub fn tokenId(_: @This(), marker: []const u8) ?u32 {
+            const markers = [_][]const u8{ "<|message_model|>", "<|content_thinking|>", "<|end_message|>", "<|content_text|>" };
+            for (markers, 0..) |m, i| if (std.mem.eql(u8, m, marker)) return @intCast(100 + i);
+            return null;
+        }
+    };
+    const open, const think, const close, const answer = .{ 100, 101, 102, 103 };
+    // a thinking message of 5 tokens, then an answer message of 4
+    try std.testing.expectEqual(@as(usize, 5), inkling.reasoningTokens(&.{ open, think, 7, 8, close, open, answer, 9, close }, Text{}));
+    // two thinking messages, the second cut off by the length limit
+    try std.testing.expectEqual(@as(usize, 7), inkling.reasoningTokens(&.{ open, think, 7, close, open, think, 8 }, Text{}));
+    try std.testing.expectEqual(@as(usize, 0), inkling.reasoningTokens(&.{ open, answer, 7, close }, Text{}));
+}

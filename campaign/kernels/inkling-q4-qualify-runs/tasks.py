@@ -198,6 +198,12 @@ def run(args) -> int:
     return 0
 
 
+def turn_key(turn: dict) -> tuple:
+    """A tool turn's output without the server's random call ids."""
+    calls = [{k: v for k, v in c.items() if k != "id"} for c in turn.get("tool_calls") or []]
+    return (turn.get("content"), json.dumps(calls, sort_keys=True), turn.get("finish_reasons"), turn.get("completion_tokens"))
+
+
 def tasks(names) -> list[dict]:
     return [r for name in names for line in (HERE / f"{name}.jsonl").read_text().splitlines()
             if (r := json.loads(line)).get("kind") == "task"]
@@ -216,8 +222,7 @@ def equal(args) -> int:
                 problems.append(f"{name} {case} {mode}: no ar task")
                 continue
             if "turns" in t:
-                keys = ("content", "tool_calls", "finish_reasons", "completion_tokens")
-                if [{k: x.get(k) for k in keys} for x in t["turns"]] != [{k: x.get(k) for k in keys} for x in ref.get("turns", [])]:
+                if [turn_key(x) for x in t["turns"]] != [turn_key(x) for x in ref.get("turns", [])]:
                     problems.append(f"{name} {case} {mode}: tool turns differ from ar")
                 continue
             problems += [f"{name} {case} {mode} first: {w}" for w in served.stream_differences(t["stream"], ref["stream"])]

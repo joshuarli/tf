@@ -434,7 +434,7 @@ pub const Generation = struct {
             .prompt_tokens = prompt_len,
             .cached_tokens = cached_tokens.within(m.cached, prompt_len),
             .completion_tokens = g.collected.items.len,
-            .reasoning_tokens = if (native) |n| n.reasoning_tokens else reply_text.reasoningCount(g.collected.items, think_end),
+            .reasoning_tokens = if (native) |n| n.reasoning_tokens else if (g.inkling != null) @import("inkling_reply.zig").reasoningTokens(g.collected.items, g.srv.text) else reply_text.reasoningCount(g.collected.items, think_end),
             .runtime = .{ .object = runtime },
             .speculative = .{ .object = spec },
             .thinking = thinking,

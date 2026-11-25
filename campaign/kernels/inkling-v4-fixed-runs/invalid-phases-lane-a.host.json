@@ -1,0 +1,37 @@
+{
+  "before": {
+    "time": "2026-11-24T22:21:29-0800",
+    "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+    "thermal_warning": false,
+    "memory_pressure": "System-wide memory free percentage: 86%",
+    "gpu_gate": "gpu-gate-ready: gpu_other=27.5% util=0%/0% pressure=1 swap=0/s compressor=119/s window=1s\ngpu-gate-ready: GPU time users: ghostty pid=83603 17.5%; WindowServer pid=623 10.0%;",
+    "perf": "perf-gate-ready: constrained  cores=18 load=4.70 (0.26/core) mem_free=86% (41.3 of 48.0 GiB) swap=9304/10240 MiB disk_free=389 GiB lanes_by_memory=10",
+    "load": [
+      4.6962890625,
+      4.21240234375,
+      3.44677734375
+    ]
+  },
+  "attempts": [
+    {
+      "exit": 0,
+      "seconds": 81.1
+    }
+  ],
+  "rest_s": 0.0,
+  "timed": true,
+  "after": {
+    "time": "2026-11-24T22:22:52-0800",
+    "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+    "thermal_warning": false,
+    "memory_pressure": "System-wide memory free percentage: 86%",
+    "gpu_gate": "gpu-gate-ready: gpu_other=25.6% util=0%/0% pressure=1 swap=0/s compressor=755/s window=1s\ngpu-gate-ready: GPU time users: ghostty pid=83603 17.0%; WindowServer pid=623 8.6%;",
+    "perf": "perf-gate-ready: constrained  cores=18 load=5.04 (0.28/core) mem_free=86% (41.3 of 48.0 GiB) swap=9280/10240 MiB disk_free=388 GiB lanes_by_memory=10",
+    "load": [
+      5.044921875,
+      4.42822265625,
+      3.59765625
+    ]
+  },
+  "env": {}
+}

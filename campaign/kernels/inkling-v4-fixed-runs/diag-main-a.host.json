@@ -1,0 +1,37 @@
+{
+  "before": {
+    "time": "2026-11-24T22:31:46-0800",
+    "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+    "thermal_warning": false,
+    "memory_pressure": "System-wide memory free percentage: 86%",
+    "gpu_gate": "gpu-gate-ready: gpu_other=0.0% util=0%/0% pressure=1 swap=8/s compressor=482/s window=1s",
+    "perf": "perf-gate-ready: constrained  cores=18 load=3.70 (0.21/core) mem_free=86% (41.3 of 48.0 GiB) swap=9208/10240 MiB disk_free=383 GiB lanes_by_memory=10",
+    "load": [
+      3.69873046875,
+      4.1513671875,
+      3.96826171875
+    ]
+  },
+  "attempts": [
+    {
+      "exit": 0,
+      "seconds": 35.0
+    }
+  ],
+  "rest_s": 0.0,
+  "timed": true,
+  "after": {
+    "time": "2026-11-24T22:32:22-0800",
+    "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+    "thermal_warning": false,
+    "memory_pressure": "System-wide memory free percentage: 82%",
+    "gpu_gate": "gpu-gate-ready: gpu_other=0.0% util=0%/0% pressure=1 swap=0/s compressor=317/s window=1s",
+    "perf": "perf-gate-ready: constrained  cores=18 load=3.36 (0.19/core) mem_free=82% (39.4 of 48.0 GiB) swap=9208/10240 MiB disk_free=383 GiB lanes_by_memory=9",
+    "load": [
+      3.3564453125,
+      4.02099609375,
+      3.92724609375
+    ]
+  },
+  "env": {}
+}

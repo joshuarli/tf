@@ -1,5 +1,27 @@
 # Inkling 2 Mini integrated scorecard (SC2)
 
+> **Superseded by Q4** (`inkling-q4-qualify.md`). An independent audit of `46061a3aa` found the following, and Q4
+> rechecked each against the records:
+> - The served equality check compared a termination-status field ("truncated"), so it would have passed different
+>   capped outputs. Under the repaired check every recorded stream here still matches; the check was broken, not
+>   the engine.
+> - The 512-token trials are fixed-window generation throughput. All 72 natural-termination requests hit the
+>   512-token cap, and all 144 saved first and forked replies have empty answer content (reasoning only). The
+>   forked turn therefore follows an answer that was never given. No completed answer is measured here.
+> - Trials: 72, of which 61 are valid and 11 invalid. code-1024 has **zero** valid plain/speculative pairs: its 72.4
+>   and 185.8 tok/s are from different sessions. The table below's "one valid pair" is wrong.
+> - The runner's code-1024 (233 tok/s) and the served code-1024 are different workloads: the runner prompt is 1,024
+>   target tokens and the served one 1,349, and they generate different tokens (10.02 against 7.74 committed a
+>   round). The gap is not server overhead. In the runner, 405 of 511 code-1024 tokens (79.3%) and 388 of 511
+>   code-4096 tokens (75.9%) were accepted on prompt-lookup paths, against 79 to 109 on the other four prompts:
+>   the code results are copy-friendly.
+> - The ~3% drafter prefill cost is a difference of pooled medians. Paired within sessions, its intervals include 1
+>   at every length, and the curves were not gated per request. It is a profiling hypothesis, not a measured cause.
+> - Chronological gains mix three things. The code-4096 runner rose from 77.8 tok/s (V3, exact prefill) to 154.2
+>   (V4's base, after PH2's half prefill, before V4's kernels) on a *different* greedy continuation that commits 7.51
+>   tokens a round instead of 2.94. V4's own same-output gain is 1.038 times speculative and 1.125 times plain.
+> - SV2's `idle` mode never loaded the drafter.
+
 The integrated configuration is main `de53331e3`: half prefill by default (PH2), V4's verify kernels, SV2's cost table,
 and served speculation by default. It is scored against Decision 17 on one pinned binary. Local measurements,
 external reports and projections are kept in separate sections.

@@ -1,5 +1,13 @@
 # Inkling 2 Mini integrated served path (SV2)
 
+> **Qualification corrected by Q4** (`inkling-q4-qualify.md`). The equality check here compared a termination-status
+> field. Under the repaired check every recorded stream still matches. The 512-token trials measure fixed-window
+> generation throughput, every natural request hit the 512-token cap, and the forked turn followed an empty
+> answer. The `idle` mode never loaded the drafter. `qualify-prose-1024`, `qualify-prose-4096` and
+> `qualify-structured-4096` cite receipts or an earlier quality result and are regression workloads, not unseen
+> input. The default-on decision stands on same-output speculative gains for these fixed-window prompts. Q4 adds
+> completed-task results.
+
 **Verdict.** Speculation is promoted to the served default. On six prompts that no fitted prior has seen, three
 served sessions give speculative decode 1.43 to 2.43 times plain decode. Every prompt's lower 95% bound is above 1,
 and every reply is byte-equal to plain decode: cold, prompt-cache hit, forked second turn and natural EOS. The

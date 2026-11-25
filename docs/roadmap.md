@@ -7,6 +7,7 @@ This is the single plan for this repository: all current and future work, and th
 **Active 2026-11-24.**
 - Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**.
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
+- Acceptance flow (2026-11-24): lanes prove changes with filtered GPU tests; the parent runs the full suite once on an integration commit of main plus the lane and fast-forwards main on green, instead of a lane suite and a second main suite.
 - **Last accepted code: PH2 merge `291240211`** (half prefill by default; green on its lane `d129b60f8`, identical code: `inkling-gpu` 181/181, oracle pass). Before it, P5c merge `7f7cb75a3` (181/181), SC1 merge `1668d5caa` (180/180), V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
 - **Open from P3c:** `code-c02` now falls into a repeatable reasoning loop, and oQ4e quality dev is 7/11 (base 6/11), below the fast profile's 8-case bar. Mean TTFT at four agents rose on the warm repetition; the cause is not traced.
 - **Parked branches** (all on `origin`), with item, cause and retry:
@@ -133,6 +134,10 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    `INKLING_ROUND_SPLIT=1`, a bit-identical selector, and a plain-greedy scratch determinism test (rerun it with
    chaining on before reviving the chain). Decision 17's levers are verify GPU time, tokens per round and drafter
    GPU time; hiding the verify's ~0.6 ms encode joins V4.
+5f. P6, running (code only until `.work/tmp/p6-timing-go`, after V4's timing): `lane/p6-tail` in `.work/wt/p6-tail`
+   (scope `usrn_b93d7e34-dc41-42c1-83e4-5366c7008924`, base `f65124c46`), receipt `inkling-p6-tail.md`. The 1K dev
+   cell: remove the short last chunk and the lone replayed token while keeping every reuse contract; profile 16K and
+   the cap by kernel class (fixes there wait for V4, which owns `prefill.zig`).
 5c. SV2, after P5c and V4: the integrated served path. Rebuild the planner's fixed cost table from sustained
    in-round measurements; freeze the tree policy and qualify it on a small untouched prompt set (the "holdout"
    prompts fitted acceptance priors and are now calibration data). Run the HTTP server with plain decoding, a loaded

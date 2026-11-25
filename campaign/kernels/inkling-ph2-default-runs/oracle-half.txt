@@ -1,0 +1,7 @@
+81-- arithmetic policy: f32-activations+prefill-512
+82-- positions: 3015 over 16 histories
+83:- top-1 agreement: 2856/3015 (94.73%); 50 reference rows tie for the maximum
+84-- top-1 agreement where the reference's top-2 margin is at least 0.1: 2747/2872 (95.65%)
+85-- mean KL, mean of history means: 0.0199132; row-weighted: 0.0670132
+86-- max KL: 16.8877 at cells_code position 378
+87-- max absolute logit difference: 23.85

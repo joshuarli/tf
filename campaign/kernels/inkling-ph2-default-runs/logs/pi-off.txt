@@ -1,0 +1,14 @@
+serve /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd under INKLING_LOAD_LIMIT_GB=26 through /Users/josh/repos/tf/.work/wt/ph2/campaign/heavy.py: tensorfold-native serve /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd --host 127.0.0.1 --port <free> --parallel 1 --context 32768 --prompt-cache-gib 2 --no-update-check --no-drafts --temperature 0
+PI_BIN='' ~/.local/bin/uv run --project /Users/josh/repos/tf/.work/wt/ph2/campaign python /Users/josh/repos/tf/.work/wt/ph2/campaign/pi/run.py --model inkling2-mini-oq4e \
+		--bin '/Users/josh/repos/tf/.work/wt/ph2/zig-out/native/bin/tensorfold-native' --pi-model flint 
+add-function: completed=True checker=True turns=4 parse_errors=0
+bugfix-dedupe: completed=True checker=True turns=4 parse_errors=0
+bugfix-intervals: completed=True checker=True turns=3 parse_errors=0
+bugfix-window: completed=True checker=True turns=3 parse_errors=0
+multifile-config: completed=True checker=True turns=3 parse_errors=0
+read-and-answer: completed=True checker=False turns=4 parse_errors=0
+refactor-preserve: completed=True checker=True turns=4 parse_errors=0
+shell-inspect: completed=True checker=True turns=4 parse_errors=0
+all task runs completed
+{"checker_passed": 7, "completed": 8, "parse_errors": 0, "server_log_parse_errors": 0, "tasks": 8}
+heavy: done: peak charged 24.0 GB of the 28 GB cap (footprint 21.4 GB, resident 15.8 GB, host wired growth 24.0 GB); host pressure worst 1, host swap +0 MB, host pageins 3731422

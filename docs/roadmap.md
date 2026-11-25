@@ -7,7 +7,7 @@ This is the single plan for this repository: all current and future work, and th
 **Active 2026-11-24.**
 - Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**.
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
-- **Last accepted code: DF2b merge `53a3b8894`** (green: `inkling-host` 25/25, `inkling-gpu` 179/179 on main `f454558ed`). Before it, P4 merge `3f0054737` (green: `inkling-gpu` 165/165) and V2 merge `3881b3d8c` (`inkling-gpu` 155/155). Open, intermittent: the first `inkling-gpu` run after the P4 and the DF2b merges was stopped by `heavy.py` over the 28 GB cap (footprint 28.0 and 28.2 GB, resident 23.5 and 19.6 GB, host pressure 2; once near the end, once 79 s in), and each rerun passed at 21.6 GB footprint. A 5 s process-tree sample of the passing rerun never shows two large processes at once (compiles stay under 0.9 GB, a test binary near 20 GB), so the extra footprint is inside one test process. Retry condition: the next breach, with the sampler (`.work/tmp/memsample.sh`, recreate if gone) running.
+- **Last accepted code: V3 merge `0a2551b36`** (green: `inkling-host` 25/25, `inkling-gpu` 179/179, peak 21.6 GB). Before it, DF2b merge `53a3b8894` (green: `inkling-host` 25/25, `inkling-gpu` 179/179 on main `f454558ed`), P4 merge `3f0054737` (green: `inkling-gpu` 165/165) and V2 merge `3881b3d8c` (`inkling-gpu` 155/155). Open, intermittent: the first `inkling-gpu` run after the P4 and the DF2b merges was stopped by `heavy.py` over the 28 GB cap (footprint 28.0 and 28.2 GB, resident 23.5 and 19.6 GB, host pressure 2; once near the end, once 79 s in), and each rerun passed at 21.6 GB footprint. A 5 s process-tree sample of the passing rerun never shows two large processes at once (compiles stay under 0.9 GB, a test binary near 20 GB), so the extra footprint is inside one test process. Retry condition: the next breach, with the sampler (`.work/tmp/memsample.sh`, recreate if gone) running.
 - **Open from P3c:** `code-c02` now falls into a repeatable reasoning loop, and oQ4e quality dev is 7/11 (base 6/11), below the fast profile's 8-case bar. Mean TTFT at four agents rose on the warm repetition; the cause is not traced.
 - **Parked branches** (all on `origin`), with item, cause and retry:
   - `lane/p3c-prefill` at `f0ff849e6`: commits the prefill scratch at setup. Two 1K pairs are inconclusive and it has not run the suite. Retry: the suite, then three first-pass pairs at 1K.
@@ -82,10 +82,17 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    0.117 tokens/ms, so 200 tok/s needs 8-row rounds close to a one-row step's cost. The six pairs ran in two
    back-to-back sessions on one host state; accepted for an opt-in mode (delegated, Decision 11), to be re-paired
    across separate sessions before speculation becomes a default.
-3d. V3, running (code and tests; timing via `.work/tmp/v3-timing-go`): `lane/v3-experts` in `.work/wt/v3-experts`
-   (scope `usrn_4c1b50f9-4878-49f1-b590-5caa0873b297`), receipt `inkling-v3-experts.md`. A cheaper 4–16-row verify:
-   expert tiles for 2–8 live rows per expert, the affine 4-bit expert layers, attention and controllers, and dense
-   kernels past 8 rows, under Decision 18.
+3d. V3, done and merged `0a2551b36` (`inkling-v3-experts.md`). Verifies of 9–16 rows are 6–12% cheaper (16 rows
+   in rounds 69.1 → 60.8 ms; rested 1K 61.9 → 58.4, 4K 72.6 → 67.4); 1–8 rows and plain decode are unchanged, and
+   every row stays bit-equal to its one-row step. The fixed cost table is refit from in-round costs (a 9th row
+   4.6 ms instead of 10.5). Round pairs: geometric mean 1.022, CI 0.986–1.059, inconclusive; code-1024 1.09× (187
+   tok/s median). Kept for cumulative benefit (Decision 11); the second session ran beside an outside soak, so SC2
+   re-pairs it on a quiet host. megakernel-zoo's layout under our summation order is 1.23–1.51× slower at 8–16 rows.
+   Open: experts with 4–8 live rows still cost about 1.5× their bytes, and about 13 ms a round at every width sits
+   in kernels dispatched from `prefill.zig` (mixes, norms, convolutions, router, controller, affine 4-bit experts),
+   which V4 takes after P5c.
+3f. V4, after P5c merges (shares `prefill.zig`): the ~13 ms a round spent at every verify width in kernels that
+   `prefill.zig` dispatches, measured per kernel at 1, 8 and 16 rows, then the 4–8-live-row expert cost.
 4. SV1, done and merged (`inkling-sv1-serve.md`). `INKLING_DRAFTER=<dir>` turns on served greedy DFlash2
    speculation, byte-identical to plain greedy across prompt-cache hits, forks and EOS (133/133 in `inkling-gpu`).
    It is faster only on code-1024 (1.47×) and prose-1024 (1.16×), so it stays opt-in until V1 and DF2 land. It
@@ -115,14 +122,15 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    accepted-tap gather, the drafter-context update and the next draft behind the verify, as megakernel-zoo's Mac
    engine `_cyc_pure()` does (reference pinned at `95e315c`, Apache-2.0), so a round has one host sync. It measures
    the round split first and reports the most the change can recover.
-5c. SV2, after V3 and SC1: the integrated served path. Rebuild the planner's fixed cost table from sustained
+5c. SV2, after SC1: the integrated served path. Rebuild the planner's fixed cost table from sustained
    in-round measurements; freeze the tree policy and qualify it on a small untouched prompt set (the "holdout"
    prompts fitted acceptance priors and are now calibration data). Run the HTTP server with plain decoding, a loaded
    but disabled drafter, and active speculation over the 1K/4K classes, unseen prefill to the cap, prefix hits and
    forks, fixed-length replies and natural EOS, re-paired across separate sessions. Speculation becomes the default
    only if it beats plain decode on every class and stays within Decision 8's 4 GiB draft residency.
 5d. SC2, after SV2: one pinned scorecard for the integrated configuration (served prefill curve, committed decode
-   by class, round time and accepted work, quality, peak footprint). Every target miss names its dominant measured
+   by class, round time and accepted work, quality, peak footprint), with V3's and DF2b's round pairs re-paired on a
+   quiet host across separate sessions. Every target miss names its dominant measured
    cost; external reported results, local comparisons and projections stay separate.
 6. Q3: the long-reasoning runaways: `code-c02` under exact prefill (open since P3c) and `retrieval-t01` under half prefill.
 7. Deferred off the critical path: see **Later**.

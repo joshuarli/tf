@@ -78,46 +78,181 @@ fn checkStore(m: *const inkling.Model, p: *inkling.PrefillScratch, ids: []const 
     std.debug.print("store: len={d} state_bytes={d} state_equal=true continuation_logits_equal=true\n", .{ point, actual.length() });
 }
 
-fn schedule(init: std.process.Init, args: []const [:0]const u8) !void {
-    const a = init.gpa;
-    const bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, args[2], a, .limited(16 << 20));
+const usage =
+    \\tf-inkling2-prefix-check <model> <capture>  a store, a replay and a rollback against full prefill
+    \\tf-inkling2-prefix-check <model> <ids.json> <chunks> <out>  every row's logits under a chunk schedule
+    \\tf-inkling2-prefix-check <model> jobs <jobs.txt>  one <ids.json> <chunks> <out> a line, one load
+    \\tf-inkling2-prefix-check <model> time <ids.json> <reps> <chunks>...  each chunk's wall and GPU ms, the last row's logits only
+    \\tf-inkling2-prefix-check <model> profile <ids.json> <reps> <chunks>...  `time` on a Metal 4 queue (TF_METAL4_TIMELINE)
+    \\
+;
+
+const max_jobs = 256;
+const max_schedules = 16;
+
+const Job = struct { ids: []u32, sizes: []usize, out: []const u8 };
+
+fn readIds(a: std.mem.Allocator, io: std.Io, path: []const u8) ![]u32 {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(16 << 20));
     defer a.free(bytes);
-    const ids = try std.json.parseFromSlice([]const u32, a, bytes, .{});
-    defer ids.deinit();
+    const parsed = try std.json.parseFromSlice([]const u32, a, bytes, .{});
+    defer parsed.deinit();
+    if (parsed.value.len == 0) return error.EmptyPrompt;
+    return a.dupe(u32, parsed.value);
+}
+
+fn readSizes(a: std.mem.Allocator, text: []const u8, len: usize) ![]usize {
     var sizes: std.ArrayList(usize) = .empty;
-    defer sizes.deinit(a);
-    var words = std.mem.tokenizeScalar(u8, args[3], ',');
+    errdefer sizes.deinit(a);
+    var words = std.mem.tokenizeScalar(u8, text, ',');
     var total: usize = 0;
     while (words.next()) |word| {
-        try sizes.append(a, try std.fmt.parseInt(usize, word, 10));
-        total += sizes.items[sizes.items.len - 1];
+        const n = try std.fmt.parseInt(usize, word, 10);
+        if (n == 0) return error.EmptyChunk;
+        try sizes.append(a, n);
+        total += n;
     }
-    if (total != ids.value.len) return error.ScheduleLength;
+    if (total != len) return error.ScheduleLength;
+    return sizes.toOwnedSlice(a);
+}
+
+fn scratchRows(sizes: []const usize) usize {
+    var top: usize = inkling.default_chunk;
+    for (sizes) |n| top = @max(top, n);
+    return top;
+}
+
+fn allRows(m: *const inkling.Model, p: *inkling.PrefillScratch, job: Job, out: []f32) !void {
+    const vocab: usize = m.config.text.unpadded_vocab;
+    std.debug.assert(out.len == job.ids.len * vocab);
+    var c = try inkling.Cache.init(m.device, &m.config, job.ids.len);
+    defer c.deinit();
+    var at: usize = 0;
+    for (job.sizes) |n| {
+        try inkling.prefillWant(m, p, &c, job.ids[at..][0..n], .all);
+        @memcpy(out[at * vocab ..][0 .. n * vocab], p.logits.slice(f32, n * vocab));
+        at += n;
+    }
+    std.debug.assert(at == job.ids.len);
+}
+
+fn capture(init: std.process.Init, model: []const u8, jobs: []const Job) !void {
+    const a = init.gpa;
+    var rows: usize = 1;
+    var top: usize = inkling.default_chunk;
+    for (jobs) |job| {
+        top = @max(top, scratchRows(job.sizes));
+        for (job.sizes) |n| rows = @max(rows, n);
+    }
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const m = try inkling.Model.load(a, init.io, model);
+    defer m.deinit();
+    var p = try inkling.PrefillScratch.initRows(m.device, &m.config, top, rows);
+    defer p.deinit();
+    for (jobs) |job| {
+        const out = try a.alloc(f32, job.ids.len * m.config.text.unpadded_vocab);
+        defer a.free(out);
+        try allRows(m, &p, job, out);
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = job.out, .data = std.mem.sliceAsBytes(out) });
+        std.debug.print("schedule: {d} tokens in {d} chunks, every row's logits, to {s}\n", .{ job.ids.len, job.sizes.len, job.out });
+    }
+}
+
+fn schedule(init: std.process.Init, args: []const [:0]const u8) !void {
+    const a = init.gpa;
+    const ids = try readIds(a, init.io, args[2]);
+    defer a.free(ids);
+    const sizes = try readSizes(a, args[3], ids.len);
+    defer a.free(sizes);
+    try capture(init, args[1], &.{.{ .ids = ids, .sizes = sizes, .out = args[4] }});
+}
+
+fn scheduleJobs(init: std.process.Init, args: []const [:0]const u8) !void {
+    if (args.len != 4) return error.ExpectedArgs;
+    const a = init.gpa;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const text = try std.Io.Dir.cwd().readFileAlloc(init.io, args[3], arena.allocator(), .limited(1 << 20));
+    var jobs: std.ArrayList(Job) = .empty;
+    var lines = std.mem.tokenizeScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        var words = std.mem.tokenizeAny(u8, line, " \t\r");
+        const path = words.next() orelse continue;
+        const chunks = words.next() orelse return error.BadJob;
+        const out = words.next() orelse return error.BadJob;
+        if (words.next() != null) return error.BadJob;
+        if (jobs.items.len == max_jobs) return error.TooManyJobs;
+        const ids = try readIds(arena.allocator(), init.io, path);
+        try jobs.append(arena.allocator(), .{ .ids = ids, .sizes = try readSizes(arena.allocator(), chunks, ids.len), .out = out });
+    }
+    if (jobs.items.len == 0) return error.NoJobs;
+    try capture(init, args[1], jobs.items);
+}
+
+fn ms(ns: i96) f64 {
+    return @as(f64, @floatFromInt(ns)) / 1e6;
+}
+
+fn timed(init: std.process.Init, args: []const [:0]const u8, metal4: bool) !void {
+    const a = init.gpa;
+    if (args.len < 6 or args.len - 5 > max_schedules) return error.ExpectedArgs;
+    const ids = try readIds(a, init.io, args[3]);
+    defer a.free(ids);
+    const reps = try std.fmt.parseInt(usize, args[4], 10);
+    if (reps == 0) return error.ExpectedArgs;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var schedules: [max_schedules][]usize = undefined;
+    const count = args.len - 5;
+    var top: usize = inkling.default_chunk;
+    for (args[5..], 0..) |text, s| {
+        schedules[s] = try readSizes(arena.allocator(), text, ids.len);
+        top = @max(top, scratchRows(schedules[s]));
+        std.debug.print("time schedule={d} chunks={s}\n", .{ s, text });
+    }
     const pool = mtl.objc.Pool.push();
     defer pool.pop();
     const m = try inkling.Model.load(a, init.io, args[1]);
     defer m.deinit();
-    const vocab: usize = m.config.text.unpadded_vocab;
-    var c = try inkling.Cache.init(m.device, &m.config, ids.value.len);
-    defer c.deinit();
-    var p = try inkling.PrefillScratch.init(m.device, &m.config, inkling.default_chunk);
-    defer p.deinit();
-    const out = try a.alloc(f32, ids.value.len * vocab);
-    defer a.free(out);
-    var at: usize = 0;
-    for (sizes.items) |n| {
-        try inkling.prefillWant(m, &p, &c, ids.value[at..][0..n], .all);
-        @memcpy(out[at * vocab ..][0 .. n * vocab], p.logits.slice(f32, n * vocab));
-        at += n;
+    if (metal4) {
+        const q = try m.device.queue4();
+        m.queue.deinit();
+        m.queue = q;
     }
-    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[4], .data = std.mem.sliceAsBytes(out) });
-    std.debug.print("schedule: {d} tokens in {d} chunks, every row's logits\n", .{ ids.value.len, sizes.items.len });
+    var p = try inkling.PrefillScratch.initRows(m.device, &m.config, top, 1);
+    defer p.deinit();
+    var c = try inkling.Cache.init(m.device, &m.config, ids.len);
+    defer c.deinit();
+    const vocab: usize = m.config.text.unpadded_vocab;
+    for (0..reps) |rep| for (schedules[0..count], 0..) |sizes, s| {
+        c.len = 0;
+        var at: usize = 0;
+        var wall: i96 = 0;
+        var gpu: f64 = 0;
+        for (sizes) |n| {
+            const t0 = std.Io.Clock.awake.now(init.io).toNanoseconds();
+            try inkling.prefillWant(m, &p, &c, ids[at..][0..n], if (at + n == ids.len) .last else .none);
+            const spent = std.Io.Clock.awake.now(init.io).toNanoseconds() - t0;
+            wall += spent;
+            gpu += p.gpu_seconds;
+            std.debug.print("time schedule={d} rep={d} at={d} rows={d} wall_ms={d:.3} gpu_ms={d:.3}\n", .{ s, rep, at, n, ms(spent), p.gpu_seconds * 1e3 });
+            at += n;
+        }
+        std.debug.print("time schedule={d} rep={d} tokens={d} chunks={d} wall_ms={d:.3} gpu_ms={d:.3} greedy={d}\n", .{ s, rep, ids.len, sizes.len, ms(wall), gpu * 1e3, argmax(p.logits.slice(f32, vocab)) });
+    };
 }
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
+    if (args.len >= 4 and std.mem.eql(u8, args[2], "jobs")) return scheduleJobs(init, args);
+    if (args.len >= 4 and std.mem.eql(u8, args[2], "time")) return timed(init, args, false);
+    if (args.len >= 4 and std.mem.eql(u8, args[2], "profile")) return timed(init, args, true);
     if (args.len == 5) return schedule(init, args);
-    if (args.len != 3) return error.ExpectedModelAndCapture;
+    if (args.len != 3) {
+        std.debug.print("{s}", .{usage});
+        return error.ExpectedModelAndCapture;
+    }
     const a = init.gpa;
     const bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, args[2], a, .limited(16 << 20));
     defer a.free(bytes);

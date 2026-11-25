@@ -85,6 +85,19 @@ pub fn duplicate(entries: anytype, tokens: []const u32) ?usize {
     return null;
 }
 
+pub fn whole(entries: anytype, prompt: []const u32, enabled: bool) ?usize {
+    if (!enabled) return null;
+    const i = duplicate(entries, prompt) orelse return null;
+    return if (entries[i].logits != null) i else null;
+}
+
+pub const Placement = union(enum) { refresh: usize, replace: usize, add };
+
+pub fn placement(entries: anytype, tokens: []const u32, logits: ?[]const f32) Placement {
+    const i = duplicate(entries, tokens) orelse return .add;
+    return if (logits != null and entries[i].logits == null) .{ .replace = i } else .{ .refresh = i };
+}
+
 pub fn oldest(entries: anytype) ?usize {
     var result: ?usize = null;
     for (entries, 0..) |entry, i| {
@@ -127,10 +140,13 @@ pub fn firstPoint(len: usize, at: usize, window: usize, interval: usize) usize {
 
 pub const Chunk = struct { rows: usize, points: usize, next: usize };
 
-/// The chunk at `at`: full chunks, and under reuse the last token alone so a prompt stored before it replays it.
-pub fn chunk(at: usize, len: usize, rows: usize, enabled: bool, next: usize, interval: usize) Chunk {
-    const end = if (enabled and at + 1 < len) len - 1 else len;
-    const take = @min(rows, end - at);
+/// The chunk at `at`: `rows` rows, or the rest of the prompt once it fits in `most`.
+pub fn chunk(at: usize, len: usize, rows: usize, most: usize, enabled: bool, next: usize, interval: usize) Chunk {
+    std.debug.assert(at < len);
+    std.debug.assert(rows > 0);
+    std.debug.assert(rows <= most);
+    if (enabled) std.debug.assert(interval > 0);
+    const take = if (len - at <= most) len - at else rows;
     var point = next;
     var points: usize = 0;
     while (enabled and point < at + take) : (point += interval) points += 1;
@@ -270,6 +286,28 @@ test "store selection respects strict prefix and disabled reuse" {
     try std.testing.expectEqual(@as(?usize, 1), oldest(&entries));
 }
 
+test "a whole prompt hits only an entry holding its last row's logits, and that entry replaces a state of the same tokens" {
+    const Entry = struct { tokens: []const u32, logits: ?[]const f32 = null };
+    const row = [_]f32{ 0.5, -1.0 };
+    const entries = [_]Entry{
+        .{ .tokens = &.{ 1, 2 } },
+        .{ .tokens = &.{ 1, 2, 3 }, .logits = &row },
+        .{ .tokens = &.{ 4, 5 }, .logits = &row },
+    };
+    try std.testing.expectEqual(@as(?usize, 1), whole(&entries, &.{ 1, 2, 3 }, true));
+    try std.testing.expectEqual(@as(?usize, 2), whole(&entries, &.{ 4, 5 }, true));
+    try std.testing.expectEqual(@as(?usize, null), whole(&entries, &.{ 1, 2 }, true));
+    try std.testing.expectEqual(@as(?usize, null), whole(&entries, &.{ 1, 2, 3, 4 }, true));
+    try std.testing.expectEqual(@as(?usize, null), whole(&entries, &.{ 1, 2, 3 }, false));
+    try std.testing.expectEqual(@as(?usize, 0), storeLookup(&entries, &.{ 1, 2, 3 }, true, 0));
+    try std.testing.expectEqual(@as(?usize, 1), storeLookup(&entries, &.{ 1, 2, 3, 4 }, true, 0));
+    try std.testing.expectEqual(Placement{ .replace = 0 }, placement(&entries, &.{ 1, 2 }, &row));
+    try std.testing.expectEqual(Placement{ .refresh = 0 }, placement(&entries, &.{ 1, 2 }, null));
+    try std.testing.expectEqual(Placement{ .refresh = 1 }, placement(&entries, &.{ 1, 2, 3 }, &row));
+    try std.testing.expectEqual(Placement{ .refresh = 1 }, placement(&entries, &.{ 1, 2, 3 }, null));
+    try std.testing.expectEqual(Placement.add, placement(&entries, &.{ 1, 2, 3, 4 }, &row));
+}
+
 test "store insertion deduplicates and evicts least recently used within byte budget" {
     const Entry = struct { tokens: []const u32, bytes: u64, last_used: u64 };
     var entries: std.ArrayList(Entry) = .empty;
@@ -316,17 +354,23 @@ test "shared prefixes remain recent as later prompts grow" {
     try std.testing.expectEqual(@as(u64, 3), entries[2].last_used);
 }
 
-test "a fresh prompt prefills in full chunks with fork points inside them and its last token alone" {
-    const Case = struct { len: usize, at: usize = 0, reuse: bool = true, chunks: []const usize, points: []const usize };
+test "a fresh prompt prefills in full chunks with fork points inside them and a short rest inside its last chunk" {
+    const Case = struct { len: usize, at: usize = 0, most: usize = 1152, reuse: bool = true, chunks: []const usize, points: []const usize };
     const cases = [_]Case{
-        .{ .len = 1027, .chunks = &.{ 1024, 2, 1 }, .points = &.{ 896, 1024 } },
-        .{ .len = 1019, .chunks = &.{ 1018, 1 }, .points = &.{ 768, 896 } },
-        .{ .len = 1258, .chunks = &.{ 1024, 233, 1 }, .points = &.{ 1024, 1152 } },
+        .{ .len = 1027, .chunks = &.{1027}, .points = &.{ 896, 1024 } },
+        .{ .len = 1027, .most = 1024, .chunks = &.{ 1024, 3 }, .points = &.{ 896, 1024 } },
+        .{ .len = 1019, .chunks = &.{1019}, .points = &.{ 768, 896 } },
+        .{ .len = 1152, .chunks = &.{1152}, .points = &.{ 896, 1024 } },
+        .{ .len = 1153, .chunks = &.{ 1024, 129 }, .points = &.{ 1024, 1152 } },
+        .{ .len = 1258, .chunks = &.{ 1024, 234 }, .points = &.{ 1024, 1152 } },
         .{ .len = 1258, .reuse = false, .chunks = &.{ 1024, 234 }, .points = &.{} },
-        .{ .len = 4100, .chunks = &.{ 1024, 1024, 1024, 1024, 3, 1 }, .points = &.{ 3968, 4096 } },
-        .{ .len = 3000, .at = 2560, .chunks = &.{ 439, 1 }, .points = &.{ 2816, 2944 } },
-        .{ .len = 129, .chunks = &.{ 128, 1 }, .points = &.{128} },
-        .{ .len = 2, .chunks = &.{ 1, 1 }, .points = &.{} },
+        .{ .len = 1033, .reuse = false, .chunks = &.{1033}, .points = &.{} },
+        .{ .len = 2200, .chunks = &.{ 1024, 1024, 152 }, .points = &.{ 2048, 2176 } },
+        .{ .len = 4100, .chunks = &.{ 1024, 1024, 1024, 1028 }, .points = &.{ 3968, 4096 } },
+        .{ .len = 8262, .chunks = &.{ 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1094 }, .points = &.{ 8064, 8192 } },
+        .{ .len = 3000, .at = 2560, .chunks = &.{440}, .points = &.{ 2816, 2944 } },
+        .{ .len = 129, .chunks = &.{129}, .points = &.{128} },
+        .{ .len = 2, .chunks = &.{2}, .points = &.{} },
         .{ .len = 1, .chunks = &.{1}, .points = &.{} },
     };
     for (cases) |case| {
@@ -337,7 +381,7 @@ test "a fresh prompt prefills in full chunks with fork points inside them and it
         var at = case.at;
         var next = firstPoint(case.len, at, 256, 128);
         while (at < case.len) {
-            const c = chunk(at, case.len, 1024, case.reuse, next, 128);
+            const c = chunk(at, case.len, 1024, case.most, case.reuse, next, 128);
             for (0..c.points) |i| points[saved + i] = next + i * 128;
             saved += c.points;
             next = c.next;

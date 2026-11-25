@@ -5,10 +5,10 @@ This is the single plan for this repository: all current and future work, and th
 ## Status
 
 **Active 2026-11-24.**
-- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**.
+- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. Next ready item is SV2 (5c); P6 is parked on `lane/p6-tail`.
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
 - Acceptance flow (2026-11-24): lanes prove changes with filtered GPU tests; the parent runs the full suite once on an integration commit of main plus the lane and fast-forwards main on green, instead of a lane suite and a second main suite.
-- **Last accepted code: PH2 merge `291240211`** (half prefill by default; green on its lane `d129b60f8`, identical code: `inkling-gpu` 181/181, oracle pass). Before it, P5c merge `7f7cb75a3` (181/181), SC1 merge `1668d5caa` (180/180), V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
+- **Last accepted code: V4 merge `ec925cb41`** (fused fixed-cost verify kernels; integrated main green: `inkling-host` ok, `inkling-gpu` 186/186, oracle pass at 94.73% top-1 and mean KL 0.0199). Before it, PH2 merge `291240211` (half prefill by default; `inkling-gpu` 181/181), P5c merge `7f7cb75a3` (181/181), SC1 merge `1668d5caa` (180/180), V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
 - **Open from P3c:** `code-c02` now falls into a repeatable reasoning loop, and oQ4e quality dev is 7/11 (base 6/11), below the fast profile's 8-case bar. Mean TTFT at four agents rose on the warm repetition; the cause is not traced.
 - **Parked branches** (all on `origin`), with item, cause and retry:
   - `lane/p3c-prefill` at `f0ff849e6`: commits the prefill scratch at setup. Two 1K pairs are inconclusive and it has not run the suite. Retry: the suite, then three first-pass pairs at 1K.
@@ -92,8 +92,14 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    Open: experts with 4–8 live rows still cost about 1.5× their bytes, and about 13 ms a round at every width sits
    in kernels dispatched from `prefill.zig` (mixes, norms, convolutions, router, controller, affine 4-bit experts),
    which V4 takes after P5c.
-3f. V4, running: `lane/v4-fixed` in `.work/wt/v4-fixed` (scope `usrn_efaf5753-38cf-48f8-bb80-9bf4f568284c`, base `d129b60f8`; timing via `.work/tmp/v4-timing-go`), receipt `inkling-v4-fixed.md`: the ~13 ms a round spent at every verify width in kernels that
-   `prefill.zig` dispatches, measured per kernel at 1, 8 and 16 rows, then the 4–8-live-row expert cost.
+3f. V4, done and merged `ec925cb41` (`inkling-v4-fixed.md`). The ~13 ms a round V3 attributed to fixed kernels was about
+   5 ms measured unstamped on the served queue: depth mixes and norms 2.35 ms in place, controllers 1.01, the k/v
+   prologue and store 0.77, the router 0.56 — small dependent dispatches at 25–170 times their bytes, not bytes. The
+   lane fuses the same arithmetic in the same order into 424–472 fewer dispatches a step; every row and prefill stays
+   bit-equal (228/228 cross-build hashes at both prefill settings), and the verify is 1.5–2.2 ms cheaper at every width.
+   Six interleaved round pairs: speculative 1.038× main (CI 1.016–1.062), the one-row step 1.125× (1.108–1.141);
+   code-1024 reaches 230 tok/s, no other prompt reaches 200. Decision 17's remaining cost past one row is the routed
+   experts (19–33 ms of a 38–64 ms step at 8 and 16 rows), out of this lane's scope.
 4. SV1, done and merged (`inkling-sv1-serve.md`). `INKLING_DRAFTER=<dir>` turns on served greedy DFlash2
    speculation, byte-identical to plain greedy across prompt-cache hits, forks and EOS (133/133 in `inkling-gpu`).
    It is faster only on code-1024 (1.47×) and prose-1024 (1.16×), so it stays opt-in until V1 and DF2 land. It
@@ -134,10 +140,12 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    `INKLING_ROUND_SPLIT=1`, a bit-identical selector, and a plain-greedy scratch determinism test (rerun it with
    chaining on before reviving the chain). Decision 17's levers are verify GPU time, tokens per round and drafter
    GPU time; hiding the verify's ~0.6 ms encode joins V4.
-5f. P6, running (code only until `.work/tmp/p6-timing-go`, after V4's timing): `lane/p6-tail` in `.work/wt/p6-tail`
-   (scope `usrn_b93d7e34-dc41-42c1-83e4-5366c7008924`, base `f65124c46`), receipt `inkling-p6-tail.md`. The 1K dev
-   cell: remove the short last chunk and the lone replayed token while keeping every reuse contract; profile 16K and
-   the cap by kernel class (fixes there wait for V4, which owns `prefill.zig`).
+5f. P6, parked at `lane/p6-tail` code `4e4a86531` (`inkling-p6-tail.md`): the 1K dev tail merged into a last chunk of
+   up to 1,152 rows, and the store keeps the whole prompt's state with its last-row logits so a hit needs no replay.
+   The session was interrupted before a build; on wind-down the host build passed 37/37, but no GPU test, Decision 20
+   or timing result exists and no acceptance is claimed. V4 has since changed `prefill.zig` on main, which this lane
+   does not own: retry by rebasing onto current main, re-running the correctness checks, then `tests.sh`, `d20.sh`,
+   `quality.sh`, and only then the gated `tail.sh`, `session.sh` and `profile.sh`.
 5c. SV2, after P5c and V4: the integrated served path. Rebuild the planner's fixed cost table from sustained
    in-round measurements; freeze the tree policy and qualify it on a small untouched prompt set (the "holdout"
    prompts fitted acceptance priors and are now calibration data). Run the HTTP server with plain decoding, a loaded

@@ -5,7 +5,7 @@ This is the single plan for this repository: all current and future work, and th
 ## Status
 
 **Active 2026-11-24.**
-- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. SV2 (5c) is merged; next ready is SC2 (5d). P6 is parked on `lane/p6-tail`.
+- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. SC2 (5d) is done. Next ready: P7 (5g) and P6's retry (5f, rebased onto `de53331e3` and ready for its correctness checks), then Q3.
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
 - Acceptance flow (2026-11-24): lanes prove changes with filtered GPU tests; the parent runs the full suite once on an integration commit of main plus the lane and fast-forwards main on green, instead of a lane suite and a second main suite.
 - **Last accepted code: SV2, fast-forwarded from `lane/sv2-serve`** (speculation served by default; integrated suite on `33b38ed43`: `inkling-host` ok, `inkling-gpu` 185/185 plus the restored served test 12/12, oracle pass). Before it, V4 `ec925cb41` (fused fixed-cost verify kernels; integrated main green: `inkling-host` ok, `inkling-gpu` 186/186, oracle pass at 94.73% top-1 and mean KL 0.0199). Before it, PH2 merge `291240211` (half prefill by default; `inkling-gpu` 181/181), P5c merge `7f7cb75a3` (181/181), SC1 merge `1668d5caa` (180/180), V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
@@ -150,16 +150,26 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    qualify prompts (`campaign/prompts/qualify/`) over three rotated sessions, speculative decode is 1.43–2.43× plain
    (every lower 95% bound above 1; code/prose/structured-1024 148/172/127 tok/s, 4K 101–113). Every reply is
    byte-equal to plain across cold, cached, forked and natural-EOS requests. The drafter adds 0.42–0.56 GB at ready
-   and 0.81 GB at peak; unseen prefill is unchanged to the cap (0.98–1.01×), and a loaded drafter that does not draft
-   costs nothing. Contract change: serve pairs Inkling 2 Mini with `incoai/Inkling-2-Mini-DFlash2` from the local
+   and 0.81 GB at peak; unseen prefill with the drafter loaded is 0.96–0.99× at 1K–8K and unchanged at 16K and the
+   cap (SC2's two sessions: 0.965–0.968× at 1K–8K). Its `idle` mode measured nothing: `--no-drafts` drops the drafter
+   at load, so `idle` is plain decode. Contract change: serve pairs Inkling 2 Mini with `incoai/Inkling-2-Mini-DFlash2` from the local
    Hugging Face cache, and `--drafter` names it, like `INKLING_DRAFTER` (giving both is refused). `--no-drafts` and
    `--drafter none` serve plain. The cost table is refitted to V4's in-round costs: neutral, 0.998× (CI
    0.961–1.036). Decision 17's 200 tok/s still holds only on code-1024; the routed experts past one row remain the
    cost. Sessions a and b ran back to back, so SC2 re-pairs on a quiet host.
-5d. SC2, after SV2: one pinned scorecard for the integrated configuration (served prefill curve, committed decode
-   by class, round time and accepted work, quality, peak footprint), with V3's and DF2b's round pairs re-paired on a
-   quiet host across separate sessions. Every target miss names its dominant measured
-   cost; external reported results, local comparisons and projections stay separate.
+5d. SC2, done (`inkling-sc2-scorecard.md`), pinned on main `de53331e3`.
+   - Prefill: plain meets 2,000 tok/s at 1K/4K/8K (2,004/2,067/2,011). The default with the drafter is 3% short
+     (1,939/1,994/1,947) because every prefill chunk captures and absorbs the drafter's taps. Both miss at 16K (1,885)
+     and near the cap (1,766).
+   - Decode: 200 tok/s on no served prompt (best 186 on code-1024; 93–172 elsewhere). The verify's routed experts
+     dominate the round.
+   - Round pairs, re-paired over six pairs in two sessions: DF2b 1.219× (1.203–1.235), V3 1.002× (0.969–1.037,
+     inconclusive).
+   - Quality: PH2's results stand, since no arithmetic changed since.
+   - Correction: SV2's `idle` mode was plain decode, because `--no-drafts` drops the drafter at load.
+5g. P7, ready: the drafter's prompt-side cost. Profile the tap capture and absorb in the prefill loop by kernel, then
+   capture or absorb only the rows the drafter's window and restore points need. The gate is Decision 17's prefill
+   at 1K/4K/8K under the default, with every reuse, fork and store contract kept.
 6. Q3: the long-reasoning runaways: `code-c02` under exact prefill (open since P3c) and `retrieval-t01` under half prefill.
 7. Deferred off the critical path: see **Later**.
 

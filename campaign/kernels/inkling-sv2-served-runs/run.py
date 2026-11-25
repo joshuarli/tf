@@ -1,4 +1,4 @@
-"""SV2 served runs: plain decode, a loaded but disabled drafter, and active speculation over the same prompts, one
+"""SV2 served runs: plain decode, `INKLING_DRAFTER` with `--no-drafts`, and active speculation over the same prompts, one
 session a call, and the tables that pair them across sessions."""
 
 import argparse
@@ -25,7 +25,7 @@ CURVE = CAMPAIGN / "comparators" / "prefill_curve.py"
 
 
 def flags_env(mode: str, drafter: dict) -> tuple[list[str], dict]:
-    """`ar` loads no drafter; `idle` loads it and serves `--no-drafts`; `spec` loads it and drafts."""
+    """`ar` names no drafter; `idle` names it with `--no-drafts`, which drops it at load; `spec` loads it and drafts."""
     return {"ar": (["--no-drafts"], {}), "idle": (["--no-drafts"], drafter), "spec": ([], drafter)}[mode]
 
 

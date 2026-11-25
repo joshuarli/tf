@@ -3,8 +3,10 @@
 **Verdict.** Speculation is promoted to the served default. On six prompts that no fitted prior has seen, three
 served sessions give speculative decode 1.43 to 2.43 times plain decode. Every prompt's lower 95% bound is above 1,
 and every reply is byte-equal to plain decode: cold, prompt-cache hit, forked second turn and natural EOS. The
-drafter costs 0.42 to 0.56 GB at ready and 0.81 GB at peak, inside Decision 8's 4 GiB. Unseen prefill is unchanged
-from 1K to the cap (0.98 to 1.01 times), and a loaded drafter that does not draft costs nothing (idle/ar 1.00 to 1.04).
+drafter costs 0.42 to 0.56 GB at ready and 0.81 GB at peak, inside Decision 8's 4 GiB. Unseen prefill with the drafter
+is 0.978 to 1.006 times plain from 1K to the cap here (SC2's two later sessions put it at 0.965 to 0.968 times at 1K to 8K).
+Correction (SC2): the `idle` mode measured nothing. `--no-drafts` drops the drafter at load, so `idle` served plain
+decode, and its 1.00 to 1.04 times `ar` is two plain servers compared.
 Serve now pairs Inkling 2 Mini with `incoai/Inkling-2-Mini-DFlash2` from the local Hugging Face cache, as it does
 Qwen3.8-27B's drafter. The planner's cost table is refitted to V4's in-round costs, which is neutral (0.998 times,
 95% interval 0.961 to 1.036).
@@ -68,7 +70,7 @@ sources are disjoint from the other sets.
 `run.py session` starts three servers in turn, in an order rotated each session:
 
 - `ar`: no drafter, `--no-drafts`;
-- `idle`: `INKLING_DRAFTER` set, `--no-drafts`;
+- `idle`: `INKLING_DRAFTER` set, `--no-drafts` (which drops the drafter at load, so this is plain decode too);
 - `spec`: `INKLING_DRAFTER` set, drafting.
 
 Each server runs every qualify prompt through `bench.trial`: a cold 512-token request, a warm repeat (a prompt-cache

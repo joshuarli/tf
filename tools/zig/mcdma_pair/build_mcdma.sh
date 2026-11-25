@@ -29,7 +29,7 @@ else
   # rpc/Makefile's $(OUT)/$(FABRIC) rule: only the mcdma_fabric_* functions are exported
   cc -std=c11 -O2 -Wall -Wextra -Werror "${shared[@]}" -fvisibility=hidden -o "$lib" "${files[@]}" "${verbs[@]}" -lpthread ${extra[@]+"${extra[@]}"}
 fi
-if command -v sha256sum >/dev/null 2>&1; then sum="$(sha256sum "$lib" | cut -d' ' -f1)"; else sum="$(shasum -a 256 "$lib" | cut -d' ' -f1)"; fi
+sum="$(sha256sum "$lib" | cut -d' ' -f1)"
 echo "$lib"
 echo "sha256 $sum" >&2
 if [ "$ext" = dylib ]; then otool -L "$lib" | tail -n +2 >&2; else ldd "$lib" >&2 || true; fi

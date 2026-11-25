@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: tools/zig/xpu_guard.sh SECONDS COMMAND [ARGS...]; one GPU program at a time under flock /tmp/b70.lock
+# usage: tools/zig/xpu_guard.sh SECONDS COMMAND [ARGS...]
 limit_mb=${XPU_OTHERS_MB:-8192}
 secs=${1:?seconds}; shift
 vram_others_mb() {
@@ -12,8 +12,12 @@ vram_others_mb() {
   echo $((kb / 1024))
 }
 # waits while other processes hold over 8 GB VRAM (xe fdinfo); stops the command only with SIGINT after SECONDS
-exec 9>/tmp/b70.lock
-flock 9
+script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+script_path=$script_dir/$(basename "$0")
+flock_helper=$script_dir/../../campaign/flock.py
+if [ "${XPU_GUARD_LOCK_HELD:-}" != 1 ]; then
+  XPU_GUARD_LOCK_HELD=1 exec python3 "$flock_helper" inf /tmp/b70.lock env XPU_GUARD_LOCK_HELD=1 "$script_path" "$secs" "$@"
+fi
 while [ "$(vram_others_mb)" -gt "$limit_mb" ]; do
   echo "waiting: other processes hold $(vram_others_mb) MB of VRAM (limit $limit_mb)" >&2
   sleep 20

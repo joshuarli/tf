@@ -31,13 +31,14 @@ $(BASELINE_WT):
 
 baseline-toolchain: | $(BASELINE_WT)
 	printf '%s\n' "$(ZIG_PINNED)" > $(BASELINE_WT)/.zig-version
-	sed -i '' 's/minimum_zig_version = "[^"]*"/minimum_zig_version = "$(ZIG_PINNED)"/' $(BASELINE_WT)/build.zig.zon
+	sed 's/minimum_zig_version = "[^"]*"/minimum_zig_version = "$(ZIG_PINNED)"/' $(BASELINE_WT)/build.zig.zon > $(BASELINE_WT)/build.zig.zon.tmp
+	mv $(BASELINE_WT)/build.zig.zon.tmp $(BASELINE_WT)/build.zig.zon
 	test "$$(git -C $(BASELINE_WT) rev-parse HEAD)" = "$(BASELINE_REV)"
 	test "$$(git -C $(BASELINE_WT) diff --name-only | tr '\n' ' ')" = ".zig-version build.zig.zon "
 
 build-baseline: check-zig baseline-toolchain
 	cd $(BASELINE_WT) && zig build native -Dcpu=apple_m1 -Dversion=1.0.0
-	shasum -a 256 $(BASELINE_WT)/zig-out/native/bin/tensorfold-native | tee $(WORK)/baseline.sha256
+	sha256sum $(BASELINE_WT)/zig-out/native/bin/tensorfold-native | tee $(WORK)/baseline.sha256
 
 baseline-timings: check-zig baseline-toolchain
 	mkdir -p $(LOGS)

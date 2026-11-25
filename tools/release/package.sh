@@ -70,9 +70,7 @@ esac
 # The walk (refuse symlinks, check every regular file, require a real directory)
 # runs inside the checker, so it behaves the same on every host.
 "$path_checker" "$build_root" --tree "$stage"
-sha() {
-    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi
-}
+sha() { sha256sum "$@"; }
 # Hash every shipped file; keep relative paths so checks survive relocation.
 (cd "$stage"; find . -type f ! -name SHA256SUMS | LC_ALL=C sort | while IFS= read -r file; do sha "$file"; done) > "$stage/SHA256SUMS"
 # no macOS metadata or builder identity in the entries (Linux tar warned once per entry)

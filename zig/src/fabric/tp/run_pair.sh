@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Two ranks of tf-tp-test on one two-GPU host: `[SUITES=..] [FAILFAST=..] run_pair.sh BIN OUTDIR`.
 set -u
+timestamp() { python3 -c 'import time; n=time.time_ns(); print("%d.%09d" % divmod(n, 1000000000))'; }
 BIN=${1:?bin}; OUT=${2:?outdir}
 mkdir -p "$OUT"
 nvidia-smi > "$OUT/smi.txt" 2>&1
@@ -12,7 +13,7 @@ pair() { # NAME BACKEND ARGS...: both ranks, logs OUT/NAME.rR.log ending with an
     PORT=$((PORT + 10))
     for r in 0 1; do
         ( TF_TP_RANK=$r TF_TP_DEVICE=$r TF_TP_PORT=$PORT TF_COMM_BACKEND=$backend NCCL_DEBUG=${NCCL_DEBUG:-WARN} \
-            timeout 600 "$BIN" "$@"; echo "EXIT rank $r rc $? at $(date +%s.%N)" ) > "$OUT/$name.r$r.log" 2>&1 &
+            timeout 600 "$BIN" "$@"; echo "EXIT rank $r rc $? at $(timestamp)" ) > "$OUT/$name.r$r.log" 2>&1 &
     done
     wait
 }
@@ -48,5 +49,5 @@ for backend in ${FAILFAST:-nccl mailbox}; do
         done
     done
 done
-grep -h "^SUMMARY\|^FAIL" "$OUT"/suite*.log
+grep -hE "^SUMMARY|^FAIL" "$OUT"/suite*.log
 cat "$OUT/failfast.txt"

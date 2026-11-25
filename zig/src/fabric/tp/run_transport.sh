@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The failed-transport check on two hosts (tf-tp-test failfast V transport); `run_transport.sh` alone prints how.
 set -u
+timestamp() { python3 -c 'import time; n=time.time_ns(); print("%d.%09d" % divmod(n, 1000000000))'; }
 usage() {
     cat << 'TXT'
 run_transport.sh MASTER_ADDR PEER_SSH OUTDIR    (on rank 0's host, as root; rank 1 runs over ssh)
@@ -29,7 +30,7 @@ if [ "${1:-}" = t2 ]; then
             timeout 300 "$BIN" failfast 1 transport 200 5 > "$OUT/T2-r$r.log" 2>&1 &
     done
     wait
-    grep -h '^PASS\|^FAIL\|REFUSED\|regions kept' "$OUT"/T2-r*.log
+    grep -hE '^PASS|^FAIL|REFUSED|regions kept' "$OUT"/T2-r*.log
     exit 0
 fi
 
@@ -88,18 +89,18 @@ step() { # NAME WANT_RC -- ARGS...
     PORT=$((PORT + 10))
     declare -A t
     for n in local peer; do
-        t[$n]=$(on $n date +%s)
+        t[$n]=$(on $n date -u +%s)
         on $n counters > "$OUT/$name.$n.err0"
     done
     on local probe > "$OUT/$name.local.rdma.txt" 2>&1 &
     on peer probe > "$OUT/$name.peer.rdma.txt" 2>&1 &
     local envs=(TF_TP_MASTER="$MASTER" TF_TP_PORT=$PORT TF_COMM_BACKEND=roce TF_TP_ROCE_FALLBACK=error TF_TP_MAILBOX_MAX_KB=1024
         TF_TP_ROCE_FAST=1 TF_TP_FAILFAST_GRACE_S=15)
-    ssh -o BatchMode=yes "$PEER" "ulimit -l unlimited && env $(printf '%q ' "${envs[@]}") TF_TP_RANK=1 timeout 300 $(printf '%q ' "$BIN" "$@"); echo \"EXIT rank 1 rc \$? at \$(date +%s.%N)\"" > "$OUT/$name-r1.log" 2>&1 &
-    ( ulimit -l unlimited && env "${envs[@]}" TF_TP_RANK=0 timeout 300 "$BIN" "$@"; echo "EXIT rank 0 rc $? at $(date +%s.%N)" ) > "$OUT/$name-r0.log" 2>&1
+    ssh -o BatchMode=yes "$PEER" "$(declare -f timestamp); ulimit -l unlimited && env $(printf '%q ' "${envs[@]}") TF_TP_RANK=1 timeout 300 $(printf '%q ' "$BIN" "$@"); echo \"EXIT rank 1 rc \$? at \$(timestamp)\"" > "$OUT/$name-r1.log" 2>&1 &
+    ( ulimit -l unlimited && env "${envs[@]}" TF_TP_RANK=0 timeout 300 "$BIN" "$@"; echo "EXIT rank 0 rc $? at $(timestamp)" ) > "$OUT/$name-r0.log" 2>&1
     wait
-    rc0=$(grep -oP '^EXIT rank 0 rc \K[0-9]+' "$OUT/$name-r0.log")
-    rc1=$(grep -oP '^EXIT rank 1 rc \K[0-9]+' "$OUT/$name-r1.log")
+    rc0=$(sed -nE 's/^EXIT rank 0 rc ([0-9]+).*/\1/p' "$OUT/$name-r0.log")
+    rc1=$(sed -nE 's/^EXIT rank 1 rc ([0-9]+).*/\1/p' "$OUT/$name-r1.log")
     echo "$name: rank 0 rc ${rc0:-?}, rank 1 rc ${rc1:-?} (want $want)" | tee -a "$OUT/verdict.txt"
     for n in local peer; do
         on $n counters > "$OUT/$name.$n.err1"
@@ -112,7 +113,7 @@ step() { # NAME WANT_RC -- ARGS...
     hits=$(grep -hE "$BAD" "$OUT/$name-r0.log" "$OUT/$name-r1.log")
     [ -n "$hits" ] && stop "$name: $hits"
     [ "$rc0" = "$want" ] && [ "$rc1" = "$want" ] || stop "$name: rc $rc0 / $rc1, want $want"
-    grep -h 'halted\|quiesced\|idle before\|regions kept' "$OUT/$name"-r*.log | sed "s/^/  /"
+    grep -hE 'halted|quiesced|idle before|regions kept' "$OUT/$name"-r*.log | sed "s/^/  /"
 }
 step T0 0 -- suite
 step T1 70 -- failfast 1 transport 200

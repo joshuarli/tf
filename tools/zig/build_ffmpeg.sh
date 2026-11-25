@@ -9,7 +9,7 @@ mkdir -p "$work"
 cd "$work"
 if [ ! -d "ffmpeg-$version" ]; then
   [ -f "ffmpeg-$version.tar.xz" ] || curl -sSfLO "https://ffmpeg.org/releases/ffmpeg-$version.tar.xz"
-  echo "$sha256  ffmpeg-$version.tar.xz" | shasum -a 256 -c -
+  echo "$sha256  ffmpeg-$version.tar.xz" | sha256sum -c -
   tar xf "ffmpeg-$version.tar.xz"
 fi
 cd "ffmpeg-$version"

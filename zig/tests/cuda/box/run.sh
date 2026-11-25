@@ -66,7 +66,7 @@ for t in "info" "smoke" "graph" "launch-ex" "ptx" "symbols" "overhead 1000 20" "
   # shellcheck disable=SC2086
   timeout 600 "$T" $t || { rc=1; echo "rc=$? for $t"; }
 done 2>&1 | tee "${OUT:?}/tests.log"
-grep -q '^FAIL\|^rc=' "${OUT:?}/tests.log" && rc=1
+grep -qE '^FAIL|^rc=' "${OUT:?}/tests.log" && rc=1
 
 step "NCCL in the image (the host has no libnccl)"
 container nccl --gpus all --network none -e NCCL_DEBUG=WARN -v "${OUT:?}:/out:ro" \

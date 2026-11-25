@@ -14,4 +14,4 @@ mkdir -p "$root"
 if [ ! -d "$source" ]; then tar xzf "$archive" -C "$root"; fi
 (cd "$source" && zig build -Doptimize=ReleaseFast)
 zig build tf-inkling2-loop-run -Dcpu=apple_m1 --prefix "$root/tf-build" --cache-dir "$root/tf-cache"
-shasum -a 256 "$source/zig-out/bin/nano" "$root/tf-build/bin/tf-inkling2-loop-run"
+sha256sum "$source/zig-out/bin/nano" "$root/tf-build/bin/tf-inkling2-loop-run"

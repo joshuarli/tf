@@ -12,9 +12,7 @@ fi
 
 die() { echo "tf-mcdma-pair: $*" >&2; exit 2; }
 
-sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
-}
+sha256() { sha256sum "$1" | cut -d' ' -f1; }
 
 # The binary for this host: TF_MCDMA_PAIR_BIN, the bundle's bin/<arch>-<os>/, then the repository's zig-out.
 find_bin() {

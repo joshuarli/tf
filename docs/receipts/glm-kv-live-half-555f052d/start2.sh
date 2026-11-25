@@ -4,8 +4,8 @@
 set -u
 penv=${1:-}; shift || true
 for i in $(seq 1 40); do a=$(pgrep -f "[t]ensorfold-native serve" | wc -l); b=$(ssh -o BatchMode=yes RANK1_RING_IP "pgrep -f \"[t]ensorfold-native serve\" | wc -l"); [[ "$a" == 0 && "$b" == 0 ]] && break; sleep 3; done
-flock -w 90 $GPU_LOCK true || { echo "LOCK HELD on node0"; exit 1; }
-ssh -o BatchMode=yes RANK1_RING_IP "flock -w 90 $GPU_LOCK true" || { echo "LOCK HELD on node1"; exit 1; }
+python3 "$WORK/TensorFold-pr/campaign/flock.py" 90 "$GPU_LOCK" || { echo "LOCK HELD on node0"; exit 1; }
+ssh -o BatchMode=yes RANK1_RING_IP "python3 '$WORK/TensorFold-pr/campaign/flock.py' 90 '$GPU_LOCK'" || { echo "LOCK HELD on node1"; exit 1; }
 echo "launch rank 1 $(date -u +%H:%M:%S)"
 ssh -o BatchMode=yes RANK1_RING_IP "cd $WORK/receipt2 && (setsid nohup env $penv $WORK/receipt2/launch2.sh 1 $* > rank1.log 2>&1 < /dev/null & disown)"
 sleep 2
@@ -16,7 +16,7 @@ echo "rank0 process seen after $((i*2)) s: $(pgrep -f "[t]ensorfold-native serve
 t0=$(date +%s)
 while :; do
   if curl -s -m 3 http://127.0.0.1:18080/v1/models | grep -q id; then echo "READY after $(( $(date +%s) - t0 )) s"; exit 0; fi
-  if ! pgrep -f "[t]ensorfold-native serve" >/dev/null; then echo "RANK0 GONE after $(( $(date +%s) - t0 )) s"; tail -n 8 rank0.log | cut -c1-200; exit 1; fi
+  if ! pgrep -f "[t]ensorfold-native serve" >/dev/null; then printf '%s\n' "RANK0 GONE after $(( $(date +%s) - t0 )) s"; tail -n 8 rank0.log | cut -c1-200; exit 1; fi
   if grep -q -E "error:|refus|panic" rank0.log; then echo "RANK0 ERROR after $(( $(date +%s) - t0 )) s"; grep -E "error:|refus|panic" rank0.log | head -3 | cut -c1-200; exit 1; fi
   if (( $(date +%s) - t0 > 1500 )); then echo "TIMEOUT"; exit 1; fi
   sleep 10

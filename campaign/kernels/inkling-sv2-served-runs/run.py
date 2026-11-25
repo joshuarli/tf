@@ -18,6 +18,7 @@ sys.path.insert(0, str(CAMPAIGN / "kernels" / "inkling-sv1-serve-runs"))
 
 import bench  # noqa: E402
 import harness  # noqa: E402
+from bench_evidence import token_equal  # noqa: E402
 from run import FOLLOW, KEY, PINS, SHORT, Log, ask, drafted, same  # noqa: E402
 
 MODES = ("ar", "idle", "spec")
@@ -152,39 +153,69 @@ def curves(names) -> list[dict]:
             for line in (HERE / f"{name}.curve.jsonl").read_text().splitlines()]
 
 
-def equal(args) -> int:
-    """Every mode's replies against `ar` in the same session: cold, warm (a prompt-cache hit), natural EOS and the
-    forked second turn; `ar` and `idle` must draft nothing and `spec` must draft."""
+HEX64 = frozenset("0123456789abcdef")
+
+
+def digest(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and set(value) <= HEX64
+
+
+def stream_differences(a: dict, b: dict) -> list[str]:
+    """Why two recorded streams are not the same output: token and output hashes, token count, finish reasons and
+    tool output. Missing or malformed evidence is a difference, never a pass."""
+    why = [] if token_equal(a, b) is True else ["token_sha256 missing, unverified or different"]
+    if not (digest(a.get("output_sha256")) and a.get("output_sha256") == b.get("output_sha256")):
+        why.append("output_sha256 missing or different")
+    count = a.get("completion_tokens")
+    if not (isinstance(count, int) and count > 0 and count == b.get("completion_tokens")):
+        why.append("completion_tokens missing or different")
+    if not (a.get("finish_reasons") and a.get("finish_reasons") == b.get("finish_reasons")):
+        why.append("finish_reasons missing or different")
+    if (a.get("tool_calls"), a.get("tool_sha256")) != (b.get("tool_calls"), b.get("tool_sha256")):
+        why.append("tool output different")
+    return why
+
+
+def differences(trial_rows: list[dict], reply_rows: list[dict], session: str) -> list[str]:
+    """Every mode against `ar` in one session: cold, warm (a prompt-cache hit) and natural requests by their stream
+    evidence, and the saved first and forked replies by token ids, message and finish. Invalid trials are named but
+    still compared; `ar` and `idle` must draft nothing and `spec` must draft."""
     problems = []
-    for name in args.names:
-        by = {(t["prompt"]["name"], t["mode"]): t for t in trials([name])}
-        for (prompt, mode), t in sorted(by.items()):
-            if not t["valid"]:
-                problems.append(f"{name} {prompt} {mode}: invalid: {t['invalid_reasons']}")
-            ref = by.get((prompt, "ar"))
-            for phase in ("cold", "warm"):
-                req, base = t["requests"].get(phase) or {}, (ref or {}).get("requests", {}).get(phase) or {}
-                if req.get("completion") != base.get("completion"):
-                    problems.append(f"{name} {prompt} {mode} {phase}: reply differs from ar")
-                if (mode == "spec") != bool(req.get("drafted_tokens")):
-                    problems.append(f"{name} {prompt} {mode} {phase}: drafted {req.get('drafted_tokens')}")
-            warm = t["requests"].get("warm") or {}
-            if not warm.get("cached_tokens"):
-                problems.append(f"{name} {prompt} {mode}: warm request hit no cached tokens")
-            nat, base = t.get("natural_termination") or {}, (ref or {}).get("natural_termination") or {}
-            if (nat.get("completion"), nat.get("finish_reasons")) != (base.get("completion"), base.get("finish_reasons")):
-                problems.append(f"{name} {prompt} {mode} natural: reply or finish differs from ar")
-        rs = {(r["prompt"], r["phase"], r["mode"]): r for r in replies([name])}
-        for (prompt, phase, mode), r in sorted(rs.items()):
-            base = rs.get((prompt, phase, "ar"))
-            if base is None or not same(r, base):
-                problems.append(f"{name} {prompt} {phase} {mode}: reply differs from ar")
-            if phase == "fork" and not r.get("cached_tokens"):
-                problems.append(f"{name} {prompt} fork {mode}: no cached tokens")
-            if (mode == "spec") != (drafted(r) > 0):
-                problems.append(f"{name} {prompt} {phase} {mode}: drafted {drafted(r)}")
+    by = {(t["prompt"]["name"], t["mode"]): t for t in trial_rows}
+    for (prompt, mode), t in sorted(by.items()):
+        if not t["valid"]:
+            problems.append(f"{session} {prompt} {mode}: invalid: {t['invalid_reasons']}")
+        ref = by.get((prompt, "ar"))
+        if ref is None:
+            problems.append(f"{session} {prompt}: no ar trial to compare {mode} against")
+            continue
+        streams = [("cold", t["requests"].get("cold") or {}, ref["requests"].get("cold") or {}),
+                   ("warm", t["requests"].get("warm") or {}, ref["requests"].get("warm") or {}),
+                   ("natural", t.get("natural_termination") or {}, ref.get("natural_termination") or {})]
+        for phase, req, base in streams:
+            if mode != "ar":
+                problems += [f"{session} {prompt} {mode} {phase}: {why}" for why in stream_differences(req, base)]
+            if phase != "natural" and (mode == "spec") != bool(req.get("drafted_tokens")):
+                problems.append(f"{session} {prompt} {mode} {phase}: drafted {req.get('drafted_tokens')}")
+        if not (t["requests"].get("warm") or {}).get("cached_tokens"):
+            problems.append(f"{session} {prompt} {mode}: warm request hit no cached tokens")
+    rs = {(r["prompt"], r["phase"], r["mode"]): r for r in reply_rows}
+    for (prompt, phase, mode), r in sorted(rs.items()):
+        base = rs.get((prompt, phase, "ar"))
+        if base is None or not same(r, base):
+            problems.append(f"{session} {prompt} {phase} {mode}: reply differs from ar")
+        if phase == "fork" and not r.get("cached_tokens"):
+            problems.append(f"{session} {prompt} fork {mode}: no cached tokens")
+        if (mode == "spec") != (drafted(r) > 0):
+            problems.append(f"{session} {prompt} {phase} {mode}: drafted {drafted(r)}")
+    return problems
+
+
+def equal(args) -> int:
+    problems = [p for name in args.names for p in differences(trials([name]), replies([name]), name)]
+    mismatches = [p for p in problems if ": invalid: " not in p]
     print("\n".join(problems) if problems else f"every reply equal across modes in {', '.join(args.names)}")
-    return 1 if problems else 0
+    return 1 if mismatches else 0
 
 
 def interval(ratios: list[float]) -> tuple[float, float, float]:

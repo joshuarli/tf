@@ -309,8 +309,8 @@ pub const Plan = struct {
     const sibling_cap: f64 = 0.98;
     const Count = struct { hits: f64, trials: f64 };
 
-    /// DF2b's measured verify at 1, 2, 4, 8, 12 and 16 rows (1K and 4K), the wider tiles' fixed step at nine rows.
-    pub const default_verify_ms = [max_rows + 1]f64{ 0.0, 17.9, 21.8, 24.9, 28.0, 30.2, 32.4, 34.5, 36.7, 47.2, 49.5, 51.8, 54.0, 56.2, 58.5, 60.8, 63.0 };
+    /// V3's verify ms in rounds at 2-8 and 16 rows; sustained widths scaled to rounds at 1, 9, 10, 12; a line between.
+    pub const default_verify_ms = [max_rows + 1]f64{ 0.0, 18.3, 22.3, 25.9, 29.2, 31.1, 33.7, 36.5, 38.1, 42.7, 45.4, 47.9, 50.4, 52.4, 54.3, 56.2, 58.1 };
     pub const default_draft_ms: f64 = 4.5;
 
     pub fn init() Plan {

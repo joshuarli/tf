@@ -14,6 +14,7 @@ const slots_a_visit = widest * 8;
 const Io = struct { x: mtl.Buffer, act: mtl.Buffer, y: mtl.Buffer, outs: [8]mtl.Buffer, picks: mtl.Buffer, visits: usize };
 const Case = struct { pipe: mtl.Pipeline, groups: mtl.Size, threads: mtl.Size };
 
+/// The served few-row kernels against the one-row kernels at 1 to 16 rows, each served output checked byte for byte.
 pub fn run(gpa: std.mem.Allocator, m: *inkling.Model, reps: usize, picks_path: ?[]const u8, io_ctx: std.Io, out: *std.ArrayList(u8)) !void {
     const c = &m.config;
     var bs = try inkling.BatchScratch.init(m.device, c, 8);
@@ -25,6 +26,9 @@ pub fn run(gpa: std.mem.Allocator, m: *inkling.Model, reps: usize, picks_path: ?
     defer act.deinit();
     const y = try m.device.buffer(widest * vocab * 4, mtl.ResourceOptions.private);
     defer y.deinit();
+    var checks: [2]mtl.Buffer = undefined;
+    for (&checks) |*b| b.* = try m.device.buffer(widest * vocab * 4, mtl.ResourceOptions.shared);
+    defer for (checks) |b| b.deinit();
     var outs: [8]mtl.Buffer = undefined;
     for (&outs) |*b| b.* = try m.device.buffer(widest * 3072 * 4, mtl.ResourceOptions.private);
     defer for (outs) |b| b.deinit();
@@ -51,12 +55,22 @@ pub fn run(gpa: std.mem.Allocator, m: *inkling.Model, reps: usize, picks_path: ?
     const shared = &bs.shared;
     const text = &c.text;
     const local = localLayer(m, 0);
+    const ms: [8]u32 = .{ @intCast(local.attn.q.shape[0]), @intCast(local.attn.k.shape[0]), @intCast(local.attn.v.shape[0]), @intCast(local.attn.r.shape[0]), @intCast(local.attn.gate.shape[0]), @intCast(local.attn.sink.shape[0]), 0, 0 };
     var total: usize = 0;
-    for ([_]usize{ local.attn.q.shape[0], local.attn.k.shape[0], local.attn.v.shape[0], local.attn.r.shape[0], local.attn.gate.shape[0], local.attn.sink.shape[0] }) |n| total += n;
-    for ([_]u32{ 1, 2, 3, 4, 8, 12, 16 }) |rows| for ([_]Kind{ .head, .oproj, .proj, .gate_up, .down }) |kind| {
+    for (ms) |n| total += n;
+    const warm = [_]Case{
+        .{ .pipe = affine.dense, .groups = mtl.Size.of((vocab + 7) / 8, 1, 1), .threads = mtl.Size.of(256, 1, 1) },
+        .{ .pipe = affine.dense, .groups = mtl.Size.of((text.hidden + 7) / 8, 1, 1), .threads = mtl.Size.of(256, 1, 1) },
+        .{ .pipe = affine.batch_projections, .groups = mtl.Size.of((total + 7) / 8, 1, 1), .threads = mtl.Size.of(256, 1, 1) },
+        .{ .pipe = bs.rows.pipes.gu_nv, .groups = mtl.Size.of(text.expert_inter, 8, 1), .threads = mtl.Size.of(32, 1, 1) },
+        .{ .pipe = bs.rows.pipes.down_nv, .groups = mtl.Size.of(text.hidden, 8, 1), .threads = mtl.Size.of(32, 1, 1) },
+    };
+    for (0..3) |_| for (warm, [_]Kind{ .head, .oproj, .proj, .gate_up, .down }) |cs, kind| {
+        _ = try timeIt(m, reps, kind, cs, false, io, 1, io.y);
+    };
+    for ([_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16 }) |rows| for ([_]Kind{ .head, .oproj, .proj, .gate_up, .down }) |kind| {
         if (rows > picked_rows) continue;
         const slots = rows * text.topk;
-        const ms: [8]u32 = .{ @intCast(local.attn.q.shape[0]), @intCast(local.attn.k.shape[0]), @intCast(local.attn.v.shape[0]), @intCast(local.attn.r.shape[0]), @intCast(local.attn.gate.shape[0]), @intCast(local.attn.sink.shape[0]), 0, 0 };
         const one: Case = switch (kind) {
             .head => .{ .pipe = affine.dense, .groups = mtl.Size.of((vocab + 7) / 8, rows, 1), .threads = mtl.Size.of(256, 1, 1) },
             .oproj => .{ .pipe = affine.dense, .groups = mtl.Size.of((text.hidden + 7) / 8, rows, 1), .threads = mtl.Size.of(256, 1, 1) },
@@ -71,15 +85,29 @@ pub fn run(gpa: std.mem.Allocator, m: *inkling.Model, reps: usize, picks_path: ?
             .gate_up => shared.gateUp(rows, text.expert_inter, text.hidden, slots),
             .down => shared.downs(rows, text.hidden, text.expert_inter, slots),
         };
-        const many: Case = if (d) |v| .{ .pipe = v.pipe, .groups = v.groups, .threads = v.threads } else one;
+        const served: Case = if (d) |v| .{ .pipe = v.pipe, .groups = v.groups, .threads = v.threads } else one;
         var times: [2][5]f64 = undefined;
-        for (0..5) |round| for ([_]Case{ one, many }, 0..) |cs, side| {
-            times[side][round] = try timeIt(m, reps, kind, cs, side == 1 and d != null, io, rows);
+        for (0..5) |round| for ([_]Case{ one, served }, 0..) |cs, side| {
+            times[side][round] = try timeIt(m, reps, kind, cs, side == 1 and d != null, io, rows, io.y);
         };
         for (&times) |*t| std.mem.sort(f64, t, {}, std.sort.asc(f64));
-        try out.print(gpa, "{{\"kind\":\"kernel\",\"rows\":{d},\"op\":\"{s}\",\"one_row_us\":{d:.2},\"shared_us\":{d:.2},\"shared_kernel\":{}}}\n", .{ rows, @tagName(kind), times[0][2], times[1][2], d != null });
-        std.debug.print("kernel rows={d} {s}: one-row kernel {d:.1} us, {s} {d:.1} us\n", .{ rows, @tagName(kind), times[0][2], if (d != null) "shared" else "same", times[1][2] });
+        const equal = if (kind == .proj or d == null) true else try sameOut(m, kind, one, served, io, rows, checks);
+        try out.print(gpa, "{{\"kind\":\"kernel\",\"rows\":{d},\"op\":\"{s}\",\"kernel\":\"served\",\"one_row_us\":{d:.2},\"kernel_us\":{d:.2},\"shared_kernel\":{},\"equal\":{}}}\n", .{ rows, @tagName(kind), times[0][2], times[1][2], d != null, equal });
+        std.debug.print("kernel rows={d} {s}: one-row {d:.1} us, served {d:.1} us{s}\n", .{ rows, @tagName(kind), times[0][2], times[1][2], if (equal) "" else " BYTES DIFFER" });
+        if (!equal) return error.KernelDiffers;
     };
+}
+
+fn sameOut(m: *inkling.Model, kind: Kind, one: Case, cs: Case, io: Io, rows: u32, checks: [2]mtl.Buffer) !bool {
+    for ([_]Case{ one, cs }, [_]bool{ false, true }, checks) |case, s, buf| _ = try timeIt(m, 1, kind, case, s, io, rows, buf);
+    const n: usize = switch (kind) {
+        .head => m.config.text.unpadded_vocab * @as(usize, rows),
+        .oproj => m.config.text.hidden * @as(usize, rows),
+        .gate_up => m.config.text.expert_inter * @as(usize, rows) * 8,
+        .down => m.config.text.hidden * @as(usize, rows) * 8,
+        .proj => 0,
+    };
+    return std.mem.eql(u8, std.mem.sliceAsBytes(checks[0].slice(f32, n)), std.mem.sliceAsBytes(checks[1].slice(f32, n)));
 }
 
 fn filled(m: *inkling.Model, count: usize, seed: u64) !mtl.Buffer {
@@ -98,7 +126,7 @@ fn localLayer(m: *inkling.Model, i: usize) *const inkling.Layer {
     };
 }
 
-fn encode(enc: mtl.ComputeEncoder, m: *inkling.Model, kind: Kind, i: usize, shared: bool, io: Io, rows: u32) void {
+fn encode(enc: mtl.ComputeEncoder, m: *inkling.Model, kind: Kind, i: usize, shared: bool, io: Io, rows: u32, y: mtl.Buffer) void {
     const text = &m.config.text;
     switch (kind) {
         .head, .oproj => {
@@ -109,7 +137,7 @@ fn encode(enc: mtl.ComputeEncoder, m: *inkling.Model, kind: Kind, i: usize, shar
             enc.setBuffer(q.scales, q.scale_offset, 2);
             enc.setBuffer(q.biases, q.bias_offset, 3);
             enc.setValue(Dense{ .n = if (kind == .head) text.unpadded_vocab else @intCast(w.shape[0]), .k = @intCast(w.shape[1]), .rows = rows, .xs = 1, .xb = 0, .bits = 8, .cap = if (kind == .head) text.logit_cap else 0 }, 4);
-            enc.setBuffer(io.y, 0, 5);
+            enc.setBuffer(y, 0, 5);
         },
         .proj => {
             const a = &localLayer(m, i).attn;
@@ -131,20 +159,20 @@ fn encode(enc: mtl.ComputeEncoder, m: *inkling.Model, kind: Kind, i: usize, shar
             for ([_]inkling.Tensor{ if (up) lay.w13 else lay.w2, if (up) lay.w13_scale else lay.w2_scale, if (up) lay.w13_global.? else lay.w2_global.?, if (up) lay.w13_den.? else lay.w2_den.? }, 1..) |t, j| enc.setBuffer(t.buffer, t.offset, j);
             enc.setBuffer(io.picks, (i % io.visits) * slots_a_visit * 4, 5);
             enc.setValue(Moe{ .k = if (up) text.hidden else text.expert_inter, .n = if (up) text.expert_inter else text.hidden, .slots = rows * 8, .topk = 8, .gate_cap = if (up) text.gate_cap else 0, .up_cap = if (up) text.up_cap else 0 }, 6);
-            enc.setBuffer(io.y, 0, 7);
+            enc.setBuffer(y, 0, 7);
             enc.setBuffer(m.t16, 0, 8);
         },
     }
 }
 
-fn timeIt(m: *inkling.Model, reps: usize, kind: Kind, cs: Case, shared: bool, io: Io, rows: u32) !f64 {
+fn timeIt(m: *inkling.Model, reps: usize, kind: Kind, cs: Case, shared: bool, io: Io, rows: u32, y: mtl.Buffer) !f64 {
     const pool = mtl.objc.Pool.push();
     defer pool.pop();
     const cb = m.queue.commandBuffer();
     const enc = cb.compute(.serial);
     for (0..reps) |i| {
         enc.setPipeline(cs.pipe);
-        encode(enc, m, kind, i, shared, io, rows);
+        encode(enc, m, kind, i, shared, io, rows, y);
         enc.dispatchGroups(cs.groups, cs.threads);
     }
     enc.end();

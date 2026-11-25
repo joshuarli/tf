@@ -19,7 +19,8 @@ pub const usage =
     \\  widths 1, 2, 4, 8, 12 and 16 (or the comma-separated widths; 0: the one-row batch step), each prompt after load_s
     \\  seconds of eight-row verifies (sustained load; 0: none)
     \\tf-inkling2-loop-run <model> <prompts.json> dflash-kernels <reps> <out.jsonl> [picks.json]  one-row against
-    \\  shared-row kernels on the weights at 1 to 16 rows; picks.json: a widths run's 48 visits of routed experts
+    \\  shared-row kernels on the weights at 1 to 16 rows, each shared output checked byte for byte; picks.json: a widths
+    \\  run's 48 visits of routed experts
     \\  prompts.json: [{"name": ..., "ids": [...]}]; EOS is ignored; a run whose tokens differ from plain exits non-zero
     \\
 ;
@@ -71,7 +72,7 @@ pub fn main(init: std.process.Init, args: []const [:0]const u8) !void {
         const reps = try std.fmt.parseInt(usize, args[4], 10);
         const load_s = if (args.len >= 7) try std.fmt.parseFloat(f64, args[6]) else 0;
         if (reps == 0 or load_s < 0) return error.ExpectedArgs;
-        var chosen: [8]usize = undefined;
+        var chosen: [16]usize = undefined;
         var count: usize = 0;
         for ([_]usize{ 0, 1, 2, 4, 8, 12, 16 }) |w| {
             chosen[count] = w;
@@ -359,11 +360,11 @@ fn widths(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, re
             try verifier.forward(m, &bs, &g, rows[0..load_rows]);
             _ = try verifier.picks(m, bs.rows.logits, load_rows);
         }
-        var samples: [8]std.ArrayList(f64) = @splat(.empty);
+        var samples: [16]std.ArrayList(f64) = @splat(.empty);
         defer for (&samples) |*list| list.deinit(gpa);
-        var forward_only: [8]std.ArrayList(f64) = @splat(.empty);
+        var forward_only: [16]std.ArrayList(f64) = @splat(.empty);
         defer for (&forward_only) |*list| list.deinit(gpa);
-        var gpu_only: [8]std.ArrayList(f64) = @splat(.empty);
+        var gpu_only: [16]std.ArrayList(f64) = @splat(.empty);
         defer for (&gpu_only) |*list| list.deinit(gpa);
         for (0..reps + 1) |rep| {
             for (0..cells.len) |k| {

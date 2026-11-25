@@ -1,0 +1,63 @@
+# attempt 0 14:49:06: /Users/josh/repos/tf/.work/tmp/v3/run-final/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v3-experts/campaign/kernels/inkling-v3-experts-runs/code-1024.json dflash-widths 20 /Users/josh/repos/tf/.work/wt/v3-experts/campaign/kernels/inkling-v3-experts-runs/profile-lane-16.jsonl 0.0 16
+gpu-gate-ready: contended (check 1 of 1): compressor 23513 pages/s (limit 5000); 
+  gpu_other=21.7% util=20%/20% pressure=1 swap=0/s compressor=23513/s window=1s
+  GPU time users: ghostty pid=83603 13.6%; WindowServer pid=623 8.2%; 
+heavy: done: peak charged 0.0 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.0 GB); host pressure worst 1, host swap +0 MB, host pageins 4485
+# attempt 1 14:49:38: /Users/josh/repos/tf/.work/tmp/v3/run-final/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v3-experts/campaign/kernels/inkling-v3-experts-runs/code-1024.json dflash-widths 20 /Users/josh/repos/tf/.work/wt/v3-experts/campaign/kernels/inkling-v3-experts-runs/profile-lane-16.jsonl 0.0 16
+exact code-1024: width=16 rows bit-equal to one-row steps 16/16 max_abs_diff=0e0
+info: metal 4 timeline: inkling2-group-8, 12 rounds after 8 warm: 1 encoders, 1302 stages and 1302 dispatches a round
+info: metal 4 timeline: inkling2-group-8: 59.001 ms a round from the first stamp to the last, 59.001 in stages, 0.000 between encoders
+info: metal 4 timeline: inkling2-group-8 by kernel: ms a round, stages a round, us a stage
+info:     16.909   44.0    384.3  i2e_gate_up16
+info:      9.868   44.0    224.3  i2e_down16
+info:      4.799   48.0    100.0  i2v_split
+info:      4.502   48.0     93.8  i2t_projections16_8_1
+info:      4.133   49.0     84.3  i2t_dense16_8_1
+info:      2.109  192.0     11.0  i2v_conv
+info:      2.017    4.0    504.3  i2a_expert_up
+info:      1.853   24.0     77.2  i2_controls_apply
+info:      1.355   72.0     18.8  i2a_float
+info:      1.236   96.0     12.9  i2_batch_mix
+info:      1.164    4.0    290.9  i2a_expert_down
+info:      1.131   48.0     23.6  i2v_store_rel
+info:      1.040   48.0     21.7  i2_batch_combine
+info:      0.902   24.0     37.6  i2_controls_down
+info:      0.704  120.0      5.9  i2p_gather_rms
+info:      0.685   48.0     14.3  i2p_routepick
+info:      0.631   48.0     13.1  i2p_clip3
+info:      0.623   24.0     25.9  i2a_batch_float_control
+info:      0.613   24.0     25.6  i2_batch_mix4
+info:      0.547   48.0     11.4  i2p_combine
+info:      0.486   69.0      7.0  i2p_rms
+info:      0.470   48.0      9.8  i2_sig_mul
+info:      0.443   24.0     18.5  i2p_rms_pair
+info:      0.362   24.0     15.1  i2_controls_norm
+info:      0.233   28.0      8.3  i2p_rms3
+info: metal 4 timeline: inkling2-group-8: the longest single stages, us a round
+info:   stage 1301 of encoder 1:   2333.7  i2t_dense16_8_1
+info:   stage 1271 of encoder 1:    514.1  i2a_expert_up
+info:   stage 1225 of encoder 1:    505.7  i2a_expert_up
+info:   stage 1248 of encoder 1:    500.6  i2a_expert_up
+info:   stage 1294 of encoder 1:    496.9  i2a_expert_up
+info:   stage   87 of encoder 1:    467.4  i2e_gate_up16
+info:   stage  110 of encoder 1:    447.3  i2e_gate_up16
+info:   stage   18 of encoder 1:    444.1  i2e_gate_up16
+info:   stage 1156 of encoder 1:    429.9  i2e_gate_up16
+info:   stage   41 of encoder 1:    425.9  i2e_gate_up16
+info:   stage  473 of encoder 1:    422.8  i2e_gate_up16
+info:   stage   64 of encoder 1:    421.0  i2e_gate_up16
+info:   stage 1125 of encoder 1:    420.3  i2e_gate_up16
+info:   stage  846 of encoder 1:    419.9  i2e_gate_up16
+info:   stage  939 of encoder 1:    411.6  i2e_gate_up16
+widths code-1024: context=1024 grouped width=16 p50=63.581 ms p90=64.317 ms forward p50=63.168 ms gpu p50=58.630 ms
+routes code-1024: width=1 distinct experts a visit mean=8.00 min=8 max=8
+routes code-1024: width=2 distinct experts a visit mean=13.23 min=10 max=16
+routes code-1024: width=4 distinct experts a visit mean=20.27 min=14 max=29
+routes code-1024: width=8 distinct experts a visit mean=30.69 min=17 max=39
+routes code-1024: width=12 distinct experts a visit mean=37.25 min=18 max=50
+routes code-1024: width=16 distinct experts a visit mean=41.79 min=21 max=59
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.1% mem=0.0% rss=11024KiB vsz=488727312KiB elapsed=11-05:33:39 state=Ss command=/sbin/launchd
+  * pid=95289 ppid=1 pgid=95289 uid=502 cpu=105.5% mem=5.0% rss=2503904KiB vsz=2488464752KiB elapsed=01-23:42:43 state=Ss command=/Applications/OrbStack.app/Contents/Frameworks/OrbStack Helper.app/Contents/MacOS/OrbStack Helper vmgr -build-id macho:f05617e057d83e1c951ceb158b6406f3 -handoff
+perf-gate-ready: app bundle attribution pid=95289 bundle_id=dev.kdrag0n.MacVirt
+heavy: done: peak charged 18.1 GB of the 28 GB cap (footprint 18.1 GB, resident 12.3 GB, host wired growth 17.9 GB); host pressure worst 2, host swap -16 MB, host pageins 428629

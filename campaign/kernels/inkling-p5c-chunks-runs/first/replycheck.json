@@ -1,0 +1,76 @@
+{
+ "builds": {
+  "a": {
+   "binary": "/Users/josh/repos/tf/.work/tmp/p5c/cur/lane-build/native/bin/tensorfold-native",
+   "ready_s_1x32768": 23.21,
+   "ready_footprint_1x32768": 17407046088,
+   "replies": [
+    {
+     "content": "",
+     "reasoning": "The user wants me to summarize consecutive excerpts from a large native inference codebase. Each excerpt is introduced by \"===== path =====\". I need to work through them and produce a technical review: for each excerpt name",
+     "prompt_tokens": 1340,
+     "completion_tokens": 48
+    },
+    {
+     "content": "",
+     "reasoning": "The user asks to summarize consecutive excerpts from engineering notes and design documents. The excerpt provided is truncated (\"Rank 0 runs the whole model and serves; rank 1 holds only its shar\"). We need reason",
+     "prompt_tokens": 1117,
+     "completion_tokens": 48
+    },
+    {
+     "content": "",
+     "reasoning": "The user wants me to summarize consecutive excerpts from configuration and documentation files. The excerpt shown is truncated (it ends mid-JSON). I need to return exactly one JSON object matching the schema: {\"summary\":",
+     "prompt_tokens": 4557,
+     "completion_tokens": 48
+    },
+    {
+     "content": "",
+     "reasoning": "The user asks: \"Name three prime numbers.\" This is a simple factual math question. Need answer concise. Need ensure primes: 2,3,5 are prime. Could mention any three. Final answer only",
+     "prompt_tokens": 20,
+     "completion_tokens": 48
+    }
+   ],
+   "ready_s_8x4096": 1412.37,
+   "ready_footprint_8x4096": 17422594528
+  },
+  "b": {
+   "binary": "/Users/josh/repos/tf/.work/tmp/p5c/cur/lanew-build/native/bin/tensorfold-native",
+   "ready_s_1x32768": 14.67,
+   "ready_footprint_1x32768": 18974470600,
+   "replies": [
+    {
+     "content": "",
+     "reasoning": "The user wants me to summarize consecutive excerpts from a large native inference codebase. Each excerpt is introduced by \"===== path =====\". I need to work through them and produce a technical review: for each excerpt name",
+     "prompt_tokens": 1340,
+     "completion_tokens": 48
+    },
+    {
+     "content": "",
+     "reasoning": "The user asks to summarize consecutive excerpts from engineering notes and design documents. The excerpt provided is truncated (\"Rank 0 runs the whole model and serves; rank 1 holds only its shar\"). We need reason",
+     "prompt_tokens": 1117,
+     "completion_tokens": 48
+    },
+    {
+     "content": "",
+     "reasoning": "The user wants me to summarize consecutive excerpts from configuration and documentation files. The excerpt shown is truncated (it ends mid-JSON). I need to return exactly one JSON object matching the schema: {\"summary\":",
+     "prompt_tokens": 4557,
+     "completion_tokens": 48
+    },
+    {
+     "content": "",
+     "reasoning": "The user asks: \"Name three prime numbers.\" This is a simple factual math question. Need answer concise. Need ensure primes: 2,3,5 are prime. Could mention any three. Final answer only",
+     "prompt_tokens": 20,
+     "completion_tokens": 48
+    }
+   ],
+   "ready_s_8x4096": 13.22,
+   "ready_footprint_8x4096": 18050937240
+  }
+ },
+ "equal": [
+  true,
+  true,
+  true,
+  true
+ ]
+}

@@ -1,0 +1,747 @@
+info: inkling2_loop: 1 session caches, 1.161 GiB per slot, 0.083 GiB total rollback, context 32768
+[tensorfold] chat template: the checkpoint's
+warning: libtfgrammar.dylib is required for structured output and required tool calls (HTTP 400 when missing); restore the matching release archive's lib/ directory or run zig build grammar -Dxgrammar=DIR; prepare DIR with git clone --branch v0.2.8 --recurse-submodules https://github.com/mlc-ai/xgrammar
+[tensorfold] profile: stable; registered overrides: none
+[tensorfold] serving Inkling-2-Mini-oQ4e-mtp@3eea042751cd at http://127.0.0.1:64783/v1 (sampling: greedy; drafts: off; context: 32768; loaded in 10.3s)
+[tensorfold] 127.0.0.1 "GET /health HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /v1/models HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 2.662730 seconds
+inkling prefix: reused 0 of 1258 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-bec7477d1a5e49ec2f10976c73520616 prompt=1258 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=2.668 decode=0.000 elapsed=2.669 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 0.833202 seconds
+inkling prefix: reused 0 of 1136 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-40c72b5f4d382f852ab4cee8424e798c prompt=1136 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.834 decode=0.000 elapsed=0.834 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 0.664706 seconds
+inkling prefix: reused 0 of 1027 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-8f178d97ae46388f10b187cb3706911f prompt=1027 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.665 decode=0.000 elapsed=0.665 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 0.786601 seconds
+inkling prefix: reused 0 of 1163 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-aaacb28b82a160c744fc851c061d2cff prompt=1163 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.787 decode=0.000 elapsed=0.788 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 0.730250 seconds
+inkling prefix: reused 0 of 1032 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-906ef2dd319183da606482a8e8cc9fea prompt=1032 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.731 decode=0.000 elapsed=0.731 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 1.244864 seconds
+inkling prefix: reused 0 of 1889 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-d5491d2acc3e403275bab712378addac prompt=1889 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=1.246 decode=0.000 elapsed=1.246 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 0.770086 seconds
+inkling prefix: reused 0 of 1033 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-689bdb05b3ce2cb0c5480d7211d071f7 prompt=1033 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.771 decode=0.000 elapsed=0.771 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 1.289859 seconds
+inkling prefix: reused 0 of 1386 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-45786d1b1a18d86a7e99997023fad8c0 prompt=1386 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=1.290 decode=0.000 elapsed=1.291 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 0.928734 seconds
+inkling prefix: reused 0 of 1019 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-b4496ce8efa5283e0a919ba2cc17decb prompt=1019 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.929 decode=0.000 elapsed=0.929 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 0.824791 seconds
+inkling prefix: reused 0 of 909 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-c3b51999f52493a1492fc0bc933ad1ed prompt=909 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.825 decode=0.000 elapsed=0.826 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 0.956154 seconds
+inkling prefix: reused 0 of 1014 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-45000c89406de9e3dafb572cff058ac1 prompt=1014 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.957 decode=0.000 elapsed=0.957 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 1.464199 seconds
+inkling prefix: reused 0 of 1773 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-798cfc368310e0b8c180142790ee1b64 prompt=1773 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=1.465 decode=0.000 elapsed=1.465 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 0.973101 seconds
+inkling prefix: reused 0 of 1003 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-9f1c29e5112e7de440b8ff1a6bc7cd27 prompt=1003 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.974 decode=0.000 elapsed=0.974 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 2.396644 seconds
+inkling prefix: reused 0 of 4003 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-f60affcf9b46d0f17d6eb4a2cda91c6a prompt=4003 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=2.397 decode=0.000 elapsed=2.398 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 3.390604 seconds
+inkling prefix: reused 0 of 4857 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-9eaf93a8b46cfd12c45f232aa533a763 prompt=4857 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=3.392 decode=0.000 elapsed=3.392 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 2.811214 seconds
+inkling prefix: reused 0 of 4058 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-15d6043349326843a38ee9de81088353 prompt=4058 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=2.812 decode=0.000 elapsed=2.813 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 4.794800 seconds
+inkling prefix: reused 0 of 8178 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-2790441a2f89ce03f2b2a1150ff6ce25 prompt=8178 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=4.796 decode=0.000 elapsed=4.796 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 7.226061 seconds
+inkling prefix: reused 0 of 10549 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-95bd833c5959713b9086a1a4e55fd1f5 prompt=10549 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=7.229 decode=0.000 elapsed=7.229 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 5.528765 seconds
+inkling prefix: reused 0 of 8262 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-d6a4a948bcdeb73b378a49fc64627596 prompt=8262 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=5.531 decode=0.000 elapsed=5.531 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 9.343467 seconds
+inkling prefix: reused 0 of 14254 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-c8265510739ad603778e5512ac342753 prompt=14254 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=9.346 decode=0.000 elapsed=9.347 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 11.112259 seconds
+inkling prefix: reused 0 of 16738 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-b9bae4c02335548f89f3b0a61e35f0eb prompt=16738 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=11.115 decode=0.000 elapsed=11.116 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 9.985784 seconds
+inkling prefix: reused 0 of 15070 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-bd9a4c9633c5939210d19df9ab4c676f prompt=15070 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=9.989 decode=0.000 elapsed=9.989 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 10.694199 seconds
+inkling prefix: reused 0 of 16343 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-1126a306937f8ca539f8beae19cf226e prompt=16343 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=10.698 decode=0.000 elapsed=10.699 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 21.505617 seconds
+inkling prefix: reused 0 of 31627 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-1a6048bbba69d1ac1705f5859d4ae326 prompt=31627 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=21.511 decode=0.000 elapsed=21.511 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 19.811302 seconds
+inkling prefix: reused 0 of 29136 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-5863b78adc79dacd6ad5db7d7fb8a5ab prompt=29136 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=19.819 decode=0.000 elapsed=19.819 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling prefill: 22.123819 seconds
+inkling prefix: reused 0 of 32125 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-247a1edbf8a063771cc927b11a0b51e0 prompt=32125 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=22.129 decode=0.000 elapsed=22.129 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] shutting down (SIGTERM): draining: new requests get 503; 0 request(s) in progress may finish within 20.0 s
+[tensorfold] shutting down: drained
+[tensorfold] shutting down: stopped

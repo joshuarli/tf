@@ -4,6 +4,7 @@ const model_mod = @import("model.zig");
 const state_mod = @import("state.zig");
 const fwd = @import("forward.zig");
 const prefill_mod = @import("prefill.zig");
+const config_mod = @import("config.zig");
 
 const t = std.testing;
 
@@ -1600,6 +1601,252 @@ test "wide expert and grouped fallback partition threshold occupancy" {
         }
         try t.expectEqual(@as(u32, 0), overflow.slice(u32, 1)[0]);
     };
+}
+
+fn readPromptState(device: mtl.Device, queue: mtl.Queue, config: *const config_mod.Config, cache: *state_mod.Cache) !mtl.Buffer {
+    const row_bytes: usize = config.text.local.kv * config.text.local.dim * 2;
+    const kv_bytes = (state_mod.Cache.localSlots(config) * config.text.window + state_mod.Cache.globalSlots(config) * cache.len) * row_bytes * 2;
+    const conv_bytes = cache.k_conv.length() + cache.v_conv.length() + cache.attn_conv.length() + cache.mlp_conv.length();
+    const output = try device.buffer(kv_bytes + conv_bytes, mtl.ResourceOptions.shared);
+    errdefer output.deinit();
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const cb = queue.commandBuffer();
+    const blit = cb.blit();
+    var at: usize = 0;
+    for ([_]mtl.Buffer{ cache.k_conv, cache.v_conv, cache.attn_conv, cache.mlp_conv }) |buf| {
+        blit.copy(buf, 0, output, at, buf.length());
+        at += buf.length();
+    }
+    for (0..config.slots()) |slot| {
+        const bytes = (if (state_mod.Cache.isLocalSlot(config, slot)) config.text.window else cache.len) * row_bytes;
+        for ([_]mtl.Buffer{ cache.keys, cache.values }) |buf| {
+            blit.copy(buf, cache.baseOffset(config, slot), output, at, bytes);
+            at += bytes;
+        }
+    }
+    blit.end();
+    cb.commit();
+    cb.wait();
+    if (cb.failure()) |_| return error.GpuFailed;
+    return output;
+}
+
+fn checkPromptRollback(wrapped: bool) !void {
+    const path = std.c.getenv("TF_INKLING2_LOOP_DIR") orelse return error.SkipZigTest;
+    const model = try model_mod.Model.load(std.testing.allocator, std.testing.io, std.mem.span(path));
+    defer model.deinit();
+    const config = &model.config;
+    var cache = try state_mod.Cache.init(model.device, config, config.text.window + 8);
+    defer cache.deinit();
+    var prefill = try prefill_mod.PrefillScratch.init(model.device, config, 512);
+    defer prefill.deinit();
+    var scratch = try state_mod.Scratch.init(model.device, config);
+    defer scratch.deinit();
+    var ids: [512]u32 = undefined;
+    for (&ids, 0..) |*id, i| id.* = @intCast(100 + i % 71);
+    const prompt_len = config.text.window - @as(usize, if (wrapped) 2 else 0);
+    var at: usize = 0;
+    while (at < prompt_len) {
+        const n = @min(ids.len, prompt_len - at);
+        try prefill_mod.prefillWant(model, &prefill, &cache, ids[0..n], .none);
+        at += n;
+    }
+    const before = try readPromptState(model.device, model.queue, config, &cache);
+    defer before.deinit();
+    var rollback = if (wrapped) try state_mod.Cache.Rollback.initRows(model.device, config, 4) else try state_mod.Cache.Rollback.init(model.device, config);
+    defer rollback.deinit();
+    try rollback.copy(model.queue, config, &cache, true);
+    for ([_]u32{ 123, 124, 125, 126 }) |id| try fwd.position(model, &scratch, &cache, id);
+    try rollback.copy(model.queue, config, &cache, false);
+    try std.testing.expectEqual(prompt_len, cache.len);
+    const after = try readPromptState(model.device, model.queue, config, &cache);
+    defer after.deinit();
+    try std.testing.expectEqualSlices(u8, before.slice(u8, before.length()), after.slice(u8, after.length()));
+}
+
+test "prompt rollback restores the state after generated tokens overwrite rings" {
+    try checkPromptRollback(false);
+}
+
+test "bounded prompt rollback restores rows across the ring wrap" {
+    try checkPromptRollback(true);
+}
+
+test "fork restores the same cache and continuation as its prefill schedule" {
+    const path = std.c.getenv("TF_INKLING2_LOOP_DIR") orelse return error.SkipZigTest;
+    const model = try model_mod.Model.load(std.testing.allocator, std.testing.io, std.mem.span(path));
+    defer model.deinit();
+    const config = &model.config;
+    const point = config.text.window + 128;
+    var source = try state_mod.Cache.init(model.device, config, point + 256);
+    defer source.deinit();
+    var direct = try state_mod.Cache.init(model.device, config, point + 256);
+    defer direct.deinit();
+    var forked = try state_mod.Cache.init(model.device, config, point + 256);
+    defer forked.deinit();
+    var prefill = try prefill_mod.PrefillScratch.init(model.device, config, 512);
+    defer prefill.deinit();
+    var saved = try state_mod.Cache.Rollback.initRows(model.device, config, 128);
+    defer saved.deinit();
+    var ids: [512]u32 = undefined;
+    for (&ids, 0..) |*id, i| id.* = @intCast(100 + i % 71);
+    for ([_]*state_mod.Cache{ &source, &direct }) |cache| {
+        var at: usize = 0;
+        while (at < point) {
+            const take = @min(ids.len, point - at);
+            try prefill_mod.prefillWant(model, &prefill, cache, ids[0..take], .none);
+            at += take;
+        }
+    }
+    try saved.copy(model.queue, config, &source, true);
+    try prefill_mod.prefillWant(model, &prefill, &source, ids[0..128], .none);
+    const before = try readPromptState(model.device, model.queue, config, &source);
+    defer before.deinit();
+    try forked.copyFrom(model.queue, config, &source, point);
+    try saved.copy(model.queue, config, &forked, false);
+    try std.testing.expectEqual(point, forked.len);
+    const expected = try readPromptState(model.device, model.queue, config, &direct);
+    defer expected.deinit();
+    const actual = try readPromptState(model.device, model.queue, config, &forked);
+    defer actual.deinit();
+    try std.testing.expectEqualSlices(u8, expected.slice(u8, expected.length()), actual.slice(u8, actual.length()));
+    const after = try readPromptState(model.device, model.queue, config, &source);
+    defer after.deinit();
+    try std.testing.expectEqualSlices(u8, before.slice(u8, before.length()), after.slice(u8, after.length()));
+    try prefill_mod.prefillWant(model, &prefill, &direct, ids[0..128], .last);
+    const logits = try std.testing.allocator.dupe(f32, prefill.logits.slice(f32, config.text.unpadded_vocab));
+    defer std.testing.allocator.free(logits);
+    try prefill_mod.prefillWant(model, &prefill, &forked, ids[0..128], .last);
+    try std.testing.expectEqualSlices(f32, logits, prefill.logits.slice(f32, config.text.unpadded_vocab));
+}
+
+fn sharedCopy(m: *const model_mod.Model, buf: mtl.Buffer, len: usize) !mtl.Buffer {
+    const out = try m.device.buffer(@max(len, 16), mtl.ResourceOptions.shared);
+    errdefer out.deinit();
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const cb = m.queue.commandBuffer();
+    const blit = cb.blit();
+    blit.copy(buf, 0, out, 0, len);
+    blit.end();
+    cb.commit();
+    cb.wait();
+    if (cb.failure()) |_| return error.GpuFailed;
+    return out;
+}
+
+fn saveAt(m: *const model_mod.Model, cache: *state_mod.Cache, rollback: *state_mod.Cache.Rollback, at: usize, rows: usize) !void {
+    const len = cache.len;
+    cache.len = at;
+    defer cache.len = len;
+    try rollback.copyRows(m.queue, &m.config, cache, true, rows);
+}
+
+test "oQ4e prefill captures inside a chunk save what copyRows saves at that row and leave the prefill unchanged" {
+    const path = std.c.getenv("TF_INKLING2_LOOP_OQ4E_DIR") orelse return error.SkipZigTest;
+    const m = try model_mod.Model.load(t.allocator, t.io, std.mem.span(path));
+    defer m.deinit();
+    const config = &m.config;
+    const window: usize = config.text.window;
+    const kvw: usize = config.text.local.kv * config.text.local.dim;
+    const len: usize = 1500;
+    const base: usize = 300;
+    const rows: usize = prefill_mod.default_chunk;
+    const ids = try t.allocator.alloc(u32, len);
+    defer t.allocator.free(ids);
+    for (ids, 0..) |*id, i| id.* = @intCast(1000 + (i * 7919) % 50000);
+    var ps = try prefill_mod.PrefillScratch.initRows(m.device, config, rows, 1);
+    defer ps.deinit();
+    var conv = try prefill_mod.ConvCapture.init(m.device, config, rows);
+    defer conv.deinit();
+    var plain = try state_mod.Cache.init(m.device, config, len);
+    defer plain.deinit();
+    var cache = try state_mod.Cache.init(m.device, config, len);
+    defer cache.deinit();
+    for ([_]*state_mod.Cache{ &plain, &cache }) |c| try prefill_mod.prefillWant(m, &ps, c, ids[0..base], .none);
+    const points = [_]usize{ base, base + 1, base + 3, window, 1100, 1200, base + rows - 1, base + rows };
+    var pre: [points.len]state_mod.Cache.Rollback = undefined;
+    var saved: [points.len]state_mod.Cache.Rollback = undefined;
+    var made: usize = 0;
+    defer for (pre[0..made], saved[0..made]) |*a, *b| {
+        a.deinit();
+        b.deinit();
+    };
+    var captures: [points.len]prefill_mod.PrefillScratch.Capture = undefined;
+    for (points, 0..) |p, i| {
+        pre[i] = try state_mod.Cache.Rollback.initRows(m.device, config, 256);
+        saved[i] = state_mod.Cache.Rollback.initRows(m.device, config, 256) catch |e| {
+            pre[i].deinit();
+            return e;
+        };
+        made += 1;
+        try saveAt(m, &cache, &pre[i], p, len - p);
+        captures[i] = .{ .rollback = &saved[i], .at = p, .rows = len - p };
+    }
+    try prefill_mod.prefillWant(m, &ps, &plain, ids[base..][0..rows], .last);
+    const logits = try t.allocator.dupe(f32, ps.logits.slice(f32, config.text.unpadded_vocab));
+    defer t.allocator.free(logits);
+    ps.captures = &captures;
+    ps.verify_conv = &conv;
+    try prefill_mod.prefillWant(m, &ps, &cache, ids[base..][0..rows], .last);
+    ps.captures = &.{};
+    ps.verify_conv = null;
+    try t.expectEqualSlices(u8, std.mem.sliceAsBytes(logits), std.mem.sliceAsBytes(ps.logits.slice(f32, config.text.unpadded_vocab)));
+    {
+        const want = try readPromptState(m.device, m.queue, config, &plain);
+        defer want.deinit();
+        const got = try readPromptState(m.device, m.queue, config, &cache);
+        defer got.deinit();
+        try t.expectEqualSlices(u8, want.slice(u8, want.length()), got.slice(u8, got.length()));
+    }
+    var post = try state_mod.Cache.Rollback.initRows(m.device, config, 256);
+    defer post.deinit();
+    const sites = [_]prefill_mod.ConvSite{ .key, .value, .attention, .mlp };
+    const ring: usize = state_mod.ring;
+    for (points, 0..) |p, i| {
+        const count = @min(256, len - p);
+        try t.expectEqual(p, saved[i].len);
+        try t.expectEqual(count, saved[i].saved_rows);
+        try saveAt(m, &cache, &post, p, len - p);
+        const used = state_mod.Cache.Rollback.savedRows(&cache, config, config.slots(), count, false);
+        const want = try m.device.buffer(used, mtl.ResourceOptions.shared);
+        defer want.deinit();
+        {
+            const pool = mtl.objc.Pool.push();
+            defer pool.pop();
+            const cb = m.queue.commandBuffer();
+            const blit = cb.blit();
+            blit.copy(pre[i].buffer, 0, want, 0, used);
+            for (sites, 0..) |site, s| {
+                const channels: usize = if (s < 2) kvw else config.text.hidden;
+                for (0..config.slots()) |slot| for (0..ring) |j| {
+                    const q = p - ring + (j + ring - p % ring) % ring;
+                    if (q >= base) blit.copy(conv.buffer, conv.offset(slot, site, q - base), want, state_mod.Cache.Rollback.savedRing(&cache, s, slot, channels) + j * channels * 4, channels * 4);
+                };
+            }
+            const fresh = window + base -| p;
+            if (fresh < count) for (0..config.slots()) |slot| {
+                if (!state_mod.Cache.isLocalSlot(config, slot)) continue;
+                for ([_]bool{ false, true }) |values| {
+                    const at = state_mod.Cache.Rollback.savedRows(&cache, config, slot, count, values) + fresh * kvw * 2;
+                    blit.copy(post.buffer, at, want, at, (count - fresh) * kvw * 2);
+                }
+            };
+            blit.end();
+            cb.commit();
+            cb.wait();
+            if (cb.failure()) |_| return error.GpuFailed;
+        }
+        const got = try sharedCopy(m, saved[i].buffer, used);
+        defer got.deinit();
+        try t.expectEqualSlices(u8, want.slice(u8, used), got.slice(u8, used));
+        if (p == base or p == base + rows) {
+            const boundary = try sharedCopy(m, if (p == base) pre[i].buffer else post.buffer, used);
+            defer boundary.deinit();
+            try t.expectEqualSlices(u8, boundary.slice(u8, used), got.slice(u8, used));
+        }
+    }
 }
 
 test {

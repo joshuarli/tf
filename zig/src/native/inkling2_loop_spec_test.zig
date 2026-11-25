@@ -2,6 +2,7 @@ const std = @import("std");
 const api = @import("engine_api");
 const native = @import("inkling2_loop.zig");
 const host_mod = @import("inkling2_loop_host.zig");
+const mtl = @import("metal");
 
 const Prompt = struct { name: []const u8, token_ids: []const u32 };
 
@@ -218,6 +219,94 @@ test "inkling served speculation: tree rounds with lookup equal draft-off replie
     try expectSame(on.long, long_plain);
     try expectSame(on.short, short_plain);
     std.debug.print("inkling served speculation: {d} drafted replies equal their draft-off replies, and 4 equal a host without the drafter\n", .{drafted});
+}
+
+test "inkling host: full-chunk prefill keeps a repeated prompt equal to its cold reply and a fork equal to a store hit at a point inside a chunk" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const target = std.c.getenv("TF_INKLING2_LOOP_OQ4E_DIR") orelse return error.SkipZigTest;
+    if (unsetenv("INKLING_DRAFTER") != 0) return error.SetEnv;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const parsed = try std.json.parseFromSlice([]const Prompt, gpa, @import("inkling_prompts").text, .{});
+    defer parsed.deinit();
+    var named: std.StringHashMapUnmanaged([]const u32) = .empty;
+    defer named.deinit(gpa);
+    for (parsed.value) |p| try named.put(gpa, p.name, p.token_ids);
+    const code = named.get("code").?;
+    const source = try gpa.dupe(u32, named.get("agent").?);
+    defer gpa.free(source);
+    source[100] = if (source[100] == 1000) 1001 else 1000;
+    const point: u32 = 2432;
+    try std.testing.expect(source.len > point + 128 and source.len - 1 < 2048 + 1024);
+    const forked = try std.mem.concat(gpa, u32, &.{ source[0 .. point + 50], code[code.len / 2 ..] });
+    defer gpa.free(forked);
+    const grown = try std.mem.concat(gpa, u32, &.{ source, code[code.len / 2 ..] });
+    defer gpa.free(grown);
+    var board: Board = .{ .gpa = gpa, .io = io, .engine = undefined };
+    defer board.deinit();
+    try board.replies.ensureTotalCapacity(gpa, 8);
+    const o: api.Open = .{ .dir = std.mem.span(target), .model_type = "inkling2_loop", .lanes = 2, .lanes_fixed = true, .context = 8192, .prompt_cache_gib = 2 };
+    var two: struct { cold: *Reply, again: *Reply, fork: *Reply, grown: *Reply } = undefined;
+    {
+        const opened = try openHost(arena.allocator(), o);
+        defer opened.close(opened.ctx);
+        board.engine = opened.engine;
+        two.cold = try board.ask(source, 32, &.{}, false);
+        two.again = try board.ask(source, 32, &.{}, false);
+        two.fork = try board.ask(forked, 48, &.{}, false);
+        two.grown = try board.ask(grown, 48, &.{}, false);
+    }
+    var one_lane = o;
+    one_lane.lanes = 1;
+    const opened = try openHost(arena.allocator(), one_lane);
+    defer opened.close(opened.ctx);
+    board.engine = opened.engine;
+    const cold = try board.ask(source, 32, &.{}, false);
+    const grown_one = try board.ask(grown, 48, &.{}, false);
+    const hit = try board.ask(forked, 48, &.{}, false);
+    try std.testing.expectEqual(@as(u32, 0), two.cold.cached);
+    try std.testing.expectEqual(@as(u32, @intCast(source.len - 1)), two.again.cached);
+    try expectSame(two.again, two.cold);
+    try expectSame(cold, two.cold);
+    try std.testing.expectEqual(point, two.fork.cached);
+    try std.testing.expectEqual(point, hit.cached);
+    try expectSame(two.fork, hit);
+    try std.testing.expectEqual(@as(u32, @intCast(source.len)), two.grown.cached);
+    try std.testing.expectEqual(@as(u32, @intCast(source.len)), grown_one.cached);
+    try expectSame(two.grown, grown_one);
+    std.debug.print("inkling host: a repeated prompt, a fork at {d} and a store hit there reply as their references\n", .{point});
+}
+
+test "inkling host: the warm-up at load leaves the first slot's caches, rollback and snapshots zero and stores nothing" {
+    const target = std.c.getenv("TF_INKLING2_LOOP_OQ4E_DIR") orelse return error.SkipZigTest;
+    if (unsetenv("INKLING_DRAFTER") != 0) return error.SetEnv;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const opened = try openHost(arena.allocator(), .{ .dir = std.mem.span(target), .model_type = "inkling2_loop", .lanes = 1, .lanes_fixed = true, .context = 4096, .prompt_cache_gib = 2 });
+    defer opened.close(opened.ctx);
+    const h: *host_mod.Host = @ptrCast(@alignCast(opened.ctx));
+    const slot = &h.slots[0];
+    try std.testing.expectEqual(@as(usize, 0), slot.cache.len);
+    try std.testing.expectEqual(@as(usize, 0), slot.resident.items.len);
+    try std.testing.expectEqual(@as(usize, 0), h.entries.items.len);
+    for (slot.points) |point| try std.testing.expectEqual(@as(usize, 0), point);
+    var buffers: std.ArrayList(mtl.Buffer) = .empty;
+    defer buffers.deinit(std.testing.allocator);
+    try buffers.appendSlice(std.testing.allocator, &.{ slot.cache.keys, slot.cache.values, slot.cache.k_conv, slot.cache.v_conv, slot.cache.attn_conv, slot.cache.mlp_conv, slot.rollback.?.buffer });
+    for (slot.snapshots) |snapshot| if (snapshot) |r| try buffers.append(std.testing.allocator, r.buffer);
+    for (buffers.items) |buf| {
+        const shared = try h.model.device.buffer(buf.length(), mtl.ResourceOptions.shared);
+        defer shared.deinit();
+        const cb = h.model.queue.commandBuffer();
+        const blit = cb.blit();
+        blit.copy(buf, 0, shared, 0, buf.length());
+        blit.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |_| return error.GpuFailed;
+        for (shared.slice(u64, buf.length() / 8)) |word| try std.testing.expectEqual(@as(u64, 0), word);
+    }
 }
 
 fn openHost(a: std.mem.Allocator, o: api.Open) !api.Opened {

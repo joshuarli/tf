@@ -1,0 +1,6 @@
+# main's runner: prefill 1024 against prefill 896, same tokens
+rows 1024 bit-equal rows before split: 0 of 896 ; after: 0 of 128
+first differing row: 0
+max abs diff before split: 14.4093 after: 4.3702
+top-1 agreement: 0.9932
+mean KL(a||b) before split: 0.00359 after: 0.00353

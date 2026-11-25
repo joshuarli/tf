@@ -119,6 +119,24 @@ pub fn canRestore(saved_len: usize, current_len: usize, saved_rows: usize, windo
     return emitted <= cap and current_len >= saved_len and (current_len - saved_len <= saved_rows or saved_rows == window);
 }
 
+/// The first fork point of a `len`-token prompt prefilled from `at`: on the `interval` grid, in its last `window` rows.
+pub fn firstPoint(len: usize, at: usize, window: usize, interval: usize) usize {
+    const first = ((len -| window) + interval - 1) / interval * interval;
+    return @max(interval, @max(first, (at + interval - 1) / interval * interval));
+}
+
+pub const Chunk = struct { rows: usize, points: usize, next: usize };
+
+/// The chunk at `at`: full chunks, and under reuse the last token alone so a prompt stored before it replays it.
+pub fn chunk(at: usize, len: usize, rows: usize, enabled: bool, next: usize, interval: usize) Chunk {
+    const end = if (enabled and at + 1 < len) len - 1 else len;
+    const take = @min(rows, end - at);
+    var point = next;
+    var points: usize = 0;
+    while (enabled and point < at + take) : (point += interval) points += 1;
+    return .{ .rows = take, .points = points, .next = point };
+}
+
 pub fn release(slot: anytype, restored: bool) void {
     if (!restored) {
         slot.cache.len = 0;
@@ -296,4 +314,38 @@ test "shared prefixes remain recent as later prompts grow" {
     try std.testing.expectEqual(@as(?usize, 2), oldest(&entries));
     try std.testing.expect(entries[0].last_used > entries[1].last_used);
     try std.testing.expectEqual(@as(u64, 3), entries[2].last_used);
+}
+
+test "a fresh prompt prefills in full chunks with fork points inside them and its last token alone" {
+    const Case = struct { len: usize, at: usize = 0, reuse: bool = true, chunks: []const usize, points: []const usize };
+    const cases = [_]Case{
+        .{ .len = 1027, .chunks = &.{ 1024, 2, 1 }, .points = &.{ 896, 1024 } },
+        .{ .len = 1019, .chunks = &.{ 1018, 1 }, .points = &.{ 768, 896 } },
+        .{ .len = 1258, .chunks = &.{ 1024, 233, 1 }, .points = &.{ 1024, 1152 } },
+        .{ .len = 1258, .reuse = false, .chunks = &.{ 1024, 234 }, .points = &.{} },
+        .{ .len = 4100, .chunks = &.{ 1024, 1024, 1024, 1024, 3, 1 }, .points = &.{ 3968, 4096 } },
+        .{ .len = 3000, .at = 2560, .chunks = &.{ 439, 1 }, .points = &.{ 2816, 2944 } },
+        .{ .len = 129, .chunks = &.{ 128, 1 }, .points = &.{128} },
+        .{ .len = 2, .chunks = &.{ 1, 1 }, .points = &.{} },
+        .{ .len = 1, .chunks = &.{1}, .points = &.{} },
+    };
+    for (cases) |case| {
+        var chunks: [16]usize = undefined;
+        var points: [8]usize = undefined;
+        var n: usize = 0;
+        var saved: usize = 0;
+        var at = case.at;
+        var next = firstPoint(case.len, at, 256, 128);
+        while (at < case.len) {
+            const c = chunk(at, case.len, 1024, case.reuse, next, 128);
+            for (0..c.points) |i| points[saved + i] = next + i * 128;
+            saved += c.points;
+            next = c.next;
+            chunks[n] = c.rows;
+            n += 1;
+            at += c.rows;
+        }
+        try std.testing.expectEqualSlices(usize, case.chunks, chunks[0..n]);
+        try std.testing.expectEqualSlices(usize, case.points, points[0..saved]);
+    }
 }

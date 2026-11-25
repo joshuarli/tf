@@ -532,6 +532,32 @@ struct i2p_batch_conv_args { uint channels, heads, ring, pos, layout; float norm
   VALUES[(size_t)r * a.count + p.x] = V[(size_t)p.y * a.count + p.x];
 }
 
+struct i2p_ring_capture_args { uint channels, ring, base, at; };
+
+[[kernel]] void i2p_ring_capture(const device uint* X [[buffer(0)]], const device uint* RING [[buffer(1)]],
+    constant i2p_ring_capture_args& a [[buffer(2)]], device uint* OUT [[buffer(3)]],
+    uint2 p [[thread_position_in_grid]]) {
+  if (p.x >= a.channels || p.y >= a.ring) return;
+  const int q = int(a.at) - int(a.ring) + int((p.y + a.ring - a.at % a.ring) % a.ring);
+  const size_t at = (size_t)p.y * a.channels + p.x;
+  OUT[at] = q >= int(a.base) ? X[(size_t)(q - int(a.base)) * a.channels + p.x] : RING[at];
+}
+
+struct i2p_kv_capture_args { uint count, base, window, at, rows; };
+
+[[kernel]] void i2p_kv_capture(const device ushort* K [[buffer(0)]], const device ushort* V [[buffer(1)]],
+    const device ushort* KEYS [[buffer(2)]], const device ushort* VALUES [[buffer(3)]],
+    constant i2p_kv_capture_args& a [[buffer(4)]], device ushort* OK [[buffer(5)]], device ushort* OV [[buffer(6)]],
+    uint2 p [[thread_position_in_grid]]) {
+  if (p.x >= a.count || p.y >= a.rows) return;
+  const int q = int(a.at + p.y) - int(a.window);
+  const bool fresh = q >= int(a.base);
+  const size_t at = (fresh ? (size_t)(q - int(a.base)) : (size_t)((a.at + p.y) % a.window)) * a.count + p.x;
+  const size_t out = (size_t)p.y * a.count + p.x;
+  OK[out] = fresh ? K[at] : KEYS[at];
+  OV[out] = fresh ? V[at] : VALUES[at];
+}
+
 struct i2p_batch_store_row { device half* keys; device half* values; uint pos, pad; };
 struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; float scale, floor, alpha, eps; };
 

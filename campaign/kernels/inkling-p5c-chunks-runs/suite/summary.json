@@ -1,0 +1,30 @@
+{
+  "host": [
+    "free disk 333 GiB",
+    "System-wide memory free percentage: 78%",
+    "no thermal warning",
+    "no tensorfold-native servers running",
+    "GPU lock free",
+    "gpu_other=1.9% util=0%/2% pressure=1 swap=0/s compressor=9048/s window=1s"
+  ],
+  "workloads": [
+    {
+      "name": "inkling-host",
+      "tier": "edit",
+      "exit": 0,
+      "seconds": 9.2
+    },
+    {
+      "name": "inkling-gpu",
+      "tier": "change",
+      "exit": 0,
+      "seconds": 2366.0
+    },
+    {
+      "name": "inkling-omlx-oracle",
+      "tier": "scenario",
+      "exit": 0,
+      "seconds": 1905.8
+    }
+  ]
+}

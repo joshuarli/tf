@@ -1,0 +1,9 @@
+host: free disk 346 GiB; System-wide memory free percentage: 44%; no thermal warning; 2 tensorfold-native servers running (other lanes' runs are untouched); GPU lock held by pid 9056; GPU workloads will wait; gpu_other=102.9% util=100%/97% pressure=1 swap=0/s compressor=464/s window=1s
+ready   inkling-host (edit, observed 4 s warm)
+ready   inkling-gpu (change, observed 9 min)
+ready   inkling-omlx-oracle (scenario, observed 2 min)
+ok   inkling-host 9.2 s  (/Users/josh/repos/tf/.work/suite/20261124T123320/inkling-host.log)
+ok   inkling-gpu 2366.0 s  (/Users/josh/repos/tf/.work/suite/20261124T123320/inkling-gpu.log)
+ok   inkling-omlx-oracle 1905.8 s  (/Users/josh/repos/tf/.work/suite/20261124T123320/inkling-omlx-oracle.log)
+summary /Users/josh/repos/tf/.work/suite/20261124T123320/summary.json; completion is not a performance verdict: read each workload's records
+exit 0

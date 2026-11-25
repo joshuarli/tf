@@ -1,0 +1,2 @@
+heavy: host memory pressure is critical (level 4); stopping zig build
+heavy: stopped on host pressure: peak charged 24.2 GB of the 28 GB cap (footprint 20.9 GB, resident 20.3 GB, host wired growth 24.2 GB); host pressure worst 4, host swap +5468 MB, host pageins 4888606

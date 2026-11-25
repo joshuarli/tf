@@ -1,0 +1,21 @@
+# one 1,024-row chunk (A) against 896 + 128 (B), main's runner, same 1,024 tokens; routes from prefillroutes
+max |dlogit| 14.4093 at row 834 token 166502: -10.0983 vs 4.3111
+row 834 top-1 4879 vs 4879; mean |dlogit| over the row 3.3052
+slot  0 (layer  0): same top-8, router logit drift 0
+slot  1 (layer  1): same top-8, router logit drift 5.48e-06
+slot  2 (layer  2): same top-8, router logit drift 6.77e-05
+slot  3 (layer  3): same top-8, router logit drift 0.000121
+slot  4 (layer  4): same top-8, router logit drift 0.00018
+slot  5 (layer  5): same top-8, router logit drift 0.000504
+slot  6 (layer  6): same top-8, router logit drift 0.00123
+slot  7 (layer  7): same top-8, router logit drift 0.00609
+slot  8 (layer  8): same top-8, router logit drift 0.0115
+slot  9 (layer  9): same top-8, router logit drift 0.0213
+first top-8 change at slot 10 (layer 10), router logit drift there 0.0244
+  only in A: [75] only in B: [101]
+  expert 75: score A 0.362849 B 0.362816 (router -0.71679 vs -0.71694)
+  expert 101: score A 0.361235 B 0.363757 (router -0.78560 vs -0.77390)
+  8th/9th score margin A 0.001614 B 0.000941
+row 834: top-8 sets differ at 32 of 48 slots
+rows 0..895: 8119 of 43008 row-slots change their top-8; median 8th/9th margin there 0.00466, 90th percentile 0.0191
+all row-slots: median 8th/9th margin 0.00961

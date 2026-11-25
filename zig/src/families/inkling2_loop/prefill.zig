@@ -78,6 +78,8 @@ const RmsPair = extern struct { width: u32, xs0: u32, xb0: u32, xs1: u32, xb1: u
 const AffineProjections = extern struct { k: u32, full: u32, m: [8]u32 };
 const SharedProjections = extern struct { k: u32, full: u32, rows: u32, m: [8]u32 };
 const AffineDense = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32, bits: u32, cap: f32 };
+const RingCapture = extern struct { channels: u32, ring: u32, base: u32, at: u32 };
+const KvCapture = extern struct { count: u32, base: u32, window: u32, at: u32, rows: u32 };
 
 const B = struct { buf: mtl.Buffer, off: usize = 0, args: bool = false };
 const A = B{ .buf = undefined, .args = true };
@@ -187,6 +189,8 @@ pub const Pipes = struct {
     moe_offsets: mtl.Pipeline,
     moe_sort: mtl.Pipeline,
     combine: mtl.Pipeline,
+    ring_capture: mtl.Pipeline,
+    kv_capture: mtl.Pipeline,
 
     pub fn deinit(p: *Pipes) void {
         if (p.gemm_mpp) |pipe| pipe.deinit();
@@ -215,7 +219,7 @@ pub const Pipes = struct {
         if (p.half_rows) |pipe| pipe.deinit();
         if (p.staged) |pipes| pipes.deinit();
         p.rows.deinit();
-        inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "gemm", "smallrow", "pick", "gu_g_nv", "down_g_nv", "gu_g_mx", "down_g_mx", "expert_matrix_nv", "expert_matrix_mx", "moe_zero", "moe_count", "moe_offsets", "moe_sort", "embed", "rms", "rms3", "rms_pair", "gather_rms", "scatter", "pass_copy", "mix", "mix4", "ctl", "clips", "clip3", "clip", "conv", "batch_conv", "batch_store_rel", "cstore", "kv", "rel", "rel_rows", "attn", "attn_tiled", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
+        inline for ([_][]const u8{ "dense", "cap", "capexact", "router", "gemm", "smallrow", "pick", "gu_g_nv", "down_g_nv", "gu_g_mx", "down_g_mx", "expert_matrix_nv", "expert_matrix_mx", "moe_zero", "moe_count", "moe_offsets", "moe_sort", "ring_capture", "kv_capture", "embed", "rms", "rms3", "rms_pair", "gather_rms", "scatter", "pass_copy", "mix", "mix4", "ctl", "clips", "clip3", "clip", "conv", "batch_conv", "batch_store_rel", "cstore", "kv", "rel", "rel_rows", "attn", "attn_tiled", "gu_nv", "down_nv", "gu_mx", "down_mx", "combine" }) |f| @field(p, f).deinit();
     }
 };
 
@@ -271,6 +275,9 @@ pub const ConvCapture = struct {
 };
 
 pub const PrefillScratch = struct {
+    /// A fork snapshot inside a chunk: what `Cache.Rollback.copyRows` saves with `rows` once `at` positions are filled.
+    pub const Capture = struct { rollback: *Cache.Rollback, at: usize, rows: usize };
+
     pipes: Pipes,
     chunk: usize,
     /// Rows of logits `.all` can return; a chunk asking for more is refused.
@@ -343,6 +350,7 @@ pub const PrefillScratch = struct {
     capture_row: usize,
     routes: ?mtl.Buffer,
     verify_conv: ?*ConvCapture,
+    captures: []const Capture,
     taps: ?*const @import("taps.zig").Taps,
     gpu_seconds: f64,
 
@@ -389,6 +397,7 @@ pub const PrefillScratch = struct {
         s.capture_row = 0;
         s.routes = null;
         s.verify_conv = null;
+        s.captures = &.{};
         s.taps = null;
         s.gpu_seconds = 0;
         s.chunk = chunk;
@@ -679,6 +688,10 @@ pub const PrefillScratch = struct {
         s.pipes.moe_sort = try mtl.Pipeline.init(device, lib, "i2p_moe_sort", false);
         errdefer s.pipes.moe_sort.deinit();
         s.pipes.combine = try mtl.Pipeline.init(device, lib, "i2p_combine", false);
+        errdefer s.pipes.combine.deinit();
+        s.pipes.ring_capture = try mtl.Pipeline.init(device, lib, "i2p_ring_capture", false);
+        errdefer s.pipes.ring_capture.deinit();
+        s.pipes.kv_capture = try mtl.Pipeline.init(device, lib, "i2p_kv_capture", false);
         return s;
     }
 
@@ -1005,11 +1018,16 @@ const Chunk = struct {
         }
         c.setP(c.s.pipes.conv, ConvB{ .channels = channels, .heads = conv_heads, .ring = st.ring, .base = c.base, .rows = c.n, .layout = layout, .norm = norm }, &.{ x, ring, t(weight), if (dyn != null) dyn_out else A, A, out });
         c.enc.dispatchThreads(mtl.Size.of(channels, c.n, 1), mtl.Size.of(256, 1, 1));
-        c.ringStore(x, ring, channels);
+        c.ringStore(x, ring, channels, slot, site);
         if (c.s.verify_conv) |capture| c.copyN(x, bo(capture.buffer, capture.offset(slot, site, 0)), @as(usize, c.n) * channels);
     }
 
-    fn ringStore(c: Chunk, x: B, ring: B, channels: u32) void {
+    fn ringStore(c: Chunk, x: B, ring: B, channels: u32, slot: u32, site: ConvSite) void {
+        for (c.s.captures) |cap| {
+            const saved = Cache.Rollback.savedRing(c.cache, @intFromEnum(site), slot, channels);
+            c.setP(c.s.pipes.ring_capture, RingCapture{ .channels = channels, .ring = st.ring, .base = c.base, .at = @intCast(cap.at) }, &.{ x, ring, A, bo(cap.rollback.buffer, saved) });
+            c.enc.dispatchThreads(mtl.Size.of(channels, st.ring, 1), mtl.Size.of(256, 1, 1));
+        }
         if (!c.s.fuse) {
             c.setP(c.s.pipes.cstore, CStore{ .channels = channels, .ring = st.ring, .base = c.base, .rows = c.n }, &.{ x, ring, A });
             c.enc.dispatchThreads(mtl.Size.of(channels, c.n, 1), mtl.Size.of(256, 1, 1));
@@ -1025,13 +1043,22 @@ const Chunk = struct {
         const norm: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(cfg.conv_taps + 1)));
         c.setP(c.s.pipes.rows.conv_add, rows_mod.ConvArgs{ .channels = c.h, .heads = 0, .ring = st.ring, .base = c.base, .rows = c.n, .layout = 0, .norm = norm, .out = @intFromBool(out != null) }, &.{ x, ring, t(weight), A, out orelse residual, residual });
         c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
-        c.ringStore(x, ring, c.h);
+        c.ringStore(x, ring, c.h, slot, site);
         if (c.s.verify_conv) |capture| c.copyN(x, bo(capture.buffer, capture.offset(slot, site, 0)), @as(usize, c.n) * c.h);
         return true;
     }
 
     fn kvStore(c: Chunk, slot: u32) void {
         const at = c.slotBase(slot);
+        if (c.isLocal(slot)) for (c.s.captures) |cap| {
+            const rows = @min(cap.rollback.rows, cap.rows);
+            if (rows == 0) continue;
+            const keys = Cache.Rollback.savedRows(c.cache, &c.m.config, slot, rows, false);
+            const values = Cache.Rollback.savedRows(c.cache, &c.m.config, slot, rows, true);
+            const args = KvCapture{ .count = c.kvw, .base = c.base, .window = c.m.config.text.window, .at = @intCast(cap.at), .rows = @intCast(rows) };
+            c.setP(c.s.pipes.kv_capture, args, &.{ b(c.s.kh), b(c.s.vh), bo(c.cache.keys, at), bo(c.cache.values, at), A, bo(cap.rollback.buffer, keys), bo(cap.rollback.buffer, values) });
+            c.enc.dispatchThreads(mtl.Size.of(c.kvw, rows, 1), mtl.Size.of(256, 1, 1));
+        };
         if (c.s.fuse and c.kvw % 4 == 0) {
             c.setP(c.s.pipes.rows.kv, rows_mod.KvArgs{ .count = c.kvw, .base = c.base, .rows = c.n, .wring = c.slotRing(slot) }, &.{ b(c.s.kh), b(c.s.vh), bo(c.cache.keys, at), bo(c.cache.values, at), A });
             c.enc.dispatchThreads(mtl.Size.of(c.kvw / 4, c.n, 1), mtl.Size.of(256, 1, 1));
@@ -1631,6 +1658,7 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
     if (ids.len == 0 or ids.len > s.chunk or (want == .all and ids.len > s.logit_rows)) return error.BadChunk;
     if (batch == null and ids.len + cache.len > cache.capacity) return error.ContextFull;
     if (s.taps) |taps| if (taps.rows < ids.len) return error.TapsTooSmall;
+    for (s.captures) |cap| if (batch != null or cap.at < cache.len or cap.at > cache.len + ids.len) return error.BadCapture;
     if (s.half_overflow) |buf| buf.slice(u32, 1)[0] = 0;
     @memcpy(s.ids.slice(u32, ids.len), ids);
     const kvw: usize = m.config.text.local.kv * m.config.text.local.dim;
@@ -1746,4 +1774,8 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
             item.len += 1;
         };
     } else cache.len += ids.len;
+    for (s.captures) |cap| {
+        cap.rollback.len = cap.at;
+        cap.rollback.saved_rows = @min(cap.rollback.rows, cap.rows);
+    }
 }

@@ -1,0 +1,7 @@
+# 1,024 held-out code tokens (heldout-code-32768.txt, first 6,000 characters), every row's logits, prefix-check schedules
+## lane 1023,1 against main reuse-on 768,128,127,1
+rows 1024; bit-equal rows 0; top-1 99.71%; top-1 at margin >= 0.1 1008/1009 (99.90%); mean KL 0.00235; max KL 0.198; max |dlogit| 14.883 at row 834
+## main reuse-off 1024 against main reuse-on 768,128,127,1
+rows 1024; bit-equal rows 0; top-1 99.71%; top-1 at margin >= 0.1 1008/1009 (99.90%); mean KL 0.00235; max KL 0.198; max |dlogit| 14.878 at row 834
+## lane 1023,1 against main reuse-off 1024
+rows 1024; bit-equal rows 17; top-1 100.00%; top-1 at margin >= 0.1 1006/1006 (100.00%); mean KL 0.00000; max KL 0.001; max |dlogit| 1.189 at row 338

@@ -1,0 +1,209 @@
+info: inkling2_loop: 1 session caches, 1.161 GiB per slot, 0.083 GiB total rollback, context 32768
+[tensorfold] chat template: the checkpoint's
+warning: libtfgrammar.dylib is required for structured output and required tool calls (HTTP 400 when missing); restore the matching release archive's lib/ directory or run zig build grammar -Dxgrammar=DIR; prepare DIR with git clone --branch v0.2.8 --recurse-submodules https://github.com/mlc-ai/xgrammar
+[tensorfold] profile: stable; registered overrides: none
+[tensorfold] serving Inkling-2-Mini-oQ4e-mtp@3eea042751cd at http://127.0.0.1:49154/v1 (sampling: greedy; drafts: off; context: 32768; loaded in 28.6s)
+[tensorfold] 127.0.0.1 "GET /health HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /v1/models HTTP/1.1" 200 -
+inkling session: slot 0
+inkling trace: admit wall_ms=0.006
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=0 rows=1024 wall_ms=4598.393 gpu_ms=457.525
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=1024 rows=233 wall_ms=264.072 gpu_ms=256.978
+inkling trace: chunk at=1257 rows=1 wall_ms=26.897 gpu_ms=26.614
+inkling trace: rollback wall_ms=6.840
+inkling prefill: 4.896248 seconds
+inkling prefix: reused 0 of 1258 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-8025b45f7e340d7f221003a10ab4757d prompt=1258 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=4.897 decode=0.000 elapsed=4.897 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+inkling trace: admit wall_ms=0.004
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=0 rows=1024 wall_ms=461.945 gpu_ms=461.055
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=1024 rows=111 wall_ms=200.212 gpu_ms=199.896
+inkling trace: chunk at=1135 rows=1 wall_ms=26.483 gpu_ms=26.256
+inkling trace: rollback wall_ms=0.260
+inkling prefill: 0.688944 seconds
+inkling prefix: reused 0 of 1136 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-5e2762cbb5e12f57a5b0daf3488555f3 prompt=1136 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.691 decode=0.000 elapsed=0.691 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+inkling trace: admit wall_ms=0.004
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=0 rows=1024 wall_ms=462.668 gpu_ms=462.279
+inkling trace: chunk at=1024 rows=2 wall_ms=30.999 gpu_ms=30.723
+inkling trace: chunk at=1026 rows=1 wall_ms=26.257 gpu_ms=26.021
+inkling trace: rollback wall_ms=0.163
+inkling prefill: 0.520115 seconds
+inkling prefix: reused 0 of 1027 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-d1d73a63f642224aa775138391cc3656 prompt=1027 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.521 decode=0.000 elapsed=0.521 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+inkling trace: admit wall_ms=0.003
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=0 rows=1024 wall_ms=461.008 gpu_ms=460.653
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=1024 rows=138 wall_ms=213.748 gpu_ms=213.430
+inkling trace: chunk at=1162 rows=1 wall_ms=26.522 gpu_ms=26.231
+inkling trace: rollback wall_ms=0.133
+inkling prefill: 0.701436 seconds
+inkling prefix: reused 0 of 1163 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-25ada4d4a947cadb27ecf9758841124d prompt=1163 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.702 decode=0.000 elapsed=0.702 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+inkling trace: admit wall_ms=0.003
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=0 rows=1024 wall_ms=462.992 gpu_ms=462.660
+inkling trace: chunk at=1024 rows=7 wall_ms=65.368 gpu_ms=65.059
+inkling trace: chunk at=1031 rows=1 wall_ms=26.429 gpu_ms=26.139
+inkling trace: rollback wall_ms=0.202
+inkling prefill: 0.555025 seconds
+inkling prefix: reused 0 of 1032 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-05c61f7cc0df73c80a84799e8b47965f prompt=1032 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.556 decode=0.000 elapsed=0.556 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+inkling trace: admit wall_ms=0.003
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=0 rows=1024 wall_ms=466.052 gpu_ms=465.728
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=1024 rows=864 wall_ms=418.964 gpu_ms=418.630
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=1888 rows=1 wall_ms=28.370 gpu_ms=28.111
+inkling trace: rollback wall_ms=0.179
+inkling prefill: 0.913591 seconds
+inkling prefix: reused 0 of 1889 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-35872f35611474f0df5a994adc0bed69 prompt=1889 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.914 decode=0.000 elapsed=0.914 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+inkling trace: admit wall_ms=0.002
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=0 rows=1024 wall_ms=491.948 gpu_ms=491.631
+inkling trace: chunk at=1024 rows=8 wall_ms=75.374 gpu_ms=75.075
+inkling trace: chunk at=1032 rows=1 wall_ms=27.310 gpu_ms=27.048
+inkling trace: rollback wall_ms=0.192
+inkling prefill: 0.594848 seconds
+inkling prefix: reused 0 of 1033 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-a8951ab9d38e9bd273a4976063fe938d prompt=1033 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.595 decode=0.000 elapsed=0.596 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+inkling trace: admit wall_ms=0.003
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=0 rows=1024 wall_ms=479.528 gpu_ms=479.198
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=1024 rows=361 wall_ms=321.504 gpu_ms=321.103
+inkling trace: chunk at=1385 rows=1 wall_ms=33.334 gpu_ms=33.077
+inkling trace: rollback wall_ms=0.191
+inkling prefill: 0.834600 seconds
+inkling prefix: reused 0 of 1386 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-7520e89c07e9e7ec25c72e3d03e20e39 prompt=1386 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.835 decode=0.000 elapsed=0.836 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+inkling trace: admit wall_ms=0.003
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=0 rows=1018 wall_ms=501.718 gpu_ms=501.391
+inkling trace: chunk at=1018 rows=1 wall_ms=28.704 gpu_ms=28.439
+inkling trace: rollback wall_ms=0.184
+inkling prefill: 0.530624 seconds
+inkling prefix: reused 0 of 1019 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-30477684e226bd5c71a1e44fe6c40a6f prompt=1019 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.531 decode=0.000 elapsed=0.531 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+inkling trace: admit wall_ms=0.003
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=0 rows=908 wall_ms=481.795 gpu_ms=481.452
+inkling trace: chunk at=908 rows=1 wall_ms=27.917 gpu_ms=27.666
+inkling trace: rollback wall_ms=0.169
+inkling prefill: 0.509896 seconds
+inkling prefix: reused 0 of 909 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-4d0762b863d4657be6d2deafbfea1894 prompt=909 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.511 decode=0.000 elapsed=0.511 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+inkling trace: admit wall_ms=0.003
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=0 rows=1013 wall_ms=519.739 gpu_ms=519.398
+inkling trace: chunk at=1013 rows=1 wall_ms=29.255 gpu_ms=28.955
+inkling trace: rollback wall_ms=0.182
+inkling prefill: 0.549199 seconds
+inkling prefix: reused 0 of 1014 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-2a8c424744c139ec43113a084d45bb26 prompt=1014 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.550 decode=0.000 elapsed=0.550 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+inkling trace: admit wall_ms=0.002
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=0 rows=1024 wall_ms=544.550 gpu_ms=544.204
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=1024 rows=748 wall_ms=437.037 gpu_ms=436.697
+inkling trace: chunk at=1772 rows=1 wall_ms=30.924 gpu_ms=30.601
+inkling trace: rollback wall_ms=0.206
+inkling prefill: 1.012753 seconds
+inkling prefix: reused 0 of 1773 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-5cfbb28a49a7d4eb993665b8efe8a271 prompt=1773 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=1.013 decode=0.000 elapsed=1.014 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+inkling session: slot 0
+inkling trace: admit wall_ms=0.003
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+inkling trace: chunk at=0 rows=1002 wall_ms=537.293 gpu_ms=536.946
+inkling trace: chunk at=1002 rows=1 wall_ms=29.979 gpu_ms=29.738
+inkling trace: rollback wall_ms=0.169
+inkling prefill: 0.567456 seconds
+inkling prefix: reused 0 of 1003 prompt tokens
+[tensorfold] warning: a reply reached max_tokens while still thinking, so its content is empty and its text is all in reasoning_content; raise max_tokens, or send chat_template_kwargs {"enable_thinking": false} (server: --no-thinking)
+[tensorfold] done chatcmpl-eddc4c866adc91ab5bf3bc731de91d6e prompt=1003 cached=0 thinking=True effort=none tokens=1 sha=66af92bf73ff finish=length rounds=0 accepted=0/0 ttft=0.568 decode=0.000 elapsed=0.568 queued=0.000 tok/s=0.0
+[tensorfold] 127.0.0.1 "POST /v1/chat/completions HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] 127.0.0.1 "GET /memory HTTP/1.1" 200 -
+[tensorfold] shutting down (SIGTERM): draining: new requests get 503; 0 request(s) in progress may finish within 20.0 s
+[tensorfold] shutting down: drained
+[tensorfold] shutting down: stopped

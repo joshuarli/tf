@@ -807,7 +807,7 @@
       "sha256": "93eb24cbefb6927caea301b8491bdca7096c70d9c3dadc5fd8df93862ddd53de",
       "bytes": 3119,
       "local_content_tokens": 1022,
-      "measured_prompt_tokens": null,
+      "measured_prompt_tokens": 1024,
       "sources_sha256": "70389da3605076d6d512f57c75934912c7f902a927d1e5c6967d00f6afa48cf8",
       "sources": [
         {
@@ -817,7 +817,8 @@
           "complete": false
         }
       ],
-      "instruction": "You are reviewing a large native inference codebase. Below are consecutive excerpts from several source files, each introduced by a line of the form ===== path =====. Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text."
+      "instruction": "You are reviewing a large native inference codebase. Below are consecutive excerpts from several source files, each introduced by a line of the form ===== path =====. Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text.",
+      "measured_cache_state": "cold"
     },
     {
       "name": "qualify-code-4096",
@@ -828,7 +829,7 @@
       "sha256": "78d9b3faf2388b1843ac3fadbe6dd074ce8ae6443797ba8b10c4abb617dfaebb",
       "bytes": 12207,
       "local_content_tokens": 4094,
-      "measured_prompt_tokens": null,
+      "measured_prompt_tokens": 4096,
       "sources_sha256": "e124d4721e2d72e0fc49b028e53db1936422bb1baa75cae0a951b57decc990a5",
       "sources": [
         {
@@ -844,7 +845,8 @@
           "complete": false
         }
       ],
-      "instruction": "You are reviewing a large native inference codebase. Below are consecutive excerpts from several source files, each introduced by a line of the form ===== path =====. Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text."
+      "instruction": "You are reviewing a large native inference codebase. Below are consecutive excerpts from several source files, each introduced by a line of the form ===== path =====. Work through them and produce a technical review: for each excerpt name the function or type it defines, state one correctness or performance risk with the identifiers that carry it, and propose one typed refactor. Be specific and cite names from the text.",
+      "measured_cache_state": "cold"
     },
     {
       "name": "qualify-prose-1024",
@@ -855,7 +857,7 @@
       "sha256": "f50f556ae4e10bb3ec2a4b42ecbfb59c711206de113340a8fae72c6579ec7432",
       "bytes": 3400,
       "local_content_tokens": 1022,
-      "measured_prompt_tokens": null,
+      "measured_prompt_tokens": 1024,
       "sources_sha256": "c04163bf7cd39b264b29793f1a053d0736e5e4270b8a3caa3fc2bf1bc9c710a3",
       "sources": [
         {
@@ -871,7 +873,8 @@
           "complete": false
         }
       ],
-      "instruction": "The following are consecutive excerpts from engineering notes and design documents. Reason carefully about the argument they build. Restate the central claim in your own words, set out the evidence offered for it, identify the weakest inference and why it is weak, and say what measurement or observation would settle it."
+      "instruction": "The following are consecutive excerpts from engineering notes and design documents. Reason carefully about the argument they build. Restate the central claim in your own words, set out the evidence offered for it, identify the weakest inference and why it is weak, and say what measurement or observation would settle it.",
+      "measured_cache_state": "cold"
     },
     {
       "name": "qualify-prose-4096",
@@ -882,7 +885,7 @@
       "sha256": "8493d84d46ada3b09bf5a3dd4878b2d74a5ace375313873b93c7dd0b42894047",
       "bytes": 11992,
       "local_content_tokens": 4094,
-      "measured_prompt_tokens": null,
+      "measured_prompt_tokens": 4096,
       "sources_sha256": "02c8052ad025d8da614e3fbb42b920b001563bfb36bc79d48899ef3832ee94d8",
       "sources": [
         {
@@ -898,7 +901,8 @@
           "complete": false
         }
       ],
-      "instruction": "The following are consecutive excerpts from engineering notes and design documents. Reason carefully about the argument they build. Restate the central claim in your own words, set out the evidence offered for it, identify the weakest inference and why it is weak, and say what measurement or observation would settle it."
+      "instruction": "The following are consecutive excerpts from engineering notes and design documents. Reason carefully about the argument they build. Restate the central claim in your own words, set out the evidence offered for it, identify the weakest inference and why it is weak, and say what measurement or observation would settle it.",
+      "measured_cache_state": "cold"
     },
     {
       "name": "qualify-structured-1024",
@@ -909,7 +913,7 @@
       "sha256": "fdff0b1293ff706013dd05e76a0fc024aab26e84078ed9504078d69eddaaf374",
       "bytes": 3265,
       "local_content_tokens": 1022,
-      "measured_prompt_tokens": null,
+      "measured_prompt_tokens": 1024,
       "sources_sha256": "f3d08db844326b7904d7baf0000d9b951eea14e0c494d336764335f507c02d96",
       "sources": [
         {
@@ -919,7 +923,8 @@
           "complete": false
         }
       ],
-      "instruction": "The following are consecutive excerpts from configuration and documentation files. Read them and return exactly one JSON object, with no prose around it, matching this schema: {\"summary\": string, \"components\": [{\"name\": string, \"kind\": string}], \"decisions\": [{\"id\": string, \"reason\": string}]}. Use names that appear in the excerpts and keep every string under forty words."
+      "instruction": "The following are consecutive excerpts from configuration and documentation files. Read them and return exactly one JSON object, with no prose around it, matching this schema: {\"summary\": string, \"components\": [{\"name\": string, \"kind\": string}], \"decisions\": [{\"id\": string, \"reason\": string}]}. Use names that appear in the excerpts and keep every string under forty words.",
+      "measured_cache_state": "cold"
     },
     {
       "name": "qualify-structured-4096",
@@ -930,7 +935,7 @@
       "sha256": "a225fd5a0c3818f0fd4085797966e89c35e3adeb5705352dabaf701a8be04057",
       "bytes": 15545,
       "local_content_tokens": 4094,
-      "measured_prompt_tokens": null,
+      "measured_prompt_tokens": 4096,
       "sources_sha256": "513a09d1c376801db7a4b078efe8e540a734fee7cba8c020b01cb8d8c3c8471a",
       "sources": [
         {
@@ -940,7 +945,8 @@
           "complete": false
         }
       ],
-      "instruction": "The following are consecutive excerpts from configuration and documentation files. Read them and return exactly one JSON object, with no prose around it, matching this schema: {\"summary\": string, \"components\": [{\"name\": string, \"kind\": string}], \"decisions\": [{\"id\": string, \"reason\": string}]}. Use names that appear in the excerpts and keep every string under forty words."
+      "instruction": "The following are consecutive excerpts from configuration and documentation files. Read them and return exactly one JSON object, with no prose around it, matching this schema: {\"summary\": string, \"components\": [{\"name\": string, \"kind\": string}], \"decisions\": [{\"id\": string, \"reason\": string}]}. Use names that appear in the excerpts and keep every string under forty words.",
+      "measured_cache_state": "cold"
     }
   ],
   "measured_by": {
@@ -955,6 +961,21 @@
       "os": "macOS 26B123",
       "recommended_max_working_set_bytes": 40200896512,
       "load_limit_gb": 36
+    }
+  },
+  "qualify_measured_by": {
+    "binary_sha256": "06edfa86a2599fb3df93e076f3568f96118e9fe634e847230d94d3cd03177b8d",
+    "host": {
+      "product": "Apple M5 Max",
+      "performance_cores": 6,
+      "efficiency_cores": 12,
+      "memory_bytes": 51539607552,
+      "gpu_cores": 40,
+      "metal": "Metal 4",
+      "os": "macOS 26B123",
+      "recommended_max_working_set_bytes": 40200896512,
+      "load_limit_gb": 27,
+      "context_tokens": 32768
     }
   }
 }

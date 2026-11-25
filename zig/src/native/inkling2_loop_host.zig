@@ -634,6 +634,24 @@ pub const Host = struct {
         }
     }
 
+    /// Metal's first command buffer on the weights and caches runs seconds slow: one token through slot 0 pays it.
+    fn warm(h: *Host) !void {
+        const slot = &h.slots[0];
+        try inkling.prefillWant(h.model, &h.prefill, &slot.cache, &.{0}, .none);
+        slot.cache.len = 0;
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
+        const cb = h.model.queue.commandBuffer();
+        const blit = cb.blit();
+        for ([_]mtl.Buffer{ slot.cache.keys, slot.cache.values, slot.cache.k_conv, slot.cache.v_conv, slot.cache.attn_conv, slot.cache.mlp_conv }) |buf| blit.fill(buf, 0, buf.length(), 0);
+        if (slot.rollback) |r| blit.fill(r.buffer, 0, r.buffer.length(), 0);
+        for (slot.snapshots) |snapshot| if (snapshot) |r| blit.fill(r.buffer, 0, r.buffer.length(), 0);
+        blit.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |_| return error.GpuFailed;
+    }
+
     fn speculate(h: *Host, d: *spec.Draft, slot: *Slot) void {
         const job = slot.job.?;
         const remaining = job.request.max_tokens - job.emitted.items.len;
@@ -724,6 +742,7 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
     h.vision_markers[0] = image_token;
     h.info_.vision.?.markers = &h.vision_markers;
     h.info_.vision.?.ctx = h;
+    try h.warm();
     try h.start();
     return h;
 }

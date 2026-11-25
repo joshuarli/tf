@@ -2,6 +2,7 @@ const std = @import("std");
 const api = @import("engine_api");
 const native = @import("inkling2_loop.zig");
 const host_mod = @import("inkling2_loop_host.zig");
+const mtl = @import("metal");
 
 const Prompt = struct { name: []const u8, token_ids: []const u32 };
 
@@ -275,6 +276,37 @@ test "inkling host: full-chunk prefill keeps a repeated prompt equal to its cold
     try std.testing.expectEqual(@as(u32, @intCast(source.len)), grown_one.cached);
     try expectSame(two.grown, grown_one);
     std.debug.print("inkling host: a repeated prompt, a fork at {d} and a store hit there reply as their references\n", .{point});
+}
+
+test "inkling host: the warm-up at load leaves the first slot's caches, rollback and snapshots zero and stores nothing" {
+    const target = std.c.getenv("TF_INKLING2_LOOP_OQ4E_DIR") orelse return error.SkipZigTest;
+    if (unsetenv("INKLING_DRAFTER") != 0) return error.SetEnv;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const opened = try openHost(arena.allocator(), .{ .dir = std.mem.span(target), .model_type = "inkling2_loop", .lanes = 1, .lanes_fixed = true, .context = 4096, .prompt_cache_gib = 2 });
+    defer opened.close(opened.ctx);
+    const h: *host_mod.Host = @ptrCast(@alignCast(opened.ctx));
+    const slot = &h.slots[0];
+    try std.testing.expectEqual(@as(usize, 0), slot.cache.len);
+    try std.testing.expectEqual(@as(usize, 0), slot.resident.items.len);
+    try std.testing.expectEqual(@as(usize, 0), h.entries.items.len);
+    for (slot.points) |point| try std.testing.expectEqual(@as(usize, 0), point);
+    var buffers: std.ArrayList(mtl.Buffer) = .empty;
+    defer buffers.deinit(std.testing.allocator);
+    try buffers.appendSlice(std.testing.allocator, &.{ slot.cache.keys, slot.cache.values, slot.cache.k_conv, slot.cache.v_conv, slot.cache.attn_conv, slot.cache.mlp_conv, slot.rollback.?.buffer });
+    for (slot.snapshots) |snapshot| if (snapshot) |r| try buffers.append(std.testing.allocator, r.buffer);
+    for (buffers.items) |buf| {
+        const shared = try h.model.device.buffer(buf.length(), mtl.ResourceOptions.shared);
+        defer shared.deinit();
+        const cb = h.model.queue.commandBuffer();
+        const blit = cb.blit();
+        blit.copy(buf, 0, shared, 0, buf.length());
+        blit.end();
+        cb.commit();
+        cb.wait();
+        if (cb.failure()) |_| return error.GpuFailed;
+        for (shared.slice(u64, buf.length() / 8)) |word| try std.testing.expectEqual(@as(u64, 0), word);
+    }
 }
 
 fn openHost(a: std.mem.Allocator, o: api.Open) !api.Opened {

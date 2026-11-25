@@ -500,7 +500,13 @@ decoding. Every check is bit equality.
   weights and routes, every grouped width equal to its one-row steps in every widths run, every round reply equal
   to plain greedy.
 
-(SUITE)
+On the final code (`e3b30971c`), `python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu` exited 0
+(`.work/suite/20261124T160438`, 16:04–16:30): inkling-host 10/10 steps and 35/35 tests, inkling-gpu 17/17 steps and
+179/179 tests with none skipped (`suite-summary.json`, `suite-inkling-host.txt`, `suite-inkling-gpu.txt`). Its tree
+speculation test ran 262 rounds, 10 of them past eight rows, equal to plain greedy and its caches; heavy.py's charged
+peak was 23.5 GB (footprint 21.6 GB). `zig build test-flint-draft-host` exited 0 (47/47 steps, 87/87 tests;
+`flint-draft-host.txt`). `tools/zig/lean_new.py` against `53a3b8894` finds 0 new problems (256 on both), and `git diff
+--check` is clean.
 
 ## Conditions
 

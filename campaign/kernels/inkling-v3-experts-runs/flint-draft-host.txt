@@ -1,0 +1,50 @@
+Build Summary: 47/47 steps succeeded; 87/87 tests passed
+test-flint-draft-host success
++- run test 68 pass (68 total) 285ms MaxRSS:6M
+|  +- compile test fast native success 10s MaxRSS:414M
+|     +- run exe test-allocator-runner-source (test_runner.zig) success 314ms
+|     |  +- compile exe test-allocator-runner-source safe native success 9s MaxRSS:352M
+|     +- WriteFile draft_ids.txt cached
+|     +- WriteFile xsum.metal cached
+|     +- WriteFile nemotron_packed.metallib cached
+|        +- run xcrun (nemotron_packed.metallib) cached
+|           +- run xcrun (coop_down_1_0.air) cached
+|           +- run xcrun (coop_down_2_0.air) cached
+|           +- run xcrun (coop_down_2_1.air) cached
+|           +- run xcrun (coop_draft_1_0.air) cached
+|           +- run xcrun (coop_draft_2_0.air) cached
+|           +- run xcrun (coop_draft_2_1.air) cached
+|           +- run xcrun (coop_eh_1_0.air) cached
+|           +- run xcrun (coop_eh_1_0_sk.air) cached
+|           +- run xcrun (coop_eh_2_0.air) cached
+|           +- run xcrun (coop_eh_2_0_sk.air) cached
+|           +- run xcrun (coop_eh_2_1.air) cached
+|           +- run xcrun (coop_eh_2_1_sk.air) cached
+|           +- run xcrun (coop_head_1_0.air) cached
+|           +- run xcrun (coop_head_2_0.air) cached
+|           +- run xcrun (coop_head_2_1.air) cached
+|           +- run xcrun (coop_in_1_0.air) cached
+|           +- run xcrun (coop_in_1_0_sk.air) cached
+|           +- run xcrun (coop_in_2_0.air) cached
+|           +- run xcrun (coop_in_2_0_sk.air) cached
+|           +- run xcrun (coop_in_2_1.air) cached
+|           +- run xcrun (coop_in_2_1_sk.air) cached
+|           +- run xcrun (coop_out_1_0.air) cached
+|           +- run xcrun (coop_out_1_0_sk.air) cached
+|           +- run xcrun (coop_out_2_0.air) cached
+|           +- run xcrun (coop_out_2_0_sk.air) cached
+|           +- run xcrun (coop_out_2_1.air) cached
+|           +- run xcrun (coop_out_2_1_sk.air) cached
+|           +- run xcrun (coop_qkv_1_0.air) cached
+|           +- run xcrun (coop_qkv_2_0.air) cached
+|           +- run xcrun (coop_qkv_2_1.air) cached
+|           +- run xcrun (coop_up_1_0.air) cached
+|           +- run xcrun (coop_up_2_0.air) cached
+|           +- run xcrun (coop_up_2_1.air) cached
+|           +- run xcrun (up_relu2_1_0.air) cached
+|           +- run xcrun (up_relu2_2_0.air) cached
+|           +- run xcrun (up_relu2_2_1.air) cached
++- run test 19 pass (19 total) 325ms MaxRSS:2M
+   +- compile test fast native success 14s MaxRSS:508M
+      +- run exe test-allocator-runner-source (test_runner.zig) (+1 more reused dependencies)
+

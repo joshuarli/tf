@@ -5,7 +5,7 @@ This is the single plan for this repository: all current and future work, and th
 ## Status
 
 **Active 2026-11-24.**
-- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. Q4 (5h, qualification repair, owner steering) is running on `lane/q4-qualify`. A1 (5i, AOT spike) is in research on `lane/inkling-metal-aot`; its GPU phases wait for Q4's runs. P6's retry (5f) and P7 (5g) resume after Q4, then Q3.
+- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. Q4 (5h, qualification repair, owner steering) has merged its code and completed-task run; its served sessions and scorecard are open. A1 (5i, AOT spike) is in research on `lane/inkling-metal-aot`; its GPU phases wait for Q4's runs. P6's retry (5f) and P7 (5g) resume after Q4, then Q3.
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
 - Acceptance flow (2026-11-24): lanes prove changes with filtered GPU tests; the parent runs the full suite once on an integration commit of main plus the lane and fast-forwards main on green, instead of a lane suite and a second main suite.
 - **Last accepted code: SV2, fast-forwarded from `lane/sv2-serve`** (speculation served by default; integrated suite on `33b38ed43`: `inkling-host` ok, `inkling-gpu` 185/185 plus the restored served test 12/12, oracle pass). Before it, V4 `ec925cb41` (fused fixed-cost verify kernels; integrated main green: `inkling-host` ok, `inkling-gpu` 186/186, oracle pass at 94.73% top-1 and mean KL 0.0199). Before it, PH2 merge `291240211` (half prefill by default; `inkling-gpu` 181/181), P5c merge `7f7cb75a3` (181/181), SC1 merge `1668d5caa` (180/180), V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
@@ -186,6 +186,10 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    6. A regenerated scorecard: valid pairs counted from records (SC2's code-1024 has none), a genuinely loaded drafter
       with per-request `draft: false` as the disabled control, prefill curves gated and paired, the ~3% drafter
       prefill cost treated as a hypothesis, and only the extra paired runs needed to fill the gaps.
+   Status (2026-11-25): items 1, 3, 4 and 5 are done. Item 2 ran in full (`campaign/kernels/inkling-q4-qualify.md`):
+   `ar` and `spec` are equal on every task under both prefill modes; half passes 32/36 and `off` 31/36. The timings
+   are invalid because of host memory pressure. Open: the fixed-window served sessions (`run.sh served a`, `b`,
+   `off`) and item 6's scorecard, both on a quiet host with at least 50% free memory.
 5i. A1, running (owner spike 2026-11-25): an ahead-of-time compiled Inkling 2 Mini for M5 Max on
    `lane/inkling-metal-aot` (`.work/wt/inkling-metal-aot`, base `46061a3aa`; records in `campaign/aot/`). An offline
    compiler emits a model-specific artifact: a native executable, an immutable specialized schedule, compiled Metal

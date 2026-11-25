@@ -7,7 +7,7 @@ This is the single plan for this repository: all current and future work, and th
 **Active 2026-11-24.**
 - Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**.
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
-- **Last accepted code: SC1 merge `1668d5caa`** (main suite deferred until P5c's timing block ends; lane green 35/35, 180/180). Before it, V3 merge `0a2551b36` (green: `inkling-host` 25/25, `inkling-gpu` 179/179, peak 21.6 GB), DF2b merge `53a3b8894` (green: `inkling-host` 25/25, `inkling-gpu` 179/179 on main `f454558ed`), P4 merge `3f0054737` (green: `inkling-gpu` 165/165) and V2 merge `3881b3d8c` (`inkling-gpu` 155/155). Open, intermittent: the first `inkling-gpu` run after the P4 and the DF2b merges was stopped by `heavy.py` over the 28 GB cap (footprint 28.0 and 28.2 GB, resident 23.5 and 19.6 GB, host pressure 2; once near the end, once 79 s in), and each rerun passed at 21.6 GB footprint. A 5 s process-tree sample of the passing rerun never shows two large processes at once (compiles stay under 0.9 GB, a test binary near 20 GB), so the extra footprint is inside one test process. Retry condition: the next breach, with the sampler (`.work/tmp/memsample.sh`, recreate if gone) running.
+- **Last accepted code: SC1 merge `1668d5caa`** (green on main with the serialized GPU test runs: `inkling-host` 24/24, `inkling-gpu` 180/180, peak 24.0 GB). Before it, V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
 - **Open from P3c:** `code-c02` now falls into a repeatable reasoning loop, and oQ4e quality dev is 7/11 (base 6/11), below the fast profile's 8-case bar. Mean TTFT at four agents rose on the warm repetition; the cause is not traced.
 - **Parked branches** (all on `origin`), with item, cause and retry:
   - `lane/p3c-prefill` at `f0ff849e6`: commits the prefill scratch at setup. Two 1K pairs are inconclusive and it has not run the suite. Retry: the suite, then three first-pass pairs at 1K.
@@ -117,7 +117,7 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    chunk, a 0–127-row tail and a one-row chunk, which run near 600 tok/s; with prefix reuse off 1K serves 1,693
    tok/s. Keep reuse, forks and the len-1 store while prefilling in full chunks; then the first request's
    unexplained 2.5–3.7 s.
-3e. SC1, done and merged `1668d5caa` (`inkling-sc1-chain.md`); main suite pending after P5c's timing. A tree
+3e. SC1, done and merged `1668d5caa` (`inkling-sc1-chain.md`). A tree
    round is GPU-bound: 35–41 ms, of which verify GPU 30.6–35.2 and drafter GPU 3.2–4.3; the host idles the GPU
    1.0–1.3 ms (2.7–3.3%). Draft end → verify start is 0.73–0.99 ms (selector ~0.2, the verify's CPU encode in
    `prefill.zig` 0.56–0.72); verify end → next draft is 0.20–0.25 ms, so a chained draft recovers at most 0.5–0.8%.

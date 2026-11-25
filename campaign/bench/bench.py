@@ -203,10 +203,10 @@ def expected_prompt_tokens(model_key: str, prompt: dict, manifest_model: str) ->
 
 def trial(path: Path, *, run_id: str, experiment: str, session: str, engine: str, binary: dict, model_key: str,
           mode: str, flags: list[str], cell: int, cache_gib: int, pair: int, order: int, prompt: dict,
-          server: harness.Server, model_id: str, hashes: dict, identity: dict) -> None:
+          server: harness.Server, model_id: str, hashes: dict, identity: dict, draft: bool | None = None) -> None:
     record = {"schema": 1, "kind": "trial", "recorded_at": dt.datetime.now(dt.timezone.utc).isoformat(),
               "run_id": run_id, "engine": engine, "binary": binary, "mode": mode, "mode_flags": flags,
-              "cell": cell, "prompt_cache_gib": cache_gib, "pair": pair, "pair_order": order,
+              "cell": cell, "prompt_cache_gib": cache_gib, "pair": pair, "pair_order": order, "request_draft": draft,
               "pairing": pairing(experiment, session, cell, mode, pair, binary.get("role"), identity),
               "prompt": {"name": prompt["name"], "set": prompt["set"], "topic": prompt["topic"],
                          "path": prompt["path"], "sha256": prompt["sha256"],
@@ -224,13 +224,13 @@ def trial(path: Path, *, run_id: str, experiment: str, session: str, engine: str
     text = (harness.REPO / prompt["path"]).read_text(encoding="utf-8")
     try:
         cold = harness.chat_request(server.base, model_id, text, max_tokens=OUTPUT_TOKENS, temperature=TEMPERATURE,
-                                    seed=SEED)
+                                    seed=SEED, draft=draft)
         record["requests"]["cold"] = harness.request_record(cold, "cold")
         warm = harness.chat_request(server.base, model_id, text, max_tokens=OUTPUT_TOKENS, temperature=TEMPERATURE,
-                                    seed=SEED)
+                                    seed=SEED, draft=draft)
         record["requests"]["warm"] = harness.request_record(warm, "warm", cold)
         natural = harness.chat_request(server.base, model_id, text, max_tokens=OUTPUT_TOKENS, temperature=TEMPERATURE,
-                                       ignore_eos=False, seed=SEED)
+                                       ignore_eos=False, seed=SEED, draft=draft)
         record["natural_termination"] = harness.request_record(natural, "natural")
         record["footprint"] = server.stats(mark)
         users, gpu_reasons = harness.gpu_contention(gpu_before, harness.gpu_time_by_pid(),

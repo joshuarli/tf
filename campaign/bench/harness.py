@@ -566,14 +566,22 @@ class Server:
         return False
 
 
-def chat_request(base: str, model: str, content: str, *, max_tokens: int = 512, temperature: float = 0,
-                 ignore_eos: bool = True, seed: int | None = 1234, timeout: float = 1800) -> dict:
-    """One streamed greedy chat request, timed on the client clock, with the server's own counters kept."""
+def chat_request(base: str, model: str, content: str | None, *, max_tokens: int = 512, temperature: float = 0,
+                 ignore_eos: bool = True, seed: int | None = 1234, timeout: float = 1800,
+                 messages: list[dict] | None = None, draft: bool | None = None) -> dict:
+    """One streamed greedy chat request, timed on the client clock, with the server's own counters kept.
+
+    ``messages`` replaces the single user turn built from ``content``; ``draft`` sets the request's draft field
+    (unset: the server's default)."""
+    if (content is None) == (messages is None):
+        raise ValueError("give exactly one of content and messages")
     body = {"model": model, "max_tokens": max_tokens, "temperature": temperature, "stream": True,
             "stream_options": {"include_usage": True}, "ignore_eos": ignore_eos,
-            "messages": [{"role": "user", "content": content}]}
+            "messages": messages if messages is not None else [{"role": "user", "content": content}]}
     if seed is not None and temperature == 0:
         body["seed"] = seed
+    if draft is not None:
+        body["draft"] = draft
     request = urllib.request.Request(f"{base}/v1/chat/completions", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
     sent = time.perf_counter()
@@ -593,6 +601,8 @@ def chat_request(base: str, model: str, content: str, *, max_tokens: int = 512, 
            "total_s": (completed - sent) if complete else None, "complete": complete,
            "completion": collector.completion(), "finish_reasons": collector.receipt()["finish_reasons"],
            "runtime": collector.runtime, "speculative": collector.speculative or {},
+           "content_text": "".join(collector.text), "boundaries": collector.receipt(),
+           "reasoning_tokens": ((collector.usage or {}).get("completion_tokens_details") or {}).get("reasoning_tokens"),
            **observed}
     tokens = observed["tokens"]
     decode_s = out["decode_s"]

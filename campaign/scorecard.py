@@ -8,6 +8,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 RUNS = HERE / "runs"
+# prefill_curve.py's records (with serve_curve.py's host conditions) share the runs tree; they are not trials.
+CURVE_KINDS = frozenset({"first", "curve", "conditions"})
 OUTPUT = HERE / "scorecard.md"
 
 T975 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262,
@@ -49,6 +51,8 @@ def load() -> tuple[list[dict], list[dict], list[str], int]:
                 unavailable.append(record)
             elif record.get("kind") == "trial":
                 trials.append(record)
+            elif record.get("kind") in CURVE_KINDS and record.get("schema") in (1, 2):
+                continue
             else:
                 malformed += 1
     return trials, unavailable, files, malformed

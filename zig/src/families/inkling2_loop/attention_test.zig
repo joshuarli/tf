@@ -900,3 +900,210 @@ fn countedPicks(rng: std.Random, rows: usize, ascending: bool, comptime experts:
         rng.shuffle(i32, out[r * 8 ..][0..8]);
     }
 }
+
+fn bf16Bits(v: f32) u16 {
+    return @truncate(@as(u32, @bitCast(v)) >> 16);
+}
+
+const QkvArgs = extern struct { kv: u32, heads: u32, dim: u32, rel: u32, extent: u32, layout: u32, dyn: u32, tau: u32, norm: f32, q_threshold: f32, rel_threshold: f32, eps: f32, floor: f32, alpha: f32 };
+const ConvArgs = extern struct { channels: u32, heads: u32, ring: u32, pos: u32, layout: u32, norm: f32, residual: u32, topk: u32 };
+const Clip3Args = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, q_threshold: f32, rel_threshold: f32 };
+const RelArgs = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, scale: f32, floor: f32, alpha: f32, eps: f32 };
+
+const QkvRig = struct {
+    rows: usize,
+    bufs: [17]mtl.Buffer,
+
+    const names = [_][]const u8{ "k", "v", "kw", "vw", "kd", "vd", "q", "qs", "r", "rs", "p", "rel", "kc", "vc", "rings", "kv", "captures" };
+
+    fn init(device: mtl.Device, rng: std.Random, rows: usize) !QkvRig {
+        const c = kv * dim;
+        const sizes = [17]usize{ rows * c * 4, rows * c * 4, c * 4 * 2, c * 4 * 2, rows * kv * 4 * 4, rows * kv * 4 * 4, rows * heads * dim * 4, heads * dim * 2, rows * heads * drel * 4, heads * drel * 2, drel * extent * 2, rows * heads * (extent + 1) * 4, rows * c * 4, rows * c * 4, rows * 2 * 4 * c * 4, rows * 2 * c * 2, rows * 2 * c * 4 };
+        var g: QkvRig = .{ .rows = rows, .bufs = undefined };
+        var made: usize = 0;
+        errdefer for (g.bufs[0..made]) |buf| buf.deinit();
+        for (&g.bufs, sizes, 0..) |*buf, size, i| {
+            buf.* = try device.buffer(size, mtl.ResourceOptions.shared);
+            made += 1;
+            switch (i) {
+                2, 3, 7, 9, 10 => {
+                    for (buf.slice(u16, size / 2)) |*v| v.* = bf16Bits(rng.float(f32) * 2 - 1);
+                },
+                11, 12, 13, 15, 16 => @memset(buf.slice(u8, size), 0),
+                else => fill(rng, buf.slice(f32, size / 4)),
+            }
+        }
+        return g;
+    }
+
+    fn deinit(g: *QkvRig) void {
+        for (g.bufs) |buf| buf.deinit();
+    }
+
+    fn copy(g: *QkvRig, queue: mtl.Queue, from: *const QkvRig) !void {
+        const cb = queue.commandBuffer();
+        const blit = cb.blit();
+        for (g.bufs, from.bufs) |dst, src| blit.copy(src, 0, dst, 0, src.length());
+        blit.end();
+        try finishQkv(cb);
+    }
+
+    fn ring(g: *const QkvRig, r: usize, site: usize) u64 {
+        return g.bufs[14].gpuAddress() + (r * 2 + site) * 4 * kv * dim * 4;
+    }
+
+    fn row(g: *const QkvRig, r: usize, site: usize) u64 {
+        return g.bufs[15].gpuAddress() + (r * 2 + site) * kv * dim * 2;
+    }
+};
+
+fn finishQkv(cb: mtl.CommandBuffer) !void {
+    cb.commit();
+    cb.wait();
+    if (cb.failure()) |msg| {
+        std.debug.print("qkv test: {s}\n", .{msg});
+        return error.GpuFailed;
+    }
+}
+
+fn qkvArgs(full: bool) QkvArgs {
+    const mul: u32 = if (full) 2 else 1;
+    return .{ .kv = kv, .heads = heads, .dim = dim, .rel = drel, .extent = extent, .layout = @intFromBool(full), .dyn = @intFromBool(full), .tau = @intFromBool(full), .norm = 1.0 / @sqrt(@as(f32, @floatFromInt(mul * 4 + 1))), .q_threshold = 22.6, .rel_threshold = 8, .eps = 1e-6, .floor = floor, .alpha = alpha };
+}
+
+test "the joined key/value prologue keeps the convolutions', clips' and stores' bytes" {
+    const device = mtl.Device.init() catch return error.SkipZigTest;
+    defer device.deinit();
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const queue = try device.queue();
+    defer queue.deinit();
+    const opts = mtl.CompileOptions.mlx();
+    const plib = try mtl.Library.fromSource(device, kernels.prefill, opts);
+    defer plib.deinit();
+    const glib = try mtl.Library.fromSource(device, @import("group.zig").source, opts);
+    defer glib.deinit();
+    var pipes: [6]mtl.Pipeline = undefined;
+    const sources = [6]mtl.Library{ plib, plib, plib, glib, glib, glib };
+    const kernel_names = [6][:0]const u8{ "i2p_batch_conv", "i2p_clip3", "i2p_batch_store_rel", "i2_batch_qkv", "i2v_conv", "i2v_qkv" };
+    var made: usize = 0;
+    defer for (pipes[0..made]) |p| p.deinit();
+    for (&pipes, sources, kernel_names) |*p, lib, name| {
+        p.* = try mtl.Pipeline.init(device, lib, name, false);
+        made += 1;
+    }
+    const store_rel = try mtl.Pipeline.init(device, glib, "i2v_store_rel", false);
+    defer store_rel.deinit();
+    var prng = std.Random.DefaultPrng.init(0x716b_7673);
+    const rng = prng.random();
+    var checked: usize = 0;
+    for ([_]usize{ 1, 3, 6 }) |rows| for ([_]bool{ false, true }) |full| for ([_]u32{ 0, 1, 2, 5, 1500 }) |start| for ([_]bool{ false, true }) |verify| {
+        var base = try QkvRig.init(device, rng, rows);
+        defer base.deinit();
+        var sides: [2]QkvRig = undefined;
+        sides[0] = try QkvRig.init(device, rng, rows);
+        defer sides[0].deinit();
+        sides[1] = try QkvRig.init(device, rng, rows);
+        defer sides[1].deinit();
+        for (&sides) |*g| try g.copy(queue, &base);
+        const a = qkvArgs(full);
+        const c: u32 = kv * dim;
+        const cb = queue.commandBuffer();
+        const enc = cb.compute(.serial);
+        for (sides, 0..) |g, side| {
+            const B = g.bufs;
+            for ([_]mtl.Buffer{ B[14], B[15], B[16] }) |buf| enc.useResource(buf, mtl.ResourceUsage.read | mtl.ResourceUsage.write);
+            if (side == 1) {
+                enc.setPipeline(if (verify) pipes[5] else pipes[3]);
+                for (0..11) |i| enc.setBuffer(B[i], 0, i);
+                enc.setValue(a, 11);
+                enc.setBuffer(B[11], 0, 12);
+                if (verify) {
+                    var vrows: [8]extern struct { k_ring: u64, v_ring: u64, pos: u32, start: u32, back: [4]u8, pad: u32 = 0 } = undefined;
+                    for (0..rows) |r| {
+                        var back: [4]u8 = @splat(0xff);
+                        for (1..4) |k| if (k <= r) {
+                            back[k - 1] = @intCast(r - k);
+                        };
+                        vrows[r] = .{ .k_ring = g.ring(0, 0), .v_ring = g.ring(0, 1), .pos = start + @as(u32, @intCast(r)), .start = start, .back = back };
+                    }
+                    enc.setBytes(std.mem.sliceAsBytes(vrows[0..rows]), 13);
+                    enc.setBuffer(B[12], 0, 14);
+                    enc.setBuffer(B[13], 0, 15);
+                    enc.setBuffer(B[16], 0, 16);
+                    enc.setBuffer(B[16], rows * c * 4, 17);
+                    enc.setBuffer(B[15], 0, 18);
+                    enc.setBuffer(B[15], rows * c * 2, 19);
+                } else {
+                    var brows: [8]extern struct { k_ring: u64, v_ring: u64, keys: u64, values: u64, pos: u32, pad: u32 = 0 } = undefined;
+                    for (0..rows) |r| brows[r] = .{ .k_ring = g.ring(r, 0), .v_ring = g.ring(r, 1), .keys = g.row(r, 0), .values = g.row(r, 1), .pos = start + @as(u32, @intCast(r)) * 7 };
+                    enc.setBytes(std.mem.sliceAsBytes(brows[0..rows]), 13);
+                    enc.setBuffer(B[12], 0, 14);
+                    enc.setBuffer(B[13], 0, 15);
+                }
+                enc.dispatchGroups(mtl.Size.of(kv + heads + (heads * (extent + 1) + 255) / 256, rows, 1), mtl.Size.of(256, 1, 1));
+                continue;
+            }
+            for (0..2) |site| {
+                const conv = ConvArgs{ .channels = c, .heads = if (full) kv else 0, .ring = 4, .pos = 0, .layout = @intFromBool(full), .norm = a.norm, .residual = 0, .topk = 0 };
+                enc.setPipeline(if (verify) pipes[4] else pipes[0]);
+                enc.setBuffer(B[site], 0, 0);
+                enc.setBuffer(B[2 + site], 0, 1);
+                enc.setBuffer(B[4 + site], 0, 2);
+                enc.setValue(conv, 3);
+                enc.setBuffer(B[12 + site], 0, 4);
+                if (verify) {
+                    var vrows: [8]extern struct { ring: u64, pos: u32, start: u32, back: [4]u8 } = undefined;
+                    for (0..rows) |r| {
+                        var back: [4]u8 = @splat(0xff);
+                        for (1..4) |k| if (k <= r) {
+                            back[k - 1] = @intCast(r - k);
+                        };
+                        vrows[r] = .{ .ring = g.ring(0, site), .pos = start + @as(u32, @intCast(r)), .start = start, .back = back };
+                    }
+                    enc.setBytes(std.mem.sliceAsBytes(vrows[0..rows]), 5);
+                    enc.setBuffer(B[16], site * rows * c * 4, 6);
+                } else {
+                    var brows: [8]extern struct { ring: u64, pos: u32, pad: u32 = 0 } = undefined;
+                    for (0..rows) |r| brows[r] = .{ .ring = g.ring(r, site), .pos = start + @as(u32, @intCast(r)) * 7 };
+                    enc.setBytes(std.mem.sliceAsBytes(brows[0..rows]), 5);
+                }
+                enc.setBuffer(B[site], 0, if (verify) 7 else 6);
+                enc.dispatchThreads(mtl.Size.of(c, rows, 1), mtl.Size.of(256, 1, 1));
+                if (site == 1) continue;
+                enc.setPipeline(pipes[1]);
+                for ([_]usize{ 6, 7, 8, 9, 12 }, 0..) |i, j| enc.setBuffer(B[i], 0, j);
+                enc.setValue(Clip3Args{ .heads = heads, .kv = kv, .dim = dim, .rel = drel, .q_threshold = a.q_threshold, .rel_threshold = a.rel_threshold }, 5);
+                enc.dispatchGroups(mtl.Size.of((2 * heads + kv) * rows, 1, 1), mtl.Size.of(256, 1, 1));
+            }
+            const rel = RelArgs{ .heads = heads, .kv = kv, .dim = dim, .rel = drel, .extent = extent, .window = 0, .pos = 0, .tau = @intFromBool(full), .scale = 0, .floor = floor, .alpha = alpha, .eps = a.eps };
+            enc.setPipeline(if (verify) store_rel else pipes[2]);
+            for ([_]usize{ 12, 13, 8, 10 }, 0..) |i, j| enc.setBuffer(B[i], 0, j);
+            enc.setValue(rel, 4);
+            enc.setBuffer(B[11], 0, 5);
+            if (verify) {
+                var positions: [8]u32 = undefined;
+                for (0..rows) |r| positions[r] = start + @as(u32, @intCast(r));
+                enc.setBytes(std.mem.sliceAsBytes(positions[0..rows]), 6);
+                enc.setBuffer(B[15], 0, 7);
+                enc.setBuffer(B[15], rows * c * 2, 8);
+            } else {
+                var srows: [8]extern struct { keys: u64, values: u64, pos: u32, pad: u32 = 0 } = undefined;
+                for (0..rows) |r| srows[r] = .{ .keys = g.row(r, 0), .values = g.row(r, 1), .pos = start + @as(u32, @intCast(r)) * 7 };
+                enc.setBytes(std.mem.sliceAsBytes(srows[0..rows]), 6);
+            }
+            enc.dispatchGroups(mtl.Size.of(kv + (heads * (extent + 1) + 255) / 256, rows, 1), mtl.Size.of(256, 1, 1));
+        }
+        enc.end();
+        try finishQkv(cb);
+        for ([_]usize{ 6, 11, 12, 13, 14, 15, 16 }) |i| {
+            const bytes = sides[0].bufs[i].length();
+            if (!std.mem.eql(u8, sides[0].bufs[i].slice(u8, bytes), sides[1].bufs[i].slice(u8, bytes))) {
+                std.debug.print("qkv test rows={d} full={} start={d} verify={}: {s} differs\n", .{ rows, full, start, verify, QkvRig.names[i] });
+                return error.TestUnexpectedResult;
+            }
+        }
+        checked += 1;
+    };
+    std.debug.print("joined key/value prologue: {d} cases (batch and verify, local and full, positions from 0) byte-equal to the separate kernels\n", .{checked});
+}

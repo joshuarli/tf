@@ -3,23 +3,30 @@
 inline float i2v_bf(const device bfloat* p, size_t i) { return float(p[i]); }
 
 struct i2v_conv_row { device float* ring; uint pos, start; uchar back[4]; };
-struct i2v_conv_args { uint channels, heads, ring, pos, layout; float norm; uint residual; };
+struct i2v_conv_args { uint channels, heads, ring, pos, layout; float norm; uint residual, topk; };
+
+inline float i2v_input(const device float* X, const device float* WTS, uint row, uint c, constant i2v_conv_args& a) {
+  if (a.topk == 0u) return X[(size_t)row * a.channels + c];
+  float sum = 0.0f;
+  for (uint j = 0; j < a.topk; ++j) sum = fma(WTS[(size_t)row * a.topk + j], X[((size_t)row * a.topk + j) * a.channels + c], sum);
+  return sum;
+}
 
 [[kernel]] void i2v_conv(const device float* X [[buffer(0)]], const device bfloat* W [[buffer(1)]],
     const device float* D [[buffer(2)]], constant i2v_conv_args& a [[buffer(3)]],
     device float* O [[buffer(4)]], constant i2v_conv_row* rows [[buffer(5)]], device float* CAP [[buffer(6)]],
-    uint2 p [[thread_position_in_grid]]) {
+    const device float* WTS [[buffer(7)]], uint2 p [[thread_position_in_grid]]) {
   if (p.x >= a.channels) return;
   const uint c = p.x, pos = rows[p.y].pos, start = rows[p.y].start;
   constant uchar* back = rows[p.y].back;
   device float* ring = rows[p.y].ring;
-  const device float* x = X + (size_t)p.y * a.channels;
-  float sum = x[c];
+  const float xc = i2v_input(X, WTS, p.y, c, a);
+  float sum = xc;
   for (uint k = 0; k < 4u; ++k) {
     const int at = int(pos) + int(k) - 3;
     if (at < 0) continue;
-    const float v = at == int(pos) ? x[c]
-      : (uint(at) >= start ? X[(size_t)back[pos - uint(at) - 1u] * a.channels + c] : ring[(uint(at) % a.ring) * a.channels + c]);
+    const float v = at == int(pos) ? xc
+      : (uint(at) >= start ? i2v_input(X, WTS, back[pos - uint(at) - 1u], c, a) : ring[(uint(at) % a.ring) * a.channels + c]);
     const size_t tap = a.layout ? (size_t)(3u - k) * a.channels + c : (size_t)c * 4u + k;
     sum = fma(v, i2v_bf(W, tap), sum);
   }
@@ -27,12 +34,12 @@ struct i2v_conv_args { uint channels, heads, ring, pos, layout; float norm; uint
     const uint head = c / (a.channels / a.heads);
     for (uint lag = 0; lag < 4u; ++lag) {
       if (lag > pos) continue;
-      const float v = lag == 0u ? x[c]
-        : (pos - lag >= start ? X[(size_t)back[lag - 1u] * a.channels + c] : ring[((pos - lag) % a.ring) * a.channels + c]);
+      const float v = lag == 0u ? xc
+        : (pos - lag >= start ? i2v_input(X, WTS, back[lag - 1u], c, a) : ring[((pos - lag) % a.ring) * a.channels + c]);
       sum = fma(v, D[(size_t)p.y * a.heads * 4u + head * 4u + lag], sum);
     }
   }
-  CAP[(size_t)p.y * a.channels + c] = x[c];
+  CAP[(size_t)p.y * a.channels + c] = xc;
   const size_t out = (size_t)p.y * a.channels + c;
   const float value = sum * a.norm;
   if (a.residual) O[out] += value; else O[out] = value;
@@ -386,4 +393,60 @@ struct i2v_round_row { device half* keys; device half* values; device float* con
   const uint site_at = site == 0u ? 0u : site == 1u ? a.kvw : site == 2u ? 2u * a.kvw : 2u * a.kvw + a.hidden;
   const size_t src = (size_t)slot * a.stride * (2u * a.kvw + 2u * a.hidden) + (size_t)site_at * a.stride + (size_t)row * width + c;
   r.conv[site][((size_t)slot * a.ring + r.pos % a.ring) * width + c] = CAP[src];
+}
+
+struct i2v_qkv_row { device float* k_ring; device float* v_ring; uint pos, start; uchar back[4]; };
+
+[[kernel]] void i2v_qkv(const device float* K [[buffer(0)]], const device float* V [[buffer(1)]],
+    const device bfloat* KW [[buffer(2)]], const device bfloat* VW [[buffer(3)]], const device float* KD [[buffer(4)]],
+    const device float* VD [[buffer(5)]], device float* Q [[buffer(6)]], const device bfloat* QS [[buffer(7)]],
+    const device float* R [[buffer(8)]], const device bfloat* RS [[buffer(9)]], const device bfloat* P [[buffer(10)]],
+    constant i2_qkv_args& a [[buffer(11)]], device float* REL [[buffer(12)]], constant i2v_qkv_row* rows [[buffer(13)]],
+    device float* KC [[buffer(14)]], device float* VC [[buffer(15)]], device float* KCAP [[buffer(16)]],
+    device float* VCAP [[buffer(17)]], device half* KH [[buffer(18)]], device half* VH [[buffer(19)]],
+    uint2 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
+  threadgroup float part[8];
+  threadgroup float rc[2][16];
+  const uint row = group.y, pos = rows[row].pos, start = rows[row].start;
+  if (group.x >= a.kv + a.heads) {
+    i2_qkv_rel(R, RS, P, a, REL, row, group.x - a.kv - a.heads, pos, rc, tid);
+    return;
+  }
+  if (group.x >= a.kv) {
+    i2_qkv_query(Q, QS, a, row, group.x - a.kv, part, tid);
+    return;
+  }
+  const uint count = a.kv * a.dim, c = group.x * a.dim + tid;
+  const bool live = tid < a.dim;
+  float kc = 0.0f, vc = 0.0f;
+  if (live) {
+    float kh[4], vh[4];
+    const size_t at = (size_t)row * count + c;
+    kh[0] = K[at];
+    vh[0] = V[at];
+    for (uint lag = 1; lag < 4u; ++lag) {
+      if (lag > pos) {
+        kh[lag] = 0.0f;
+        vh[lag] = 0.0f;
+      } else if (pos - lag >= start) {
+        const size_t back = (size_t)rows[row].back[lag - 1u] * count + c;
+        kh[lag] = K[back];
+        vh[lag] = V[back];
+      } else {
+        const size_t r = ((pos - lag) % 4u) * count + c;
+        kh[lag] = rows[row].k_ring[r];
+        vh[lag] = rows[row].v_ring[r];
+      }
+    }
+    kc = i2_qkv_conv(kh, pos, KW, a, c, KD + (size_t)row * a.kv * 4u);
+    vc = i2_qkv_conv(vh, pos, VW, a, c, VD + (size_t)row * a.kv * 4u);
+    KCAP[at] = kh[0];
+    VCAP[at] = vh[0];
+  }
+  const float2 kv = i2_qkv_rows(kc, vc, live, a, part, tid);
+  if (!live) return;
+  KC[(size_t)row * count + c] = kv.x;
+  VC[(size_t)row * count + c] = vc;
+  KH[(size_t)row * count + c] = kv.x;
+  VH[(size_t)row * count + c] = kv.y;
 }

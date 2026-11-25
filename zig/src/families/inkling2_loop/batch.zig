@@ -15,6 +15,8 @@ pub const BatchScratch = struct {
     controls_apply: mtl.Pipeline,
     mix: mtl.Pipeline,
     mix4: mtl.Pipeline,
+    qkv: mtl.Pipeline,
+    controls_cols: mtl.Pipeline,
     shared: @import("rows.zig").Pipes,
     controls_input: mtl.Buffer,
     controls_hidden: mtl.Buffer,
@@ -49,12 +51,18 @@ pub const BatchScratch = struct {
         errdefer mix.deinit();
         const mix4 = try mtl.Pipeline.init(device, lib, "i2_batch_mix4", false);
         errdefer mix4.deinit();
+        const qkv = try mtl.Pipeline.init(device, lib, "i2_batch_qkv", false);
+        errdefer qkv.deinit();
+        const controls_cols = try mtl.Pipeline.init(device, lib, "i2_controls_apply_rows", false);
+        errdefer controls_cols.deinit();
         const shared = try @import("rows.zig").Pipes.init(device);
-        return .{ .rows = rows, .decode = decode, .parts = parts, .split = split, .combine = combine, .controls_norm = controls_norm, .controls_down = controls_down, .controls_apply = controls_apply, .mix = mix, .mix4 = mix4, .shared = shared, .controls_input = controls_input, .controls_hidden = controls_hidden };
+        return .{ .rows = rows, .decode = decode, .parts = parts, .split = split, .combine = combine, .controls_norm = controls_norm, .controls_down = controls_down, .controls_apply = controls_apply, .mix = mix, .mix4 = mix4, .qkv = qkv, .controls_cols = controls_cols, .shared = shared, .controls_input = controls_input, .controls_hidden = controls_hidden };
     }
 
     pub fn deinit(s: *BatchScratch) void {
         s.shared.deinit();
+        s.qkv.deinit();
+        s.controls_cols.deinit();
         s.mix4.deinit();
         s.mix.deinit();
         s.controls_apply.deinit();

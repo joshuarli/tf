@@ -328,3 +328,47 @@ template [[host_name("i2r_dense_ahead_2")]] [[kernel]] void i2r_dense_ahead<2, 4
     const device uint* w [[buffer(1)]], const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
     constant i2t_dense_args& a [[buffer(4)]], device float* y [[buffer(5)]], uint group [[threadgroup_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]]);
+
+struct i2r_controls_args { uint h, rank, rows, msg0; uint xs[3], xb[3]; };
+
+[[kernel]] void i2r_controls_down(const device float* X0 [[buffer(0)]], const device float* X1 [[buffer(1)]],
+    const device float* X2 [[buffer(2)]], const device float* MSG [[buffer(3)]], const device float* W0 [[buffer(4)]],
+    const device float* W1 [[buffer(5)]], const device float* W2 [[buffer(6)]], constant i2r_controls_args& a [[buffer(7)]],
+    device float* OUT [[buffer(8)]], uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
+  threadgroup float part[8];
+  threadgroup float inv[2];
+  const uint j = group.z, row = group.y;
+  const device float* cur = (j == 0u ? X0 : j == 1u ? X1 : X2) + size_t(a.xb[j] + row * a.xs[j]) * a.h;
+  const device float* msg = MSG + size_t(a.msg0 + j + row * 4u) * a.h;
+  for (uint which = 0; which < 2u; ++which) {
+    const device float* src = which == 0u ? cur : msg;
+    float sum = 0.0f;
+    for (uint i = tid; i < a.h; i += 256u) sum = fma(src[i], src[i], sum);
+    sum = simd_sum(sum);
+    if (tid % 32u == 0u) part[tid / 32u] = sum;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (tid == 0u) {
+      float total = 0.0f;
+      for (uint i = 0; i < 8u; ++i) total += part[i];
+      inv[which] = 1.0f / sqrt(total / float(a.h) + 1e-6f);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  const uint col = group.x * 8u + tid / 32u, lane = tid % 32u;
+  if (col >= a.rank) return;
+  const uint width = 2u * a.h;
+  const device float* w = (j == 0u ? W0 : j == 1u ? W1 : W2) + size_t(col) * width;
+  float acc = 0.0f;
+  uint base = 0u;
+  for (; base + 128u <= width; base += 128u) {
+    const uint k = base + lane * 4u;
+    const bool first = k < a.h;
+    const float4 xv = float4(*reinterpret_cast<const device packed_float4*>(first ? cur + k : msg + (k - a.h))) * (first ? inv[0] : inv[1]);
+    const float4 wv = float4(*reinterpret_cast<const device packed_float4*>(w + k));
+    acc = fma(xv.x, wv.x, acc); acc = fma(xv.y, wv.y, acc);
+    acc = fma(xv.z, wv.z, acc); acc = fma(xv.w, wv.w, acc);
+  }
+  for (uint k = base + lane; k < width; k += 32u) acc = fma(k < a.h ? cur[k] * inv[0] : msg[k - a.h] * inv[1], w[k], acc);
+  acc = simd_sum(acc);
+  if (lane == 0u) OUT[(size_t(j) * a.rows + row) * a.rank + col] = acc;
+}

@@ -170,3 +170,107 @@ struct i2pr_conv_args { uint channels, heads, ring, base, rows, layout; float no
   if (a.out) O[at] = value;
   RES[at] = RES[at] + value;
 }
+
+inline void i2pr_mix_row(const device float* BLK, const device float* CUR, const device float* Q0,
+    const device float* Q1, const device float* Q2, const device float* Q3, constant i2pr_mix_args& a, device float* MIX,
+    const device bfloat* W0, const device bfloat* W1, const device bfloat* W2, device float* O0, device float* O1,
+    device float* O2, uint row, uint t, uint sg, uint lane, threadgroup float (&part)[4][5][8],
+    threadgroup float (&w)[4][5], threadgroup float (&inv)[5]) {
+  float src[5][9];
+  for (uint j = 0; j < a.depth; ++j) {
+    const device float* s = j + 1u < a.depth ? BLK + ((size_t)row * a.stride + (a.depth - 2u - j)) * a.width
+                                             : CUR + (size_t)row * a.width;
+    float sum = 0.0f;
+    for (uint i = 0; i < 9u; ++i) {
+      src[j][i] = s[t + i * 256u];
+      sum = fma(src[j][i], src[j][i], sum);
+    }
+    sum = simd_sum(sum);
+    if (lane == 0u) part[0][j][sg] = sum;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (t < a.depth) {
+    float total = 0.0f;
+    for (uint s = 0; s < 8u; ++s) total += part[0][t][s];
+    inv[t] = 1.0f / sqrt(total / float(a.width) + 1e-6f);
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint j = 0; j < a.depth; ++j) for (uint i = 0; i < 9u; ++i) src[j][i] = src[j][i] * inv[j];
+  for (uint k = 0; k < a.k; ++k) {
+    const device float* q = k == 0u ? Q0 : k == 1u ? Q1 : k == 2u ? Q2 : Q3;
+    for (uint j = 0; j < a.depth; ++j) {
+      float sum = 0.0f;
+      for (uint i = 0; i < 9u; ++i) sum = fma(src[j][i], q[t + i * 256u], sum);
+      sum = simd_sum(sum);
+      if (lane == 0u) part[k][j][sg] = sum;
+    }
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (t < a.k) {
+    for (uint j = 0; j < a.depth; ++j) {
+      float total = 0.0f;
+      for (uint s = 0; s < 8u; ++s) total += part[t][j][s];
+      w[t][j] = total * a.scale;
+    }
+    float peak = w[t][0];
+    for (uint j = 1; j < a.depth; ++j) peak = max(peak, w[t][j]);
+    float total = 0.0f;
+    for (uint j = 0; j < a.depth; ++j) total += precise::exp(w[t][j] - peak);
+    for (uint j = 0; j < a.depth; ++j) w[t][j] = precise::exp(w[t][j] - peak) / total;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float out[3][9];
+  for (uint k = 0; k < a.k; ++k) {
+    device float* mix = MIX + ((size_t)row * a.k + k) * a.width;
+    float sum2 = 0.0f;
+    for (uint i = 0; i < 9u; ++i) {
+      float sum = 0.0f;
+      for (uint j = 0; j < a.depth; ++j) sum = fma(w[k][j], src[j][i], sum);
+      mix[t + i * 256u] = sum;
+      if (k < 3u) out[k][i] = sum;
+      sum2 = fma(sum, sum, sum2);
+    }
+    if (a.norm == 0u) continue;
+    sum2 = simd_sum(sum2);
+    if (lane == 0u) part[0][k][sg] = sum2;
+  }
+  if (a.norm == 0u) return;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint k = 0; k < a.k; ++k) {
+    float total = 0.0f;
+    for (uint s = 0; s < 8u; ++s) total += part[0][k][s];
+    const float r = 1.0f / sqrt(total / float(a.width) + a.eps);
+    const device bfloat* g = k == 0u ? W0 : k == 1u ? W1 : W2;
+    device float* o = (k == 0u ? O0 : k == 1u ? O1 : O2) + (size_t)row * a.width;
+    for (uint i = 0; i < 9u; ++i) o[t + i * 256u] = out[k][i] * r * float(g[t + i * 256u]);
+  }
+}
+
+[[kernel]] void i2pr_batch_mix(const device float* BLK [[buffer(0)]], const device float* CUR [[buffer(1)]],
+    const device float* Q0 [[buffer(2)]], const device float* Q1 [[buffer(3)]], const device float* Q2 [[buffer(4)]],
+    const device float* Q3 [[buffer(5)]], constant i2pr_mix_args& a [[buffer(6)]], device float* MIX [[buffer(7)]],
+    const device bfloat* W0 [[buffer(8)]], const device bfloat* W1 [[buffer(9)]], const device bfloat* W2 [[buffer(10)]],
+    device float* O0 [[buffer(11)]], device float* O1 [[buffer(12)]], device float* O2 [[buffer(13)]],
+    uint row [[threadgroup_position_in_grid]], uint t [[thread_position_in_threadgroup]],
+    uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+  threadgroup float part[4][5][8];
+  threadgroup float w[4][5];
+  threadgroup float inv[5];
+  i2pr_mix_row(BLK, CUR, Q0, Q1, Q2, Q3, a, MIX, W0, W1, W2, O0, O1, O2, row, t, sg, lane, part, w, inv);
+}
+
+[[kernel]] void i2pr_batch_mix2(const device float* BLK0 [[buffer(0)]], const device float* CUR0 [[buffer(1)]],
+    const device float* Q00 [[buffer(2)]], const device float* Q01 [[buffer(3)]], const device float* Q02 [[buffer(4)]],
+    const device float* Q03 [[buffer(5)]], device float* MIX0 [[buffer(6)]], const device float* BLK1 [[buffer(7)]],
+    const device float* CUR1 [[buffer(8)]], const device float* Q10 [[buffer(9)]], const device float* Q11 [[buffer(10)]],
+    const device float* Q12 [[buffer(11)]], const device float* Q13 [[buffer(12)]], device float* MIX1 [[buffer(13)]],
+    constant i2pr_mix_args* args [[buffer(14)]], uint2 tg [[threadgroup_position_in_grid]],
+    uint t [[thread_index_in_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]) {
+  threadgroup float part[4][5][8];
+  threadgroup float w[4][5];
+  threadgroup float inv[5];
+  const device bfloat* none = (const device bfloat*)Q00;
+  if (tg.y == 0u) i2pr_mix_row(BLK0, CUR0, Q00, Q01, Q02, Q03, args[0], MIX0, none, none, none, MIX0, MIX0, MIX0, tg.x, t, sg, lane, part, w, inv);
+  else i2pr_mix_row(BLK1, CUR1, Q10, Q11, Q12, Q13, args[1], MIX1, none, none, none, MIX1, MIX1, MIX1, tg.x, t, sg, lane, part, w, inv);
+}

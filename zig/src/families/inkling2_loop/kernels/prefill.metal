@@ -448,21 +448,23 @@ struct i2p_clip3_args { uint heads, kv, dim, rel; float q_threshold, rel_thresho
 }
 
 struct i2p_batch_conv_row { device float* ring; uint pos, pad; };
-struct i2p_batch_conv_args { uint channels, heads, ring, pos, layout; float norm; uint residual; };
+struct i2p_batch_conv_args { uint channels, heads, ring, pos, layout; float norm; uint residual, topk; };
 
 [[kernel]] void i2p_batch_conv(const device float* X [[buffer(0)]], const device bfloat* W [[buffer(1)]],
     const device float* D [[buffer(2)]], constant i2p_batch_conv_args& a [[buffer(3)]],
-    device float* O [[buffer(4)]], constant i2p_batch_conv_row* rows [[buffer(5)]],
+    device float* O [[buffer(4)]], constant i2p_batch_conv_row* rows [[buffer(5)]], const device float* WTS [[buffer(6)]],
     uint2 p [[thread_position_in_grid]]) {
   if (p.x >= a.channels) return;
   const uint c = p.x, pos = rows[p.y].pos;
   device float* ring = rows[p.y].ring;
-  const device float* x = X + (size_t)p.y * a.channels;
-  float sum = x[c];
+  float xc = 0.0f;
+  if (a.topk == 0u) xc = X[(size_t)p.y * a.channels + c];
+  else for (uint j = 0; j < a.topk; ++j) xc = fma(WTS[(size_t)p.y * a.topk + j], X[((size_t)p.y * a.topk + j) * a.channels + c], xc);
+  float sum = xc;
   for (uint k = 0; k < 4u; ++k) {
     const int at = int(pos) + int(k) - 3;
     if (at < 0) continue;
-    const float v = at == int(pos) ? x[c] : ring[(uint(at) % a.ring) * a.channels + c];
+    const float v = at == int(pos) ? xc : ring[(uint(at) % a.ring) * a.channels + c];
     const size_t tap = a.layout ? (size_t)(3u - k) * a.channels + c : (size_t)c * 4u + k;
     sum = fma(v, i2p_bf(W, tap), sum);
   }
@@ -470,11 +472,11 @@ struct i2p_batch_conv_args { uint channels, heads, ring, pos, layout; float norm
     const uint head = c / (a.channels / a.heads);
     for (uint lag = 0; lag < 4u; ++lag) {
       if (lag > pos) continue;
-      const float v = lag == 0u ? x[c] : ring[((pos - lag) % a.ring) * a.channels + c];
+      const float v = lag == 0u ? xc : ring[((pos - lag) % a.ring) * a.channels + c];
       sum = fma(v, D[(size_t)p.y * a.heads * 4u + head * 4u + lag], sum);
     }
   }
-  ring[(pos % a.ring) * a.channels + c] = x[c];
+  ring[(pos % a.ring) * a.channels + c] = xc;
   const size_t out = (size_t)p.y * a.channels + c;
   const float value = sum * a.norm;
   if (a.residual) O[out] += value; else O[out] = value;

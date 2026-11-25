@@ -31,6 +31,7 @@ const Kind = enum(u8) { dense, projections, gate_up, down };
 pub const Pipes = struct {
     pipes: [kernels.len]mtl.Pipeline,
     head_pair: mtl.Pipeline,
+    controls_down: mtl.Pipeline,
     /// Whether this device's matrix products are the fma chains the tiles rely on; if not, one-row kernels serve.
     tiles: bool,
 
@@ -46,14 +47,17 @@ pub const Pipes = struct {
         }
         const head_pair = try mtl.Pipeline.init(device, lib, "i2r_dense_ahead_2", false);
         errdefer head_pair.deinit();
+        const controls_down = try mtl.Pipeline.init(device, lib, "i2r_controls_down", false);
+        errdefer controls_down.deinit();
         const probe = try mtl.Pipeline.init(device, lib, "i2t_probe", false);
         defer probe.deinit();
-        return .{ .pipes = pipes, .head_pair = head_pair, .tiles = try chains(device, probe) };
+        return .{ .pipes = pipes, .head_pair = head_pair, .controls_down = controls_down, .tiles = try chains(device, probe) };
     }
 
     pub fn deinit(p: *Pipes) void {
         for (p.pipes) |pipe| pipe.deinit();
         p.head_pair.deinit();
+        p.controls_down.deinit();
     }
 
     fn pick(p: *const Pipes, kind: Kind, rows: usize, outputs: []const u32, slots: u32) Dispatch {

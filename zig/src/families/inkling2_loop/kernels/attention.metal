@@ -368,7 +368,7 @@ inline void i2_mix_rows(const device float* S, const device float* q0, const dev
   i2_mix_rows(S, Q, K, V, F, a, 4u, O, t, i, part, w);
 }
 
-struct i2_controls_args { uint h, rank, rows; uint xs[3], xb[3]; };
+struct i2_controls_args { uint h, rank, rows; uint xs[3], xb[3]; uint msg0, cols; };
 
 [[kernel]] void i2_controls_norm(const device float* X0 [[buffer(0)]], const device float* X1 [[buffer(1)]],
     const device float* X2 [[buffer(2)]], const device float* MSG [[buffer(3)]],
@@ -416,34 +416,154 @@ struct i2_controls_args { uint h, rank, rows; uint xs[3], xb[3]; };
   if (lane == 0u) OUT[(size_t(group.z) * a.rows + group.y) * a.rank + col] = acc;
 }
 
-[[kernel]] void i2_controls_apply(const device float* X [[buffer(0)]],
-    const device float* G0 [[buffer(1)]], const device float* G1 [[buffer(2)]], const device float* G2 [[buffer(3)]],
-    const device float* F0 [[buffer(4)]], const device float* F1 [[buffer(5)]], const device float* F2 [[buffer(6)]],
-    const device float* C0 [[buffer(7)]], const device float* C1 [[buffer(8)]], const device float* C2 [[buffer(9)]],
-    const device float* MSG [[buffer(10)]], device float* O0 [[buffer(11)]], device float* O1 [[buffer(12)]],
-    device float* O2 [[buffer(13)]], constant i2_controls_args& a [[buffer(14)]],
-    uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
-  const uint col = group.x * 8u + tid / 32u, lane = tid % 32u, j = group.z;
-  if (col >= a.h || group.y >= a.rows) return;
+#define I2_CONTROLS_APPLY_ARGS const device float* X [[buffer(0)]], const device float* G0 [[buffer(1)]], \
+    const device float* G1 [[buffer(2)]], const device float* G2 [[buffer(3)]], const device float* F0 [[buffer(4)]], \
+    const device float* F1 [[buffer(5)]], const device float* F2 [[buffer(6)]], const device float* C0 [[buffer(7)]], \
+    const device float* C1 [[buffer(8)]], const device float* C2 [[buffer(9)]], const device float* MSG [[buffer(10)]], \
+    device float* O0 [[buffer(11)]], device float* O1 [[buffer(12)]], device float* O2 [[buffer(13)]], \
+    constant i2_controls_args& a [[buffer(14)]], uint3 group [[threadgroup_position_in_grid]], \
+    uint tid [[thread_index_in_threadgroup]]
+
+template <uint C>
+[[kernel]] void i2_controls_apply_cols(I2_CONTROLS_APPLY_ARGS) {
+  const uint cols = C == 0u ? a.cols : C;
+  const uint col0 = (group.x * 8u + tid / 32u) * cols, lane = tid % 32u, j = group.z;
+  if (col0 >= a.h || group.y >= a.rows) return;
   const device float* x = X + (size_t(j) * a.rows + group.y) * a.rank;
-  const device float* wg = (j == 0u ? G0 : j == 1u ? G1 : G2) + size_t(col) * a.rank;
-  const device float* wf = (j == 0u ? F0 : j == 1u ? F1 : F2) + size_t(col) * a.rank;
   const device float* cur = (j == 0u ? C0 : j == 1u ? C1 : C2) + size_t(a.xb[j] + group.y * a.xs[j]) * a.h;
-  const device float* msg = MSG + size_t(j + group.y * 4u) * a.h;
+  const device float* msg = MSG + size_t(a.msg0 + j + group.y * 4u) * a.h;
   device float* out = (j == 0u ? O0 : j == 1u ? O1 : O2) + size_t(group.y) * a.h;
-  float g = 0.0f, f = 0.0f;
-  uint base = 0u;
-  for (; base + 128u <= a.rank; base += 128u) {
-    const uint k = base + lane * 4u;
-    const float4 xv = float4(*reinterpret_cast<const device packed_float4*>(x + k));
-    const float4 gv = float4(*reinterpret_cast<const device packed_float4*>(wg + k));
-    const float4 fv = float4(*reinterpret_cast<const device packed_float4*>(wf + k));
-    g = fma(xv.x, gv.x, g); g = fma(xv.y, gv.y, g); g = fma(xv.z, gv.z, g); g = fma(xv.w, gv.w, g);
-    f = fma(xv.x, fv.x, f); f = fma(xv.y, fv.y, f); f = fma(xv.z, fv.z, f); f = fma(xv.w, fv.w, f);
+  for (uint col = col0; col < min(col0 + cols, a.h); ++col) {
+    const device float* wg = (j == 0u ? G0 : j == 1u ? G1 : G2) + size_t(col) * a.rank;
+    const device float* wf = (j == 0u ? F0 : j == 1u ? F1 : F2) + size_t(col) * a.rank;
+    float g = 0.0f, f = 0.0f;
+    uint base = 0u;
+    for (; base + 128u <= a.rank; base += 128u) {
+      const uint k = base + lane * 4u;
+      const float4 xv = float4(*reinterpret_cast<const device packed_float4*>(x + k));
+      const float4 gv = float4(*reinterpret_cast<const device packed_float4*>(wg + k));
+      const float4 fv = float4(*reinterpret_cast<const device packed_float4*>(wf + k));
+      g = fma(xv.x, gv.x, g); g = fma(xv.y, gv.y, g); g = fma(xv.z, gv.z, g); g = fma(xv.w, gv.w, g);
+      f = fma(xv.x, fv.x, f); f = fma(xv.y, fv.y, f); f = fma(xv.z, fv.z, f); f = fma(xv.w, fv.w, f);
+    }
+    for (uint k = base + lane; k < a.rank; k += 32u) {
+      g = fma(x[k], wg[k], g); f = fma(x[k], wf[k], f);
+    }
+    g = simd_sum(g); f = simd_sum(f);
+    if (lane == 0u) out[col] = cur[col] - precise::tanh(f) * cur[col] + precise::tanh(g) * msg[col];
   }
-  for (uint k = base + lane; k < a.rank; k += 32u) {
-    g = fma(x[k], wg[k], g); f = fma(x[k], wf[k], f);
+}
+
+template [[host_name("i2_controls_apply")]] [[kernel]] void i2_controls_apply_cols<1>(I2_CONTROLS_APPLY_ARGS);
+template [[host_name("i2_controls_apply_rows")]] [[kernel]] void i2_controls_apply_cols<0>(I2_CONTROLS_APPLY_ARGS);
+
+struct i2_qkv_args { uint kv, heads, dim, rel, extent, layout, dyn, tau; float norm, q_threshold, rel_threshold, eps, floor, alpha; };
+
+inline float i2_qkv_conv(const thread float* hist, uint pos, const device bfloat* W, constant i2_qkv_args& a, uint c,
+    const device float* D) {
+  const uint channels = a.kv * a.dim;
+  float sum = hist[0];
+  for (uint k = 0; k < 4u; ++k) {
+    const uint lag = 3u - k;
+    if (lag > pos) continue;
+    sum = fma(hist[lag], float(W[a.layout ? (size_t)(3u - k) * channels + c : (size_t)c * 4u + k]), sum);
   }
-  g = simd_sum(g); f = simd_sum(f);
-  if (lane == 0u) out[col] = cur[col] - precise::tanh(f) * cur[col] + precise::tanh(g) * msg[col];
+  if (a.dyn) for (uint lag = 0; lag < 4u; ++lag) if (lag <= pos) sum = fma(hist[lag], D[(c / a.dim) * 4u + lag], sum);
+  return sum * a.norm;
+}
+
+inline float i2_qkv_total(float sum, threadgroup float* part, uint tid) {
+  sum = simd_sum(sum);
+  if (tid % 32u == 0u) part[tid / 32u] = sum;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  float total = 0.0f;
+  for (uint i = 0; i < 8u; ++i) total += part[i];
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  return total;
+}
+
+inline float2 i2_qkv_rows(float kc, float vc, bool live, constant i2_qkv_args& a, threadgroup float* part, uint tid) {
+  const float kt = i2_qkv_total(live ? fma(kc, kc, 0.0f) : 0.0f, part, tid);
+  const float clip = clamp(a.q_threshold / (sqrt(kt) + 1e-6f), 0.0f, 1.0f);
+  const float vt = i2_qkv_total(live ? fma(vc, vc, 0.0f) : 0.0f, part, tid);
+  return float2(kc * clip, vc * (1.0f / sqrt(vt / float(a.dim) + a.eps)));
+}
+
+inline void i2_qkv_query(device float* Q, const device bfloat* QS, constant i2_qkv_args& a, uint row, uint h,
+    threadgroup float* part, uint tid) {
+  device float* x = Q + ((size_t)row * a.heads + h) * a.dim;
+  const bool live = tid < a.dim;
+  const float v = live ? x[tid] * float(QS[(size_t)h * a.dim + tid]) : 0.0f;
+  const float total = i2_qkv_total(live ? fma(v, v, 0.0f) : 0.0f, part, tid);
+  const float clip = clamp(a.q_threshold / (sqrt(total) + 1e-6f), 0.0f, 1.0f);
+  if (live) x[tid] = v * clip;
+}
+
+inline void i2_qkv_rel(const device float* R, const device bfloat* RS, const device bfloat* P, constant i2_qkv_args& a,
+    device float* O, uint row, uint block, uint pos, threadgroup float (&rc)[2][16], uint tid) {
+  const uint cols = a.extent + 1u, first = block * 256u, h0 = first / cols;
+  if (tid < 64u) {
+    const uint s = tid / 32u, lane = tid % 32u, h = h0 + s;
+    const bool live = h < a.heads && lane < a.rel;
+    const float v = live ? R[((size_t)row * a.heads + h) * a.rel + lane] * float(RS[(size_t)h * a.rel + lane]) : 0.0f;
+    const float total = simd_sum(live ? fma(v, v, 0.0f) : 0.0f);
+    const float clip = clamp(a.rel_threshold / (sqrt(total) + 1e-6f), 0.0f, 1.0f);
+    if (lane < 16u) rc[s][lane] = v * clip;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  const uint i = first + tid;
+  if (i >= cols * a.heads) return;
+  const uint h = i / cols, dist = i % cols;
+  const size_t out = (size_t)row * cols * a.heads + i;
+  if (dist == a.extent) { O[out] = 0.0f; return; }
+  const float tau = a.tau ? 1.0f + a.alpha * precise::log(max(1.0f, (float(pos) + 1.0f) / a.floor)) : 1.0f;
+  float sum = 0.0f;
+  for (uint u = 0; u < a.rel; ++u) sum = fma(float(P[u * a.extent + dist]), rc[h - h0][u], sum);
+  O[out] = sum * tau;
+}
+
+struct i2_batch_qkv_row { device float* k_ring; device float* v_ring; device half* keys; device half* values; uint pos, pad; };
+
+[[kernel]] void i2_batch_qkv(const device float* K [[buffer(0)]], const device float* V [[buffer(1)]],
+    const device bfloat* KW [[buffer(2)]], const device bfloat* VW [[buffer(3)]], const device float* KD [[buffer(4)]],
+    const device float* VD [[buffer(5)]], device float* Q [[buffer(6)]], const device bfloat* QS [[buffer(7)]],
+    const device float* R [[buffer(8)]], const device bfloat* RS [[buffer(9)]], const device bfloat* P [[buffer(10)]],
+    constant i2_qkv_args& a [[buffer(11)]], device float* REL [[buffer(12)]],
+    constant i2_batch_qkv_row* rows [[buffer(13)]], device float* KC [[buffer(14)]], device float* VC [[buffer(15)]],
+    uint2 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
+  threadgroup float part[8];
+  threadgroup float rc[2][16];
+  const uint row = group.y, pos = rows[row].pos;
+  if (group.x >= a.kv + a.heads) {
+    i2_qkv_rel(R, RS, P, a, REL, row, group.x - a.kv - a.heads, pos, rc, tid);
+    return;
+  }
+  if (group.x >= a.kv) {
+    i2_qkv_query(Q, QS, a, row, group.x - a.kv, part, tid);
+    return;
+  }
+  const uint count = a.kv * a.dim, c = group.x * a.dim + tid;
+  const bool live = tid < a.dim;
+  float kc = 0.0f, vc = 0.0f;
+  if (live) {
+    float kh[4], vh[4];
+    const size_t at = (size_t)row * count + c;
+    kh[0] = K[at];
+    vh[0] = V[at];
+    for (uint lag = 1; lag < 4u; ++lag) {
+      const size_t r = lag <= pos ? ((pos - lag) % 4u) * count + c : 0;
+      kh[lag] = lag <= pos ? rows[row].k_ring[r] : 0.0f;
+      vh[lag] = lag <= pos ? rows[row].v_ring[r] : 0.0f;
+    }
+    kc = i2_qkv_conv(kh, pos, KW, a, c, KD + (size_t)row * a.kv * 4u);
+    vc = i2_qkv_conv(vh, pos, VW, a, c, VD + (size_t)row * a.kv * 4u);
+    rows[row].k_ring[(pos % 4u) * count + c] = kh[0];
+    rows[row].v_ring[(pos % 4u) * count + c] = vh[0];
+  }
+  const float2 kv = i2_qkv_rows(kc, vc, live, a, part, tid);
+  if (!live) return;
+  KC[(size_t)row * count + c] = kv.x;
+  VC[(size_t)row * count + c] = vc;
+  rows[row].keys[c] = kv.x;
+  rows[row].values[c] = kv.y;
 }

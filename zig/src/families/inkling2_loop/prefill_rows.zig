@@ -11,6 +11,8 @@ const max_norms = 3;
 
 pub const Pipes = struct {
     mix: mtl.Pipeline,
+    batch_mix: mtl.Pipeline,
+    batch_mix2: mtl.Pipeline,
     clips: mtl.Pipeline,
     ring: mtl.Pipeline,
     kv: mtl.Pipeline,
@@ -21,17 +23,23 @@ pub const Pipes = struct {
         defer lib.deinit();
         const mix = try mtl.Pipeline.init(device, lib, "i2pr_mix_norm", false);
         errdefer mix.deinit();
+        const batch_mix = try mtl.Pipeline.init(device, lib, "i2pr_batch_mix", false);
+        errdefer batch_mix.deinit();
+        const batch_mix2 = try mtl.Pipeline.init(device, lib, "i2pr_batch_mix2", false);
+        errdefer batch_mix2.deinit();
         const clips = try mtl.Pipeline.init(device, lib, "i2pr_clips", false);
         errdefer clips.deinit();
         const ring = try mtl.Pipeline.init(device, lib, "i2pr_ring_store", false);
         errdefer ring.deinit();
         const kv = try mtl.Pipeline.init(device, lib, "i2pr_kv_store", false);
         errdefer kv.deinit();
-        return .{ .mix = mix, .clips = clips, .ring = ring, .kv = kv, .conv_add = try mtl.Pipeline.init(device, lib, "i2pr_conv_add", false) };
+        return .{ .mix = mix, .batch_mix = batch_mix, .batch_mix2 = batch_mix2, .clips = clips, .ring = ring, .kv = kv, .conv_add = try mtl.Pipeline.init(device, lib, "i2pr_conv_add", false) };
     }
 
     pub fn deinit(p: Pipes) void {
         p.mix.deinit();
+        p.batch_mix.deinit();
+        p.batch_mix2.deinit();
         p.clips.deinit();
         p.ring.deinit();
         p.kv.deinit();

@@ -22,15 +22,20 @@ const BatchRow = extern struct { keys: u64, values: u64, args: DecodeParts };
 const GroupRow = extern struct { keys: u64, values: u64, args: DecodeParts, gpos: u32, path: [max_rows]u8 };
 const RelArgs = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, scale: f32, floor: f32, alpha: f32, eps: f32 };
 const ConvRow = extern struct { ring: u64, pos: u32, start: u32, back: [4]u8 };
-const ConvArgs = extern struct { channels: u32, heads: u32, ring: u32, pos: u32, layout: u32, norm: f32, residual: u32 };
+const ConvArgs = extern struct { channels: u32, heads: u32, ring: u32, pos: u32, layout: u32, norm: f32, residual: u32, topk: u32 };
+pub const ConvInto = struct { residual: bool, topk: u32, wts: mtl.Buffer };
 const CommitRow = extern struct { keys: u64, values: u64, conv: [4]u64, pos: u32, capacity: u32, keep: u32, conv_keep: u32 };
 const CommitSlot = extern struct { local: u32, locals_before: u32, globals_before: u32, pad: u32 = 0 };
 const CommitArgs = extern struct { kvw: u32, hidden: u32, rows: u32, stride: u32, slots: u32, window: u32, ring: u32 };
 const RoundRow = extern struct { keys: u64, values: u64, conv: [4]u64, pos: u32, capacity: u32, owner: u32, depth: u32 };
 const Stream = extern struct { first: u32, size: u32 };
 
-const names = [_][:0]const u8{ "i2v_conv", "i2v_store_rel", "i2v_split", "i2v_commit_kv", "i2v_commit_conv", "i2v_argmax", "i2v_accept", "i2v_round_kv", "i2v_round_conv" };
-const Kernel = enum { conv, store_rel, split, commit_kv, commit_conv, argmax, accept, round_kv, round_conv };
+const names = [_][:0]const u8{ "i2v_conv", "i2v_store_rel", "i2v_split", "i2v_commit_kv", "i2v_commit_conv", "i2v_argmax", "i2v_accept", "i2v_round_kv", "i2v_round_conv", "i2v_qkv" };
+const Kernel = enum { conv, store_rel, split, commit_kv, commit_conv, argmax, accept, round_kv, round_conv, qkv };
+const QkvRow = extern struct { k_ring: u64, v_ring: u64, pos: u32, start: u32, back: [4]u8, pad: u32 = 0 };
+pub const QkvArgs = extern struct { kv: u32, heads: u32, dim: u32, rel: u32, extent: u32, layout: u32, dyn: u32, tau: u32, norm: f32, q_threshold: f32, rel_threshold: f32, eps: f32, floor: f32, alpha: f32 };
+pub const QkvWeights = struct { k_conv: Tensor, v_conv: Tensor, q_scale: Tensor, r_scale: Tensor, rel_bias: Tensor };
+pub const QkvBuffers = struct { k: mtl.Buffer, v: mtl.Buffer, kdyn: mtl.Buffer, vdyn: mtl.Buffer, q: mtl.Buffer, r: mtl.Buffer, relbias: mtl.Buffer, kc: mtl.Buffer, vc: mtl.Buffer };
 
 pub const Finish = enum { picks, commit };
 /// `last[i]`: stream i's deepest accepted row, counted from its first row; on a chain, its accepted drafts.
@@ -323,8 +328,12 @@ pub fn scratch(device: mtl.Device, config: *const Config) !batch_mod.BatchScratc
     errdefer mix.deinit();
     const mix4 = try mtl.Pipeline.init(device, lib, "i2_batch_mix4", false);
     errdefer mix4.deinit();
+    const qkv = try mtl.Pipeline.init(device, lib, "i2_batch_qkv", false);
+    errdefer qkv.deinit();
+    const controls_cols = try mtl.Pipeline.init(device, lib, "i2_controls_apply_rows", false);
+    errdefer controls_cols.deinit();
     const shared = try @import("rows.zig").Pipes.init(device);
-    return .{ .rows = rows, .decode = decode, .parts = parts, .split = split, .combine = combine, .controls_norm = controls_norm, .controls_down = controls_down, .controls_apply = controls_apply, .mix = mix, .mix4 = mix4, .shared = shared, .controls_input = controls_input, .controls_hidden = controls_hidden };
+    return .{ .rows = rows, .decode = decode, .parts = parts, .split = split, .combine = combine, .controls_norm = controls_norm, .controls_down = controls_down, .controls_apply = controls_apply, .mix = mix, .mix4 = mix4, .qkv = qkv, .controls_cols = controls_cols, .shared = shared, .controls_input = controls_input, .controls_hidden = controls_hidden };
 }
 
 pub const Group = struct {
@@ -362,7 +371,7 @@ pub const Group = struct {
         return out[0..n];
     }
 
-    pub fn conv(g: *const Group, enc: mtl.ComputeEncoder, x: mtl.Buffer, x_off: usize, weight: Tensor, dyn: ?mtl.Buffer, dyn_off: usize, out: mtl.Buffer, out_off: usize, channels: u32, heads: u32, layout: u32, norm: f32, slot: u32, site: prefill.ConvSite) void {
+    pub fn conv(g: *const Group, enc: mtl.ComputeEncoder, x: mtl.Buffer, x_off: usize, weight: Tensor, dyn: ?mtl.Buffer, dyn_off: usize, out: mtl.Buffer, out_off: usize, channels: u32, heads: u32, layout: u32, norm: f32, slot: u32, site: prefill.ConvSite, into: ConvInto) void {
         const v = g.verifier;
         var rows: [max_rows]ConvRow = undefined;
         for (0..g.rows) |r| {
@@ -385,16 +394,54 @@ pub const Group = struct {
         enc.setBuffer(x, x_off, 0);
         enc.setBuffer(weight.buffer, weight.offset, 1);
         enc.setBuffer(dyn orelse x, if (dyn != null) dyn_off else x_off, 2);
-        enc.setValue(ConvArgs{ .channels = channels, .heads = heads, .ring = state.ring, .pos = 0, .layout = layout, .norm = norm, .residual = @intFromBool(site == .mlp) }, 3);
+        enc.setValue(ConvArgs{ .channels = channels, .heads = heads, .ring = state.ring, .pos = 0, .layout = layout, .norm = norm, .residual = @intFromBool(into.residual), .topk = into.topk }, 3);
         enc.setBuffer(out, out_off, 4);
         enc.setBytes(std.mem.sliceAsBytes(rows[0..g.rows]), 5);
         enc.setBuffer(v.conv.buffer, v.conv.offset(slot, site, 0), 6);
+        if (into.topk > 0) enc.setBuffer(into.wts, 0, 7) else enc.setBuffer(x, x_off, 7);
         enc.dispatchThreads(mtl.Size.of(channels, g.rows, 1), mtl.Size.of(256, 1, 1));
+    }
+
+    pub fn qkv(g: *const Group, enc: mtl.ComputeEncoder, args: QkvArgs, w: QkvWeights, bufs: QkvBuffers, slot: u32) void {
+        const v = g.verifier;
+        const kvw: usize = @as(usize, args.kv) * args.dim;
+        var rows: [max_rows]QkvRow = undefined;
+        for (0..g.rows) |r| {
+            const cache = g.caches[g.owner[r]];
+            var back: [4]u8 = @splat(none);
+            const depth = g.depth[r];
+            for (1..state.ring) |k| if (k <= depth) {
+                back[k - 1] = g.path[r][depth - k];
+            };
+            rows[r] = .{ .k_ring = cache.k_conv.gpuAddress() + cache.convAt(slot, kvw), .v_ring = cache.v_conv.gpuAddress() + cache.convAt(slot, kvw), .pos = g.pos[r], .start = @intCast(cache.len), .back = back };
+            enc.useResource(cache.k_conv, mtl.ResourceUsage.read);
+            enc.useResource(cache.v_conv, mtl.ResourceUsage.read);
+        }
+        enc.setPipeline(v.pipe(.qkv));
+        for ([_]mtl.Buffer{ bufs.k, bufs.v }, 0..) |buf, i| enc.setBuffer(buf, 0, i);
+        for ([_]Tensor{ w.k_conv, w.v_conv }, 2..) |t, i| enc.setBuffer(t.buffer, t.offset, i);
+        enc.setBuffer(bufs.kdyn, 0, 4);
+        enc.setBuffer(bufs.vdyn, 0, 5);
+        enc.setBuffer(bufs.q, 0, 6);
+        enc.setBuffer(w.q_scale.buffer, w.q_scale.offset, 7);
+        enc.setBuffer(bufs.r, 0, 8);
+        enc.setBuffer(w.r_scale.buffer, w.r_scale.offset, 9);
+        enc.setBuffer(w.rel_bias.buffer, w.rel_bias.offset, 10);
+        enc.setValue(args, 11);
+        enc.setBuffer(bufs.relbias, 0, 12);
+        enc.setBytes(std.mem.sliceAsBytes(rows[0..g.rows]), 13);
+        enc.setBuffer(bufs.kc, 0, 14);
+        enc.setBuffer(bufs.vc, 0, 15);
+        enc.setBuffer(v.conv.buffer, v.conv.offset(slot, .key, 0), 16);
+        enc.setBuffer(v.conv.buffer, v.conv.offset(slot, .value, 0), 17);
+        enc.setBuffer(v.kv, (@as(usize, slot) * 2 + 0) * max_rows * kvw * 2, 18);
+        enc.setBuffer(v.kv, (@as(usize, slot) * 2 + 1) * max_rows * kvw * 2, 19);
+        enc.dispatchGroups(mtl.Size.of(args.kv + args.heads + (args.heads * (args.extent + 1) + 255) / 256, g.rows, 1), mtl.Size.of(256, 1, 1));
     }
 
     pub const AttnBuffers = struct { q: mtl.Buffer, k: mtl.Buffer, v: mtl.Buffer, r: mtl.Buffer, sink: mtl.Buffer, relbias: mtl.Buffer, out: mtl.Buffer, parts: mtl.Buffer, combine: mtl.Pipeline };
 
-    pub fn attend(g: *const Group, store: mtl.ComputeEncoder, enc: mtl.ComputeEncoder, m: *const Model, rel_bias: Tensor, slot: u32, full: bool, extent: u32, bufs: AttnBuffers) void {
+    pub fn attend(g: *const Group, stores: ?mtl.ComputeEncoder, enc: mtl.ComputeEncoder, m: *const Model, rel_bias: Tensor, slot: u32, full: bool, extent: u32, bufs: AttnBuffers) void {
         const v = g.verifier;
         const config = &m.config;
         const text = &config.text;
@@ -423,17 +470,19 @@ pub const Group = struct {
         }
         const kh = (@as(usize, slot) * 2 + 0) * max_rows * kvw * 2;
         const vh = (@as(usize, slot) * 2 + 1) * max_rows * kvw * 2;
-        store.setPipeline(v.pipe(.store_rel));
-        store.setBuffer(bufs.k, 0, 0);
-        store.setBuffer(bufs.v, 0, 1);
-        store.setBuffer(bufs.r, 0, 2);
-        store.setBuffer(rel_bias.buffer, rel_bias.offset, 3);
-        store.setValue(RelArgs{ .heads = heads, .kv = kv, .dim = dim, .rel = text.d_rel, .extent = extent, .window = 0, .pos = 0, .tau = @intFromBool(full), .scale = 0, .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha, .eps = text.eps }, 4);
-        store.setBuffer(bufs.relbias, 0, 5);
-        store.setBytes(std.mem.sliceAsBytes(positions[0..g.rows]), 6);
-        store.setBuffer(v.kv, kh, 7);
-        store.setBuffer(v.kv, vh, 8);
-        store.dispatchGroups(mtl.Size.of(kv + (heads * (extent + 1) + 255) / 256, g.rows, 1), mtl.Size.of(256, 1, 1));
+        if (stores) |store| {
+            store.setPipeline(v.pipe(.store_rel));
+            store.setBuffer(bufs.k, 0, 0);
+            store.setBuffer(bufs.v, 0, 1);
+            store.setBuffer(bufs.r, 0, 2);
+            store.setBuffer(rel_bias.buffer, rel_bias.offset, 3);
+            store.setValue(RelArgs{ .heads = heads, .kv = kv, .dim = dim, .rel = text.d_rel, .extent = extent, .window = 0, .pos = 0, .tau = @intFromBool(full), .scale = 0, .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha, .eps = text.eps }, 4);
+            store.setBuffer(bufs.relbias, 0, 5);
+            store.setBytes(std.mem.sliceAsBytes(positions[0..g.rows]), 6);
+            store.setBuffer(v.kv, kh, 7);
+            store.setBuffer(v.kv, vh, 8);
+            store.dispatchGroups(mtl.Size.of(kv + (heads * (extent + 1) + 255) / 256, g.rows, 1), mtl.Size.of(256, 1, 1));
+        }
         enc.setPipeline(v.pipe(.split));
         enc.setBuffer(bufs.q, 0, 0);
         enc.setBuffer(bufs.relbias, 0, 1);

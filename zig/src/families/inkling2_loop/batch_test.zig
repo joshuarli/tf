@@ -392,3 +392,116 @@ test "concurrent greedy batch-step replies equal solo replies as streams join an
     }
     if (!ran) return error.SkipZigTest;
 }
+
+const group = @import("group.zig");
+
+fn prefillAll(m: *const model.Model, ps: *prefill.PrefillScratch, cache: *state.Cache, tokens: []const u32) !void {
+    var at: usize = 0;
+    while (at < tokens.len) {
+        const take = @min(ps.chunk, tokens.len - at);
+        try prefill.prefillWant(m, ps, cache, tokens[at..][0..take], .none);
+        at += take;
+    }
+}
+
+fn verifyPair(m: *const model.Model, wide: *batch.BatchScratch, verifier: *const group.Verifier, base: *state.Cache, work: *[2]state.Cache, ids: []const u32, parents: ?[]const u8, gpa: std.mem.Allocator) !void {
+    const vocab = m.config.text.unpadded_vocab;
+    var logits: [2][]f32 = undefined;
+    var picks: [2][]u32 = undefined;
+    var last: [2]u32 = undefined;
+    for (0..2) |side| {
+        try copyCache(m, base, &work[side]);
+        wide.rows.fuse = side == 0;
+        const g = try verifier.tree(&.{&work[side]}, &.{ids.len}, parents);
+        const decided = try verifier.decide(m, wide, &g, ids, .commit);
+        logits[side] = try gpa.dupe(f32, wide.rows.logits.slice(f32, ids.len * vocab));
+        picks[side] = try gpa.dupe(u32, decided.picks);
+        last[side] = decided.last[0];
+    }
+    wide.rows.fuse = true;
+    defer for (0..2) |side| {
+        gpa.free(logits[side]);
+        gpa.free(picks[side]);
+    };
+    try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(logits[1]), std.mem.sliceAsBytes(logits[0]));
+    try std.testing.expectEqualSlices(u32, picks[1], picks[0]);
+    try std.testing.expectEqual(last[1], last[0]);
+    try expectSameCache(m, &work[0], &work[1]);
+}
+
+fn checkFusedKernels(path: []const u8) !void {
+    const gpa = std.testing.allocator;
+    const s = try Streams.init(gpa, path);
+    defer s.deinit();
+    const m = s.m;
+    const config = &m.config;
+    const vocab = config.text.unpadded_vocab;
+    var work: [2][8]state.Cache = undefined;
+    var made: usize = 0;
+    defer for (0..made) |i| {
+        work[0][i].deinit();
+        work[1][i].deinit();
+    };
+    for (0..8) |i| {
+        work[0][i] = try state.Cache.init(m.device, config, stream_capacity);
+        work[1][i] = state.Cache.init(m.device, config, stream_capacity) catch |err| {
+            work[0][i].deinit();
+            return err;
+        };
+        made += 1;
+    }
+    const logits = try gpa.alloc(f32, 2 * 8 * vocab);
+    defer gpa.free(logits);
+    var steps: usize = 0;
+    for ([_]usize{ 1, 2, 3, 5, 8 }) |width| {
+        for (0..2) |side| {
+            var caches: [8]*state.Cache = undefined;
+            for (0..width) |j| {
+                try copyCache(m, &s.base[(j * 3 + width) % 8], &work[side][j]);
+                caches[j] = &work[side][j];
+            }
+            var ids: [8]u32 = undefined;
+            for (0..width) |j| ids[j] = s.ids[(j * 3 + width) % 8];
+            s.bs.rows.fuse = side == 0;
+            for (0..3) |_| try batch.step(m, &s.bs, caches[0..width], ids[0..width], logits[side * 8 * vocab ..][0 .. width * vocab]);
+        }
+        s.bs.rows.fuse = true;
+        try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(logits[8 * vocab ..][0 .. width * vocab]), std.mem.sliceAsBytes(logits[0 .. width * vocab]));
+        for (0..width) |j| try expectSameCache(m, &work[0][j], &work[1][j]);
+        steps += width;
+    }
+    var ps = try prefill.PrefillScratch.init(m.device, config, 512);
+    defer ps.deinit();
+    var wide = try group.scratch(m.device, config);
+    defer wide.deinit();
+    const capacity = config.text.window + 64;
+    var base = try state.Cache.init(m.device, config, capacity);
+    defer base.deinit();
+    var pair: [2]state.Cache = undefined;
+    pair[0] = try state.Cache.init(m.device, config, capacity);
+    defer pair[0].deinit();
+    pair[1] = try state.Cache.init(m.device, config, capacity);
+    defer pair[1].deinit();
+    const parsed = try std.json.parseFromSlice([]const Prompt, gpa, @embedFile("fixtures/prompts.json"), .{});
+    defer parsed.deinit();
+    const agent = parsed.value[0].token_ids;
+    const start = config.text.window - 5;
+    try prefillAll(m, &ps, &base, agent[0..start]);
+    const ids = agent[start..][0..group.max_rows];
+    const limit = s.verifier.limit;
+    for (1..limit + 1) |width| try verifyPair(m, &wide, &s.verifier, &base, &pair, ids[0..width], null, gpa);
+    const tree = [_]u8{ 0, 0, 0, 1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 2, 14 };
+    try verifyPair(m, &wide, &s.verifier, &base, &pair, ids[0..limit], tree[0 .. limit - 1], gpa);
+    try verifyPair(m, &wide, &s.verifier, &base, &pair, ids[0..5], &.{ 0, 0, 1, 1 }, gpa);
+    std.debug.print("fused kernels {s}: {d} batch-step rows at widths 1-8 and grouped verifies of 1-{d} rows (chains and trees) equal the unfused kernels' logits, picks and caches bit for bit\n", .{ path, steps, limit });
+}
+
+test "fused batch-step and verify kernels keep the unfused kernels' logits, picks and caches" {
+    var ran = false;
+    for ([_][*:0]const u8{ "TF_INKLING2_LOOP_DIR", "TF_INKLING2_LOOP_OQ4E_DIR" }) |name| {
+        const env = std.c.getenv(name) orelse continue;
+        try checkFusedKernels(std.mem.span(env));
+        ran = true;
+    }
+    if (!ran) return error.SkipZigTest;
+}

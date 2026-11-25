@@ -5,7 +5,7 @@ This is the single plan for this repository: all current and future work, and th
 ## Status
 
 **Active 2026-11-24.**
-- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. Next ready item is SV2 (5c); P6 is parked on `lane/p6-tail`.
+- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. SV2 (5c) is running on `lane/sv2-serve`; P6 is parked on `lane/p6-tail`.
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
 - Acceptance flow (2026-11-24): lanes prove changes with filtered GPU tests; the parent runs the full suite once on an integration commit of main plus the lane and fast-forwards main on green, instead of a lane suite and a second main suite.
 - **Last accepted code: V4 merge `ec925cb41`** (fused fixed-cost verify kernels; integrated main green: `inkling-host` ok, `inkling-gpu` 186/186, oracle pass at 94.73% top-1 and mean KL 0.0199). Before it, PH2 merge `291240211` (half prefill by default; `inkling-gpu` 181/181), P5c merge `7f7cb75a3` (181/181), SC1 merge `1668d5caa` (180/180), V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
@@ -146,7 +146,8 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    or timing result exists and no acceptance is claimed. V4 has since changed `prefill.zig` on main, which this lane
    does not own: retry by rebasing onto current main, re-running the correctness checks, then `tests.sh`, `d20.sh`,
    `quality.sh`, and only then the gated `tail.sh`, `session.sh` and `profile.sh`.
-5c. SV2, after P5c and V4: the integrated served path. Rebuild the planner's fixed cost table from sustained
+5c. SV2, running: `lane/sv2-serve` in `.work/wt/sv2-serve` (base `ec925cb41`), receipt `inkling-sv2-served.md`,
+   harness `inkling-sv2-served-runs/run.py`, untouched prompts `campaign/prompts/qualify/`. The integrated served path. Rebuild the planner's fixed cost table from sustained
    in-round measurements; freeze the tree policy and qualify it on a small untouched prompt set (the "holdout"
    prompts fitted acceptance priors and are now calibration data). Run the HTTP server with plain decoding, a loaded
    but disabled drafter, and active speculation over the 1K/4K classes, unseen prefill to the cap, prefix hits and

@@ -247,7 +247,7 @@ eight; gate/up past eight rows is 0.96–0.97×. The one-tile dense kernels take
 V2's tiles. In rounds the verify at those widths is not slower (29.8 against 30.0 ms at 4 rows); the cause is not
 traced (Open problems).
 
-## Kernels alone, on real routes
+## Candidate sweeps on real routes
 
 Each `dflash-kernels` process times every projection kind alone at widths 1 to 16 on DF2b's recorded routes of
 code-1024's greedy continuation (`picks16-code-1024.json`: 48 visits of 16 rows), 24 calls a command buffer with the
@@ -346,8 +346,9 @@ each on code-1024 and code-4096 (`split-*-a`, `-b`), p50 ms of the grouped forwa
 | 4,096 | 16 | 65.7 | 65.2 (0.99×) | 71.9 (1.10×) |
 
 Rows of one stream next to each other in the grid change nothing. Staging a stream's cached keys once for up to four
-rows (`i2v_split_runs`, byte-equal on 256 random chains and trees) is 10–12% slower from 4 rows on: its 24 KB of
-threadgroup memory a group and its rows walked one after another cost more than the key reads it saves. The verify
+rows (`i2v_split_runs`, byte-equal on 256 random chains and trees) is 10–12% slower from 4 rows on, likely because
+its 24 KB of threadgroup memory a group and its rows walked one after another cost more than the key reads it saves
+(not profiled further). The verify
 keeps main's kernel.
 
 ## Controllers (reverted)

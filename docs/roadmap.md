@@ -5,7 +5,7 @@ This is the single plan for this repository: all current and future work, and th
 ## Status
 
 **Active 2026-11-24.**
-- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. SC2 (5d) is done. Next ready: P7 (5g) and P6's retry (5f, rebased onto `de53331e3` and ready for its correctness checks), then Q3.
+- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. Q4 (5h, qualification repair, owner steering) is running on `lane/q4-qualify`; P6's retry (5f) and P7 (5g) resume after it, then Q3.
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
 - Acceptance flow (2026-11-24): lanes prove changes with filtered GPU tests; the parent runs the full suite once on an integration commit of main plus the lane and fast-forwards main on green, instead of a lane suite and a second main suite.
 - **Last accepted code: SV2, fast-forwarded from `lane/sv2-serve`** (speculation served by default; integrated suite on `33b38ed43`: `inkling-host` ok, `inkling-gpu` 185/185 plus the restored served test 12/12, oracle pass). Before it, V4 `ec925cb41` (fused fixed-cost verify kernels; integrated main green: `inkling-host` ok, `inkling-gpu` 186/186, oracle pass at 94.73% top-1 and mean KL 0.0199). Before it, PH2 merge `291240211` (half prefill by default; `inkling-gpu` 181/181), P5c merge `7f7cb75a3` (181/181), SC1 merge `1668d5caa` (180/180), V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
@@ -167,6 +167,25 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
      inconclusive).
    - Quality: PH2's results stand, since no arithmetic changed since.
    - Correction: SV2's `idle` mode was plain decode, because `--no-drafts` drops the drafter at load.
+5h. Q4, running (owner steering 2026-11-25, from an independent audit of `46061a3aa`): make serving qualification
+   enforce and describe the accepted policies before any further performance claim. P6 and P7 resume after it.
+   1. Equality: compare served streams by token and output hashes, token counts, finish reasons and tool output;
+      missing evidence fails, with mutation tests (`campaign/tests/test_served_equality.py`). Done in `1f285be08`:
+      the old check compared a status field; SC2's records still match under the repaired check.
+   2. Completed tasks beside the fixed 512-token window (relabelled fixed-window generation throughput): a frozen
+      suite with EOS on and room to answer, scoring success and format and recording cap hits, total time, first
+      answer latency, reasoning, answer and total tokens. Follow-up turns are built from completed answers.
+   3. Corpus: exclude model outputs, results, receipts and run records from prompt sources. Keep the existing
+      prompts as regression cases, and add frozen tasks from outside this repository (low-copy and copy-heavy,
+      labelled), with lengths in the target tokenizer.
+   4. Configuration identity on every result: checkpoint, KV dtype, prefill rounding, decode arithmetic, drafter,
+      lookup, sampler, context and output policy. Report half and `off` prefill separately, and never present a
+      cross-precision chronological gain as faster execution of one continuation.
+   5. Decision 19 as an executable gate: the net-runaway rule, every lost case listed (`retrieval-t01`), and explicit
+      unsupported, over-context, missing and invalid cases.
+   6. A regenerated scorecard: valid pairs counted from records (SC2's code-1024 has none), a genuinely loaded drafter
+      with per-request `draft: false` as the disabled control, prefill curves gated and paired, the ~3% drafter
+      prefill cost treated as a hypothesis, and only the extra paired runs needed to fill the gaps.
 5g. P7, ready: the drafter's prompt-side cost. Profile the tap capture and absorb in the prefill loop by kernel, then
    capture or absorb only the rows the drafter's window and restore points need. The gate is Decision 17's prefill
    at 1K/4K/8K under the default, with every reuse, fork and store contract kept.

@@ -21,8 +21,9 @@ pub const usage =
     \\tf-inkling2-loop-run <model> <prompts.json> dflash-kernels <reps> <out.jsonl> [picks.json]  one-row against
     \\  shared-row kernels on the weights at 1 to 16 rows, each shared output checked byte for byte; picks.json: a widths
     \\  run's 48 visits of routed experts
-    \\tf-inkling2-loop-run <model> <prompts.json> dflash-widths <reps> <out.jsonl> <load_s> <widths> phases  the same
-    \\  widths' GPU ms with one kernel class encoded at a time (prefill.Phase), the others left uncommitted
+    \\tf-inkling2-loop-run <model> <prompts.json> dflash-widths <reps> <out.jsonl> <load_s> <widths> phases|hashes  the
+    \\  widths' GPU ms with one kernel class encoded at a time (prefill.Phase), the others left uncommitted; or sha256s of
+    \\  each prompt's prefill logits and caches, its 16 one-row greedy steps and the widths' grouped logits
     \\  prompts.json: [{"name": ..., "ids": [...]}]; EOS is ignored; a run whose tokens differ from plain exits non-zero
     \\
 ;
@@ -71,8 +72,8 @@ pub fn main(init: std.process.Init, args: []const [:0]const u8) !void {
     }
     if (std.mem.eql(u8, mode, "dflash-widths")) {
         if (args.len < 6 or args.len > 9) return error.ExpectedArgs;
-        const by_phase = args.len == 9;
-        if (by_phase and !std.mem.eql(u8, args[8], "phases")) return error.ExpectedArgs;
+        const extra: []const u8 = if (args.len == 9) args[8] else "";
+        if (args.len == 9 and !std.mem.eql(u8, extra, "phases") and !std.mem.eql(u8, extra, "hashes")) return error.ExpectedArgs;
         const reps = try std.fmt.parseInt(usize, args[4], 10);
         const load_s = if (args.len >= 7) try std.fmt.parseFloat(f64, args[6]) else 0;
         if (reps == 0 or load_s < 0) return error.ExpectedArgs;
@@ -94,7 +95,8 @@ pub fn main(init: std.process.Init, args: []const [:0]const u8) !void {
             }
             if (count == 0) return error.ExpectedArgs;
         }
-        const result = if (by_phase) @import("kbench.zig").phases(gpa, m, parsed.value, reps, chosen[0..count], &out) else widths(gpa, m, parsed.value, reps, load_s, chosen[0..count], &out);
+        const kb = @import("kbench.zig");
+        const result = if (std.mem.eql(u8, extra, "phases")) kb.phases(gpa, m, parsed.value, reps, chosen[0..count], &out) else if (std.mem.eql(u8, extra, "hashes")) kb.hashes(gpa, m, parsed.value, chosen[0..count], &out) else widths(gpa, m, parsed.value, reps, load_s, chosen[0..count], &out);
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = args[5], .data = out.items });
         return result;
     }

@@ -301,3 +301,80 @@ fn phaseStep(m: *inkling.Model, verifier: *inkling.group.Verifier, bs: *inkling.
     try verifier.forward(m, bs, &g, rows);
     return bs.rows.gpu_seconds * 1e3;
 }
+
+fn digestBuffer(m: *inkling.Model, buf: mtl.Buffer, len: usize) ![32]u8 {
+    const host = try m.device.buffer(@max(len, 16), mtl.ResourceOptions.shared);
+    defer host.deinit();
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const cb = m.queue.commandBuffer();
+    const blit = cb.blit();
+    blit.copy(buf, 0, host, 0, len);
+    blit.end();
+    cb.commit();
+    cb.wait();
+    if (cb.failure()) |_| return error.GpuFailed;
+    var out: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(host.contents()[0..len], &out, .{});
+    return out;
+}
+
+fn digestBytes(bytes: []const u8) [32]u8 {
+    var out: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &out, .{});
+    return out;
+}
+
+fn hashLine(gpa: std.mem.Allocator, out: *std.ArrayList(u8), prompt: []const u8, what: []const u8, width: usize, digest: [32]u8) !void {
+    try out.print(gpa, "{{\"kind\":\"hash\",\"prompt\":\"{s}\",\"what\":\"{s}\",\"width\":{d},\"sha256\":\"{s}\"}}\n", .{ prompt, what, width, &std.fmt.bytesToHex(digest, .lower) });
+}
+
+pub fn hashes(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, widths: []const usize, out: *std.ArrayList(u8)) !void {
+    var verifier = try inkling.group.Verifier.init(m.device, &m.config);
+    defer verifier.deinit();
+    var bs = try inkling.group.scratch(m.device, &m.config);
+    defer bs.deinit();
+    var ps = try inkling.PrefillScratch.init(m.device, &m.config, spec.prefill_chunk);
+    defer ps.deinit();
+    var rollback = try inkling.Cache.Rollback.initRows(m.device, &m.config, inkling.group.max_rows);
+    defer rollback.deinit();
+    const vocab: usize = m.config.text.unpadded_vocab;
+    const steps = try gpa.alloc(f32, inkling.group.max_rows * vocab);
+    defer gpa.free(steps);
+    for (prompts) |prompt| {
+        var head = try inkling.Cache.init(m.device, &m.config, spec.prefill_chunk);
+        defer head.deinit();
+        const take = @min(prompt.ids.len, spec.prefill_chunk);
+        try inkling.prefillWant(m, &ps, &head, prompt.ids[0..take], .all);
+        try hashLine(gpa, out, prompt.name, "prefill_chunk_logits", take, digestBytes(std.mem.sliceAsBytes(ps.logits.slice(f32, take * vocab))));
+        var cache = try inkling.Cache.init(m.device, &m.config, prompt.ids.len + inkling.group.max_rows);
+        defer cache.deinit();
+        const first = try spec.prefillPlain(m, &ps, &cache, prompt.ids);
+        try hashLine(gpa, out, prompt.name, "prefill_last_logits", prompt.ids.len, digestBytes(std.mem.sliceAsBytes(ps.logits.slice(f32, vocab))));
+        const names = [_][]const u8{ "prefill_keys", "prefill_values", "prefill_k_conv", "prefill_v_conv", "prefill_attn_conv", "prefill_mlp_conv" };
+        for ([_]mtl.Buffer{ cache.keys, cache.values, cache.k_conv, cache.v_conv, cache.attn_conv, cache.mlp_conv }, names) |buf, name| try hashLine(gpa, out, prompt.name, name, prompt.ids.len, try digestBuffer(m, buf, buf.length()));
+        var rows: [inkling.group.max_rows]u32 = undefined;
+        rows[0] = first;
+        try rollback.copy(m.queue, &m.config, &cache, true);
+        for (0..rows.len) |i| {
+            try inkling.batchStep(m, &bs, &.{&cache}, &.{rows[i]}, steps[i * vocab ..][0..vocab]);
+            if (i + 1 < rows.len) rows[i + 1] = spec.argmax(steps[i * vocab ..][0..vocab]);
+        }
+        try hashLine(gpa, out, prompt.name, "step_logits", rows.len, digestBytes(std.mem.sliceAsBytes(steps)));
+        try hashLine(gpa, out, prompt.name, "step_tokens", rows.len, digestBytes(std.mem.sliceAsBytes(&rows)));
+        const names2 = [_][]const u8{ "step_keys", "step_values", "step_k_conv", "step_v_conv", "step_attn_conv", "step_mlp_conv" };
+        for ([_]mtl.Buffer{ cache.keys, cache.values, cache.k_conv, cache.v_conv, cache.attn_conv, cache.mlp_conv }, names2) |buf, name| try hashLine(gpa, out, prompt.name, name, rows.len, try digestBuffer(m, buf, buf.length()));
+        try rollback.copy(m.queue, &m.config, &cache, false);
+        for (widths) |width| {
+            if (width == 0) continue;
+            const g = try verifier.group(&.{&cache}, &.{width});
+            try verifier.forward(m, &bs, &g, rows[0..width]);
+            const got = bs.rows.logits.slice(f32, width * vocab);
+            try hashLine(gpa, out, prompt.name, "verify_logits", width, digestBytes(std.mem.sliceAsBytes(got)));
+            const equal = std.mem.eql(u8, std.mem.sliceAsBytes(got), std.mem.sliceAsBytes(steps[0 .. width * vocab]));
+            try out.print(gpa, "{{\"kind\":\"exact\",\"prompt\":\"{s}\",\"context\":{d},\"width\":{d},\"equal_steps\":{}}}\n", .{ prompt.name, cache.len, width, equal });
+            std.debug.print("hashes {s}: width={d} verify rows equal one-row steps: {}\n", .{ prompt.name, width, equal });
+            if (!equal) return error.GroupedDiffersFromPlain;
+        }
+    }
+}

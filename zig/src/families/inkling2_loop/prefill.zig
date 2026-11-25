@@ -227,8 +227,12 @@ pub const Rounding = struct {
     experts: bool = false,
     inputs: bool = false,
 
+    pub const default: Rounding = .{ .experts = true, .inputs = true };
+
+    /// `INKLING_PREFILL_HALF`: unset or `both` serve half experts and inputs; `off` is the exact path.
     pub fn parse(text: ?[]const u8) error{BadInklingPrefillHalf}!Rounding {
-        const value = text orelse return .{};
+        const value = text orelse return default;
+        if (std.mem.eql(u8, value, "off")) return .{};
         if (std.mem.eql(u8, value, "experts")) return .{ .experts = true };
         if (std.mem.eql(u8, value, "inputs")) return .{ .inputs = true };
         if (std.mem.eql(u8, value, "both")) return .{ .experts = true, .inputs = true };
@@ -237,7 +241,8 @@ pub const Rounding = struct {
 };
 
 test "half rounding accepts only the documented values" {
-    try std.testing.expectEqual(Rounding{}, try Rounding.parse(null));
+    try std.testing.expectEqual(Rounding{ .experts = true, .inputs = true }, try Rounding.parse(null));
+    try std.testing.expectEqual(Rounding{}, try Rounding.parse("off"));
     try std.testing.expectEqual(Rounding{ .experts = true }, try Rounding.parse("experts"));
     try std.testing.expectEqual(Rounding{ .inputs = true }, try Rounding.parse("inputs"));
     try std.testing.expectEqual(Rounding{ .experts = true, .inputs = true }, try Rounding.parse("both"));
@@ -360,6 +365,11 @@ pub const PrefillScratch = struct {
 
     /// Scratch for chunks of up to `chunk` rows that keeps logits for `logit_rows` of them (1 for `.last` only).
     pub fn initRows(device: mtl.Device, c: *const cfg.Config, chunk: usize, logit_rows: usize) !PrefillScratch {
+        return initRounding(device, c, chunk, logit_rows, try Rounding.parse(if (std.c.getenv("INKLING_PREFILL_HALF")) |v| std.mem.span(v) else null));
+    }
+
+    /// `initRows` with `rounding` in place of `INKLING_PREFILL_HALF`'s.
+    pub fn initRounding(device: mtl.Device, c: *const cfg.Config, chunk: usize, logit_rows: usize, rounding: Rounding) !PrefillScratch {
         const h: usize = c.text.hidden;
         const qw: usize = @max(c.text.local.q * c.text.local.dim, c.text.global.q * c.text.global.dim);
         const kvw: usize = @max(c.text.local.kv * c.text.local.dim, c.text.global.kv * c.text.global.dim);
@@ -379,7 +389,7 @@ pub const PrefillScratch = struct {
         s.half = true;
         s.units = true;
         s.fuse = true;
-        s.rounding = try Rounding.parse(if (std.c.getenv("INKLING_PREFILL_HALF")) |v| std.mem.span(v) else null);
+        s.rounding = rounding;
         s.bf16_input = if (fast and device.tensorUnits()) try device.buffer(@max(chunk * @max(2 * h, @max(qw, @max(kvw, rank))) * 2, 16), mtl.ResourceOptions.private) else null;
         errdefer if (s.bf16_input) |buf| buf.deinit();
         s.half_overflow = if (fast or device.tensorUnits()) try device.buffer(16, mtl.ResourceOptions.shared) else null;

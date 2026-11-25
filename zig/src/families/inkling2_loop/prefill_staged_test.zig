@@ -48,7 +48,7 @@ fn fill(m: *const model.Model, ps: *prefill.PrefillScratch, ids: []const u32, ch
     return Snapshot.take(m, &cache, ps.logits.slice(f32, chunks[chunks.len - 1] * m.config.text.unpadded_vocab));
 }
 
-test "oQ4e fused prefill keeps the unfused logits and cache state byte for byte" {
+test "oQ4e exact fused prefill keeps the unfused logits and cache state byte for byte" {
     const path = std.c.getenv("TF_INKLING2_LOOP_OQ4E_DIR") orelse return error.SkipZigTest;
     const m = try model.Model.load(t.allocator, t.io, std.mem.span(path));
     defer m.deinit();
@@ -68,7 +68,7 @@ test "oQ4e fused prefill keeps the unfused logits and cache state byte for byte"
             try t.expect(staged.joined(&.{ a.q, a.v }) == null);
         }
     }
-    var ps = try prefill.PrefillScratch.initRows(m.device, &m.config, 163, 163);
+    var ps = try prefill.PrefillScratch.initRounding(m.device, &m.config, 163, 163, .{});
     defer ps.deinit();
     try t.expect(ps.pipes.staged != null);
     const capacity = ps.affine_stage_w.?.length();

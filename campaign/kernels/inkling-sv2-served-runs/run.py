@@ -6,7 +6,9 @@ import json
 import math
 import os
 import statistics
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -19,13 +21,22 @@ import harness  # noqa: E402
 from run import FOLLOW, KEY, PINS, Log, ask, drafted, same  # noqa: E402
 
 MODES = ("ar", "idle", "spec")
-DECODE_CELLS = (1024, 4096)
-CAP_CELL = 32768
+CURVE = CAMPAIGN / "comparators" / "prefill_curve.py"
 
 
 def flags_env(mode: str, drafter: dict) -> tuple[list[str], dict]:
     """`ar` loads no drafter; `idle` loads it and serves `--no-drafts`; `spec` loads it and drafts."""
     return {"ar": (["--no-drafts"], {}), "idle": (["--no-drafts"], drafter), "spec": ([], drafter)}[mode]
+
+
+def settle(server: harness.Server, limit_s: float = 180) -> None:
+    """Wait until the host passes `bench.trial`'s own checks: a fresh load leaves the memory compressor busy."""
+    own = harness.process_tree(server.process.pid)
+    deadline = time.monotonic() + limit_s
+    while (reasons := harness.conditions(own)["pressure_reasons"]) and time.monotonic() < deadline:
+        time.sleep(10)
+    if reasons:
+        print(f"host still unsettled after {limit_s:.0f} s: {reasons}", flush=True)
 
 
 def prompts(wanted: str, cells) -> dict[int, list[dict]]:
@@ -40,7 +51,8 @@ def prompts(wanted: str, cells) -> dict[int, list[dict]]:
 
 def session(args) -> int:
     """One session: each mode's server in turn (order rotated by `--rotate`), every prompt's cold, warm and natural
-    requests through `bench.trial`, then a second turn that forks the first reply's cached state."""
+    requests through `bench.trial`, a second turn that forks the first reply's cached state, then unseen prefill to
+    the cap through `prefill_curve.py`."""
     os.environ.pop("INKLING_DRAFTER", None)
     binary = Path(args.bin).expanduser().resolve()
     model = harness.model_dir(KEY)
@@ -48,9 +60,7 @@ def session(args) -> int:
     if not drafter:
         raise SystemExit("the pinned Inkling 2 Mini DFlash2 drafter is not fetched")
     cells = [int(c) for c in args.cells.split(",")]
-    by_cell = prompts(args.set, [c for c in cells if c != CAP_CELL])
-    if CAP_CELL in cells:
-        by_cell.update(prompts("dev", [CAP_CELL]))
+    by_cell = prompts(args.set, cells)
     path = HERE / f"{args.name}.jsonl"
     path.touch()
     log = Log(HERE / f"{args.name}.checks.jsonl")
@@ -58,7 +68,7 @@ def session(args) -> int:
     identity = {"role": "candidate", "path": str(binary), "sha256": harness.sha256_file(binary)}
     engine = f"tensorfold-native@{identity['sha256'][:12]}"
     log.row(kind="run", binary=str(binary), binary_sha256=identity["sha256"], set=args.set, cells=cells,
-            rotate=args.rotate, drafter=drafter)
+            rotate=args.rotate, drafter=drafter, curve=args.curve)
     modes = MODES[args.rotate % 3:] + MODES[:args.rotate % 3]
     for order, mode in enumerate(modes):
         flags, env = flags_env(mode, drafter)
@@ -76,12 +86,11 @@ def session(args) -> int:
                                           cache_gib=2, prompts=group, copy_drafts=False)
                 contract["context_policy"]["served_model"] = served
                 for prompt in group:
+                    settle(server)
                     bench.trial(path, run_id=args.name, experiment="sv2", session=args.name, engine=engine,
                                 binary=identity, model_key=KEY, mode=mode, flags=named, cell=cell, cache_gib=2,
                                 pair=args.rotate, order=order, prompt=prompt, server=server, model_id=served,
                                 hashes=hashes, identity=contract)
-                    if cell == CAP_CELL:
-                        continue
                     messages = [{"role": "user", "content": (harness.REPO / prompt["path"]).read_text(encoding="utf-8")}]
                     first = ask(server.base, served, messages, draft=mode == "spec")
                     turn = messages + [{"role": "assistant", "content": first["message"].get("content") or ""},
@@ -89,6 +98,10 @@ def session(args) -> int:
                     fork = ask(server.base, served, turn, draft=mode == "spec")
                     log.row(kind="reply", prompt=prompt["name"], phase="first", mode=mode, **first)
                     log.row(kind="reply", prompt=prompt["name"], phase="fork", mode=mode, **fork)
+            settle(server)
+            subprocess.run([sys.executable, "-I", str(CURVE), "--base", server.base, "--engine", f"{args.name}-{mode}",
+                            "--lengths", args.curve, "--reps", "2", "--out", str(HERE / f"{args.name}.curve.jsonl")],
+                           check=True)
     print(f"trials in {path}; replies in {log.path}", flush=True)
     return 0
 
@@ -101,6 +114,11 @@ def trials(names) -> list[dict]:
 def replies(names) -> list[dict]:
     return [r for name in names for line in (HERE / f"{name}.checks.jsonl").read_text().splitlines()
             if (r := json.loads(line)).get("kind") == "reply"]
+
+
+def curves(names) -> list[dict]:
+    return [json.loads(line) for name in names if (HERE / f"{name}.curve.jsonl").exists()
+            for line in (HERE / f"{name}.curve.jsonl").read_text().splitlines()]
 
 
 def equal(args) -> int:
@@ -178,8 +196,17 @@ def table(args) -> int:
         print(f"| {name} | {num(med('ar', tps))} | {num(med('idle', tps))} | {num(med('spec', tps))} | {fmt(spec)} | "
               f"{fmt(idle)} | {num(med('ar', pre), 0)} / {num(med('spec', pre), 0)} | {num(med('spec', cpr), 2)} | "
               f"{num(med('ar', peak), 2)} / {num(med('spec', peak), 2)} |")
-        if cell != CAP_CELL and spec:
+        if spec:
             verdicts.append((name, spec[1] > 1.0))
+    print()
+    print("| Unseen prefill tokens | ar tok/s | idle tok/s | spec tok/s | spec/ar |")
+    print("| ---: | ---: | ---: | ---: | ---: |")
+    rows = [r for r in curves(args.names) if r["kind"] == "curve"]
+    for target in sorted({r["target"] for r in rows}):
+        med = {m: statistics.median([r["client_prefill_tps"] for r in rows
+                                     if r["target"] == target and r["engine"].endswith(f"-{m}")] or [float("nan")])
+               for m in MODES}
+        print(f"| {target:,} | {med['ar']:.0f} | {med['idle']:.0f} | {med['spec']:.0f} | {med['spec'] / med['ar']:.3f} |")
     print()
     for name, wins in verdicts:
         print(f"{name}: spec {'beats' if wins else 'does not beat'} ar (lower bound {'>' if wins else '<='} 1)")
@@ -194,7 +221,8 @@ def main() -> int:
     p.add_argument("--bin", default=str(harness.REPO / "zig-out/native/bin/tensorfold-native"))
     p.add_argument("--name", required=True)
     p.add_argument("--set", default="qualify")
-    p.add_argument("--cells", default="1024,4096,32768")
+    p.add_argument("--cells", default="1024,4096")
+    p.add_argument("--curve", default="1024,4096,16384,31744", help="unseen prefill lengths, one-token replies")
     p.add_argument("--rotate", type=int, default=0, help="start the mode order at this offset (0, 1 or 2)")
     for action in ("equal", "table"):
         sub.add_parser(action).add_argument("names", nargs="+")

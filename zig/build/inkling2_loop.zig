@@ -82,6 +82,15 @@ pub fn engineModule(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std
     return m;
 }
 
+/// A GPU test run that may hold a loaded checkpoint: its RSS claim is the 26 GB load limit, so the build runner never
+/// overlaps two of them, which `-j1` alone allows and which exceeds the 28 GB process-tree cap.
+fn gpuRun(b: *std.Build, compile: *std.Build.Step.Compile) *std.Build.Step.Run {
+    const run = b.addRunArtifact(compile);
+    run.has_side_effects = true;
+    run.step.max_rss = 26_000_000_000;
+    return run;
+}
+
 /// The family's GPU-side tests, which open the real checkpoint only when `TF_INKLING2_LOOP_DIR` names it.
 pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.Build.Module, core: *std.Build.Module, test_step: *std.Build.Step) void {
     const m = engineModule(b, target, metal, core);
@@ -95,16 +104,14 @@ pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.B
     const exe = b.addExecutable(.{ .name = "tf-inkling2-prefix-check", .root_module = check });
     b.step("tf-inkling2-prefix-check", "Compare retained state to identical replay and full prefill").dependOn(&b.addInstallArtifact(exe, .{}).step);
     const family_test = b.addTest(.{ .root_module = m });
-    const run = b.addRunArtifact(family_test);
-    run.has_side_effects = true;
+    const run = gpuRun(b, family_test);
     const compile = b.step("compile-inkling2-loop", "Compile the Inkling 2 Mini Metal test binaries without running them on the GPU");
     compile.dependOn(&family_test.step);
     const step = b.step("test-inkling2-loop", "Inkling 2 Mini's native Metal forward against the checkpoint and its own state");
     step.dependOn(&run.step);
     test_step.dependOn(&run.step);
     if (b.option([]const u8, "inkling-filter", "Only the Inkling 2 Mini family tests whose names contain this text")) |filter| {
-        const filtered = b.addRunArtifact(b.addTest(.{ .root_module = m, .filters = b.dupeStrings(&.{filter}) }));
-        filtered.has_side_effects = true;
+        const filtered = gpuRun(b, b.addTest(.{ .root_module = m, .filters = b.dupeStrings(&.{filter}) }));
         b.step("test-inkling2-loop-filtered", "The Inkling 2 Mini family tests that -Dinkling-filter names").dependOn(&filtered.step);
     }
     const d = b.createModule(.{
@@ -118,8 +125,7 @@ pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.B
     d.addImport("inkling2_config", b.createModule(.{ .root_source_file = b.path("zig/src/families/inkling2/config.zig"), .target = target, .optimize = .Debug }));
     const dense_test = b.addTest(.{ .root_module = d });
     compile.dependOn(&dense_test.step);
-    const dense_run = b.addRunArtifact(dense_test);
-    dense_run.has_side_effects = true;
+    const dense_run = gpuRun(b, dense_test);
     step.dependOn(&dense_run.step);
     test_step.dependOn(&dense_run.step);
     const affine = module(b, target, "zig/src/families/inkling2_loop/affine_test.zig");
@@ -128,23 +134,20 @@ pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.B
     affine.addImport("inkling2_config", b.createModule(.{ .root_source_file = b.path("zig/src/families/inkling2/config.zig"), .target = target, .optimize = .Debug }));
     const affine_test = b.addTest(.{ .root_module = affine });
     compile.dependOn(&affine_test.step);
-    const affine_run = b.addRunArtifact(affine_test);
-    affine_run.has_side_effects = true;
+    const affine_run = gpuRun(b, affine_test);
     b.step("test-inkling2-loop-affine", "Compare affine dense and expert kernels with float64").dependOn(&affine_run.step);
     step.dependOn(&affine_run.step);
     test_step.dependOn(&affine_run.step);
     const draft = draftEngine(b, target);
     const dflash_test = b.addTest(.{ .root_module = dflashModule(b, target, draft, "zig/src/families/inkling2_loop/dflash_test.zig") });
     compile.dependOn(&dflash_test.step);
-    const dflash_run = b.addRunArtifact(dflash_test);
-    dflash_run.has_side_effects = true;
+    const dflash_run = gpuRun(b, dflash_test);
     b.step("test-inkling2-loop-dflash2", "Inkling 2 Mini's DFlash2 drafter: config refusals and greedy speculation against plain decoding").dependOn(&dflash_run.step);
     step.dependOn(&dflash_run.step);
     test_step.dependOn(&dflash_run.step);
     const served_test = b.addTest(.{ .root_module = servedModule(b, target, draft), .filters = &.{ "inkling served speculation:", "the registry's open", "drafter bits", "copy drafts", "prefix reuse defaults", "a bad INKLING_LOAD_LIMIT_GB", "inkling host:" } });
     compile.dependOn(&served_test.step);
-    const served_run = b.addRunArtifact(served_test);
-    served_run.has_side_effects = true;
+    const served_run = gpuRun(b, served_test);
     b.step("test-inkling2-loop-served", "Inkling 2 Mini's served host with its DFlash2 drafter: replies equal draft-off replies").dependOn(&served_run.step);
     step.dependOn(&served_run.step);
     test_step.dependOn(&served_run.step);

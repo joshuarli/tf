@@ -787,3 +787,20 @@ These references were verified on 2026-11-21:
 - B2 remainder: comparator rows not yet run on the corrected workload.
 - R1: the campaign report's reproduction pass.
 - Splash `--verify-rows all` profile, for a deterministic Splash speculative comparison.
+- ZL1: a bounded `baskingspot/ziglint` pilot on owned Zig source, with the exact 0.17.1 standard library and an
+  explicit reviewed rule set. Prove that missing inputs, malformed configuration and a known violation fail,
+  and that a clean fixture passes, before making the gate blocking. Preserve compile/link, kernel-contract and
+  lean checks; triage findings without a house-style rewrite. Source pins and observed failure modes are in the
+  [reuse assessment](../campaign/baskingspot.md#ziglint-validate-the-gate-before-enforcing-it).
+- PS1: resolve the swallowed permission-setting failure in `zig/src/sessions/disk_namespace.zig:prepare`.
+  The directory promises owner-only prompt-state storage, yet `setPermissions` failure is ignored. Add a failing
+  permission-operation fixture, follow the existing initialization error path when privacy cannot be established,
+  and verify descriptor/lock cleanup. This contract review is independent of adopting the linter; see the
+  [inspected finding](../campaign/baskingspot.md#ziglint-validate-the-gate-before-enforcing-it).
+- TK1: profile added-token matching on real coding prompts and common-prefix stress cases. If material, compare
+  the existing trie with pinned `baskingspot/aho-corasick` runtime `Automaton`, preserving token IDs,
+  leftmost-longest selection, normalized duplicates, strip flags and request masks. Reuse tokenizer parity;
+  include construction cost, actual retained memory and served TTFT. Use existing benchmark machinery first,
+  match both arms' module optimize modes, and retain the current trie unless request benefit and dependency
+  limits justify adoption. The [contract comparison](../campaign/baskingspot.md#added-token-matching-the-strongest-runtime-lead)
+  names the fallback cases. This stays behind V4/P6's measured GPU work.

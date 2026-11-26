@@ -39,6 +39,9 @@ pub fn main(init: std.process.Init) !void {
     var gpu_argmax = false;
     var burst_size: usize = 0;
     var opt_mask: u32 = 7;
+    var chunked_prefill = false;
+    var half_inputs = true;
+    var capture_taps = false;
     var arch_override: ?[]const u8 = null;
 
     var pos_args: std.ArrayList([]const u8) = .empty;
@@ -53,6 +56,16 @@ pub fn main(init: std.process.Init) !void {
             use_mmap = true;
         } else if (std.mem.eql(u8, args[i], "--gpu-argmax")) {
             gpu_argmax = true;
+        } else if (std.mem.eql(u8, args[i], "--prefill=chunked")) {
+            chunked_prefill = true;
+        } else if (std.mem.eql(u8, args[i], "--prefill=step")) {
+            chunked_prefill = false;
+        } else if (std.mem.eql(u8, args[i], "--half=false")) {
+            half_inputs = false;
+        } else if (std.mem.eql(u8, args[i], "--half=true")) {
+            half_inputs = true;
+        } else if (std.mem.eql(u8, args[i], "--taps")) {
+            capture_taps = true;
         } else if (std.mem.startsWith(u8, args[i], "--burst=")) {
             burst_size = try std.fmt.parseInt(usize, args[i]["--burst=".len..], 10);
         } else if (std.mem.startsWith(u8, args[i], "--opt=")) {
@@ -206,10 +219,16 @@ pub fn main(init: std.process.Init) !void {
         for (prompts.value) |pr| {
             rt.reset();
             var tok: u32 = 0;
-            for (pr.ids, 0..) |id, k| {
-                const last = k + 1 == pr.ids.len;
-                const st_ = try rt.stepDirect(id, last, gpu_argmax);
-                if (last) tok = st_.token;
+            if (chunked_prefill) {
+                const ps = try rt.prefillPrompt(pr.ids, true, half_inputs, capture_taps);
+                tok = ps.last_token;
+                if ((opt_mask & 256) != 0) try rt.convertKvToPerm();
+            } else {
+                for (pr.ids, 0..) |id, k| {
+                    const last = k + 1 == pr.ids.len;
+                    const st_ = try rt.stepDirect(id, last, gpu_argmax);
+                    if (last) tok = st_.token;
+                }
             }
             const first_sha = digestBytes(std.mem.sliceAsBytes(rt.logitsSlice()));
             var last_stat: rt_mod.StepStats = .{};
@@ -426,6 +445,171 @@ pub fn main(init: std.process.Init) !void {
         }
         const total_s = @as(f64, @floatFromInt(rt_mod.nowNs() - t_all)) / 1e9;
         std.debug.print("aot histories: {d} files, {d} positions in {d:.2} s\n", .{ histories.value.len, total_rows, total_s });
+        return;
+    }
+
+    if (std.mem.eql(u8, mode, "prefill-bench")) {
+        if (pos_args.items.len != 2) return error.ExpectedArgs;
+        const pbytes = try std.Io.Dir.cwd().readFileAlloc(io, pos_args.items[0], gpa, .limited(64 << 20));
+        defer gpa.free(pbytes);
+        const prompts = try std.json.parseFromSlice([]const Prompt, gpa, pbytes, .{});
+        defer prompts.deinit();
+        var max_len: usize = 1024;
+        for (prompts.value) |pr| max_len = @max(max_len, pr.ids.len + 16);
+
+        const rt = try rt_mod.Runtime.open(gpa, io, bundle_dir, .{
+            .capacity = max_len,
+            .use_mmap = use_mmap,
+            .device_arch_override = arch_override,
+            .opt_mask = opt_mask,
+        });
+        defer rt.deinit();
+        std.debug.print("aot load: total={d:.1} ms (verify={d:.1}, weights={d:.1}, pipelines={d:.1}, residency={d:.1})\n", .{
+            rt.stats.total_ms, rt.stats.verify_ms, rt.stats.weights_ms, rt.stats.pipelines_ms, rt.stats.residency_ms,
+        });
+
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(gpa);
+        for (prompts.value, 0..) |pr, pi| {
+            rt.reset();
+            const ps = try rt.prefillPrompt(pr.ids, true, half_inputs, capture_taps);
+            const tok_s = @as(f64, @floatFromInt(pr.ids.len)) * 1000.0 / ps.wall_ms;
+            const gpu_tok_s = @as(f64, @floatFromInt(pr.ids.len)) * 1000.0 / ps.gpu_ms;
+            const sha = digestBytes(std.mem.sliceAsBytes(rt.logitsSlice()));
+            std.debug.print("aot prefill[{d}] {s}: n={d} half={} taps={} wall={d:.1} ms ({d:.1} tok/s) gpu={d:.1} ms ({d:.1} tok/s) tok={d} sha={s}\n", .{
+                pi, pr.name, pr.ids.len, half_inputs, capture_taps, ps.wall_ms, tok_s, ps.gpu_ms, gpu_tok_s, ps.last_token, sha[0..12],
+            });
+            try out.print(gpa, "{{\"idx\":{d},\"prompt\":\"{s}\",\"tokens\":{d},\"half\":{},\"taps\":{},\"wall_ms\":{d:.3},\"gpu_ms\":{d:.3},\"wall_tok_s\":{d:.2},\"gpu_tok_s\":{d:.2},\"last_token\":{d},\"last_logit_sha256\":\"{s}\"}}\n", .{
+                pi, pr.name, pr.ids.len, half_inputs, capture_taps, ps.wall_ms, ps.gpu_ms, tok_s, gpu_tok_s, ps.last_token, sha,
+            });
+        }
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = pos_args.items[1], .data = out.items });
+        return;
+    }
+
+    if (std.mem.eql(u8, mode, "verify-bench")) {
+        if (pos_args.items.len != 3) return error.ExpectedArgs;
+        const pbytes = try std.Io.Dir.cwd().readFileAlloc(io, pos_args.items[0], gpa, .limited(64 << 20));
+        defer gpa.free(pbytes);
+        const prompts = try std.json.parseFromSlice([]const Prompt, gpa, pbytes, .{});
+        defer prompts.deinit();
+        const reps = try std.fmt.parseInt(usize, pos_args.items[1], 10);
+        var max_len: usize = 1024;
+        for (prompts.value) |pr| max_len = @max(max_len, pr.ids.len + 64);
+
+        const rt = try rt_mod.Runtime.open(gpa, io, bundle_dir, .{
+            .capacity = max_len,
+            .use_mmap = use_mmap,
+            .device_arch_override = arch_override,
+            .opt_mask = opt_mask,
+        });
+        defer rt.deinit();
+        std.debug.print("aot load: total={d:.1} ms (verify={d:.1}, weights={d:.1}, pipelines={d:.1}, residency={d:.1})\n", .{
+            rt.stats.total_ms, rt.stats.verify_ms, rt.stats.weights_ms, rt.stats.pipelines_ms, rt.stats.residency_ms,
+        });
+
+        const vocab: usize = rt.sched.geom.unpadded_vocab;
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(gpa);
+        const widths = [_]usize{ 1, 2, 4, 8, 12, 16 };
+        const walls = try gpa.alloc(f64, reps);
+        defer gpa.free(walls);
+        const gpus = try gpa.alloc(f64, reps);
+        defer gpa.free(gpus);
+
+        for (prompts.value, 0..) |pr, pi| {
+            rt.reset();
+            const ps = try rt.prefillPrompt(pr.ids, true, half_inputs, false);
+            const anchor = ps.last_token;
+            const saved = try rt.snapshotState();
+            defer saved.deinit();
+
+            var chain_ids: [16]u32 = undefined;
+            chain_ids[0] = anchor;
+            for (1..16) |k| chain_ids[k] = @intCast((anchor + k * 97) % vocab);
+
+            if (pi == 0) {
+                var ref_chain: [16][64]u8 = undefined;
+                for (0..16) |k| {
+                    _ = try rt.stepDirect(chain_ids[k], true, false);
+                    ref_chain[k] = digestBytes(std.mem.sliceAsBytes(rt.logitsSlice()));
+                }
+                rt.restoreState(saved);
+                _ = try rt.verifyTree(chain_ids[0..8], null, false, capture_taps);
+                const vs = &(rt.verify_scratch.?);
+                const vlogs = vs.logits.slice(f32, 16 * vocab);
+                var chain8_ok = true;
+                for (0..8) |k| {
+                    const got = digestBytes(std.mem.sliceAsBytes(vlogs[k * vocab ..][0..vocab]));
+                    if (!std.mem.eql(u8, &got, &ref_chain[k])) chain8_ok = false;
+                }
+                _ = try rt.verifyTree(chain_ids[0..16], null, false, capture_taps);
+                var chain16_ok = true;
+                for (0..16) |k| {
+                    const got = digestBytes(std.mem.sliceAsBytes(vlogs[k * vocab ..][0..vocab]));
+                    if (!std.mem.eql(u8, &got, &ref_chain[k])) chain16_ok = false;
+                }
+
+                const tree_parents = [_]u8{ 0, 0, 1, 1, 2, 2, 3, 3, 4, 5, 6, 7, 8, 9, 10 };
+                _ = try rt.verifyTree(chain_ids[0..16], &tree_parents, false, capture_taps);
+                var tree_shas: [16][64]u8 = undefined;
+                for (0..16) |k| tree_shas[k] = digestBytes(std.mem.sliceAsBytes(vlogs[k * vocab ..][0..vocab]));
+                var tree16_ok = true;
+                const check_leaves = [_][5]usize{ .{ 0, 1, 3, 7, 12 }, .{ 0, 1, 3, 8, 13 }, .{ 0, 1, 4, 9, 14 }, .{ 0, 2, 5, 10, 15 } };
+                for (check_leaves) |branch| {
+                    rt.restoreState(saved);
+                    for (branch) |node| {
+                        _ = try rt.stepDirect(chain_ids[node], true, false);
+                        const ref_s = digestBytes(std.mem.sliceAsBytes(rt.logitsSlice()));
+                        if (!std.mem.eql(u8, &ref_s, &tree_shas[node])) tree16_ok = false;
+                    }
+                }
+                rt.restoreState(saved);
+
+                var accept_ids: [8]u32 = undefined;
+                accept_ids[0] = anchor;
+                {
+                    var t = anchor;
+                    for (1..8) |k| {
+                        t = (try rt.stepDirect(t, true, false)).token;
+                        accept_ids[k] = t;
+                    }
+                }
+                accept_ids[4] ^= 1;
+                rt.restoreState(saved);
+                const cv = try rt.verifyTree(accept_ids[0..8], null, true, false);
+                const commit_ok = cv.accepted_last == 3 and cv.kept_tokens == 4 and rt.len == saved.len + 4;
+                const after_commit = try rt.stepDirect(accept_ids[4], true, false);
+                const after_commit_sha = digestBytes(std.mem.sliceAsBytes(rt.logitsSlice()));
+                rt.restoreState(saved);
+                for (0..4) |k| _ = try rt.stepDirect(accept_ids[k], false, false);
+                const ref_after = try rt.stepDirect(accept_ids[4], true, false);
+                const ref_after_sha = digestBytes(std.mem.sliceAsBytes(rt.logitsSlice()));
+                const commit_state_ok = commit_ok and after_commit.token == ref_after.token and std.mem.eql(u8, &after_commit_sha, &ref_after_sha);
+                std.debug.print("aot verify parity: chain8={} chain16={} tree16={} commit_rollback_exact={} (kept={d})\n", .{
+                    chain8_ok, chain16_ok, tree16_ok, commit_state_ok, cv.kept_tokens,
+                });
+                if (!chain8_ok or !chain16_ok or !tree16_ok or !commit_state_ok) return error.VerifyParityFailed;
+                rt.restoreState(saved);
+            }
+
+            for (widths) |w| {
+                for (0..reps) |r| {
+                    const st_ = try rt.verifyTree(chain_ids[0..w], null, false, capture_taps);
+                    walls[r] = st_.wall_ms;
+                    gpus[r] = st_.gpu_ms;
+                }
+                const w50 = median(walls);
+                const g50 = median(gpus);
+                std.debug.print("aot verify {s}: ctx={d} width={d} taps={} wall_p50={d:.3} ms gpu_p50={d:.3} ms\n", .{
+                    pr.name, pr.ids.len, w, capture_taps, w50, g50,
+                });
+                try out.print(gpa, "{{\"prompt\":\"{s}\",\"context\":{d},\"width\":{d},\"taps\":{},\"reps\":{d},\"wall_p50_ms\":{d:.4},\"gpu_p50_ms\":{d:.4}}}\n", .{
+                    pr.name, pr.ids.len, w, capture_taps, reps, w50, g50,
+                });
+            }
+        }
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = pos_args.items[2], .data = out.items });
         return;
     }
 

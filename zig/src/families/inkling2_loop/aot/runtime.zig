@@ -2,6 +2,7 @@ const std = @import("std");
 const mtl = @import("metal");
 const fmt = @import("format.zig");
 const ba = @import("binary_archive.zig");
+pub const prefill_mod = @import("prefill.zig");
 
 const F_NOCACHE: c_int = 48;
 const mix_states: u32 = 5;
@@ -353,6 +354,9 @@ pub const Runtime = struct {
     weight_chunk_count: usize = 0,
     mapped_weights: ?mtl.MappedFile = null,
     pipes: Pipes,
+    extra_pipes: ?prefill_mod.ExtraPipes = null,
+    prefill_scratch: ?prefill_mod.PrefillScratch = null,
+    verify_scratch: ?prefill_mod.VerifyScratch = null,
     residency: ?mtl.ResidencySet = null,
     stats: LoadStats = .{},
 
@@ -512,6 +516,9 @@ pub const Runtime = struct {
         defer archive.deinit();
         var pipes = try Pipes.load(device, lib, archive, sched.layout_flags);
         errdefer pipes.deinit();
+        const ind = (sched.layout_flags & fmt.layout_non_indirect) == 0;
+        var extra_pipes: ?prefill_mod.ExtraPipes = prefill_mod.ExtraPipes.load(device, lib, archive, ind) catch null;
+        errdefer if (extra_pipes) |*ep| ep.deinit();
         const t_pipes = std.Io.Clock.awake.now(io).toNanoseconds();
 
         const queue = try device.queue();
@@ -526,11 +533,13 @@ pub const Runtime = struct {
         const kvw: usize = g.kv_heads * g.head_dim;
         const cap = if (opts.verify_only) 16 else opts.capacity;
         const kv_row_bytes = kvw * 2;
+        var slot_full: [fmt.num_slots]bool = @splat(false);
+        for (sched.slots) |sl| slot_full[sl.slot] = sl.is_full != 0;
         var slot_kv_off: [fmt.num_slots]usize = @splat(0);
         var kv_total: usize = 0;
-        for (sched.slots) |sl| {
-            slot_kv_off[sl.slot] = kv_total;
-            const rows: usize = if (sl.is_full != 0) cap else g.window;
+        for (0..fmt.num_slots) |sidx| {
+            slot_kv_off[sidx] = kv_total;
+            const rows: usize = if (slot_full[sidx]) cap else g.window;
             kv_total += rows * kv_row_bytes;
         }
 
@@ -546,6 +555,7 @@ pub const Runtime = struct {
             .weight_chunk_count = weight_chunk_count,
             .mapped_weights = mapped_weights,
             .pipes = pipes,
+            .extra_pipes = extra_pipes,
             .capacity = cap,
             .len = 0,
             .slot_kv_off = slot_kv_off,
@@ -641,7 +651,7 @@ pub const Runtime = struct {
         for (bufs) |b| rs.add(b);
     }
 
-    inline fn setW(rt: *const Runtime, target: anytype, off: u64, index: usize) void {
+    pub inline fn setW(rt: *const Runtime, target: anytype, off: u64, index: usize) void {
         var i: usize = rt.weight_chunk_count;
         while (i > 0) {
             i -= 1;
@@ -654,7 +664,40 @@ pub const Runtime = struct {
         unreachable;
     }
 
+    pub fn slotIsFull(rt: *const Runtime, slot: u32) bool {
+        for (rt.sched.slots) |sl| if (sl.slot == slot) return sl.is_full != 0;
+        unreachable;
+    }
+
+    pub fn ensurePrefillScratch(rt: *Runtime) !*prefill_mod.PrefillScratch {
+        if (rt.prefill_scratch == null) {
+            rt.prefill_scratch = try prefill_mod.PrefillScratch.init(rt.device, rt.sched.geom, prefill_mod.default_chunk);
+        }
+        return &rt.prefill_scratch.?;
+    }
+
+    pub fn ensureVerifyScratch(rt: *Runtime) !*prefill_mod.VerifyScratch {
+        if (rt.verify_scratch == null) {
+            rt.verify_scratch = try prefill_mod.VerifyScratch.init(rt.device, rt.sched.geom);
+        }
+        return &rt.verify_scratch.?;
+    }
+
+    pub fn prefillPrompt(rt: *Runtime, ids: []const u32, want_last_logits: bool, half_inputs: bool, capture_taps: bool) !prefill_mod.PrefillStats {
+        return prefill_mod.prefillChunk(rt, ids, want_last_logits, half_inputs, capture_taps);
+    }
+
+    pub fn verifyTree(rt: *Runtime, ids: []const u32, parents: ?[]const u8, commit: bool, capture_taps: bool) !prefill_mod.VerifyStats {
+        return prefill_mod.verifyTree(rt, ids, parents, commit, capture_taps);
+    }
+
+    pub fn convertKvToPerm(rt: *Runtime) !void {
+        return prefill_mod.convertKvToPerm(rt);
+    }
+
     pub fn deinit(rt: *Runtime) void {
+        if (rt.prefill_scratch) |*ps| ps.deinit();
+        if (rt.verify_scratch) |*vs| vs.deinit();
         if (rt.icb_pre) |icb| icb.deinit();
         if (rt.icb_main) |icb| icb.deinit();
         if (rt.residency) |rs| {
@@ -671,6 +714,7 @@ pub const Runtime = struct {
             rt.argmax_tmp_v, rt.argmax_tmp_i, rt.token_ring, rt.loop_ctrl, rt.param_arena,
         };
         for (bufs) |b| b.deinit();
+        if (rt.extra_pipes) |*ep| ep.deinit();
         rt.pipes.deinit();
         for (0..rt.weight_chunk_count) |ci| rt.weight_chunks[ci].buf.deinit();
         if (rt.mapped_weights) |m| m.deinit();

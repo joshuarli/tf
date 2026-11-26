@@ -11,8 +11,13 @@ const rows_metal = @embedFile("../kernels/rows.metal");
 const experts_metal = @embedFile("../kernels/experts.metal");
 const verify_metal = @embedFile("../kernels/verify.metal");
 const prefill_rows_metal = @embedFile("../kernels/prefill_rows.metal");
+const prefill_staged_metal = @embedFile("../kernels/prefill_staged.metal");
+const prefill_expert_wide_metal = @embedFile("../kernels/prefill_expert_wide.metal");
+const affine_stage_metal = @embedFile("../kernels/affine_stage.metal");
+const float_mpp_metal = @embedFile("../kernels/float_mpp.metal");
 const taps_metal = @embedFile("../kernels/taps.metal");
 const aot_fused_metal = @embedFile("aot_fused.metal");
+const aot_prefill_metal = @embedFile("aot_prefill.metal");
 
 const decode_pso_names = [_][:0]const u8{
     "i2a_embed",
@@ -30,6 +35,12 @@ const decode_pso_names = [_][:0]const u8{
     "i2_controls_apply",
     "i2_controls_apply_rows",
     "i2v_argmax",
+    "i2v_qkv",
+    "i2v_split",
+    "i2v_conv",
+    "i2v_accept",
+    "i2v_round_kv",
+    "i2v_round_conv",
     "i2_copy",
     "i2_sig_mul",
     "i2_add",
@@ -38,12 +49,38 @@ const decode_pso_names = [_][:0]const u8{
     "i2p_rms3",
     "i2p_rms_pair",
     "i2p_batch_conv",
+    "i2p_conv",
+    "i2p_relbias_rows",
     "i2p_scatter",
     "i2p_routepick",
     "i2p_gu",
+    "i2p_moe_zero",
+    "i2p_moe_count",
+    "i2p_moe_offsets",
+    "i2p_moe_sort",
+    "i2p_combine",
+    "i2p_half_rows",
+    "i2p_attn_units",
+    "i2p_expert_units_down",
+    "i2p_affine_units_up",
+    "i2p_affine_units_down",
+    "i2pr_mix_norm",
     "i2pr_batch_mix",
     "i2pr_batch_mix2",
+    "i2pr_clips",
+    "i2pr_ring_store",
+    "i2pr_kv_store",
+    "i2pr_conv_add",
+    "i2as_split",
+    "i2as_gemm_split",
+    "i2ps_gemm_split",
+    "i2ps_gemm_hi",
+    "i2ps_split_gated",
+    "i2af_gemm",
+    "i2af_gate_ctl",
     "i2e_down1",
+    "i2e_down",
+    "i2e_down16",
     "i2r_controls_down",
     "i2t_tap",
     "i2_aot_embed_sb",
@@ -65,6 +102,18 @@ const decode_pso_names = [_][:0]const u8{
     "i2_aot_argmax_p2",
     "i2_aot_qkv_perm",
     "i2_aot_split_perm",
+    "i2_aot_as_prepare_sb",
+    "i2_aot_unpack_gf2",
+    "i2_aot_expert_units_up_packed",
+    "i2_aot_kv_to_perm",
+    "i2_aot_t_dense_8_2_sb",
+    "i2_aot_t_dense16_8_1_sb",
+    "i2_aot_t_proj_8_2_sb",
+    "i2_aot_t_proj16_8_1_sb",
+    "i2_aot_e_gu_packed",
+    "i2_aot_e_gu16_packed",
+    "i2_aot_ctl_apply3_gf2_rows",
+    "i2_aot_ctl_apply1_gf2_rows",
 };
 
 const Shard = struct {
@@ -222,17 +271,23 @@ fn compileMetallib(gpa: std.mem.Allocator, io: std.Io, out_dir: []const u8, extr
     defer gpa.free(attn_verify);
     const rows_exp = try std.fmt.allocPrint(gpa, "{s}\n#define I2T_ROUTED 1\n{s}\n", .{ rows_metal, experts_metal });
     defer gpa.free(rows_exp);
+    const prefill_units = try std.fmt.allocPrint(gpa, "#define I2P_TENSOR_UNITS 1\n#define I2P_HALF_ACT 1\n#define I2P_HALF_OPERANDS 1\n#define I2P_MATRIX_THRESHOLD 1\n#define I2P_DOWN_MATRIX_THRESHOLD 1\n{s}\n{s}\n", .{ kernels.prefill, prefill_expert_wide_metal });
+    defer gpa.free(prefill_units);
 
     var units: std.ArrayList(Unit) = .empty;
     defer units.deinit(gpa);
     try units.appendSlice(gpa, &.{
         .{ .name = "affine", .src = kernels.affine },
+        .{ .name = "affine_stage", .src = affine_stage_metal },
+        .{ .name = "float_mpp", .src = float_mpp_metal },
         .{ .name = "attention_verify", .src = attn_verify },
         .{ .name = "glue", .src = kernels.glue },
-        .{ .name = "prefill", .src = kernels.prefill },
+        .{ .name = "prefill", .src = prefill_units },
         .{ .name = "prefill_rows", .src = prefill_rows_metal },
+        .{ .name = "prefill_staged", .src = prefill_staged_metal },
         .{ .name = "rows_experts", .src = rows_exp },
         .{ .name = "taps", .src = taps_metal },
+        .{ .name = "aot_prefill", .src = aot_prefill_metal },
     });
     if (extra_metal) |src| try units.append(gpa, .{ .name = "aot_fused", .src = src });
 

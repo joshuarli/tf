@@ -518,68 +518,7 @@ template <uint C>
 }
 
 template [[host_name("i2_controls_apply")]] [[kernel]] void i2_controls_apply_cols<1>(I2_CONTROLS_APPLY_ARGS);
-
-[[kernel]] void i2_controls_apply_rows(I2_CONTROLS_APPLY_ARGS) {
-  const uint col = group.x * 8u + tid / 32u, lane = tid % 32u, j = group.z, rows = a.rows;
-  if (a.rank <= 64u && rows <= 16u) {
-    threadgroup float xs[16][64];
-    const device float* xb = X + size_t(j) * rows * a.rank;
-    const uint total = rows * a.rank;
-    for (uint i = tid; i < total; i += 256u) xs[i / a.rank][i % a.rank] = xb[i];
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (col >= a.h) return;
-    const device float* wg = (j == 0u ? G0 : j == 1u ? G1 : G2) + size_t(col) * a.rank;
-    const device float* wf = (j == 0u ? F0 : j == 1u ? F1 : F2) + size_t(col) * a.rank;
-    const device float* cb = j == 0u ? C0 : j == 1u ? C1 : C2;
-    device float* ob = j == 0u ? O0 : j == 1u ? O1 : O2;
-    float g[16], f[16];
-    for (uint r = 0u; r < rows; ++r) { g[r] = 0.0f; f[r] = 0.0f; }
-    for (uint k = lane; k < a.rank; k += 32u) {
-      const float gw = wg[k], fw = wf[k];
-      for (uint r = 0u; r < rows; ++r) {
-        const float xv = xs[r][k];
-        g[r] = fma(xv, gw, g[r]);
-        f[r] = fma(xv, fw, f[r]);
-      }
-    }
-    for (uint r = 0u; r < rows; ++r) {
-      const float gs = simd_sum(g[r]), fs = simd_sum(f[r]);
-      if (lane == 0u) {
-        const float cv = cb[size_t(a.xb[j] + r * a.xs[j]) * a.h + col];
-        const float mv = MSG[size_t(a.msg0 + j + r * 4u) * a.h + col];
-        ob[size_t(r) * a.h + col] = cv - precise::tanh(fs) * cv + precise::tanh(gs) * mv;
-      }
-    }
-    return;
-  }
-  if (col >= a.h) return;
-  const device float* wg = (j == 0u ? G0 : j == 1u ? G1 : G2) + size_t(col) * a.rank;
-  const device float* wf = (j == 0u ? F0 : j == 1u ? F1 : F2) + size_t(col) * a.rank;
-  const device float* cb = j == 0u ? C0 : j == 1u ? C1 : C2;
-  device float* ob = j == 0u ? O0 : j == 1u ? O1 : O2;
-  for (uint r = 0u; r < rows; ++r) {
-    const device float* x = X + (size_t(j) * rows + r) * a.rank;
-    float g = 0.0f, f = 0.0f;
-    uint base = 0u;
-    for (; base + 128u <= a.rank; base += 128u) {
-      const uint k = base + lane * 4u;
-      const float4 xv = float4(*reinterpret_cast<const device packed_float4*>(x + k));
-      const float4 gv = float4(*reinterpret_cast<const device packed_float4*>(wg + k));
-      const float4 fv = float4(*reinterpret_cast<const device packed_float4*>(wf + k));
-      g = fma(xv.x, gv.x, g); g = fma(xv.y, gv.y, g); g = fma(xv.z, gv.z, g); g = fma(xv.w, gv.w, g);
-      f = fma(xv.x, fv.x, f); f = fma(xv.y, fv.y, f); f = fma(xv.z, fv.z, f); f = fma(xv.w, fv.w, f);
-    }
-    for (uint k = base + lane; k < a.rank; k += 32u) {
-      g = fma(x[k], wg[k], g); f = fma(x[k], wf[k], f);
-    }
-    g = simd_sum(g); f = simd_sum(f);
-    if (lane == 0u) {
-      const float cv = cb[size_t(a.xb[j] + r * a.xs[j]) * a.h + col];
-      const float mv = MSG[size_t(a.msg0 + j + r * 4u) * a.h + col];
-      ob[size_t(r) * a.h + col] = cv - precise::tanh(f) * cv + precise::tanh(g) * mv;
-    }
-  }
-}
+template [[host_name("i2_controls_apply_rows")]] [[kernel]] void i2_controls_apply_cols<0>(I2_CONTROLS_APPLY_ARGS);
 
 struct i2_qkv_args { uint kv, heads, dim, rel, extent, layout, dyn, tau; float norm, q_threshold, rel_threshold, eps, floor, alpha; };
 

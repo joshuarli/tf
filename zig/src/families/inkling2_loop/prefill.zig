@@ -1222,15 +1222,15 @@ const Chunk = struct {
 
     fn control(c: Chunk, ctl: Controller, cur: In, msg: In, out: B, ys: u32, yb: u32) void {
         const s = c.s;
-        if (c.batch) |batch| if (s.fuse and c.n > 1 and c.n <= 16 and c.m.affine_pipes != null and ctl.down.dtype == .f32 and ctl.gain.dtype == .f32 and ctl.forget.dtype == .f32 and msg.xs == 4 and ys == 1 and yb == 0 and width(ctl.down) == 2 * c.h and nrows(ctl.gain) == c.h and nrows(ctl.forget) == c.h and width(ctl.gain) == nrows(ctl.down) and width(ctl.forget) == nrows(ctl.down)) {
+        if (c.batch) |batch| if (s.fuse and c.n > 1 and c.m.affine_pipes != null and ctl.down.dtype == .f32 and ctl.gain.dtype == .f32 and ctl.forget.dtype == .f32 and msg.xs == 4 and ys == 1 and yb == 0 and width(ctl.down) == 2 * c.h and nrows(ctl.gain) == c.h and nrows(ctl.forget) == c.h and width(ctl.gain) == nrows(ctl.down) and width(ctl.forget) == nrows(ctl.down)) {
             const scratch = batch.scratch;
             const rank: u32 = @intCast(nrows(ctl.down));
             const xs: [3]u32 = @splat(cur.xs);
             const xb: [3]u32 = @splat(cur.xb);
             c.setP(scratch.shared.controls_down, ControlsDown{ .h = c.h, .rank = rank, .rows = c.n, .msg0 = msg.xb, .xs = xs, .xb = xb }, &.{ cur.buf, cur.buf, cur.buf, msg.buf, t(ctl.down), t(ctl.down), t(ctl.down), A, b(scratch.controls_hidden) });
-            c.enc.dispatchGroups(mtl.Size.of((rank + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
-            c.setP(scratch.controls_cols, ControlsArgs{ .h = c.h, .rank = rank, .rows = c.n, .xs = xs, .xb = xb, .msg0 = msg.xb, .cols = 1 }, &.{ b(scratch.controls_hidden), t(ctl.gain), t(ctl.gain), t(ctl.gain), t(ctl.forget), t(ctl.forget), t(ctl.forget), cur.buf, cur.buf, cur.buf, msg.buf, out, out, out, A });
-            c.enc.dispatchGroups(mtl.Size.of((c.h + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+            c.enc.dispatchGroups(mtl.Size.of((rank + 7) / 8, c.n, 1), mtl.Size.of(256, 1, 1));
+            c.setP(scratch.controls_cols, ControlsArgs{ .h = c.h, .rank = rank, .rows = c.n, .xs = xs, .xb = xb, .msg0 = msg.xb, .cols = c.applyCols() }, &.{ b(scratch.controls_hidden), t(ctl.gain), t(ctl.gain), t(ctl.gain), t(ctl.forget), t(ctl.forget), t(ctl.forget), cur.buf, cur.buf, cur.buf, msg.buf, out, out, out, A });
+            c.enc.dispatchGroups(mtl.Size.of(c.applyGroups(), c.n, 1), mtl.Size.of(256, 1, 1));
             return;
         };
         c.setP(s.pipes.rms_pair, RmsPair{ .width = c.h, .xs0 = cur.xs, .xb0 = cur.xb, .xs1 = msg.xs, .xb1 = msg.xb, .eps = 1e-6 }, &.{ cur.buf, msg.buf, A, b(s.h2in) });
@@ -1258,22 +1258,19 @@ const Chunk = struct {
     fn controls(c: Chunk, controllers: [3]Controller, ins: [3]In, msg: B, batch: *BatchContext) void {
         const scratch = batch.scratch;
         const rank: u32 = @intCast(nrows(controllers[0].down));
-        const joined = c.s.fuse and c.n > 1 and c.n <= 16;
-        const args = ControlsArgs{ .h = c.h, .rank = rank, .rows = c.n, .xs = .{ ins[0].xs, ins[1].xs, ins[2].xs }, .xb = .{ ins[0].xb, ins[1].xb, ins[2].xb }, .cols = 1 };
+        const joined = c.s.fuse and c.n > 1;
+        const args = ControlsArgs{ .h = c.h, .rank = rank, .rows = c.n, .xs = .{ ins[0].xs, ins[1].xs, ins[2].xs }, .xb = .{ ins[0].xb, ins[1].xb, ins[2].xb }, .cols = if (joined) c.applyCols() else 1 };
         if (joined) {
             const down = ControlsDown{ .h = c.h, .rank = rank, .rows = c.n, .msg0 = 0, .xs = args.xs, .xb = args.xb };
             c.setP(scratch.shared.controls_down, down, &.{ ins[0].buf, ins[1].buf, ins[2].buf, msg, t(controllers[0].down), t(controllers[1].down), t(controllers[2].down), A, b(scratch.controls_hidden) });
-            c.enc.dispatchGroups(mtl.Size.of((rank + 7) / 8, 1, 3), mtl.Size.of(256, 1, 1));
-            c.setP(scratch.controls_cols, args, &.{ b(scratch.controls_hidden), t(controllers[0].gain), t(controllers[1].gain), t(controllers[2].gain), t(controllers[0].forget), t(controllers[1].forget), t(controllers[2].forget), ins[0].buf, ins[1].buf, ins[2].buf, msg, b(c.s.n0), b(c.s.n1), b(c.s.n2), A });
-            c.enc.dispatchGroups(mtl.Size.of((c.h + 7) / 8, 1, 3), mtl.Size.of(256, 1, 1));
-            return;
+        } else {
+            c.setP(scratch.controls_norm, args, &.{ ins[0].buf, ins[1].buf, ins[2].buf, msg, A, b(scratch.controls_input) });
+            c.enc.dispatchGroups(mtl.Size.of(6 * c.n, 1, 1), mtl.Size.of(256, 1, 1));
+            c.setP(scratch.controls_down, args, &.{ b(scratch.controls_input), t(controllers[0].down), t(controllers[1].down), t(controllers[2].down), A, b(scratch.controls_hidden) });
         }
-        c.setP(scratch.controls_norm, args, &.{ ins[0].buf, ins[1].buf, ins[2].buf, msg, A, b(scratch.controls_input) });
-        c.enc.dispatchGroups(mtl.Size.of(6 * c.n, 1, 1), mtl.Size.of(256, 1, 1));
-        c.setP(scratch.controls_down, args, &.{ b(scratch.controls_input), t(controllers[0].down), t(controllers[1].down), t(controllers[2].down), A, b(scratch.controls_hidden) });
         c.enc.dispatchGroups(mtl.Size.of((rank + 7) / 8, c.n, 3), mtl.Size.of(256, 1, 1));
-        c.setP(scratch.controls_apply, args, &.{ b(scratch.controls_hidden), t(controllers[0].gain), t(controllers[1].gain), t(controllers[2].gain), t(controllers[0].forget), t(controllers[1].forget), t(controllers[2].forget), ins[0].buf, ins[1].buf, ins[2].buf, msg, b(c.s.n0), b(c.s.n1), b(c.s.n2), A });
-        c.enc.dispatchGroups(mtl.Size.of((c.h + 7) / 8, c.n, 3), mtl.Size.of(256, 1, 1));
+        c.setP(if (joined) scratch.controls_cols else scratch.controls_apply, args, &.{ b(scratch.controls_hidden), t(controllers[0].gain), t(controllers[1].gain), t(controllers[2].gain), t(controllers[0].forget), t(controllers[1].forget), t(controllers[2].forget), ins[0].buf, ins[1].buf, ins[2].buf, msg, b(c.s.n0), b(c.s.n1), b(c.s.n2), A });
+        c.enc.dispatchGroups(mtl.Size.of(if (joined) c.applyGroups() else (c.h + 7) / 8, c.n, 3), mtl.Size.of(256, 1, 1));
     }
 
     fn mixPair(c: Chunk, bk: Bank, ip: u32, query: Tensor) bool {
@@ -1564,6 +1561,15 @@ const Chunk = struct {
         c.enc.dispatchGroups(mtl.Size.of(if (wide_matrix or half_matrix == null) (c.h + 63) / 64 else (c.h + 31) / 32, E, (c.n + 31) / 32), mtl.Size.of(if (wide_matrix or half_matrix == null) 256 else 128, 1, 1));
         c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = K, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
         c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
+    }
+
+    fn applyCols(c: Chunk) u32 {
+        return @min(c.n, 8);
+    }
+
+    fn applyGroups(c: Chunk) u32 {
+        const cols = c.applyCols();
+        return (c.h + 8 * cols - 1) / (8 * cols);
     }
 
     fn moeInConv(c: Chunk) bool {

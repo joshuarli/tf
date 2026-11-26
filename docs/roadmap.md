@@ -5,7 +5,7 @@ This is the single plan for this repository: all current and future work, and th
 ## Status
 
 **Active 2026-11-26.**
-- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. Q4 (5h), A1 (5i, `lane/inkling-metal-aot`), P6 (5f), P7 (5g), and P8 (long-context prefill: served with drafter `2,521–2,690` at 1K, `2,496` at 4K, `2,384` at 8K, `2,223` at 16K, `2,057` at 31.7K — Decision 17 prefill goal met across the full curve) are done. Next: Q3 (6), Decision 17 single-stream decode (`>= 200 tok/s`), and final qualification.
+- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. Q4 (5h), A1 (5i, `lane/inkling-metal-aot`), P6 (5f), P7 (5g), P8 (long-context prefill: Decision 17 met across `1K–31.7K`), and Q3 (6, long-reasoning runaways traced) are done. Next: Decision 17 single-stream decode (`>= 200 tok/s`), then final qualification.
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
 - Acceptance flow (2026-11-24): lanes prove changes with filtered GPU tests; the parent runs the full suite once on an integration commit of main plus the lane and fast-forwards main on green, instead of a lane suite and a second main suite.
 - **Last accepted code: SV2, fast-forwarded from `lane/sv2-serve`** (speculation served by default; integrated suite on `33b38ed43`: `inkling-host` ok, `inkling-gpu` 185/185 plus the restored served test 12/12, oracle pass). Before it, V4 `ec925cb41` (fused fixed-cost verify kernels; integrated main green: `inkling-host` ok, `inkling-gpu` 186/186, oracle pass at 94.73% top-1 and mean KL 0.0199). Before it, PH2 merge `291240211` (half prefill by default; `inkling-gpu` 181/181), P5c merge `7f7cb75a3` (181/181), SC1 merge `1668d5caa` (180/180), V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
@@ -230,7 +230,11 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    `i2ps_split_gated`, and skip doomed `store(capture.at)` when `fork + final > store_limit`. Oracle gate matches `main`
    identically (`2,856/3,015 = 94.73%`, mean KL `0.0199132`); served prefill with drafter clears Decision 17 at every
    length (`1K: 2,521–2,690`, `4K: 2,496`, `8K: 2,384`, `16K: 2,223`, `31.7K: 2,057 tok/s`; `2,307 tok/s` GPU).
-6. Q3: the long-reasoning runaways: `code-c02` under exact prefill (open since P3c) and `retrieval-t01` under half prefill.
+6. Q3, done (`campaign/kernels/inkling-q3-runaways.md`): full untruncated traces under `half` and `off` show no
+   TensorFold numerical defect. `retrieval-t01` (`half`) finds `QX-7419` in ~100 tokens then writes 26,125 chars of
+   coherent non-repeating code review (max 12-gram = 1) until the 8,192 cap (`off` chooses a compact review, 4,066
+   tokens); `code-c02` passes under default `half` (1,561 tokens) and loops on `'o'` under `off`; `code-c13` matches
+   for 1,123 chars then enters greedy `<think>` repetition loops under both `half` (44×) and `off` (78×).
 7. Deferred off the critical path: see **Later**.
 
 Items run on per-model chains, and items whose owned files are disjoint run in parallel:

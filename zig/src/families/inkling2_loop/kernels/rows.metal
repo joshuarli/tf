@@ -336,41 +336,65 @@ struct i2r_controls_args { uint h, rank, rows, msg0; uint xs[3], xb[3]; };
     const device float* W1 [[buffer(5)]], const device float* W2 [[buffer(6)]], constant i2r_controls_args& a [[buffer(7)]],
     device float* OUT [[buffer(8)]], uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
   threadgroup float part[2][8];
-  threadgroup float inv[2];
-  const uint j = group.z, row = group.y;
-  const device float* cur = (j == 0u ? X0 : j == 1u ? X1 : X2) + size_t(a.xb[j] + row * a.xs[j]) * a.h;
-  const device float* msg = MSG + size_t(a.msg0 + j + row * 4u) * a.h;
-  float sums[2] = { 0.0f, 0.0f };
-  for (uint i = tid; i < a.h; i += 256u) {
-    sums[0] = fma(cur[i], cur[i], sums[0]);
-    sums[1] = fma(msg[i], msg[i], sums[1]);
+  threadgroup float inv[2][16];
+  const uint j = group.z, rows = a.rows;
+  const device float* xbase = j == 0u ? X0 : j == 1u ? X1 : X2;
+  for (uint r = 0u; r < rows; ++r) {
+    const device float* cur = xbase + size_t(a.xb[j] + r * a.xs[j]) * a.h;
+    const device float* msg = MSG + size_t(a.msg0 + j + r * 4u) * a.h;
+    float sums[2] = { 0.0f, 0.0f };
+    for (uint i = tid; i < a.h; i += 256u) {
+      sums[0] = fma(cur[i], cur[i], sums[0]);
+      sums[1] = fma(msg[i], msg[i], sums[1]);
+    }
+    for (uint which = 0; which < 2u; ++which) {
+      const float sum = simd_sum(sums[which]);
+      if (tid % 32u == 0u) part[which][tid / 32u] = sum;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (tid < 2u) {
+      float total = 0.0f;
+      for (uint i = 0; i < 8u; ++i) total += part[tid][i];
+      inv[tid][r] = 1.0f / sqrt(total / float(a.h) + 1e-6f);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
   }
-  for (uint which = 0; which < 2u; ++which) {
-    const float sum = simd_sum(sums[which]);
-    if (tid % 32u == 0u) part[which][tid / 32u] = sum;
-  }
-  threadgroup_barrier(mem_flags::mem_threadgroup);
-  if (tid < 2u) {
-    float total = 0.0f;
-    for (uint i = 0; i < 8u; ++i) total += part[tid][i];
-    inv[tid] = 1.0f / sqrt(total / float(a.h) + 1e-6f);
-  }
-  threadgroup_barrier(mem_flags::mem_threadgroup);
   const uint col = group.x * 8u + tid / 32u, lane = tid % 32u;
   if (col >= a.rank) return;
   const uint width = 2u * a.h;
   const device float* w = (j == 0u ? W0 : j == 1u ? W1 : W2) + size_t(col) * width;
-  float acc = 0.0f;
+  const device float* cur_p[16];
+  const device float* msg_p[16];
+  float inv0[16], inv1[16], acc[16];
+  for (uint r = 0u; r < rows; ++r) {
+    cur_p[r] = xbase + size_t(a.xb[j] + r * a.xs[j]) * a.h;
+    msg_p[r] = MSG + size_t(a.msg0 + j + r * 4u) * a.h;
+    inv0[r] = inv[0][r];
+    inv1[r] = inv[1][r];
+    acc[r] = 0.0f;
+  }
   uint base = 0u;
   for (; base + 128u <= width; base += 128u) {
     const uint k = base + lane * 4u;
     const bool first = k < a.h;
-    const float4 xv = float4(*reinterpret_cast<const device packed_float4*>(first ? cur + k : msg + (k - a.h))) * (first ? inv[0] : inv[1]);
     const float4 wv = float4(*reinterpret_cast<const device packed_float4*>(w + k));
-    acc = fma(xv.x, wv.x, acc); acc = fma(xv.y, wv.y, acc);
-    acc = fma(xv.z, wv.z, acc); acc = fma(xv.w, wv.w, acc);
+    for (uint r = 0u; r < rows; ++r) {
+      const float4 xv = float4(*reinterpret_cast<const device packed_float4*>(first ? cur_p[r] + k : msg_p[r] + (k - a.h))) * (first ? inv0[r] : inv1[r]);
+      float ac = acc[r];
+      ac = fma(xv.x, wv.x, ac); ac = fma(xv.y, wv.y, ac);
+      ac = fma(xv.z, wv.z, ac); ac = fma(xv.w, wv.w, ac);
+      acc[r] = ac;
+    }
   }
-  for (uint k = base + lane; k < width; k += 32u) acc = fma(k < a.h ? cur[k] * inv[0] : msg[k - a.h] * inv[1], w[k], acc);
-  acc = simd_sum(acc);
-  if (lane == 0u) OUT[(size_t(j) * a.rows + row) * a.rank + col] = acc;
+  for (uint k = base + lane; k < width; k += 32u) {
+    const bool first = k < a.h;
+    const float wv = w[k];
+    for (uint r = 0u; r < rows; ++r) {
+      acc[r] = fma(first ? cur_p[r][k] * inv0[r] : msg_p[r][k - a.h] * inv1[r], wv, acc[r]);
+    }
+  }
+  for (uint r = 0u; r < rows; ++r) {
+    const float total = simd_sum(acc[r]);
+    if (lane == 0u) OUT[(size_t(j) * rows + r) * a.rank + col] = total;
+  }
 }

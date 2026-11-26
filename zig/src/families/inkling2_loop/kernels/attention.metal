@@ -289,6 +289,69 @@ struct i2_batch_row { device half* keys; device half* values; i2_attn_parts args
   else i2_combine_serial(PART, a, O, tg.x, lane);
 }
 
+[[kernel]] void i2_batch_combine_sig_mul(const device float* PART [[buffer(0)]], constant i2_batch_row* rows [[buffer(1)]],
+    const device float* GATE [[buffer(2)]], device float* O [[buffer(3)]],
+    uint2 tg [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) {
+  constant i2_attn_parts& a = rows[tg.y].args;
+  PART += size_t(tg.y) * a.heads * 16u * (a.dim + 2u);
+  GATE += size_t(tg.y) * a.heads * a.dim;
+  O += size_t(tg.y) * a.heads * a.dim;
+  const uint h = tg.x;
+  if (a.dim == 128u && a.splits <= 16u) {
+    constexpr uint D = 128u;
+    const uint S = a.splits;
+    const size_t first = (size_t)h * S * (D + 2u);
+    const size_t mine = first + (size_t)min(lane, S - 1u) * (D + 2u);
+    const float tops = PART[mine], masses = PART[mine + 1u];
+    float pv[16][4];
+#pragma unroll
+    for (uint s = 0; s < 16u; ++s) {
+      const size_t base = first + (size_t)min(s, S - 1u) * (D + 2u) + 2u + lane;
+      pv[s][0] = PART[base];
+      pv[s][1] = PART[base + 32u];
+      pv[s][2] = PART[base + 64u];
+      pv[s][3] = PART[base + 96u];
+    }
+    float top = 0.0f, mass = 1.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+#pragma unroll
+    for (uint s = 0; s < 16u; ++s) {
+      if (s >= S) break;
+      const float ptop = simd_shuffle(tops, ushort(s));
+      const float pmass = simd_shuffle(masses, ushort(s));
+      if (pmass == 0.0f) continue;
+      const float peak = max(top, ptop);
+      const float r0 = precise::exp(top - peak);
+      const float r1 = precise::exp(ptop - peak);
+      mass = mass * r0 + pmass * r1;
+      for (uint u = 0; u < 4u; ++u) acc[u] = acc[u] * r0 + r1 * pv[s][u];
+      top = peak;
+    }
+    for (uint u = 0; u < 4u; ++u) {
+      const uint idx = h * D + lane + 32u * u;
+      O[idx] = (acc[u] / mass) / (1.0f + precise::exp(-GATE[idx]));
+    }
+    return;
+  }
+  const uint D = a.dim, S = a.splits, per = max(1u, D / 32u);
+  float top = 0.0f, mass = 1.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+  for (uint s = 0; s < S; ++s) {
+    const size_t base = ((size_t)h * S + s) * (D + 2u);
+    const float ptop = PART[base];
+    const float pmass = PART[base + 1u];
+    if (pmass == 0.0f) continue;
+    const float peak = max(top, ptop);
+    const float r0 = precise::exp(top - peak);
+    const float r1 = precise::exp(ptop - peak);
+    mass = mass * r0 + pmass * r1;
+    for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) acc[u] = acc[u] * r0 + r1 * PART[base + 2u + lane + 32u * u];
+    top = peak;
+  }
+  for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) {
+    const uint idx = h * D + lane + 32u * u;
+    O[idx] = (acc[u] / mass) / (1.0f + precise::exp(-GATE[idx]));
+  }
+}
+
 struct i2_mix_args { uint width, depth, k, rows; float scale; };
 
 // A token's depth mix for up to four queries over up to five states, one threadgroup of 256 a row: every query and
@@ -455,7 +518,68 @@ template <uint C>
 }
 
 template [[host_name("i2_controls_apply")]] [[kernel]] void i2_controls_apply_cols<1>(I2_CONTROLS_APPLY_ARGS);
-template [[host_name("i2_controls_apply_rows")]] [[kernel]] void i2_controls_apply_cols<0>(I2_CONTROLS_APPLY_ARGS);
+
+[[kernel]] void i2_controls_apply_rows(I2_CONTROLS_APPLY_ARGS) {
+  const uint col = group.x * 8u + tid / 32u, lane = tid % 32u, j = group.z, rows = a.rows;
+  if (a.rank <= 64u && rows <= 16u) {
+    threadgroup float xs[16][64];
+    const device float* xb = X + size_t(j) * rows * a.rank;
+    const uint total = rows * a.rank;
+    for (uint i = tid; i < total; i += 256u) xs[i / a.rank][i % a.rank] = xb[i];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (col >= a.h) return;
+    const device float* wg = (j == 0u ? G0 : j == 1u ? G1 : G2) + size_t(col) * a.rank;
+    const device float* wf = (j == 0u ? F0 : j == 1u ? F1 : F2) + size_t(col) * a.rank;
+    const device float* cb = j == 0u ? C0 : j == 1u ? C1 : C2;
+    device float* ob = j == 0u ? O0 : j == 1u ? O1 : O2;
+    float g[16], f[16];
+    for (uint r = 0u; r < rows; ++r) { g[r] = 0.0f; f[r] = 0.0f; }
+    for (uint k = lane; k < a.rank; k += 32u) {
+      const float gw = wg[k], fw = wf[k];
+      for (uint r = 0u; r < rows; ++r) {
+        const float xv = xs[r][k];
+        g[r] = fma(xv, gw, g[r]);
+        f[r] = fma(xv, fw, f[r]);
+      }
+    }
+    for (uint r = 0u; r < rows; ++r) {
+      const float gs = simd_sum(g[r]), fs = simd_sum(f[r]);
+      if (lane == 0u) {
+        const float cv = cb[size_t(a.xb[j] + r * a.xs[j]) * a.h + col];
+        const float mv = MSG[size_t(a.msg0 + j + r * 4u) * a.h + col];
+        ob[size_t(r) * a.h + col] = cv - precise::tanh(fs) * cv + precise::tanh(gs) * mv;
+      }
+    }
+    return;
+  }
+  if (col >= a.h) return;
+  const device float* wg = (j == 0u ? G0 : j == 1u ? G1 : G2) + size_t(col) * a.rank;
+  const device float* wf = (j == 0u ? F0 : j == 1u ? F1 : F2) + size_t(col) * a.rank;
+  const device float* cb = j == 0u ? C0 : j == 1u ? C1 : C2;
+  device float* ob = j == 0u ? O0 : j == 1u ? O1 : O2;
+  for (uint r = 0u; r < rows; ++r) {
+    const device float* x = X + (size_t(j) * rows + r) * a.rank;
+    float g = 0.0f, f = 0.0f;
+    uint base = 0u;
+    for (; base + 128u <= a.rank; base += 128u) {
+      const uint k = base + lane * 4u;
+      const float4 xv = float4(*reinterpret_cast<const device packed_float4*>(x + k));
+      const float4 gv = float4(*reinterpret_cast<const device packed_float4*>(wg + k));
+      const float4 fv = float4(*reinterpret_cast<const device packed_float4*>(wf + k));
+      g = fma(xv.x, gv.x, g); g = fma(xv.y, gv.y, g); g = fma(xv.z, gv.z, g); g = fma(xv.w, gv.w, g);
+      f = fma(xv.x, fv.x, f); f = fma(xv.y, fv.y, f); f = fma(xv.z, fv.z, f); f = fma(xv.w, fv.w, f);
+    }
+    for (uint k = base + lane; k < a.rank; k += 32u) {
+      g = fma(x[k], wg[k], g); f = fma(x[k], wf[k], f);
+    }
+    g = simd_sum(g); f = simd_sum(f);
+    if (lane == 0u) {
+      const float cv = cb[size_t(a.xb[j] + r * a.xs[j]) * a.h + col];
+      const float mv = MSG[size_t(a.msg0 + j + r * 4u) * a.h + col];
+      ob[size_t(r) * a.h + col] = cv - precise::tanh(f) * cv + precise::tanh(g) * mv;
+    }
+  }
+}
 
 struct i2_qkv_args { uint kv, heads, dim, rel, extent, layout, dyn, tau; float norm, q_threshold, rel_threshold, eps, floor, alpha; };
 

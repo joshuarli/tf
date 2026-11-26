@@ -878,7 +878,8 @@ struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; 
 inline float i2p_e4m3(uchar c) {
   if ((c & 127u) == 127u) return NAN;
   const uint e = (uint(c) >> 3) & 15u, man = uint(c) & 7u;
-  const float v = e ? (1.0f + float(man) * 0.125f) * exp2(float(int(e) - 7)) : float(man) * (1.0f / 512.0f);
+  if (e != 0u) return as_type<float>(((uint(c) & 128u) << 24u) | ((e + 120u) << 23u) | (man << 20u));
+  const float v = float(man) * (1.0f / 512.0f);
   return (c & 128u) ? -v : v;
 }
 

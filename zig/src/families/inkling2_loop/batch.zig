@@ -10,6 +10,7 @@ pub const BatchScratch = struct {
     parts: mtl.Buffer,
     split: mtl.Pipeline,
     combine: mtl.Pipeline,
+    combine_sig_mul: mtl.Pipeline,
     controls_norm: mtl.Pipeline,
     controls_down: mtl.Pipeline,
     controls_apply: mtl.Pipeline,
@@ -41,6 +42,8 @@ pub const BatchScratch = struct {
         errdefer split.deinit();
         const combine = try mtl.Pipeline.init(device, lib, "i2_batch_combine", false);
         errdefer combine.deinit();
+        const combine_sig_mul = try mtl.Pipeline.init(device, lib, "i2_batch_combine_sig_mul", false);
+        errdefer combine_sig_mul.deinit();
         const controls_norm = try mtl.Pipeline.init(device, lib, "i2_controls_norm", false);
         errdefer controls_norm.deinit();
         const controls_down = try mtl.Pipeline.init(device, lib, "i2_controls_down", false);
@@ -56,7 +59,7 @@ pub const BatchScratch = struct {
         const controls_cols = try mtl.Pipeline.init(device, lib, "i2_controls_apply_rows", false);
         errdefer controls_cols.deinit();
         const shared = try @import("rows.zig").Pipes.init(device);
-        return .{ .rows = rows, .decode = decode, .parts = parts, .split = split, .combine = combine, .controls_norm = controls_norm, .controls_down = controls_down, .controls_apply = controls_apply, .mix = mix, .mix4 = mix4, .qkv = qkv, .controls_cols = controls_cols, .shared = shared, .controls_input = controls_input, .controls_hidden = controls_hidden };
+        return .{ .rows = rows, .decode = decode, .parts = parts, .split = split, .combine = combine, .combine_sig_mul = combine_sig_mul, .controls_norm = controls_norm, .controls_down = controls_down, .controls_apply = controls_apply, .mix = mix, .mix4 = mix4, .qkv = qkv, .controls_cols = controls_cols, .shared = shared, .controls_input = controls_input, .controls_hidden = controls_hidden };
     }
 
     pub fn deinit(s: *BatchScratch) void {
@@ -70,6 +73,7 @@ pub const BatchScratch = struct {
         s.controls_norm.deinit();
         s.controls_hidden.deinit();
         s.controls_input.deinit();
+        s.combine_sig_mul.deinit();
         s.combine.deinit();
         s.split.deinit();
         s.parts.deinit();

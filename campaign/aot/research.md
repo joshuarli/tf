@@ -1,7 +1,7 @@
 # A1 (5i) Research Ledger: Ahead-of-Time Compiled Inkling 2 Mini on Apple M5 Max
 
-**Lane:** `lane/inkling-metal-aot` (`eb18fe252`)  
-**Target checkpoint:** `~/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd` (plus `~/models/Inkling-2-Mini-DFlash2@4f9088ea66c2`)  
+**Lane:** `lane/inkling-metal-aot` (`eb18fe252`)
+**Target checkpoint:** `~/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd` (plus `~/models/Inkling-2-Mini-DFlash2@4f9088ea66c2`)
 **Host / Toolchain:** Apple M5 Max (40 GPU cores, 48 GiB), macOS `27.2` (`26B123`), Xcode `27.2` (`27B52`), Metal `32023.922` (`metalfe-32023.922.4`, toolchain `27.2.47.0`), Zig `0.17.1`
 
 ## Executive Verdict

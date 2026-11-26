@@ -1,6 +1,6 @@
 # A1 (5i) TensorFold Specialization Inventory: Inkling 2 Mini oQ4e
 
-**Lane:** `lane/inkling-metal-aot` (`eb18fe252`)  
+**Lane:** `lane/inkling-metal-aot` (`eb18fe252`)
 **Primary Sources:** `zig/src/families/inkling2_loop/*.zig`, `zig/src/families/inkling2_loop/kernels/*.metal`, `zig/src/families/inkling2/config.zig`, `zig/src/native/inkling2_loop*.zig`, `zig/build/inkling2_loop.zig`, `~/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd/{config.json,model.safetensors.index.json}`, `~/models/Inkling-2-Mini-DFlash2@4f9088ea66c2/config.json`
 
 ---

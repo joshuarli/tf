@@ -24,12 +24,16 @@ const DecodeParts = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, ext
 const BatchRow = extern struct { keys: u64, values: u64, args: DecodeParts };
 const AffineDenseA = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32, bits: u32, cap: f32 };
 const DecodeConvA = extern struct { channels: u32, heads: u32, ring: u32, pos: u32, layout: u32, norm: f32, residual: u32, topk: u32 = 0 };
+const QkvPermA = extern struct { kv: u32, heads: u32, dim: u32, rel: u32, extent: u32, layout: u32, dyn: u32, tau: u32, kv_stride_rows: u32, kv_row: u32, norm: f32, q_threshold: f32, rel_threshold: f32, eps: f32, floor: f32, alpha: f32 };
+const SplitPermRow = extern struct { keys: u64, values: u64, args: DecodeParts, kv_stride_rows: u32, pad: u32 = 0 };
 const ConvRow = extern struct { ring: u64, pos: u32, pad: u32 = 0 };
 const ScatterA = extern struct { width: u32, stride: u32, slot: u32 };
 const AffineBatchCtlA = extern struct { k: u32, m0: u32, m1: u32, h: u32, cxs: u32, cxb: u32, mxs: u32, mxb: u32, ys: u32, yb: u32 };
 const PickA = extern struct { experts: u32, topk: u32, rows: u32, route_scale: f32 };
 const MoeBA = extern struct { k: u32, n: u32, slots: u32, topk: u32, gate_cap: f32, up_cap: f32 };
 const ArgmaxA = extern struct { vocab: u32 };
+const Argmax2A = extern struct { vocab: u32, step_idx: u32, stop_token: u32, write_loop: u32 };
+pub const LoopCtrl = extern struct { cancelled: u32 = 0, stopped: u32 = 0, produced: u32 = 0, pad: u32 = 0 };
 
 pub const Pipes = struct {
     embed: mtl.Pipeline,
@@ -59,37 +63,80 @@ pub const Pipes = struct {
     batch_mix: mtl.Pipeline,
     batch_mix2: mtl.Pipeline,
     down1_nv: mtl.Pipeline,
+    aot_embed_sb: ?mtl.Pipeline = null,
+    aot_dense8_sb: ?mtl.Pipeline = null,
+    aot_batch_proj8_sb: ?mtl.Pipeline = null,
+    aot_expert_up4_sb: ?mtl.Pipeline = null,
+    aot_expert_down4_sb: ?mtl.Pipeline = null,
+    aot_combine_sig_mul: ?mtl.Pipeline = null,
+    aot_gu_nv: ?mtl.Pipeline = null,
+    aot_down1_nv: ?mtl.Pipeline = null,
+    aot_mix2_inv: ?mtl.Pipeline = null,
+    aot_mix_inv: ?mtl.Pipeline = null,
+    aot_ctl_down3: ?mtl.Pipeline = null,
+    aot_ctl_down1: ?mtl.Pipeline = null,
+    aot_ctl_apply3_gf2: ?mtl.Pipeline = null,
+    aot_ctl_apply1_gf2: ?mtl.Pipeline = null,
+    aot_gu_nv_packed: ?mtl.Pipeline = null,
+    aot_argmax_p1: ?mtl.Pipeline = null,
+    aot_argmax_p2: ?mtl.Pipeline = null,
+    aot_qkv_perm: ?mtl.Pipeline = null,
+    aot_split_perm: ?mtl.Pipeline = null,
 
-    pub fn load(device: mtl.Device, lib: mtl.Library, archive: ba.BinaryArchive) !Pipes {
-        return .{
-            .embed = try archive.loadPipeline(device, lib, "i2a_embed", true),
-            .batch_proj = try archive.loadPipeline(device, lib, "i2a_batch_projections", true),
-            .dense = try archive.loadPipeline(device, lib, "i2a_dense", true),
-            .float_mv = try archive.loadPipeline(device, lib, "i2a_float", true),
-            .batch_float_ctl = try archive.loadPipeline(device, lib, "i2a_batch_float_control", true),
-            .aff_up = try archive.loadPipeline(device, lib, "i2a_expert_up", true),
-            .aff_down = try archive.loadPipeline(device, lib, "i2a_expert_down", true),
-            .qkv = try archive.loadPipeline(device, lib, "i2_batch_qkv", true),
-            .split = try archive.loadPipeline(device, lib, "i2_batch_split", true),
-            .combine = try archive.loadPipeline(device, lib, "i2_batch_combine", true),
-            .ctl_norm = try archive.loadPipeline(device, lib, "i2_controls_norm", true),
-            .ctl_down = try archive.loadPipeline(device, lib, "i2_controls_down", true),
-            .ctl_apply = try archive.loadPipeline(device, lib, "i2_controls_apply", true),
-            .argmax = try archive.loadPipeline(device, lib, "i2v_argmax", true),
-            .copy = try archive.loadPipeline(device, lib, "i2_copy", true),
-            .sig_mul = try archive.loadPipeline(device, lib, "i2_sig_mul", true),
-            .pass_copy = try archive.loadPipeline(device, lib, "i2p_pass_copy", true),
-            .rms = try archive.loadPipeline(device, lib, "i2p_rms", true),
-            .rms3 = try archive.loadPipeline(device, lib, "i2p_rms3", true),
-            .rms_pair = try archive.loadPipeline(device, lib, "i2p_rms_pair", true),
-            .batch_conv = try archive.loadPipeline(device, lib, "i2p_batch_conv", true),
-            .scatter = try archive.loadPipeline(device, lib, "i2p_scatter", true),
-            .routepick = try archive.loadPipeline(device, lib, "i2p_routepick", true),
-            .gu_nv = try archive.loadPipeline(device, lib, "i2p_gu", true),
-            .batch_mix = try archive.loadPipeline(device, lib, "i2pr_batch_mix", true),
-            .batch_mix2 = try archive.loadPipeline(device, lib, "i2pr_batch_mix2", true),
-            .down1_nv = try archive.loadPipeline(device, lib, "i2e_down1", true),
+    pub fn load(device: mtl.Device, lib: mtl.Library, archive: ba.BinaryArchive, layout_flags: u32) !Pipes {
+        const ind = (layout_flags & fmt.layout_non_indirect) == 0;
+        const has_fused = (layout_flags & fmt.layout_fused_kernels) != 0;
+        var res = Pipes{
+            .embed = try archive.loadPipeline(device, lib, "i2a_embed", ind),
+            .batch_proj = try archive.loadPipeline(device, lib, "i2a_batch_projections", ind),
+            .dense = try archive.loadPipeline(device, lib, "i2a_dense", ind),
+            .float_mv = try archive.loadPipeline(device, lib, "i2a_float", ind),
+            .batch_float_ctl = try archive.loadPipeline(device, lib, "i2a_batch_float_control", ind),
+            .aff_up = try archive.loadPipeline(device, lib, "i2a_expert_up", ind),
+            .aff_down = try archive.loadPipeline(device, lib, "i2a_expert_down", ind),
+            .qkv = try archive.loadPipeline(device, lib, "i2_batch_qkv", ind),
+            .split = try archive.loadPipeline(device, lib, "i2_batch_split", ind),
+            .combine = try archive.loadPipeline(device, lib, "i2_batch_combine", ind),
+            .ctl_norm = try archive.loadPipeline(device, lib, "i2_controls_norm", ind),
+            .ctl_down = try archive.loadPipeline(device, lib, "i2_controls_down", ind),
+            .ctl_apply = try archive.loadPipeline(device, lib, "i2_controls_apply", ind),
+            .argmax = try archive.loadPipeline(device, lib, "i2v_argmax", ind),
+            .copy = try archive.loadPipeline(device, lib, "i2_copy", ind),
+            .sig_mul = try archive.loadPipeline(device, lib, "i2_sig_mul", ind),
+            .pass_copy = try archive.loadPipeline(device, lib, "i2p_pass_copy", ind),
+            .rms = try archive.loadPipeline(device, lib, "i2p_rms", ind),
+            .rms3 = try archive.loadPipeline(device, lib, "i2p_rms3", ind),
+            .rms_pair = try archive.loadPipeline(device, lib, "i2p_rms_pair", ind),
+            .batch_conv = try archive.loadPipeline(device, lib, "i2p_batch_conv", ind),
+            .scatter = try archive.loadPipeline(device, lib, "i2p_scatter", ind),
+            .routepick = try archive.loadPipeline(device, lib, "i2p_routepick", ind),
+            .gu_nv = try archive.loadPipeline(device, lib, "i2p_gu", ind),
+            .batch_mix = try archive.loadPipeline(device, lib, "i2pr_batch_mix", ind),
+            .batch_mix2 = try archive.loadPipeline(device, lib, "i2pr_batch_mix2", ind),
+            .down1_nv = try archive.loadPipeline(device, lib, "i2e_down1", ind),
         };
+        if (has_fused) {
+            res.aot_embed_sb = try archive.loadPipeline(device, lib, "i2_aot_embed_sb", ind);
+            res.aot_dense8_sb = try archive.loadPipeline(device, lib, "i2_aot_dense8_sb", ind);
+            res.aot_batch_proj8_sb = try archive.loadPipeline(device, lib, "i2_aot_batch_proj8_sb", ind);
+            res.aot_expert_up4_sb = try archive.loadPipeline(device, lib, "i2_aot_expert_up4_sb", ind);
+            res.aot_expert_down4_sb = try archive.loadPipeline(device, lib, "i2_aot_expert_down4_sb", ind);
+            res.aot_combine_sig_mul = try archive.loadPipeline(device, lib, "i2_aot_combine_sig_mul", ind);
+            res.aot_gu_nv = try archive.loadPipeline(device, lib, "i2_aot_gu_nv", ind);
+            res.aot_down1_nv = try archive.loadPipeline(device, lib, "i2_aot_down1_nv", ind);
+            res.aot_mix2_inv = try archive.loadPipeline(device, lib, "i2_aot_mix2_inv", ind);
+            res.aot_mix_inv = try archive.loadPipeline(device, lib, "i2_aot_mix_inv", ind);
+            res.aot_ctl_down3 = try archive.loadPipeline(device, lib, "i2_aot_ctl_down3", ind);
+            res.aot_ctl_down1 = try archive.loadPipeline(device, lib, "i2_aot_ctl_down1", ind);
+            res.aot_ctl_apply3_gf2 = try archive.loadPipeline(device, lib, "i2_aot_ctl_apply3_gf2", ind);
+            res.aot_ctl_apply1_gf2 = try archive.loadPipeline(device, lib, "i2_aot_ctl_apply1_gf2", ind);
+            res.aot_gu_nv_packed = try archive.loadPipeline(device, lib, "i2_aot_gu_nv_packed", ind);
+            res.aot_argmax_p1 = try archive.loadPipeline(device, lib, "i2_aot_argmax_p1", ind);
+            res.aot_argmax_p2 = try archive.loadPipeline(device, lib, "i2_aot_argmax_p2", ind);
+            res.aot_qkv_perm = try archive.loadPipeline(device, lib, "i2_aot_qkv_perm", ind);
+            res.aot_split_perm = try archive.loadPipeline(device, lib, "i2_aot_split_perm", ind);
+        }
+        return res;
     }
 
     pub fn deinit(p: *Pipes) void {
@@ -120,6 +167,25 @@ pub const Pipes = struct {
         p.batch_mix.deinit();
         p.batch_mix2.deinit();
         p.down1_nv.deinit();
+        if (p.aot_embed_sb) |x| x.deinit();
+        if (p.aot_dense8_sb) |x| x.deinit();
+        if (p.aot_batch_proj8_sb) |x| x.deinit();
+        if (p.aot_expert_up4_sb) |x| x.deinit();
+        if (p.aot_expert_down4_sb) |x| x.deinit();
+        if (p.aot_combine_sig_mul) |x| x.deinit();
+        if (p.aot_gu_nv) |x| x.deinit();
+        if (p.aot_down1_nv) |x| x.deinit();
+        if (p.aot_mix2_inv) |x| x.deinit();
+        if (p.aot_mix_inv) |x| x.deinit();
+        if (p.aot_ctl_down3) |x| x.deinit();
+        if (p.aot_ctl_down1) |x| x.deinit();
+        if (p.aot_ctl_apply3_gf2) |x| x.deinit();
+        if (p.aot_ctl_apply1_gf2) |x| x.deinit();
+        if (p.aot_gu_nv_packed) |x| x.deinit();
+        if (p.aot_argmax_p1) |x| x.deinit();
+        if (p.aot_argmax_p2) |x| x.deinit();
+        if (p.aot_qkv_perm) |x| x.deinit();
+        if (p.aot_split_perm) |x| x.deinit();
     }
 };
 
@@ -165,39 +231,13 @@ fn sha256File(io: std.Io, path: []const u8) !struct { size: u64, digest: [32]u8 
     return .{ .size = total, .digest = hasher.finalResult() };
 }
 
-const max_weight_chunks = 8;
-const max_chunk_bytes: u64 = 3_500_000_000;
+const max_weight_chunks = fmt.max_weight_chunks;
 
 const WeightChunk = struct {
     buf: mtl.Buffer,
     start: u64,
     end: u64,
 };
-
-const ChunkPlan = struct {
-    starts: [max_weight_chunks]u64 = @splat(0),
-    ends: [max_weight_chunks]u64 = @splat(0),
-    count: usize = 0,
-};
-
-fn planWeightChunks(sched: *const fmt.Schedule) ChunkPlan {
-    var plan = ChunkPlan{};
-    var cur_start: u64 = 0;
-    for (0..fmt.num_layers) |li| {
-        const layer_start = sched.layers[li].q_norm.off;
-        const layer_end = if (li + 1 < fmt.num_layers) sched.layers[li + 1].q_norm.off else sched.weights_size;
-        if (layer_end - cur_start > max_chunk_bytes and layer_start > cur_start) {
-            plan.starts[plan.count] = cur_start;
-            plan.ends[plan.count] = layer_start;
-            plan.count += 1;
-            cur_start = layer_start;
-        }
-    }
-    plan.starts[plan.count] = cur_start;
-    plan.ends[plan.count] = sched.weights_size;
-    plan.count += 1;
-    return plan;
-}
 
 fn loadWeightsPreadChunks(device: mtl.Device, path: [:0]const u8, sched: *const fmt.Schedule, chunks: *[max_weight_chunks]WeightChunk) !usize {
     const fd = std.c.open(path.ptr, .{ .ACCMODE = .RDONLY });
@@ -207,11 +247,62 @@ fn loadWeightsPreadChunks(device: mtl.Device, path: [:0]const u8, sched: *const 
     const end = std.c.lseek(fd, 0, std.c.SEEK.END);
     if (end < 0 or @as(u64, @intCast(end)) != sched.weights_size) return error.SizeMismatch;
 
-    const plan = planWeightChunks(sched);
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    const plan = fmt.planWeightChunks(sched);
     var loaded: usize = 0;
     errdefer for (0..loaded) |i| chunks[i].buf.deinit();
 
+    if (sched.chunk_count == plan.count and plan.count > 0) {
+        for (0..plan.count) |ci| {
+            const cs = sched.chunk_starts[ci];
+            const ce = sched.chunk_ends[ci];
+            if (cs != plan.starts[ci] or ce != plan.ends[ci]) return error.CorruptArtifact;
+            const clen: usize = @intCast(ce - cs);
+            const buf = try device.buffer(clen, mtl.ResourceOptions.shared | mtl.ResourceOptions.untracked);
+            chunks[ci] = .{ .buf = buf, .start = cs, .end = ce };
+            loaded += 1;
+        }
+        const Ctx = struct {
+            fd: std.c.fd_t,
+            dst: []u8,
+            start: u64,
+            expected: [32]u8,
+            err: ?anyerror = null,
+            fn run(ctx: *@This()) void {
+                var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                var off: usize = 0;
+                while (off < ctx.dst.len) {
+                    const want = @min(ctx.dst.len - off, 16 << 20);
+                    const got = std.c.pread(ctx.fd, ctx.dst.ptr + off, want, @intCast(ctx.start + off));
+                    if (got <= 0) {
+                        ctx.err = error.CorruptArtifact;
+                        return;
+                    }
+                    const n: usize = @intCast(got);
+                    hasher.update(ctx.dst[off .. off + n]);
+                    off += n;
+                }
+                const actual = hasher.finalResult();
+                if (!std.mem.eql(u8, &actual, &ctx.expected)) ctx.err = error.DigestMismatch;
+            }
+        };
+        var ctxs: [max_weight_chunks]Ctx = undefined;
+        var threads: [max_weight_chunks]std.Thread = undefined;
+        for (0..plan.count) |ci| {
+            const clen: usize = @intCast(chunks[ci].end - chunks[ci].start);
+            ctxs[ci] = .{
+                .fd = fd,
+                .dst = chunks[ci].buf.contents()[0..clen],
+                .start = chunks[ci].start,
+                .expected = sched.chunk_sha256[ci],
+            };
+            threads[ci] = try std.Thread.spawn(.{}, Ctx.run, .{&ctxs[ci]});
+        }
+        for (0..plan.count) |ci| threads[ci].join();
+        for (0..plan.count) |ci| if (ctxs[ci].err) |e| return e;
+        return loaded;
+    }
+
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     for (0..plan.count) |ci| {
         const cs = plan.starts[ci];
         const ce = plan.ends[ci];
@@ -238,7 +329,7 @@ fn loadWeightsPreadChunks(device: mtl.Device, path: [:0]const u8, sched: *const 
 
 fn loadWeightsMmapChunks(device: mtl.Device, map: mtl.MappedFile, sched: *const fmt.Schedule, chunks: *[max_weight_chunks]WeightChunk) !usize {
     const page: u64 = std.heap.pageSize();
-    const plan = planWeightChunks(sched);
+    const plan = fmt.planWeightChunks(sched);
     var loaded: usize = 0;
     errdefer for (0..loaded) |i| chunks[i].buf.deinit();
 
@@ -314,7 +405,13 @@ pub const Runtime = struct {
     parts: mtl.Buffer,
     ctl_in: mtl.Buffer,
     ctl_hid: mtl.Buffer,
+    ctl_inv: mtl.Buffer,
     argmax_out: mtl.Buffer,
+    argmax_tmp_v: mtl.Buffer,
+    argmax_tmp_i: mtl.Buffer,
+    token_ring: mtl.Buffer,
+    loop_ctrl: mtl.Buffer,
+    opt_mask: u32 = 0,
 
     param_arena: mtl.Buffer,
     icb_pre: ?mtl.IndirectCommandBuffer = null,
@@ -333,6 +430,7 @@ pub const Runtime = struct {
         use_mmap: bool = false,
         device_arch_override: ?[]const u8 = null,
         verify_only: bool = false,
+        opt_mask: u32 = 0,
     };
 
     pub fn open(gpa: std.mem.Allocator, io: std.Io, bundle_dir: []const u8, opts: OpenOpts) !*Runtime {
@@ -412,7 +510,7 @@ pub const Runtime = struct {
         defer lib.deinit();
         const archive = try ba.BinaryArchive.open(device, archive_path);
         defer archive.deinit();
-        var pipes = try Pipes.load(device, lib, archive);
+        var pipes = try Pipes.load(device, lib, archive, sched.layout_flags);
         errdefer pipes.deinit();
         const t_pipes = std.Io.Clock.awake.now(io).toNanoseconds();
 
@@ -496,7 +594,13 @@ pub const Runtime = struct {
             .parts = try device.buffer(g.heads * attn_splits * (g.head_dim + 2) * 4, priv),
             .ctl_in = try device.buffer(3 * 2 * h * 4, priv),
             .ctl_hid = try device.buffer(3 * g.gate_rank * 4, priv),
+            .ctl_inv = try device.buffer(16 * 4, priv),
             .argmax_out = try device.buffer(16 * 4, shr),
+            .argmax_tmp_v = try device.buffer(128 * 4, priv),
+            .argmax_tmp_i = try device.buffer(128 * 4, priv),
+            .token_ring = try device.buffer(64 * 4, shr),
+            .loop_ctrl = try device.buffer(@sizeOf(LoopCtrl), shr),
+            .opt_mask = opts.opt_mask,
             .param_arena = try device.buffer(256 * 1024, shr),
         };
 
@@ -531,7 +635,8 @@ pub const Runtime = struct {
             rt.q, rt.k, rt.v, rt.r, rt.kc, rt.vc, rt.kdyn, rt.vdyn, rt.sink, rt.relbias,
             rt.attn, rt.gate, rt.projout, rt.o, rt.aconv, rt.moe, rt.blocks, rt.mixout,
             rt.msg, rt.h2in, rt.normed, rt.router, rt.picks, rt.wts, rt.act, rt.down,
-            rt.logits, rt.parts, rt.ctl_in, rt.ctl_hid, rt.argmax_out, rt.param_arena,
+            rt.logits, rt.parts, rt.ctl_in, rt.ctl_hid, rt.ctl_inv, rt.argmax_out,
+            rt.argmax_tmp_v, rt.argmax_tmp_i, rt.token_ring, rt.loop_ctrl, rt.param_arena,
         };
         for (bufs) |b| rs.add(b);
     }
@@ -562,7 +667,8 @@ pub const Runtime = struct {
             rt.q, rt.k, rt.v, rt.r, rt.kc, rt.vc, rt.kdyn, rt.vdyn, rt.sink, rt.relbias,
             rt.attn, rt.gate, rt.projout, rt.o, rt.aconv, rt.moe, rt.blocks, rt.mixout,
             rt.msg, rt.h2in, rt.normed, rt.router, rt.picks, rt.wts, rt.act, rt.down,
-            rt.logits, rt.parts, rt.ctl_in, rt.ctl_hid, rt.argmax_out, rt.param_arena,
+            rt.logits, rt.parts, rt.ctl_in, rt.ctl_hid, rt.ctl_inv, rt.argmax_out,
+            rt.argmax_tmp_v, rt.argmax_tmp_i, rt.token_ring, rt.loop_ctrl, rt.param_arena,
         };
         for (bufs) |b| b.deinit();
         rt.pipes.deinit();
@@ -575,6 +681,65 @@ pub const Runtime = struct {
 
     pub fn reset(rt: *Runtime) void {
         rt.len = 0;
+    }
+
+    pub const StateSnapshot = struct {
+        len: usize,
+        keys: mtl.Buffer,
+        values: mtl.Buffer,
+        k_conv: mtl.Buffer,
+        v_conv: mtl.Buffer,
+        attn_conv: mtl.Buffer,
+        mlp_conv: mtl.Buffer,
+
+        pub fn deinit(s: StateSnapshot) void {
+            s.keys.deinit();
+            s.values.deinit();
+            s.k_conv.deinit();
+            s.v_conv.deinit();
+            s.attn_conv.deinit();
+            s.mlp_conv.deinit();
+        }
+    };
+
+    pub fn snapshotState(rt: *Runtime) !StateSnapshot {
+        const priv = mtl.ResourceOptions.private;
+        const s = StateSnapshot{
+            .len = rt.len,
+            .keys = try rt.device.buffer(rt.keys.length(), priv),
+            .values = try rt.device.buffer(rt.values.length(), priv),
+            .k_conv = try rt.device.buffer(rt.k_conv.length(), priv),
+            .v_conv = try rt.device.buffer(rt.v_conv.length(), priv),
+            .attn_conv = try rt.device.buffer(rt.attn_conv.length(), priv),
+            .mlp_conv = try rt.device.buffer(rt.mlp_conv.length(), priv),
+        };
+        const cb = rt.queue.commandBuffer();
+        const bl = cb.blit();
+        bl.copy(rt.keys, 0, s.keys, 0, rt.keys.length());
+        bl.copy(rt.values, 0, s.values, 0, rt.values.length());
+        bl.copy(rt.k_conv, 0, s.k_conv, 0, rt.k_conv.length());
+        bl.copy(rt.v_conv, 0, s.v_conv, 0, rt.v_conv.length());
+        bl.copy(rt.attn_conv, 0, s.attn_conv, 0, rt.attn_conv.length());
+        bl.copy(rt.mlp_conv, 0, s.mlp_conv, 0, rt.mlp_conv.length());
+        bl.end();
+        cb.commit();
+        cb.wait();
+        return s;
+    }
+
+    pub fn restoreState(rt: *Runtime, s: StateSnapshot) void {
+        rt.len = s.len;
+        const cb = rt.queue.commandBuffer();
+        const bl = cb.blit();
+        bl.copy(s.keys, 0, rt.keys, 0, rt.keys.length());
+        bl.copy(s.values, 0, rt.values, 0, rt.values.length());
+        bl.copy(s.k_conv, 0, rt.k_conv, 0, rt.k_conv.length());
+        bl.copy(s.v_conv, 0, rt.v_conv, 0, rt.v_conv.length());
+        bl.copy(s.attn_conv, 0, rt.attn_conv, 0, rt.attn_conv.length());
+        bl.copy(s.mlp_conv, 0, rt.mlp_conv, 0, rt.mlp_conv.length());
+        bl.end();
+        cb.commit();
+        cb.wait();
     }
 
     inline fn kvRowAddr(rt: *const Runtime, base_buf: mtl.Buffer, slot: u32, pos: usize) u64 {
@@ -596,14 +761,17 @@ pub const Runtime = struct {
         return base_buf.gpuAddress() + @as(usize, slot) * conv_ring * channels * 4;
     }
 
-    pub fn stepDirect(rt: *Runtime, token_id: u32, want_logits: bool, gpu_argmax: bool) !StepStats {
-        if (rt.len >= rt.capacity) return error.ContextFull;
-        const t0 = nowNs();
-        const pool = mtl.objc.Pool.push();
-        defer pool.pop();
-
-        rt.ids.slice(u32, 1)[0] = token_id;
-        const pos: u32 = @intCast(rt.len);
+    fn encodeStepBody(
+        rt: *Runtime,
+        cb0: *mtl.CommandBuffer,
+        enc: *mtl.ComputeEncoder,
+        cb_first: *?mtl.CommandBuffer,
+        pos: u32,
+        want_logits: bool,
+        gpu_argmax: bool,
+        ring_slot: ?u32,
+        stop_token: u32,
+    ) u32 {
         const g = rt.sched.geom;
         const h: u32 = g.hidden;
         const qw: u32 = g.heads * g.head_dim;
@@ -613,20 +781,36 @@ pub const Runtime = struct {
         const scale_attn: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(g.head_dim)));
         const norm_post: f32 = 1.0 / @sqrt(@as(f32, 5.0));
 
-        var cb0 = rt.queue.commandBuffer();
-        var enc = cb0.compute(.serial);
-        var cb_first: ?mtl.CommandBuffer = null;
+        const use_sb = (rt.sched.layout_flags & fmt.layout_interleaved_sb) != 0 and p.aot_dense8_sb != null;
+        const use_packed_w13_gf = (rt.sched.layout_flags & fmt.layout_packed_w13_gf) != 0 and p.aot_gu_nv_packed != null and p.aot_ctl_apply3_gf2 != null;
+        const opt = rt.opt_mask;
+        const opt_d1 = (opt & 1) != 0 and p.aot_combine_sig_mul != null;
+        const opt_d2 = ((opt & 2) != 0 or use_packed_w13_gf) and p.aot_gu_nv != null and (rt.sched.layout_flags & fmt.layout_predivided_nvfp4) != 0;
+        const opt_d3 = (opt & 4) != 0 and p.aot_ctl_down3 != null;
+        const opt_d9 = (opt & 256) != 0 and p.aot_qkv_perm != null and p.aot_split_perm != null;
+
         var dispatches: u32 = 0;
 
-        enc.setPipeline(p.embed);
-        enc.setBuffer(rt.ids, 0, 0);
-        rt.setW(enc, @intCast(rt.sched.globals.embed.w.off), 1);
-        rt.setW(enc, @intCast(rt.sched.globals.embed.s.off), 2);
-        rt.setW(enc, @intCast(rt.sched.globals.embed.b.off), 3);
-        rt.setW(enc, @intCast(rt.sched.globals.embed_norm.off), 4);
-        enc.setValue(EmbedA{ .width = h, .rows = 1, .eps = g.eps }, 5);
-        enc.setBuffer(rt.x, 0, 6);
-        enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
+        if (use_sb) {
+            enc.setPipeline(p.aot_embed_sb.?);
+            enc.setBuffer(rt.ids, 0, 0);
+            rt.setW(enc.*, @intCast(rt.sched.globals.embed.w.off), 1);
+            rt.setW(enc.*, @intCast(rt.sched.globals.embed.sb.off), 2);
+            rt.setW(enc.*, @intCast(rt.sched.globals.embed_norm.off), 3);
+            enc.setValue(EmbedA{ .width = h, .rows = 1, .eps = g.eps }, 4);
+            enc.setBuffer(rt.x, 0, 5);
+            enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
+        } else {
+            enc.setPipeline(p.embed);
+            enc.setBuffer(rt.ids, 0, 0);
+            rt.setW(enc.*, @intCast(rt.sched.globals.embed.w.off), 1);
+            rt.setW(enc.*, @intCast(rt.sched.globals.embed.s.off), 2);
+            rt.setW(enc.*, @intCast(rt.sched.globals.embed.b.off), 3);
+            rt.setW(enc.*, @intCast(rt.sched.globals.embed_norm.off), 4);
+            enc.setValue(EmbedA{ .width = h, .rows = 1, .eps = g.eps }, 5);
+            enc.setBuffer(rt.x, 0, 6);
+            enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
+        }
         dispatches += 1;
 
         for (rt.sched.slots) |sl| {
@@ -666,25 +850,6 @@ pub const Runtime = struct {
                         .{ .width = h, .depth = sl.block_count_before + 1, .stride = mix_states, .k = kq, .norm = 0, .scale = scale_h, .eps = g.eps },
                         .{ .width = h, .depth = sl.bank_n + 1, .stride = mix_states, .k = 4, .norm = 0, .scale = scale_h, .eps = g.eps },
                     };
-                    enc.setPipeline(p.batch_mix2);
-                    enc.setBuffer(rt.blocks, 0, 0);
-                    enc.setBuffer(rt.x, 0, 1);
-                    rt.setW(enc, q0_off, 2);
-                    rt.setW(enc, q1_off, 3);
-                    rt.setW(enc, q2_off, 4);
-                    rt.setW(enc, q0_off, 5);
-                    enc.setBuffer(rt.mixout, 0, 6);
-                    enc.setBuffer(rt.bank, 0, 7);
-                    enc.setBuffer(rt.passout, 0, 8);
-                    rt.setW(enc, @intCast(cpq + (at * 2) * h * 4), 9);
-                    rt.setW(enc, @intCast(cpkv + (at * 2) * h * 4), 10);
-                    rt.setW(enc, @intCast(cpkv + (at * 2 + 1) * h * 4), 11);
-                    rt.setW(enc, @intCast(cpq + (at * 2 + 1) * h * 4), 12);
-                    enc.setBuffer(rt.msg, 0, 13);
-                    enc.setBytes(std.mem.sliceAsBytes(&args2), 14);
-                    enc.dispatchGroups(mtl.Size.of(1, 2, 1), mtl.Size.of(256, 1, 1));
-                    dispatches += 1;
-
                     const ctl_args = ControlsArgs{
                         .h = h,
                         .rank = g.gate_rank,
@@ -692,52 +857,122 @@ pub const Runtime = struct {
                         .xs = .{ kq, kq, kq },
                         .xb = if (full) .{ 0, 1, 2 } else .{ 0, 0, 0 },
                     };
-                    enc.setPipeline(p.ctl_norm);
-                    enc.setBuffer(rt.mixout, 0, 0);
-                    enc.setBuffer(rt.mixout, 0, 1);
-                    enc.setBuffer(rt.mixout, 0, 2);
-                    enc.setBuffer(rt.msg, 0, 3);
-                    enc.setValue(ctl_args, 4);
-                    enc.setBuffer(rt.ctl_in, 0, 5);
-                    enc.dispatchGroups(mtl.Size.of(6, 1, 1), mtl.Size.of(256, 1, 1));
-                    dispatches += 1;
+                    if (opt_d3) {
+                        enc.setPipeline(p.aot_mix2_inv.?);
+                        enc.setBuffer(rt.blocks, 0, 0);
+                        enc.setBuffer(rt.x, 0, 1);
+                        rt.setW(enc.*, q0_off, 2);
+                        rt.setW(enc.*, q1_off, 3);
+                        rt.setW(enc.*, q2_off, 4);
+                        rt.setW(enc.*, q0_off, 5);
+                        enc.setBuffer(rt.mixout, 0, 6);
+                        enc.setBuffer(rt.bank, 0, 7);
+                        enc.setBuffer(rt.passout, 0, 8);
+                        rt.setW(enc.*, @intCast(cpq + (at * 2) * h * 4), 9);
+                        rt.setW(enc.*, @intCast(cpkv + (at * 2) * h * 4), 10);
+                        rt.setW(enc.*, @intCast(cpkv + (at * 2 + 1) * h * 4), 11);
+                        rt.setW(enc.*, @intCast(cpq + (at * 2 + 1) * h * 4), 12);
+                        enc.setBuffer(rt.msg, 0, 13);
+                        enc.setBytes(std.mem.sliceAsBytes(&args2), 14);
+                        enc.setBuffer(rt.ctl_inv, 0, 15);
+                        enc.dispatchGroups(mtl.Size.of(1, 2, 1), mtl.Size.of(256, 1, 1));
+                        dispatches += 1;
 
-                    enc.setPipeline(p.ctl_down);
-                    enc.setBuffer(rt.ctl_in, 0, 0);
-                    rt.setW(enc, @intCast(lay.controllers[0].down.off), 1);
-                    rt.setW(enc, @intCast(lay.controllers[1].down.off), 2);
-                    rt.setW(enc, @intCast(lay.controllers[2].down.off), 3);
-                    enc.setValue(ctl_args, 4);
-                    enc.setBuffer(rt.ctl_hid, 0, 5);
-                    enc.dispatchGroups(mtl.Size.of((g.gate_rank + 7) / 8, 1, 3), mtl.Size.of(256, 1, 1));
-                    dispatches += 1;
+                        enc.setPipeline(p.aot_ctl_down3.?);
+                        enc.setBuffer(rt.mixout, 0, 0);
+                        enc.setBuffer(rt.msg, 0, 1);
+                        enc.setBuffer(rt.ctl_inv, 0, 2);
+                        rt.setW(enc.*, @intCast(lay.controllers[0].down.off), 3);
+                        rt.setW(enc.*, @intCast(lay.controllers[1].down.off), 4);
+                        rt.setW(enc.*, @intCast(lay.controllers[2].down.off), 5);
+                        enc.setValue(ctl_args, 6);
+                        enc.setBuffer(rt.ctl_hid, 0, 7);
+                        enc.dispatchGroups(mtl.Size.of((g.gate_rank + 1) / 2, 1, 3), mtl.Size.of(64, 1, 1));
+                        dispatches += 1;
+                    } else {
+                        enc.setPipeline(p.batch_mix2);
+                        enc.setBuffer(rt.blocks, 0, 0);
+                        enc.setBuffer(rt.x, 0, 1);
+                        rt.setW(enc.*, q0_off, 2);
+                        rt.setW(enc.*, q1_off, 3);
+                        rt.setW(enc.*, q2_off, 4);
+                        rt.setW(enc.*, q0_off, 5);
+                        enc.setBuffer(rt.mixout, 0, 6);
+                        enc.setBuffer(rt.bank, 0, 7);
+                        enc.setBuffer(rt.passout, 0, 8);
+                        rt.setW(enc.*, @intCast(cpq + (at * 2) * h * 4), 9);
+                        rt.setW(enc.*, @intCast(cpkv + (at * 2) * h * 4), 10);
+                        rt.setW(enc.*, @intCast(cpkv + (at * 2 + 1) * h * 4), 11);
+                        rt.setW(enc.*, @intCast(cpq + (at * 2 + 1) * h * 4), 12);
+                        enc.setBuffer(rt.msg, 0, 13);
+                        enc.setBytes(std.mem.sliceAsBytes(&args2), 14);
+                        enc.dispatchGroups(mtl.Size.of(1, 2, 1), mtl.Size.of(256, 1, 1));
+                        dispatches += 1;
 
-                    enc.setPipeline(p.ctl_apply);
-                    enc.setBuffer(rt.ctl_hid, 0, 0);
-                    rt.setW(enc, @intCast(lay.controllers[0].gain.off), 1);
-                    rt.setW(enc, @intCast(lay.controllers[1].gain.off), 2);
-                    rt.setW(enc, @intCast(lay.controllers[2].gain.off), 3);
-                    rt.setW(enc, @intCast(lay.controllers[0].forget.off), 4);
-                    rt.setW(enc, @intCast(lay.controllers[1].forget.off), 5);
-                    rt.setW(enc, @intCast(lay.controllers[2].forget.off), 6);
-                    enc.setBuffer(rt.mixout, 0, 7);
-                    enc.setBuffer(rt.mixout, 0, 8);
-                    enc.setBuffer(rt.mixout, 0, 9);
-                    enc.setBuffer(rt.msg, 0, 10);
-                    enc.setBuffer(rt.n0, 0, 11);
-                    enc.setBuffer(rt.n1, 0, 12);
-                    enc.setBuffer(rt.n2, 0, 13);
-                    enc.setValue(ctl_args, 14);
-                    enc.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 3), mtl.Size.of(256, 1, 1));
+                        enc.setPipeline(p.ctl_norm);
+                        enc.setBuffer(rt.mixout, 0, 0);
+                        enc.setBuffer(rt.mixout, 0, 1);
+                        enc.setBuffer(rt.mixout, 0, 2);
+                        enc.setBuffer(rt.msg, 0, 3);
+                        enc.setValue(ctl_args, 4);
+                        enc.setBuffer(rt.ctl_in, 0, 5);
+                        enc.dispatchGroups(mtl.Size.of(6, 1, 1), mtl.Size.of(256, 1, 1));
+                        dispatches += 1;
+
+                        enc.setPipeline(p.ctl_down);
+                        enc.setBuffer(rt.ctl_in, 0, 0);
+                        rt.setW(enc.*, @intCast(lay.controllers[0].down.off), 1);
+                        rt.setW(enc.*, @intCast(lay.controllers[1].down.off), 2);
+                        rt.setW(enc.*, @intCast(lay.controllers[2].down.off), 3);
+                        enc.setValue(ctl_args, 4);
+                        enc.setBuffer(rt.ctl_hid, 0, 5);
+                        enc.dispatchGroups(mtl.Size.of((g.gate_rank + 7) / 8, 1, 3), mtl.Size.of(256, 1, 1));
+                        dispatches += 1;
+                    }
+
+                    if (use_packed_w13_gf) {
+                        enc.setPipeline(p.aot_ctl_apply3_gf2.?);
+                        enc.setBuffer(rt.ctl_hid, 0, 0);
+                        rt.setW(enc.*, @intCast(lay.controllers[0].gain.off), 1);
+                        rt.setW(enc.*, @intCast(lay.controllers[1].gain.off), 2);
+                        rt.setW(enc.*, @intCast(lay.controllers[2].gain.off), 3);
+                        enc.setBuffer(rt.mixout, 0, 4);
+                        enc.setBuffer(rt.mixout, 0, 5);
+                        enc.setBuffer(rt.mixout, 0, 6);
+                        enc.setBuffer(rt.msg, 0, 7);
+                        enc.setBuffer(rt.n0, 0, 8);
+                        enc.setBuffer(rt.n1, 0, 9);
+                        enc.setBuffer(rt.n2, 0, 10);
+                        enc.setValue(ctl_args, 11);
+                        enc.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 3), mtl.Size.of(256, 1, 1));
+                    } else {
+                        enc.setPipeline(p.ctl_apply);
+                        enc.setBuffer(rt.ctl_hid, 0, 0);
+                        rt.setW(enc.*, @intCast(lay.controllers[0].gain.off), 1);
+                        rt.setW(enc.*, @intCast(lay.controllers[1].gain.off), 2);
+                        rt.setW(enc.*, @intCast(lay.controllers[2].gain.off), 3);
+                        rt.setW(enc.*, @intCast(lay.controllers[0].forget.off), 4);
+                        rt.setW(enc.*, @intCast(lay.controllers[1].forget.off), 5);
+                        rt.setW(enc.*, @intCast(lay.controllers[2].forget.off), 6);
+                        enc.setBuffer(rt.mixout, 0, 7);
+                        enc.setBuffer(rt.mixout, 0, 8);
+                        enc.setBuffer(rt.mixout, 0, 9);
+                        enc.setBuffer(rt.msg, 0, 10);
+                        enc.setBuffer(rt.n0, 0, 11);
+                        enc.setBuffer(rt.n1, 0, 12);
+                        enc.setBuffer(rt.n2, 0, 13);
+                        enc.setValue(ctl_args, 14);
+                        enc.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 3), mtl.Size.of(256, 1, 1));
+                    }
                     dispatches += 1;
 
                     enc.setPipeline(p.rms3);
                     enc.setBuffer(rt.n0, 0, 0);
                     enc.setBuffer(rt.n1, 0, 1);
                     enc.setBuffer(rt.n2, 0, 2);
-                    rt.setW(enc, @intCast(lay.q_norm.off), 3);
-                    rt.setW(enc, @intCast(lay.k_norm.off), 4);
-                    rt.setW(enc, @intCast(lay.v_norm.off), 5);
+                    rt.setW(enc.*, @intCast(lay.q_norm.off), 3);
+                    rt.setW(enc.*, @intCast(lay.k_norm.off), 4);
+                    rt.setW(enc.*, @intCast(lay.v_norm.off), 5);
                     enc.setValue(Rms3A{ .width = h, .xs = .{ 1, 1, 1 }, .xb = .{ 0, 0, 0 }, .eps = g.eps }, 6);
                     enc.setBuffer(rt.n0, 0, 7);
                     enc.setBuffer(rt.n1, 0, 8);
@@ -756,15 +991,15 @@ pub const Runtime = struct {
                     enc.setPipeline(p.batch_mix);
                     enc.setBuffer(rt.blocks, 0, 0);
                     enc.setBuffer(rt.x, 0, 1);
-                    rt.setW(enc, q0_off, 2);
-                    rt.setW(enc, q1_off, 3);
-                    rt.setW(enc, q2_off, 4);
-                    rt.setW(enc, q0_off, 5);
+                    rt.setW(enc.*, q0_off, 2);
+                    rt.setW(enc.*, q1_off, 3);
+                    rt.setW(enc.*, q2_off, 4);
+                    rt.setW(enc.*, q0_off, 5);
                     enc.setValue(MixArgs{ .width = h, .depth = sl.block_count_before + 1, .stride = mix_states, .k = kq, .norm = 1, .scale = scale_h, .eps = g.eps }, 6);
                     enc.setBuffer(rt.mixout, 0, 7);
-                    rt.setW(enc, @intCast(lay.q_norm.off), 8);
-                    rt.setW(enc, @intCast(lay.k_norm.off), 9);
-                    rt.setW(enc, @intCast(lay.v_norm.off), 10);
+                    rt.setW(enc.*, @intCast(lay.q_norm.off), 8);
+                    rt.setW(enc.*, @intCast(lay.k_norm.off), 9);
+                    rt.setW(enc.*, @intCast(lay.v_norm.off), 10);
                     enc.setBuffer(rt.n0, 0, 11);
                     enc.setBuffer(rt.n1, 0, 12);
                     enc.setBuffer(rt.n2, 0, 13);
@@ -781,7 +1016,7 @@ pub const Runtime = struct {
             if (!fused_norm) {
                 enc.setPipeline(p.rms);
                 enc.setBuffer(rt.x, 0, 0);
-                rt.setW(enc, @intCast(lay.q_norm.off), 1);
+                rt.setW(enc.*, @intCast(lay.q_norm.off), 1);
                 enc.setValue(RmsBA{ .width = h, .rows = 1, .xs = 1, .xb = 0, .ys = 1, .yb = 0, .wb = 1, .eps = g.eps }, 2);
                 enc.setBuffer(rt.n0, 0, 3);
                 enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
@@ -793,74 +1028,121 @@ pub const Runtime = struct {
 
             var total_proj: u32 = 0;
             for (lay.proj_ms) |m_| total_proj += m_;
-            enc.setPipeline(p.batch_proj);
-            enc.setBuffer(in0, 0, 0);
-            enc.setBuffer(in1, 0, 1);
-            enc.setBuffer(in2, 0, 2);
-            rt.setW(enc, @intCast(lay.proj_q.w.off), 3);
-            rt.setW(enc, @intCast(lay.proj_q.s.off), 4);
-            rt.setW(enc, @intCast(lay.proj_q.b.off), 5);
-            rt.setW(enc, @intCast(lay.proj_k.w.off), 6);
-            rt.setW(enc, @intCast(lay.proj_k.s.off), 7);
-            rt.setW(enc, @intCast(lay.proj_k.b.off), 8);
-            rt.setW(enc, @intCast(lay.proj_v.w.off), 9);
-            rt.setW(enc, @intCast(lay.proj_v.s.off), 10);
-            rt.setW(enc, @intCast(lay.proj_v.b.off), 11);
-            enc.setBuffer(rt.q, 0, 12);
-            enc.setBuffer(rt.k, 0, 13);
-            enc.setBuffer(rt.v, 0, 14);
-            enc.setBuffer(rt.r, 0, 15);
-            enc.setBuffer(rt.gate, 0, 16);
-            enc.setBuffer(rt.sink, 0, 17);
-            enc.setBuffer(rt.kdyn, 0, 18);
-            enc.setBuffer(rt.vdyn, 0, 19);
-            enc.setValue(AffineProjA{ .k = h, .full = sl.is_full, .m = lay.proj_ms }, 20);
-            enc.dispatchGroups(mtl.Size.of((total_proj + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+            if (use_sb) {
+                enc.setPipeline(p.aot_batch_proj8_sb.?);
+                enc.setBuffer(in0, 0, 0);
+                enc.setBuffer(in1, 0, 1);
+                enc.setBuffer(in2, 0, 2);
+                rt.setW(enc.*, @intCast(lay.proj_q.w.off), 3);
+                rt.setW(enc.*, @intCast(lay.proj_q.sb.off), 4);
+                rt.setW(enc.*, @intCast(lay.proj_k.w.off), 5);
+                rt.setW(enc.*, @intCast(lay.proj_k.sb.off), 6);
+                rt.setW(enc.*, @intCast(lay.proj_v.w.off), 7);
+                rt.setW(enc.*, @intCast(lay.proj_v.sb.off), 8);
+                enc.setBuffer(rt.q, 0, 9);
+                enc.setBuffer(rt.k, 0, 10);
+                enc.setBuffer(rt.v, 0, 11);
+                enc.setBuffer(rt.r, 0, 12);
+                enc.setBuffer(rt.gate, 0, 13);
+                enc.setBuffer(rt.sink, 0, 14);
+                enc.setBuffer(rt.kdyn, 0, 15);
+                enc.setBuffer(rt.vdyn, 0, 16);
+                enc.setValue(AffineProjA{ .k = h, .full = sl.is_full, .m = lay.proj_ms }, 17);
+                enc.dispatchGroups(mtl.Size.of((total_proj + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+            } else {
+                enc.setPipeline(p.batch_proj);
+                enc.setBuffer(in0, 0, 0);
+                enc.setBuffer(in1, 0, 1);
+                enc.setBuffer(in2, 0, 2);
+                rt.setW(enc.*, @intCast(lay.proj_q.w.off), 3);
+                rt.setW(enc.*, @intCast(lay.proj_q.s.off), 4);
+                rt.setW(enc.*, @intCast(lay.proj_q.b.off), 5);
+                rt.setW(enc.*, @intCast(lay.proj_k.w.off), 6);
+                rt.setW(enc.*, @intCast(lay.proj_k.s.off), 7);
+                rt.setW(enc.*, @intCast(lay.proj_k.b.off), 8);
+                rt.setW(enc.*, @intCast(lay.proj_v.w.off), 9);
+                rt.setW(enc.*, @intCast(lay.proj_v.s.off), 10);
+                rt.setW(enc.*, @intCast(lay.proj_v.b.off), 11);
+                enc.setBuffer(rt.q, 0, 12);
+                enc.setBuffer(rt.k, 0, 13);
+                enc.setBuffer(rt.v, 0, 14);
+                enc.setBuffer(rt.r, 0, 15);
+                enc.setBuffer(rt.gate, 0, 16);
+                enc.setBuffer(rt.sink, 0, 17);
+                enc.setBuffer(rt.kdyn, 0, 18);
+                enc.setBuffer(rt.vdyn, 0, 19);
+                enc.setValue(AffineProjA{ .k = h, .full = sl.is_full, .m = lay.proj_ms }, 20);
+                enc.dispatchGroups(mtl.Size.of((total_proj + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+            }
             dispatches += 1;
 
-            const kv_at = rt.slot_kv_off[sl.slot] + (if (full) @as(usize, pos) else @as(usize, pos % g.window)) * kvw * 2;
-            const qkv_row = BatchQkvRow{
-                .k_ring = convAddr(rt.k_conv, sl.slot, kvw),
-                .v_ring = convAddr(rt.v_conv, sl.slot, kvw),
-                .keys = rt.keys.gpuAddress() + kv_at,
-                .values = rt.values.gpuAddress() + kv_at,
-                .pos = pos,
-            };
             const qkv_norm: f32 = 1.0 / @sqrt(@as(f32, if (full) 9.0 else 5.0));
-            const qkv_args = QkvArgs{
-                .kv = g.kv_heads,
-                .heads = g.heads,
-                .dim = g.head_dim,
-                .rel = g.d_rel,
-                .extent = lay.extent,
-                .layout = sl.is_full,
-                .dyn = sl.is_full,
-                .tau = sl.is_full,
-                .norm = qkv_norm,
-                .q_threshold = g.qk_clip,
-                .rel_threshold = g.rel_clip,
-                .eps = g.eps,
-                .floor = @floatFromInt(g.log_floor),
-                .alpha = g.log_alpha,
-            };
-            enc.setPipeline(p.qkv);
-            enc.setBuffer(rt.k, 0, 0);
-            enc.setBuffer(rt.v, 0, 1);
-            rt.setW(enc, @intCast(lay.k_conv.off), 2);
-            rt.setW(enc, @intCast(lay.v_conv.off), 3);
-            enc.setBuffer(rt.kdyn, 0, 4);
-            enc.setBuffer(rt.vdyn, 0, 5);
-            enc.setBuffer(rt.q, 0, 6);
-            rt.setW(enc, @intCast(lay.q_scale.off), 7);
-            enc.setBuffer(rt.r, 0, 8);
-            rt.setW(enc, @intCast(lay.r_scale.off), 9);
-            rt.setW(enc, @intCast(lay.rel_bias.off), 10);
-            enc.setValue(qkv_args, 11);
-            enc.setBuffer(rt.relbias, 0, 12);
-            enc.setValue(qkv_row, 13);
-            enc.setBuffer(rt.kc, 0, 14);
-            enc.setBuffer(rt.vc, 0, 15);
-            enc.dispatchGroups(mtl.Size.of(g.kv_heads + g.heads + (g.heads * (lay.extent + 1) + 255) / 256, 1, 1), mtl.Size.of(256, 1, 1));
+            const kv_stride_rows: u32 = if (full) @intCast(rt.capacity) else g.window;
+            const kv_row: u32 = if (full) pos else (pos % g.window);
+            if (opt_d9) {
+                const qkv_row = BatchQkvRow{
+                    .k_ring = convAddr(rt.k_conv, sl.slot, kvw),
+                    .v_ring = convAddr(rt.v_conv, sl.slot, kvw),
+                    .keys = rt.keys.gpuAddress() + rt.slot_kv_off[sl.slot],
+                    .values = rt.values.gpuAddress() + rt.slot_kv_off[sl.slot],
+                    .pos = pos,
+                };
+                const qkv_args = QkvPermA{
+                    .kv = g.kv_heads, .heads = g.heads, .dim = g.head_dim, .rel = g.d_rel, .extent = lay.extent,
+                    .layout = sl.is_full, .dyn = sl.is_full, .tau = sl.is_full, .kv_stride_rows = kv_stride_rows, .kv_row = kv_row,
+                    .norm = qkv_norm, .q_threshold = g.qk_clip, .rel_threshold = g.rel_clip, .eps = g.eps,
+                    .floor = @floatFromInt(g.log_floor), .alpha = g.log_alpha,
+                };
+                enc.setPipeline(p.aot_qkv_perm.?);
+                enc.setBuffer(rt.k, 0, 0);
+                enc.setBuffer(rt.v, 0, 1);
+                rt.setW(enc.*, @intCast(lay.k_conv.off), 2);
+                rt.setW(enc.*, @intCast(lay.v_conv.off), 3);
+                enc.setBuffer(rt.kdyn, 0, 4);
+                enc.setBuffer(rt.vdyn, 0, 5);
+                enc.setBuffer(rt.q, 0, 6);
+                rt.setW(enc.*, @intCast(lay.q_scale.off), 7);
+                enc.setBuffer(rt.r, 0, 8);
+                rt.setW(enc.*, @intCast(lay.r_scale.off), 9);
+                rt.setW(enc.*, @intCast(lay.rel_bias.off), 10);
+                enc.setValue(qkv_args, 11);
+                enc.setBuffer(rt.relbias, 0, 12);
+                enc.setValue(qkv_row, 13);
+                enc.dispatchGroups(mtl.Size.of(g.kv_heads + g.heads + (g.heads * (lay.extent + 1) + 255) / 256, 1, 1), mtl.Size.of(256, 1, 1));
+            } else {
+                const kv_at = rt.slot_kv_off[sl.slot] + @as(usize, kv_row) * kvw * 2;
+                const qkv_row = BatchQkvRow{
+                    .k_ring = convAddr(rt.k_conv, sl.slot, kvw),
+                    .v_ring = convAddr(rt.v_conv, sl.slot, kvw),
+                    .keys = rt.keys.gpuAddress() + kv_at,
+                    .values = rt.values.gpuAddress() + kv_at,
+                    .pos = pos,
+                };
+                const qkv_args = QkvArgs{
+                    .kv = g.kv_heads, .heads = g.heads, .dim = g.head_dim, .rel = g.d_rel, .extent = lay.extent,
+                    .layout = sl.is_full, .dyn = sl.is_full, .tau = sl.is_full, .norm = qkv_norm,
+                    .q_threshold = g.qk_clip, .rel_threshold = g.rel_clip, .eps = g.eps,
+                    .floor = @floatFromInt(g.log_floor), .alpha = g.log_alpha,
+                };
+                enc.setPipeline(p.qkv);
+                enc.setBuffer(rt.k, 0, 0);
+                enc.setBuffer(rt.v, 0, 1);
+                rt.setW(enc.*, @intCast(lay.k_conv.off), 2);
+                rt.setW(enc.*, @intCast(lay.v_conv.off), 3);
+                enc.setBuffer(rt.kdyn, 0, 4);
+                enc.setBuffer(rt.vdyn, 0, 5);
+                enc.setBuffer(rt.q, 0, 6);
+                rt.setW(enc.*, @intCast(lay.q_scale.off), 7);
+                enc.setBuffer(rt.r, 0, 8);
+                rt.setW(enc.*, @intCast(lay.r_scale.off), 9);
+                rt.setW(enc.*, @intCast(lay.rel_bias.off), 10);
+                enc.setValue(qkv_args, 11);
+                enc.setBuffer(rt.relbias, 0, 12);
+                enc.setValue(qkv_row, 13);
+                enc.setBuffer(rt.kc, 0, 14);
+                enc.setBuffer(rt.vc, 0, 15);
+                enc.dispatchGroups(mtl.Size.of(g.kv_heads + g.heads + (g.heads * (lay.extent + 1) + 255) / 256, 1, 1), mtl.Size.of(256, 1, 1));
+            }
             dispatches += 1;
 
             const win: u32 = if (full) 0 else g.window;
@@ -870,59 +1152,82 @@ pub const Runtime = struct {
                 .keys = rt.keys.gpuAddress() + rt.slot_kv_off[sl.slot],
                 .values = rt.values.gpuAddress() + rt.slot_kv_off[sl.slot],
                 .args = .{
-                    .heads = g.heads,
-                    .kv = g.kv_heads,
-                    .dim = g.head_dim,
-                    .rel = g.d_rel,
-                    .extent = lay.extent,
-                    .window = win,
-                    .pos = pos,
-                    .tau = sl.is_full,
-                    .splits = part.splits,
-                    .chunk = part.chunk,
-                    .scale = scale_attn,
-                    .floor = @floatFromInt(g.log_floor),
-                    .alpha = g.log_alpha,
+                    .heads = g.heads, .kv = g.kv_heads, .dim = g.head_dim, .rel = g.d_rel, .extent = lay.extent,
+                    .window = win, .pos = pos, .tau = sl.is_full, .splits = part.splits, .chunk = part.chunk,
+                    .scale = scale_attn, .floor = @floatFromInt(g.log_floor), .alpha = g.log_alpha,
                 },
             };
-            enc.setPipeline(p.split);
-            enc.setBuffer(rt.q, 0, 0);
-            enc.setBuffer(rt.relbias, 0, 1);
-            enc.setBuffer(rt.sink, 0, 2);
-            enc.setValue(attn_row, 3);
-            enc.setBuffer(rt.parts, 0, 4);
-            enc.dispatchGroups(mtl.Size.of(g.kv_heads * part.splits, 1, 1), mtl.Size.of((g.heads / g.kv_heads) * 32, 1, 1));
+            if (opt_d9) {
+                const perm_row = SplitPermRow{ .keys = attn_row.keys, .values = attn_row.values, .args = attn_row.args, .kv_stride_rows = kv_stride_rows };
+                enc.setPipeline(p.aot_split_perm.?);
+                enc.setBuffer(rt.q, 0, 0);
+                enc.setBuffer(rt.relbias, 0, 1);
+                enc.setBuffer(rt.sink, 0, 2);
+                enc.setValue(perm_row, 3);
+                enc.setBuffer(rt.parts, 0, 4);
+                enc.dispatchGroups(mtl.Size.of(g.kv_heads * part.splits, 1, 1), mtl.Size.of((g.heads / g.kv_heads) * 32, 1, 1));
+            } else {
+                enc.setPipeline(p.split);
+                enc.setBuffer(rt.q, 0, 0);
+                enc.setBuffer(rt.relbias, 0, 1);
+                enc.setBuffer(rt.sink, 0, 2);
+                enc.setValue(attn_row, 3);
+                enc.setBuffer(rt.parts, 0, 4);
+                enc.dispatchGroups(mtl.Size.of(g.kv_heads * part.splits, 1, 1), mtl.Size.of((g.heads / g.kv_heads) * 32, 1, 1));
+            }
             dispatches += 1;
 
-            enc.setPipeline(p.combine);
-            enc.setBuffer(rt.parts, 0, 0);
-            enc.setValue(attn_row, 1);
-            enc.setBuffer(rt.attn, 0, 2);
-            enc.dispatchGroups(mtl.Size.of(g.heads, 1, 1), mtl.Size.of(32, 1, 1));
-            dispatches += 1;
+            if (opt_d1) {
+                enc.setPipeline(p.aot_combine_sig_mul.?);
+                enc.setBuffer(rt.parts, 0, 0);
+                enc.setValue(attn_row, 1);
+                enc.setBuffer(rt.gate, 0, 2);
+                enc.setBuffer(rt.attn, 0, 3);
+                enc.dispatchGroups(mtl.Size.of(g.heads, 1, 1), mtl.Size.of(32, 1, 1));
+                dispatches += 1;
+            } else {
+                enc.setPipeline(p.combine);
+                enc.setBuffer(rt.parts, 0, 0);
+                enc.setValue(attn_row, 1);
+                enc.setBuffer(rt.attn, 0, 2);
+                enc.dispatchGroups(mtl.Size.of(g.heads, 1, 1), mtl.Size.of(32, 1, 1));
+                dispatches += 1;
 
-            enc.setPipeline(p.sig_mul);
-            enc.setBuffer(rt.attn, 0, 0);
-            enc.setBuffer(rt.gate, 0, 1);
-            enc.setValue(PairA{ .count = qw }, 2);
-            enc.setBuffer(rt.attn, 0, 3);
-            enc.dispatchThreads(mtl.Size.of(qw, 1, 1), mtl.Size.of(256, 1, 1));
-            dispatches += 1;
+                enc.setPipeline(p.sig_mul);
+                enc.setBuffer(rt.attn, 0, 0);
+                enc.setBuffer(rt.gate, 0, 1);
+                enc.setValue(PairA{ .count = qw }, 2);
+                enc.setBuffer(rt.attn, 0, 3);
+                enc.dispatchThreads(mtl.Size.of(qw, 1, 1), mtl.Size.of(256, 1, 1));
+                dispatches += 1;
+            }
 
-            enc.setPipeline(p.dense);
-            enc.setBuffer(rt.attn, 0, 0);
-            rt.setW(enc, @intCast(lay.proj_o.w.off), 1);
-            rt.setW(enc, @intCast(lay.proj_o.s.off), 2);
-            rt.setW(enc, @intCast(lay.proj_o.b.off), 3);
-            enc.setValue(AffineDenseA{ .n = h, .k = qw, .rows = 1, .xs = 1, .xb = 0, .bits = 8, .cap = 0 }, 4);
-            enc.setBuffer(rt.projout, 0, 5);
-            enc.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+            if (use_sb) {
+                enc.setPipeline(p.aot_dense8_sb.?);
+                enc.setBuffer(rt.attn, 0, 0);
+                rt.setW(enc.*, @intCast(lay.proj_o.w.off), 1);
+                rt.setW(enc.*, @intCast(lay.proj_o.sb.off), 2);
+                enc.setValue(AffineDenseA{ .n = h, .k = qw, .rows = 1, .xs = 1, .xb = 0, .bits = 8, .cap = 0 }, 3);
+                enc.setBuffer(rt.projout, 0, 4);
+                enc.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+            } else {
+                enc.setPipeline(p.dense);
+                enc.setBuffer(rt.attn, 0, 0);
+                rt.setW(enc.*, @intCast(lay.proj_o.w.off), 1);
+                rt.setW(enc.*, @intCast(lay.proj_o.s.off), 2);
+                rt.setW(enc.*, @intCast(lay.proj_o.b.off), 3);
+                enc.setValue(AffineDenseA{ .n = h, .k = qw, .rows = 1, .xs = 1, .xb = 0, .bits = 8, .cap = 0 }, 4);
+                enc.setBuffer(rt.projout, 0, 5);
+                enc.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+            }
             dispatches += 1;
 
             const aconv_row = ConvRow{ .ring = convAddr(rt.attn_conv, sl.slot, h), .pos = pos };
+            const mlp_q = rt.sched.globals.mlp_queries[sl.phys];
+            const mq_off: usize = @intCast(mlp_q.off);
             enc.setPipeline(p.batch_conv);
             enc.setBuffer(rt.projout, 0, 0);
-            rt.setW(enc, @intCast(lay.attn_post.off), 1);
+            rt.setW(enc.*, @intCast(lay.attn_post.off), 1);
             const aconv_args = DecodeConvA{ .channels = h, .heads = 0, .ring = conv_ring, .pos = 0, .layout = 0, .norm = norm_post, .residual = @intFromBool(!push), .topk = 0 };
             enc.setValue(aconv_args, 2);
             enc.setValue(aconv_args, 3);
@@ -942,67 +1247,129 @@ pub const Runtime = struct {
                 dispatches += 1;
             }
 
-            const mlp_q = rt.sched.globals.mlp_queries[sl.phys];
-            const mq_off: usize = @intCast(mlp_q.off);
-            enc.setPipeline(p.batch_mix);
-            enc.setBuffer(rt.blocks, 0, 0);
-            enc.setBuffer(rt.x, 0, 1);
-            rt.setW(enc, mq_off, 2);
-            rt.setW(enc, mq_off, 3);
-            rt.setW(enc, mq_off, 4);
-            rt.setW(enc, mq_off, 5);
-            enc.setValue(MixArgs{ .width = h, .depth = sl.block_count_after_attn + 1, .stride = mix_states, .k = 1, .norm = @intFromBool(!bank), .scale = scale_h, .eps = g.eps }, 6);
-            enc.setBuffer(rt.mixout, 0, 7);
-            rt.setW(enc, @intCast(if (!bank) lay.mlp_norm.off else mq_off), 8);
-            rt.setW(enc, mq_off, 9);
-            rt.setW(enc, mq_off, 10);
-            enc.setBuffer(if (!bank) rt.m0 else rt.n0, 0, 11);
-            enc.setBuffer(if (!bank) rt.m0 else rt.n1, 0, 12);
-            enc.setBuffer(if (!bank) rt.m0 else rt.n2, 0, 13);
-            enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
-            dispatches += 1;
+            if (bank and opt_d3) {
+                enc.setPipeline(p.aot_mix_inv.?);
+                enc.setBuffer(rt.blocks, 0, 0);
+                enc.setBuffer(rt.x, 0, 1);
+                rt.setW(enc.*, mq_off, 2);
+                enc.setValue(MixArgs{ .width = h, .depth = sl.block_count_after_attn + 1, .stride = mix_states, .k = 1, .norm = 0, .scale = scale_h, .eps = g.eps }, 3);
+                enc.setBuffer(rt.mixout, 0, 4);
+                enc.setBuffer(rt.ctl_inv, 0, 5);
+                enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
+                dispatches += 1;
 
-            if (bank) {
                 const ctl = lay.controllers[3];
-                enc.setPipeline(p.rms_pair);
+                enc.setPipeline(p.aot_ctl_down1.?);
                 enc.setBuffer(rt.mixout, 0, 0);
                 enc.setBuffer(rt.msg, 0, 1);
-                enc.setValue(RmsPairA{ .width = h, .xs0 = 1, .xb0 = 0, .xs1 = 4, .xb1 = 3, .eps = g.eps }, 2);
-                enc.setBuffer(rt.h2in, 0, 3);
-                enc.dispatchGroups(mtl.Size.of(2, 1, 1), mtl.Size.of(256, 1, 1));
+                enc.setBuffer(rt.ctl_inv, 0, 2);
+                rt.setW(enc.*, @intCast(ctl.down.off), 3);
+                enc.setValue(AffineDenseA{ .n = g.gate_rank, .k = 2 * h, .rows = 1, .xs = 1, .xb = 0, .bits = 0, .cap = 0 }, 4);
+                enc.setBuffer(rt.normed, 0, 5);
+                enc.dispatchGroups(mtl.Size.of((g.gate_rank + 1) / 2, 1, 1), mtl.Size.of(64, 1, 1));
                 dispatches += 1;
 
-                enc.setPipeline(p.float_mv);
-                enc.setBuffer(rt.h2in, 0, 0);
-                rt.setW(enc, @intCast(ctl.down.off), 1);
-                enc.setValue(AffineDenseA{ .n = g.gate_rank, .k = 2 * h, .rows = 1, .xs = 1, .xb = 0, .bits = 0, .cap = 0 }, 2);
-                enc.setBuffer(rt.normed, 0, 3);
-                enc.dispatchGroups(mtl.Size.of((g.gate_rank + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
-                dispatches += 1;
-
-                enc.setPipeline(p.batch_float_ctl);
-                enc.setBuffer(rt.normed, 0, 0);
-                rt.setW(enc, @intCast(ctl.gain.off), 1);
-                rt.setW(enc, @intCast(ctl.forget.off), 2);
-                enc.setBuffer(rt.mixout, 0, 3);
-                enc.setBuffer(rt.msg, 0, 4);
-                enc.setBuffer(rt.mixout, 0, 5);
-                enc.setValue(AffineBatchCtlA{ .k = g.gate_rank, .m0 = h, .m1 = h, .h = h, .cxs = 1, .cxb = 0, .mxs = 4, .mxb = 3, .ys = 1, .yb = 0 }, 6);
-                enc.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+                if (use_packed_w13_gf) {
+                    enc.setPipeline(p.aot_ctl_apply1_gf2.?);
+                    enc.setBuffer(rt.normed, 0, 0);
+                    rt.setW(enc.*, @intCast(ctl.gain.off), 1);
+                    enc.setBuffer(rt.mixout, 0, 2);
+                    enc.setBuffer(rt.msg, 0, 3);
+                    enc.setBuffer(rt.mixout, 0, 4);
+                    enc.setValue(AffineBatchCtlA{ .k = g.gate_rank, .m0 = h, .m1 = h, .h = h, .cxs = 1, .cxb = 0, .mxs = 4, .mxb = 3, .ys = 1, .yb = 0 }, 5);
+                    enc.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+                } else {
+                    enc.setPipeline(p.batch_float_ctl);
+                    enc.setBuffer(rt.normed, 0, 0);
+                    rt.setW(enc.*, @intCast(ctl.gain.off), 1);
+                    rt.setW(enc.*, @intCast(ctl.forget.off), 2);
+                    enc.setBuffer(rt.mixout, 0, 3);
+                    enc.setBuffer(rt.msg, 0, 4);
+                    enc.setBuffer(rt.mixout, 0, 5);
+                    enc.setValue(AffineBatchCtlA{ .k = g.gate_rank, .m0 = h, .m1 = h, .h = h, .cxs = 1, .cxb = 0, .mxs = 4, .mxb = 3, .ys = 1, .yb = 0 }, 6);
+                    enc.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+                }
                 dispatches += 1;
 
                 enc.setPipeline(p.rms);
                 enc.setBuffer(rt.mixout, 0, 0);
-                rt.setW(enc, @intCast(lay.mlp_norm.off), 1);
+                rt.setW(enc.*, @intCast(lay.mlp_norm.off), 1);
                 enc.setValue(RmsBA{ .width = h, .rows = 1, .xs = 1, .xb = 0, .ys = 1, .yb = 0, .wb = 1, .eps = g.eps }, 2);
                 enc.setBuffer(rt.m0, 0, 3);
                 enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
                 dispatches += 1;
+            } else {
+                enc.setPipeline(p.batch_mix);
+                enc.setBuffer(rt.blocks, 0, 0);
+                enc.setBuffer(rt.x, 0, 1);
+                rt.setW(enc.*, mq_off, 2);
+                rt.setW(enc.*, mq_off, 3);
+                rt.setW(enc.*, mq_off, 4);
+                rt.setW(enc.*, mq_off, 5);
+                enc.setValue(MixArgs{ .width = h, .depth = sl.block_count_after_attn + 1, .stride = mix_states, .k = 1, .norm = @intFromBool(!bank), .scale = scale_h, .eps = g.eps }, 6);
+                enc.setBuffer(rt.mixout, 0, 7);
+                rt.setW(enc.*, @intCast(if (!bank) lay.mlp_norm.off else mq_off), 8);
+                rt.setW(enc.*, mq_off, 9);
+                rt.setW(enc.*, mq_off, 10);
+                enc.setBuffer(if (!bank) rt.m0 else rt.n0, 0, 11);
+                enc.setBuffer(if (!bank) rt.m0 else rt.n1, 0, 12);
+                enc.setBuffer(if (!bank) rt.m0 else rt.n2, 0, 13);
+                enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
+                dispatches += 1;
+
+                if (bank) {
+                    const ctl = lay.controllers[3];
+                    enc.setPipeline(p.rms_pair);
+                    enc.setBuffer(rt.mixout, 0, 0);
+                    enc.setBuffer(rt.msg, 0, 1);
+                    enc.setValue(RmsPairA{ .width = h, .xs0 = 1, .xb0 = 0, .xs1 = 4, .xb1 = 3, .eps = g.eps }, 2);
+                    enc.setBuffer(rt.h2in, 0, 3);
+                    enc.dispatchGroups(mtl.Size.of(2, 1, 1), mtl.Size.of(256, 1, 1));
+                    dispatches += 1;
+
+                    enc.setPipeline(p.float_mv);
+                    enc.setBuffer(rt.h2in, 0, 0);
+                    rt.setW(enc.*, @intCast(ctl.down.off), 1);
+                    enc.setValue(AffineDenseA{ .n = g.gate_rank, .k = 2 * h, .rows = 1, .xs = 1, .xb = 0, .bits = 0, .cap = 0 }, 2);
+                    enc.setBuffer(rt.normed, 0, 3);
+                    enc.dispatchGroups(mtl.Size.of((g.gate_rank + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+                    dispatches += 1;
+
+                    if (use_packed_w13_gf) {
+                        enc.setPipeline(p.aot_ctl_apply1_gf2.?);
+                        enc.setBuffer(rt.normed, 0, 0);
+                        rt.setW(enc.*, @intCast(ctl.gain.off), 1);
+                        enc.setBuffer(rt.mixout, 0, 2);
+                        enc.setBuffer(rt.msg, 0, 3);
+                        enc.setBuffer(rt.mixout, 0, 4);
+                        enc.setValue(AffineBatchCtlA{ .k = g.gate_rank, .m0 = h, .m1 = h, .h = h, .cxs = 1, .cxb = 0, .mxs = 4, .mxb = 3, .ys = 1, .yb = 0 }, 5);
+                        enc.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+                    } else {
+                        enc.setPipeline(p.batch_float_ctl);
+                        enc.setBuffer(rt.normed, 0, 0);
+                        rt.setW(enc.*, @intCast(ctl.gain.off), 1);
+                        rt.setW(enc.*, @intCast(ctl.forget.off), 2);
+                        enc.setBuffer(rt.mixout, 0, 3);
+                        enc.setBuffer(rt.msg, 0, 4);
+                        enc.setBuffer(rt.mixout, 0, 5);
+                        enc.setValue(AffineBatchCtlA{ .k = g.gate_rank, .m0 = h, .m1 = h, .h = h, .cxs = 1, .cxb = 0, .mxs = 4, .mxb = 3, .ys = 1, .yb = 0 }, 6);
+                        enc.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+                    }
+                    dispatches += 1;
+
+                    enc.setPipeline(p.rms);
+                    enc.setBuffer(rt.mixout, 0, 0);
+                    rt.setW(enc.*, @intCast(lay.mlp_norm.off), 1);
+                    enc.setValue(RmsBA{ .width = h, .rows = 1, .xs = 1, .xb = 0, .ys = 1, .yb = 0, .wb = 1, .eps = g.eps }, 2);
+                    enc.setBuffer(rt.m0, 0, 3);
+                    enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
+                    dispatches += 1;
+                }
             }
 
             enc.setPipeline(p.float_mv);
             enc.setBuffer(rt.m0, 0, 0);
-            rt.setW(enc, @intCast(lay.router.off), 1);
+            rt.setW(enc.*, @intCast(lay.router.off), 1);
             enc.setValue(AffineDenseA{ .n = g.experts, .k = h, .rows = 1, .xs = 1, .xb = 0, .bits = 0, .cap = 0 }, 2);
             enc.setBuffer(rt.router, 0, 3);
             enc.dispatchGroups(mtl.Size.of((g.experts + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
@@ -1010,7 +1377,7 @@ pub const Runtime = struct {
 
             enc.setPipeline(p.routepick);
             enc.setBuffer(rt.router, 0, 0);
-            rt.setW(enc, @intCast(lay.router_bias.off), 1);
+            rt.setW(enc.*, @intCast(lay.router_bias.off), 1);
             enc.setValue(PickA{ .experts = g.experts, .topk = g.topk, .rows = 1, .route_scale = g.route_scale }, 2);
             enc.setBuffer(rt.picks, 0, 3);
             enc.setBuffer(rt.wts, 0, 4);
@@ -1020,9 +1387,9 @@ pub const Runtime = struct {
             if (lay.is_affine4 != 0) {
                 enc.setPipeline(p.aff_up);
                 enc.setBuffer(rt.m0, 0, 0);
-                rt.setW(enc, @intCast(lay.w13.off), 1);
-                rt.setW(enc, @intCast(lay.w13_scale.off), 2);
-                rt.setW(enc, @intCast(lay.w13_bias.off), 3);
+                rt.setW(enc.*, @intCast(lay.w13.off), 1);
+                rt.setW(enc.*, @intCast(lay.w13_scale.off), 2);
+                rt.setW(enc.*, @intCast(lay.w13_bias.off), 3);
                 enc.setBuffer(rt.picks, 0, 4);
                 enc.setValue(MoeBA{ .k = h, .n = g.expert_inter, .slots = g.topk, .topk = g.topk, .gate_cap = g.gate_cap, .up_cap = g.up_cap }, 5);
                 enc.setBuffer(rt.act, 0, 6);
@@ -1031,38 +1398,64 @@ pub const Runtime = struct {
 
                 enc.setPipeline(p.aff_down);
                 enc.setBuffer(rt.act, 0, 0);
-                rt.setW(enc, @intCast(lay.w2.off), 1);
-                rt.setW(enc, @intCast(lay.w2_scale.off), 2);
-                rt.setW(enc, @intCast(lay.w2_bias.off), 3);
+                rt.setW(enc.*, @intCast(lay.w2.off), 1);
+                rt.setW(enc.*, @intCast(lay.w2_scale.off), 2);
+                rt.setW(enc.*, @intCast(lay.w2_bias.off), 3);
                 enc.setBuffer(rt.picks, 0, 4);
                 enc.setValue(MoeBA{ .k = g.expert_inter, .n = h, .slots = g.topk, .topk = g.topk, .gate_cap = 0, .up_cap = 0 }, 5);
                 enc.setBuffer(rt.down, 0, 6);
                 enc.dispatchGroups(mtl.Size.of((h + 7) / 8, g.topk, 1), mtl.Size.of(256, 1, 1));
                 dispatches += 1;
+            } else if (opt_d2) {
+                enc.setPipeline(if (use_packed_w13_gf) p.aot_gu_nv_packed.? else p.aot_gu_nv.?);
+                enc.setBuffer(rt.m0, 0, 0);
+                rt.setW(enc.*, @intCast(lay.w13.off), 1);
+                rt.setW(enc.*, @intCast(lay.w13_scale.off), 2);
+                rt.setW(enc.*, @intCast(lay.w13_global.off), 3);
+                enc.setBuffer(rt.picks, 0, 4);
+                enc.setValue(MoeBA{ .k = h, .n = g.expert_inter, .slots = g.topk, .topk = g.topk, .gate_cap = g.gate_cap, .up_cap = g.up_cap }, 5);
+                enc.setBuffer(rt.act, 0, 6);
+                rt.setW(enc.*, @intCast(rt.sched.globals.t16.off), 7);
+                rt.setW(enc.*, @intCast(rt.sched.globals.t256.off), 8);
+                enc.dispatchGroups(mtl.Size.of((g.expert_inter + 7) / 8, g.topk, 1), mtl.Size.of(256, 1, 1));
+                dispatches += 1;
+
+                enc.setPipeline(p.aot_down1_nv.?);
+                enc.setBuffer(rt.act, 0, 0);
+                rt.setW(enc.*, @intCast(lay.w2.off), 1);
+                rt.setW(enc.*, @intCast(lay.w2_scale.off), 2);
+                rt.setW(enc.*, @intCast(lay.w2_global.off), 3);
+                enc.setBuffer(rt.picks, 0, 4);
+                enc.setValue(MoeBA{ .k = g.expert_inter, .n = h, .slots = g.topk, .topk = g.topk, .gate_cap = 0, .up_cap = 0 }, 5);
+                enc.setBuffer(rt.down, 0, 6);
+                rt.setW(enc.*, @intCast(rt.sched.globals.t16.off), 7);
+                rt.setW(enc.*, @intCast(rt.sched.globals.t256.off), 8);
+                enc.dispatchGroups(mtl.Size.of((h + 31) / 32, g.topk, 1), mtl.Size.of(256, 1, 1));
+                dispatches += 1;
             } else {
                 enc.setPipeline(p.gu_nv);
                 enc.setBuffer(rt.m0, 0, 0);
-                rt.setW(enc, @intCast(lay.w13.off), 1);
-                rt.setW(enc, @intCast(lay.w13_scale.off), 2);
-                rt.setW(enc, @intCast(lay.w13_global.off), 3);
-                rt.setW(enc, @intCast(rt.sched.globals.nvfp4_den.off), 4);
+                rt.setW(enc.*, @intCast(lay.w13.off), 1);
+                rt.setW(enc.*, @intCast(lay.w13_scale.off), 2);
+                rt.setW(enc.*, @intCast(lay.w13_global.off), 3);
+                rt.setW(enc.*, @intCast(rt.sched.globals.nvfp4_den.off), 4);
                 enc.setBuffer(rt.picks, 0, 5);
                 enc.setValue(MoeBA{ .k = h, .n = g.expert_inter, .slots = g.topk, .topk = g.topk, .gate_cap = g.gate_cap, .up_cap = g.up_cap }, 6);
                 enc.setBuffer(rt.act, 0, 7);
-                rt.setW(enc, @intCast(rt.sched.globals.t16.off), 8);
+                rt.setW(enc.*, @intCast(rt.sched.globals.t16.off), 8);
                 enc.dispatchGroups(mtl.Size.of(g.expert_inter, g.topk, 1), mtl.Size.of(32, 1, 1));
                 dispatches += 1;
 
                 enc.setPipeline(p.down1_nv);
                 enc.setBuffer(rt.act, 0, 0);
-                rt.setW(enc, @intCast(lay.w2.off), 1);
-                rt.setW(enc, @intCast(lay.w2_scale.off), 2);
-                rt.setW(enc, @intCast(lay.w2_global.off), 3);
-                rt.setW(enc, @intCast(rt.sched.globals.nvfp4_den.off), 4);
+                rt.setW(enc.*, @intCast(lay.w2.off), 1);
+                rt.setW(enc.*, @intCast(lay.w2_scale.off), 2);
+                rt.setW(enc.*, @intCast(lay.w2_global.off), 3);
+                rt.setW(enc.*, @intCast(rt.sched.globals.nvfp4_den.off), 4);
                 enc.setBuffer(rt.picks, 0, 5);
                 enc.setValue(MoeBA{ .k = g.expert_inter, .n = h, .slots = g.topk, .topk = g.topk, .gate_cap = 0, .up_cap = 0 }, 6);
                 enc.setBuffer(rt.down, 0, 7);
-                rt.setW(enc, @intCast(rt.sched.globals.t16.off), 8);
+                rt.setW(enc.*, @intCast(rt.sched.globals.t16.off), 8);
                 enc.dispatchGroups(mtl.Size.of((h + 31) / 32, g.topk, 1), mtl.Size.of(256, 1, 1));
                 dispatches += 1;
             }
@@ -1071,7 +1464,7 @@ pub const Runtime = struct {
             const mconv_args = DecodeConvA{ .channels = h, .heads = 0, .ring = conv_ring, .pos = 0, .layout = 0, .norm = norm_post, .residual = 1, .topk = g.topk };
             enc.setPipeline(p.batch_conv);
             enc.setBuffer(rt.down, 0, 0);
-            rt.setW(enc, @intCast(lay.mlp_post.off), 1);
+            rt.setW(enc.*, @intCast(lay.mlp_post.off), 1);
             enc.setValue(mconv_args, 2);
             enc.setValue(mconv_args, 3);
             enc.setBuffer(rt.x, 0, 4);
@@ -1088,11 +1481,13 @@ pub const Runtime = struct {
                 enc.dispatchThreads(mtl.Size.of(h, 1, 1), mtl.Size.of(256, 1, 1));
                 dispatches += 1;
 
-                enc.end();
-                cb0.commit();
-                cb_first = cb0;
-                cb0 = rt.queue.commandBuffer();
-                enc = cb0.compute(.serial);
+                if (ring_slot == null) {
+                    enc.end();
+                    cb0.commit();
+                    cb_first.* = cb0.*;
+                    cb0.* = rt.queue.commandBuffer();
+                    enc.* = cb0.compute(.serial);
+                }
             }
         }
 
@@ -1101,40 +1496,90 @@ pub const Runtime = struct {
             enc.setPipeline(p.batch_mix);
             enc.setBuffer(rt.blocks, 0, 0);
             enc.setBuffer(rt.x, 0, 1);
-            rt.setW(enc, oq_off, 2);
-            rt.setW(enc, oq_off, 3);
-            rt.setW(enc, oq_off, 4);
-            rt.setW(enc, oq_off, 5);
+            rt.setW(enc.*, oq_off, 2);
+            rt.setW(enc.*, oq_off, 3);
+            rt.setW(enc.*, oq_off, 4);
+            rt.setW(enc.*, oq_off, 5);
             enc.setValue(MixArgs{ .width = h, .depth = 5, .stride = mix_states, .k = 1, .norm = 1, .scale = scale_h, .eps = g.eps }, 6);
             enc.setBuffer(rt.mixout, 0, 7);
-            rt.setW(enc, @intCast(rt.sched.globals.norm.off), 8);
-            rt.setW(enc, oq_off, 9);
-            rt.setW(enc, oq_off, 10);
+            rt.setW(enc.*, @intCast(rt.sched.globals.norm.off), 8);
+            rt.setW(enc.*, oq_off, 9);
+            rt.setW(enc.*, oq_off, 10);
             enc.setBuffer(rt.n0, 0, 11);
             enc.setBuffer(rt.n0, 0, 12);
             enc.setBuffer(rt.n0, 0, 13);
             enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
             dispatches += 1;
 
-            enc.setPipeline(p.dense);
-            enc.setBuffer(rt.n0, 0, 0);
-            rt.setW(enc, @intCast(rt.sched.globals.unembed.w.off), 1);
-            rt.setW(enc, @intCast(rt.sched.globals.unembed.s.off), 2);
-            rt.setW(enc, @intCast(rt.sched.globals.unembed.b.off), 3);
-            enc.setValue(AffineDenseA{ .n = g.unpadded_vocab, .k = h, .rows = 1, .xs = 1, .xb = 0, .bits = 8, .cap = g.logit_cap }, 4);
-            enc.setBuffer(rt.logits, 0, 5);
-            enc.dispatchGroups(mtl.Size.of((g.unpadded_vocab + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+            if (use_sb) {
+                enc.setPipeline(p.aot_dense8_sb.?);
+                enc.setBuffer(rt.n0, 0, 0);
+                rt.setW(enc.*, @intCast(rt.sched.globals.unembed.w.off), 1);
+                rt.setW(enc.*, @intCast(rt.sched.globals.unembed.sb.off), 2);
+                enc.setValue(AffineDenseA{ .n = g.unpadded_vocab, .k = h, .rows = 1, .xs = 1, .xb = 0, .bits = 8, .cap = g.logit_cap }, 3);
+                enc.setBuffer(rt.logits, 0, 4);
+                enc.dispatchGroups(mtl.Size.of((g.unpadded_vocab + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+            } else {
+                enc.setPipeline(p.dense);
+                enc.setBuffer(rt.n0, 0, 0);
+                rt.setW(enc.*, @intCast(rt.sched.globals.unembed.w.off), 1);
+                rt.setW(enc.*, @intCast(rt.sched.globals.unembed.s.off), 2);
+                rt.setW(enc.*, @intCast(rt.sched.globals.unembed.b.off), 3);
+                enc.setValue(AffineDenseA{ .n = g.unpadded_vocab, .k = h, .rows = 1, .xs = 1, .xb = 0, .bits = 8, .cap = g.logit_cap }, 4);
+                enc.setBuffer(rt.logits, 0, 5);
+                enc.dispatchGroups(mtl.Size.of((g.unpadded_vocab + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+            }
             dispatches += 1;
 
-            if (gpu_argmax) {
-                enc.setPipeline(p.argmax);
-                enc.setBuffer(rt.logits, 0, 0);
-                enc.setValue(ArgmaxA{ .vocab = g.unpadded_vocab }, 1);
-                enc.setBuffer(rt.argmax_out, 0, 2);
-                enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(1024, 1, 1));
-                dispatches += 1;
+            if (gpu_argmax or ring_slot != null) {
+                if (p.aot_argmax_p1 != null and p.aot_argmax_p2 != null) {
+                    const am_args = Argmax2A{
+                        .vocab = g.unpadded_vocab,
+                        .step_idx = ring_slot orelse 0,
+                        .stop_token = stop_token,
+                        .write_loop = @intFromBool(ring_slot != null),
+                    };
+                    enc.setPipeline(p.aot_argmax_p1.?);
+                    enc.setBuffer(rt.logits, 0, 0);
+                    enc.setValue(am_args, 1);
+                    enc.setBuffer(rt.argmax_tmp_v, 0, 2);
+                    enc.setBuffer(rt.argmax_tmp_i, 0, 3);
+                    enc.dispatchGroups(mtl.Size.of(128, 1, 1), mtl.Size.of(256, 1, 1));
+                    dispatches += 1;
+
+                    enc.setPipeline(p.aot_argmax_p2.?);
+                    enc.setBuffer(rt.argmax_tmp_v, 0, 0);
+                    enc.setBuffer(rt.argmax_tmp_i, 0, 1);
+                    enc.setValue(am_args, 2);
+                    enc.setBuffer(rt.ids, 0, 3);
+                    enc.setBuffer(if (ring_slot != null) rt.token_ring else rt.argmax_out, 0, 4);
+                    enc.setBuffer(rt.loop_ctrl, 0, 5);
+                    enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(128, 1, 1));
+                    dispatches += 1;
+                } else {
+                    enc.setPipeline(p.argmax);
+                    enc.setBuffer(rt.logits, 0, 0);
+                    enc.setValue(ArgmaxA{ .vocab = g.unpadded_vocab }, 1);
+                    enc.setBuffer(rt.argmax_out, 0, 2);
+                    enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(1024, 1, 1));
+                    dispatches += 1;
+                }
             }
         }
+        return dispatches;
+    }
+
+    pub fn stepDirect(rt: *Runtime, token_id: u32, want_logits: bool, gpu_argmax: bool) !StepStats {
+        if (rt.len >= rt.capacity) return error.ContextFull;
+        const t0 = nowNs();
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
+
+        rt.ids.slice(u32, 1)[0] = token_id;
+        var cb0 = rt.queue.commandBuffer();
+        var enc = cb0.compute(.serial);
+        var cb_first: ?mtl.CommandBuffer = null;
+        const dispatches = rt.encodeStepBody(&cb0, &enc, &cb_first, @intCast(rt.len), want_logits, gpu_argmax, null, 0xffffffff);
 
         enc.end();
         cb0.commit();
@@ -1152,8 +1597,68 @@ pub const Runtime = struct {
         const gpu_ms = (if (cb_first) |c0| c0.gpuSeconds() else 0) * 1000.0 + cb0.gpuSeconds() * 1000.0;
         const wall_ms = @as(f64, @floatFromInt(nowNs() - t0)) / 1e6;
         rt.len += 1;
-        const tok: u32 = if (!want_logits) 0 else if (gpu_argmax) rt.argmax_out.slice(u32, 1)[0] else cpuArgmax(rt.logits.slice(f32, g.unpadded_vocab));
+        const tok: u32 = if (!want_logits) 0 else if (gpu_argmax) rt.argmax_out.slice(u32, 1)[0] else cpuArgmax(rt.logits.slice(f32, rt.sched.geom.unpadded_vocab));
         return .{ .wall_ms = wall_ms, .gpu_ms = gpu_ms, .dispatches = dispatches, .command_buffers = if (cb_first != null) 2 else 1, .syncs = 1, .token = tok };
+    }
+
+    pub const BurstStats = struct {
+        produced: usize = 0,
+        stopped: bool = false,
+        wall_ms: f64 = 0,
+        gpu_ms: f64 = 0,
+        dispatches: u32 = 0,
+        syncs: u32 = 1,
+    };
+
+    pub fn requestCancel(rt: *Runtime) void {
+        const ctrl: *volatile LoopCtrl = @ptrCast(@alignCast(rt.loop_ctrl.contents()));
+        ctrl.cancelled = 1;
+    }
+
+    pub fn generateBurst(rt: *Runtime, start_token: u32, count: usize, stop_token: u32, out_tokens: []u32) !BurstStats {
+        if (count == 0 or count > 64 or count > out_tokens.len) return error.InvalidBurst;
+        if (rt.len + count > rt.capacity) return error.ContextFull;
+        const t0 = nowNs();
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
+
+        rt.ids.slice(u32, 1)[0] = start_token;
+        const ctrl: *LoopCtrl = @ptrCast(@alignCast(rt.loop_ctrl.contents()));
+        ctrl.* = .{};
+
+        var cbs: [64]mtl.CommandBuffer = undefined;
+        var dispatches: u32 = 0;
+        for (0..count) |s| {
+            var cb = rt.queue.commandBuffer();
+            var enc = cb.compute(.serial);
+            var unused_first: ?mtl.CommandBuffer = null;
+            dispatches = rt.encodeStepBody(&cb, &enc, &unused_first, @intCast(rt.len + s), true, true, @intCast(s), stop_token);
+            enc.end();
+            cb.commit();
+            cbs[s] = cb;
+        }
+        cbs[count - 1].wait();
+        var gpu_ms: f64 = 0;
+        for (0..count) |s| {
+            if (cbs[s].failure()) |msg| {
+                std.log.err("aot burst cb[{d}] failed: {s}", .{ s, msg });
+                return error.GpuFailed;
+            }
+            gpu_ms += cbs[s].gpuSeconds() * 1000.0;
+        }
+        const wall_ms = @as(f64, @floatFromInt(nowNs() - t0)) / 1e6;
+        const produced: usize = @min(@as(usize, ctrl.produced), count);
+        const ring = rt.token_ring.slice(u32, count);
+        @memcpy(out_tokens[0..produced], ring[0..produced]);
+        rt.len += produced;
+        return .{
+            .produced = produced,
+            .stopped = ctrl.stopped != 0,
+            .wall_ms = wall_ms,
+            .gpu_ms = gpu_ms,
+            .dispatches = dispatches,
+            .syncs = 1,
+        };
     }
 
     fn allocParam(arena_bytes: []u8, cursor: *usize, val: anytype) usize {
@@ -1876,6 +2381,465 @@ pub const Runtime = struct {
 
     pub fn logitsSlice(rt: *const Runtime) []const f32 {
         return rt.logits.slice(f32, rt.sched.geom.unpadded_vocab);
+    }
+
+    pub fn profileClasses(rt: *Runtime, reps: usize) !void {
+        const g = rt.sched.geom;
+        const h: u32 = g.hidden;
+        const qw: u32 = g.heads * g.head_dim;
+        const kvw: u32 = g.kv_heads * g.head_dim;
+        const p = &rt.pipes;
+        const use_sb = (rt.sched.layout_flags & fmt.layout_interleaved_sb) != 0 and p.aot_dense8_sb != null;
+        const pos: u32 = @intCast(if (rt.len > 0) rt.len - 1 else 0);
+        const scale_h: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(h)));
+        const scale_attn: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(g.head_dim)));
+        const norm_post: f32 = 1.0 / @sqrt(@as(f32, 5.0));
+        const opt_d1 = (rt.opt_mask & 1) != 0 and p.aot_combine_sig_mul != null;
+        const opt_d2 = (rt.opt_mask & 2) != 0 and p.aot_gu_nv != null;
+        const opt_d3 = (rt.opt_mask & 4) != 0 and p.aot_ctl_down3 != null;
+
+        const classes = [_][]const u8{
+            "attn_proj_48", "qkv_48", "split_48", "combine_sig_48", "o_proj_48",
+            "attn_post_48", "mix_norms_all", "controllers_24", "router_pick_48",
+            "gu_nv_44", "down1_nv_44", "aff4_exp_4", "mlp_post_48", "lm_head_1",
+        };
+        var totals: [classes.len]f64 = @splat(0);
+
+        for (0..classes.len) |ci| {
+            var sum_ms: f64 = 0;
+            for (0..reps) |_| {
+                const pool = mtl.objc.Pool.push();
+                defer pool.pop();
+                const cb = rt.queue.commandBuffer();
+                const enc = cb.compute(.serial);
+                for (rt.sched.slots) |sl| {
+                    const lay = &rt.sched.layers[sl.phys];
+                    const full = sl.is_full != 0;
+                    const bank = sl.is_bank != 0;
+                    switch (ci) {
+                        0 => {
+                            var total_proj: u32 = 0;
+                            for (lay.proj_ms) |m_| total_proj += m_;
+                            if (use_sb) {
+                                enc.setPipeline(p.aot_batch_proj8_sb.?);
+                                enc.setBuffer(rt.n0, 0, 0);
+                                enc.setBuffer(rt.n1, 0, 1);
+                                enc.setBuffer(rt.n2, 0, 2);
+                                rt.setW(enc, @intCast(lay.proj_q.w.off), 3);
+                                rt.setW(enc, @intCast(lay.proj_q.sb.off), 4);
+                                rt.setW(enc, @intCast(lay.proj_k.w.off), 5);
+                                rt.setW(enc, @intCast(lay.proj_k.sb.off), 6);
+                                rt.setW(enc, @intCast(lay.proj_v.w.off), 7);
+                                rt.setW(enc, @intCast(lay.proj_v.sb.off), 8);
+                                enc.setBuffer(rt.q, 0, 9);
+                                enc.setBuffer(rt.k, 0, 10);
+                                enc.setBuffer(rt.v, 0, 11);
+                                enc.setBuffer(rt.r, 0, 12);
+                                enc.setBuffer(rt.gate, 0, 13);
+                                enc.setBuffer(rt.sink, 0, 14);
+                                enc.setBuffer(rt.kdyn, 0, 15);
+                                enc.setBuffer(rt.vdyn, 0, 16);
+                                enc.setValue(AffineProjA{ .k = h, .full = sl.is_full, .m = lay.proj_ms }, 17);
+                                enc.dispatchGroups(mtl.Size.of((total_proj + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+                            } else {
+                                enc.setPipeline(p.batch_proj);
+                                enc.setBuffer(rt.n0, 0, 0);
+                                enc.setBuffer(rt.n1, 0, 1);
+                                enc.setBuffer(rt.n2, 0, 2);
+                                rt.setW(enc, @intCast(lay.proj_q.w.off), 3);
+                                rt.setW(enc, @intCast(lay.proj_q.s.off), 4);
+                                rt.setW(enc, @intCast(lay.proj_q.b.off), 5);
+                                rt.setW(enc, @intCast(lay.proj_k.w.off), 6);
+                                rt.setW(enc, @intCast(lay.proj_k.s.off), 7);
+                                rt.setW(enc, @intCast(lay.proj_k.b.off), 8);
+                                rt.setW(enc, @intCast(lay.proj_v.w.off), 9);
+                                rt.setW(enc, @intCast(lay.proj_v.s.off), 10);
+                                rt.setW(enc, @intCast(lay.proj_v.b.off), 11);
+                                enc.setBuffer(rt.q, 0, 12);
+                                enc.setBuffer(rt.k, 0, 13);
+                                enc.setBuffer(rt.v, 0, 14);
+                                enc.setBuffer(rt.r, 0, 15);
+                                enc.setBuffer(rt.gate, 0, 16);
+                                enc.setBuffer(rt.sink, 0, 17);
+                                enc.setBuffer(rt.kdyn, 0, 18);
+                                enc.setBuffer(rt.vdyn, 0, 19);
+                                enc.setValue(AffineProjA{ .k = h, .full = sl.is_full, .m = lay.proj_ms }, 20);
+                                enc.dispatchGroups(mtl.Size.of((total_proj + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+                            }
+                        },
+                        1 => {
+                            const kv_at = rt.slot_kv_off[sl.slot] + (if (full) @as(usize, pos) else @as(usize, pos % g.window)) * kvw * 2;
+                            const qkv_row = BatchQkvRow{ .k_ring = convAddr(rt.k_conv, sl.slot, kvw), .v_ring = convAddr(rt.v_conv, sl.slot, kvw), .keys = rt.keys.gpuAddress() + kv_at, .values = rt.values.gpuAddress() + kv_at, .pos = pos };
+                            const qkv_args = QkvArgs{ .kv = g.kv_heads, .heads = g.heads, .dim = g.head_dim, .rel = g.d_rel, .extent = lay.extent, .layout = sl.is_full, .dyn = sl.is_full, .tau = sl.is_full, .norm = 1.0 / @sqrt(@as(f32, if (full) 9.0 else 5.0)), .q_threshold = g.qk_clip, .rel_threshold = g.rel_clip, .eps = g.eps, .floor = @floatFromInt(g.log_floor), .alpha = g.log_alpha };
+                            enc.setPipeline(p.qkv);
+                            enc.setBuffer(rt.k, 0, 0);
+                            enc.setBuffer(rt.v, 0, 1);
+                            rt.setW(enc, @intCast(lay.k_conv.off), 2);
+                            rt.setW(enc, @intCast(lay.v_conv.off), 3);
+                            enc.setBuffer(rt.kdyn, 0, 4);
+                            enc.setBuffer(rt.vdyn, 0, 5);
+                            enc.setBuffer(rt.q, 0, 6);
+                            rt.setW(enc, @intCast(lay.q_scale.off), 7);
+                            enc.setBuffer(rt.r, 0, 8);
+                            rt.setW(enc, @intCast(lay.r_scale.off), 9);
+                            rt.setW(enc, @intCast(lay.rel_bias.off), 10);
+                            enc.setValue(qkv_args, 11);
+                            enc.setBuffer(rt.relbias, 0, 12);
+                            enc.setValue(qkv_row, 13);
+                            enc.setBuffer(rt.kc, 0, 14);
+                            enc.setBuffer(rt.vc, 0, 15);
+                            enc.dispatchGroups(mtl.Size.of(g.kv_heads + g.heads + (g.heads * (lay.extent + 1) + 255) / 256, 1, 1), mtl.Size.of(256, 1, 1));
+                        },
+                        2 => {
+                            const win: u32 = if (full) 0 else g.window;
+                            const lo: u32 = if (win != 0 and pos + 1 > win) pos + 1 - win else 0;
+                            const part = attnPartition(pos + 1 - lo);
+                            const attn_row = BatchRow{ .keys = rt.keys.gpuAddress() + rt.slot_kv_off[sl.slot], .values = rt.values.gpuAddress() + rt.slot_kv_off[sl.slot], .args = .{ .heads = g.heads, .kv = g.kv_heads, .dim = g.head_dim, .rel = g.d_rel, .extent = lay.extent, .window = win, .pos = pos, .tau = sl.is_full, .splits = part.splits, .chunk = part.chunk, .scale = scale_attn, .floor = @floatFromInt(g.log_floor), .alpha = g.log_alpha } };
+                            enc.setPipeline(p.split);
+                            enc.setBuffer(rt.q, 0, 0);
+                            enc.setBuffer(rt.relbias, 0, 1);
+                            enc.setBuffer(rt.sink, 0, 2);
+                            enc.setValue(attn_row, 3);
+                            enc.setBuffer(rt.parts, 0, 4);
+                            enc.dispatchGroups(mtl.Size.of(g.kv_heads * part.splits, 1, 1), mtl.Size.of((g.heads / g.kv_heads) * 32, 1, 1));
+                        },
+                        3 => {
+                            const win: u32 = if (full) 0 else g.window;
+                            const lo: u32 = if (win != 0 and pos + 1 > win) pos + 1 - win else 0;
+                            const part = attnPartition(pos + 1 - lo);
+                            const attn_row = BatchRow{ .keys = rt.keys.gpuAddress() + rt.slot_kv_off[sl.slot], .values = rt.values.gpuAddress() + rt.slot_kv_off[sl.slot], .args = .{ .heads = g.heads, .kv = g.kv_heads, .dim = g.head_dim, .rel = g.d_rel, .extent = lay.extent, .window = win, .pos = pos, .tau = sl.is_full, .splits = part.splits, .chunk = part.chunk, .scale = scale_attn, .floor = @floatFromInt(g.log_floor), .alpha = g.log_alpha } };
+                            if (opt_d1) {
+                                enc.setPipeline(p.aot_combine_sig_mul.?);
+                                enc.setBuffer(rt.parts, 0, 0);
+                                enc.setValue(attn_row, 1);
+                                enc.setBuffer(rt.gate, 0, 2);
+                                enc.setBuffer(rt.attn, 0, 3);
+                                enc.dispatchGroups(mtl.Size.of(g.heads, 1, 1), mtl.Size.of(32, 1, 1));
+                            } else {
+                                enc.setPipeline(p.combine);
+                                enc.setBuffer(rt.parts, 0, 0);
+                                enc.setValue(attn_row, 1);
+                                enc.setBuffer(rt.attn, 0, 2);
+                                enc.dispatchGroups(mtl.Size.of(g.heads, 1, 1), mtl.Size.of(32, 1, 1));
+                                enc.setPipeline(p.sig_mul);
+                                enc.setBuffer(rt.attn, 0, 0);
+                                enc.setBuffer(rt.gate, 0, 1);
+                                enc.setValue(PairA{ .count = qw }, 2);
+                                enc.setBuffer(rt.attn, 0, 3);
+                                enc.dispatchThreads(mtl.Size.of(qw, 1, 1), mtl.Size.of(256, 1, 1));
+                            }
+                        },
+                        4 => {
+                            if (use_sb) {
+                                enc.setPipeline(p.aot_dense8_sb.?);
+                                enc.setBuffer(rt.attn, 0, 0);
+                                rt.setW(enc, @intCast(lay.proj_o.w.off), 1);
+                                rt.setW(enc, @intCast(lay.proj_o.sb.off), 2);
+                                enc.setValue(AffineDenseA{ .n = h, .k = qw, .rows = 1, .xs = 1, .xb = 0, .bits = 8, .cap = 0 }, 3);
+                                enc.setBuffer(rt.projout, 0, 4);
+                                enc.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+                            } else {
+                                enc.setPipeline(p.dense);
+                                enc.setBuffer(rt.attn, 0, 0);
+                                rt.setW(enc, @intCast(lay.proj_o.w.off), 1);
+                                rt.setW(enc, @intCast(lay.proj_o.s.off), 2);
+                                rt.setW(enc, @intCast(lay.proj_o.b.off), 3);
+                                enc.setValue(AffineDenseA{ .n = h, .k = qw, .rows = 1, .xs = 1, .xb = 0, .bits = 8, .cap = 0 }, 4);
+                                enc.setBuffer(rt.projout, 0, 5);
+                                enc.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+                            }
+                        },
+                        5 => {
+                            const aconv_row = ConvRow{ .ring = convAddr(rt.attn_conv, sl.slot, h), .pos = pos };
+                            const aconv_args = DecodeConvA{ .channels = h, .heads = 0, .ring = conv_ring, .pos = 0, .layout = 0, .norm = norm_post, .residual = 1, .topk = 0 };
+                            enc.setPipeline(p.batch_conv);
+                            enc.setBuffer(rt.projout, 0, 0);
+                            rt.setW(enc, @intCast(lay.attn_post.off), 1);
+                            enc.setValue(aconv_args, 2);
+                            enc.setValue(aconv_args, 3);
+                            enc.setBuffer(rt.o, 0, 4);
+                            enc.setValue(aconv_row, 5);
+                            enc.setBuffer(rt.projout, 0, 6);
+                            enc.dispatchThreads(mtl.Size.of(h, 1, 1), mtl.Size.of(256, 1, 1));
+                        },
+                        6 => {
+                            const mq_off: usize = @intCast(rt.sched.globals.mlp_queries[sl.phys].off);
+                            enc.setPipeline(p.batch_mix);
+                            enc.setBuffer(rt.blocks, 0, 0);
+                            enc.setBuffer(rt.x, 0, 1);
+                            rt.setW(enc, mq_off, 2);
+                            rt.setW(enc, mq_off, 3);
+                            rt.setW(enc, mq_off, 4);
+                            rt.setW(enc, mq_off, 5);
+                            enc.setValue(MixArgs{ .width = h, .depth = sl.block_count_after_attn + 1, .stride = mix_states, .k = 1, .norm = 1, .scale = scale_h, .eps = g.eps }, 6);
+                            enc.setBuffer(rt.mixout, 0, 7);
+                            rt.setW(enc, @intCast(lay.mlp_norm.off), 8);
+                            rt.setW(enc, mq_off, 9);
+                            rt.setW(enc, mq_off, 10);
+                            enc.setBuffer(rt.m0, 0, 11);
+                            enc.setBuffer(rt.m0, 0, 12);
+                            enc.setBuffer(rt.m0, 0, 13);
+                            enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
+                            if (sl.phys > 0) {
+                                const q0_off: usize = @intCast(rt.sched.globals.attn_queries[sl.phys - 1].off);
+                                enc.setPipeline(p.batch_mix);
+                                enc.setBuffer(rt.blocks, 0, 0);
+                                enc.setBuffer(rt.x, 0, 1);
+                                rt.setW(enc, q0_off, 2);
+                                rt.setW(enc, q0_off, 3);
+                                rt.setW(enc, q0_off, 4);
+                                rt.setW(enc, q0_off, 5);
+                                enc.setValue(MixArgs{ .width = h, .depth = sl.block_count_before + 1, .stride = mix_states, .k = if (full) 3 else 1, .norm = 1, .scale = scale_h, .eps = g.eps }, 6);
+                                enc.setBuffer(rt.mixout, 0, 7);
+                                rt.setW(enc, @intCast(lay.q_norm.off), 8);
+                                rt.setW(enc, @intCast(lay.k_norm.off), 9);
+                                rt.setW(enc, @intCast(lay.v_norm.off), 10);
+                                enc.setBuffer(rt.n0, 0, 11);
+                                enc.setBuffer(rt.n1, 0, 12);
+                                enc.setBuffer(rt.n2, 0, 13);
+                                enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
+                            }
+                        },
+                        7 => if (bank) {
+                            const kq: u32 = if (full) 3 else 1;
+                            const ctl_args = ControlsArgs{ .h = h, .rank = g.gate_rank, .rows = 1, .xs = .{ kq, kq, kq }, .xb = if (full) .{ 0, 1, 2 } else .{ 0, 0, 0 } };
+                            if (opt_d3) {
+                                enc.setPipeline(p.aot_ctl_down3.?);
+                                enc.setBuffer(rt.mixout, 0, 0);
+                                enc.setBuffer(rt.msg, 0, 1);
+                                enc.setBuffer(rt.ctl_inv, 0, 2);
+                                rt.setW(enc, @intCast(lay.controllers[0].down.off), 3);
+                                rt.setW(enc, @intCast(lay.controllers[1].down.off), 4);
+                                rt.setW(enc, @intCast(lay.controllers[2].down.off), 5);
+                                enc.setValue(ctl_args, 6);
+                                enc.setBuffer(rt.ctl_hid, 0, 7);
+                                enc.dispatchGroups(mtl.Size.of((g.gate_rank + 1) / 2, 1, 3), mtl.Size.of(64, 1, 1));
+                            } else {
+                                enc.setPipeline(p.ctl_norm);
+                                enc.setBuffer(rt.mixout, 0, 0);
+                                enc.setBuffer(rt.mixout, 0, 1);
+                                enc.setBuffer(rt.mixout, 0, 2);
+                                enc.setBuffer(rt.msg, 0, 3);
+                                enc.setValue(ctl_args, 4);
+                                enc.setBuffer(rt.ctl_in, 0, 5);
+                                enc.dispatchGroups(mtl.Size.of(6, 1, 1), mtl.Size.of(256, 1, 1));
+                                enc.setPipeline(p.ctl_down);
+                                enc.setBuffer(rt.ctl_in, 0, 0);
+                                rt.setW(enc, @intCast(lay.controllers[0].down.off), 1);
+                                rt.setW(enc, @intCast(lay.controllers[1].down.off), 2);
+                                rt.setW(enc, @intCast(lay.controllers[2].down.off), 3);
+                                enc.setValue(ctl_args, 4);
+                                enc.setBuffer(rt.ctl_hid, 0, 5);
+                                enc.dispatchGroups(mtl.Size.of((g.gate_rank + 7) / 8, 1, 3), mtl.Size.of(256, 1, 1));
+                            }
+                            enc.setPipeline(p.ctl_apply);
+                            enc.setBuffer(rt.ctl_hid, 0, 0);
+                            rt.setW(enc, @intCast(lay.controllers[0].gain.off), 1);
+                            rt.setW(enc, @intCast(lay.controllers[1].gain.off), 2);
+                            rt.setW(enc, @intCast(lay.controllers[2].gain.off), 3);
+                            rt.setW(enc, @intCast(lay.controllers[0].forget.off), 4);
+                            rt.setW(enc, @intCast(lay.controllers[1].forget.off), 5);
+                            rt.setW(enc, @intCast(lay.controllers[2].forget.off), 6);
+                            enc.setBuffer(rt.mixout, 0, 7);
+                            enc.setBuffer(rt.mixout, 0, 8);
+                            enc.setBuffer(rt.mixout, 0, 9);
+                            enc.setBuffer(rt.msg, 0, 10);
+                            enc.setBuffer(rt.n0, 0, 11);
+                            enc.setBuffer(rt.n1, 0, 12);
+                            enc.setBuffer(rt.n2, 0, 13);
+                            enc.setValue(ctl_args, 14);
+                            enc.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 3), mtl.Size.of(256, 1, 1));
+                            enc.setPipeline(p.rms3);
+                            enc.setBuffer(rt.n0, 0, 0);
+                            enc.setBuffer(rt.n1, 0, 1);
+                            enc.setBuffer(rt.n2, 0, 2);
+                            rt.setW(enc, @intCast(lay.q_norm.off), 3);
+                            rt.setW(enc, @intCast(lay.k_norm.off), 4);
+                            rt.setW(enc, @intCast(lay.v_norm.off), 5);
+                            enc.setValue(Rms3A{ .width = h, .xs = .{ 1, 1, 1 }, .xb = .{ 0, 0, 0 }, .eps = g.eps }, 6);
+                            enc.setBuffer(rt.n0, 0, 7);
+                            enc.setBuffer(rt.n1, 0, 8);
+                            enc.setBuffer(rt.n2, 0, 9);
+                            enc.dispatchGroups(mtl.Size.of(3, 1, 1), mtl.Size.of(256, 1, 1));
+                            const ctl = lay.controllers[3];
+                            if (opt_d3) {
+                                enc.setPipeline(p.aot_ctl_down1.?);
+                                enc.setBuffer(rt.mixout, 0, 0);
+                                enc.setBuffer(rt.msg, 0, 1);
+                                enc.setBuffer(rt.ctl_inv, 0, 2);
+                                rt.setW(enc, @intCast(ctl.down.off), 3);
+                                enc.setValue(AffineDenseA{ .n = g.gate_rank, .k = 2 * h, .rows = 1, .xs = 1, .xb = 0, .bits = 0, .cap = 0 }, 4);
+                                enc.setBuffer(rt.normed, 0, 5);
+                                enc.dispatchGroups(mtl.Size.of((g.gate_rank + 1) / 2, 1, 1), mtl.Size.of(64, 1, 1));
+                            } else {
+                                enc.setPipeline(p.rms_pair);
+                                enc.setBuffer(rt.mixout, 0, 0);
+                                enc.setBuffer(rt.msg, 0, 1);
+                                enc.setValue(RmsPairA{ .width = h, .xs0 = 1, .xb0 = 0, .xs1 = 4, .xb1 = 3, .eps = g.eps }, 2);
+                                enc.setBuffer(rt.h2in, 0, 3);
+                                enc.dispatchGroups(mtl.Size.of(2, 1, 1), mtl.Size.of(256, 1, 1));
+                                enc.setPipeline(p.float_mv);
+                                enc.setBuffer(rt.h2in, 0, 0);
+                                rt.setW(enc, @intCast(ctl.down.off), 1);
+                                enc.setValue(AffineDenseA{ .n = g.gate_rank, .k = 2 * h, .rows = 1, .xs = 1, .xb = 0, .bits = 0, .cap = 0 }, 2);
+                                enc.setBuffer(rt.normed, 0, 3);
+                                enc.dispatchGroups(mtl.Size.of((g.gate_rank + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+                            }
+                            enc.setPipeline(p.batch_float_ctl);
+                            enc.setBuffer(rt.normed, 0, 0);
+                            rt.setW(enc, @intCast(ctl.gain.off), 1);
+                            rt.setW(enc, @intCast(ctl.forget.off), 2);
+                            enc.setBuffer(rt.mixout, 0, 3);
+                            enc.setBuffer(rt.msg, 0, 4);
+                            enc.setBuffer(rt.mixout, 0, 5);
+                            enc.setValue(AffineBatchCtlA{ .k = g.gate_rank, .m0 = h, .m1 = h, .h = h, .cxs = 1, .cxb = 0, .mxs = 4, .mxb = 3, .ys = 1, .yb = 0 }, 6);
+                            enc.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+                            enc.setPipeline(p.rms);
+                            enc.setBuffer(rt.mixout, 0, 0);
+                            rt.setW(enc, @intCast(lay.mlp_norm.off), 1);
+                            enc.setValue(RmsBA{ .width = h, .rows = 1, .xs = 1, .xb = 0, .ys = 1, .yb = 0, .wb = 1, .eps = g.eps }, 2);
+                            enc.setBuffer(rt.m0, 0, 3);
+                            enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
+                        },
+                        8 => {
+                            enc.setPipeline(p.float_mv);
+                            enc.setBuffer(rt.m0, 0, 0);
+                            rt.setW(enc, @intCast(lay.router.off), 1);
+                            enc.setValue(AffineDenseA{ .n = g.experts, .k = h, .rows = 1, .xs = 1, .xb = 0, .bits = 0, .cap = 0 }, 2);
+                            enc.setBuffer(rt.router, 0, 3);
+                            enc.dispatchGroups(mtl.Size.of((g.experts + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+                            enc.setPipeline(p.routepick);
+                            enc.setBuffer(rt.router, 0, 0);
+                            rt.setW(enc, @intCast(lay.router_bias.off), 1);
+                            enc.setValue(PickA{ .experts = g.experts, .topk = g.topk, .rows = 1, .route_scale = g.route_scale }, 2);
+                            enc.setBuffer(rt.picks, 0, 3);
+                            enc.setBuffer(rt.wts, 0, 4);
+                            enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(32, 1, 1));
+                        },
+                        9 => if (lay.is_affine4 == 0) {
+                            if (opt_d2) {
+                                enc.setPipeline(p.aot_gu_nv.?);
+                                enc.setBuffer(rt.m0, 0, 0);
+                                rt.setW(enc, @intCast(lay.w13.off), 1);
+                                rt.setW(enc, @intCast(lay.w13_scale.off), 2);
+                                rt.setW(enc, @intCast(lay.w13_global.off), 3);
+                                enc.setBuffer(rt.picks, 0, 4);
+                                enc.setValue(MoeBA{ .k = h, .n = g.expert_inter, .slots = g.topk, .topk = g.topk, .gate_cap = g.gate_cap, .up_cap = g.up_cap }, 5);
+                                enc.setBuffer(rt.act, 0, 6);
+                                rt.setW(enc, @intCast(rt.sched.globals.t16.off), 7);
+                                rt.setW(enc, @intCast(rt.sched.globals.t256.off), 8);
+                                enc.dispatchGroups(mtl.Size.of((g.expert_inter + 7) / 8, g.topk, 1), mtl.Size.of(256, 1, 1));
+                            } else {
+                                enc.setPipeline(p.gu_nv);
+                                enc.setBuffer(rt.m0, 0, 0);
+                                rt.setW(enc, @intCast(lay.w13.off), 1);
+                                rt.setW(enc, @intCast(lay.w13_scale.off), 2);
+                                rt.setW(enc, @intCast(lay.w13_global.off), 3);
+                                rt.setW(enc, @intCast(rt.sched.globals.nvfp4_den.off), 4);
+                                enc.setBuffer(rt.picks, 0, 5);
+                                enc.setValue(MoeBA{ .k = h, .n = g.expert_inter, .slots = g.topk, .topk = g.topk, .gate_cap = g.gate_cap, .up_cap = g.up_cap }, 6);
+                                enc.setBuffer(rt.act, 0, 7);
+                                rt.setW(enc, @intCast(rt.sched.globals.t16.off), 8);
+                                enc.dispatchGroups(mtl.Size.of(g.expert_inter, g.topk, 1), mtl.Size.of(32, 1, 1));
+                            }
+                        },
+                        10 => if (lay.is_affine4 == 0) {
+                            if (opt_d2) {
+                                enc.setPipeline(p.aot_down1_nv.?);
+                                enc.setBuffer(rt.act, 0, 0);
+                                rt.setW(enc, @intCast(lay.w2.off), 1);
+                                rt.setW(enc, @intCast(lay.w2_scale.off), 2);
+                                rt.setW(enc, @intCast(lay.w2_global.off), 3);
+                                enc.setBuffer(rt.picks, 0, 4);
+                                enc.setValue(MoeBA{ .k = g.expert_inter, .n = h, .slots = g.topk, .topk = g.topk, .gate_cap = 0, .up_cap = 0 }, 5);
+                                enc.setBuffer(rt.down, 0, 6);
+                                rt.setW(enc, @intCast(rt.sched.globals.t16.off), 7);
+                                rt.setW(enc, @intCast(rt.sched.globals.t256.off), 8);
+                                enc.dispatchGroups(mtl.Size.of((h + 31) / 32, g.topk, 1), mtl.Size.of(256, 1, 1));
+                            } else {
+                                enc.setPipeline(p.down1_nv);
+                                enc.setBuffer(rt.act, 0, 0);
+                                rt.setW(enc, @intCast(lay.w2.off), 1);
+                                rt.setW(enc, @intCast(lay.w2_scale.off), 2);
+                                rt.setW(enc, @intCast(lay.w2_global.off), 3);
+                                rt.setW(enc, @intCast(rt.sched.globals.nvfp4_den.off), 4);
+                                enc.setBuffer(rt.picks, 0, 5);
+                                enc.setValue(MoeBA{ .k = g.expert_inter, .n = h, .slots = g.topk, .topk = g.topk, .gate_cap = 0, .up_cap = 0 }, 6);
+                                enc.setBuffer(rt.down, 0, 7);
+                                rt.setW(enc, @intCast(rt.sched.globals.t16.off), 8);
+                                enc.dispatchGroups(mtl.Size.of((h + 31) / 32, g.topk, 1), mtl.Size.of(256, 1, 1));
+                            }
+                        },
+                        11 => if (lay.is_affine4 != 0) {
+                            enc.setPipeline(p.aff_up);
+                            enc.setBuffer(rt.m0, 0, 0);
+                            rt.setW(enc, @intCast(lay.w13.off), 1);
+                            rt.setW(enc, @intCast(lay.w13_scale.off), 2);
+                            rt.setW(enc, @intCast(lay.w13_bias.off), 3);
+                            enc.setBuffer(rt.picks, 0, 4);
+                            enc.setValue(MoeBA{ .k = h, .n = g.expert_inter, .slots = g.topk, .topk = g.topk, .gate_cap = g.gate_cap, .up_cap = g.up_cap }, 5);
+                            enc.setBuffer(rt.act, 0, 6);
+                            enc.dispatchGroups(mtl.Size.of((g.expert_inter + 7) / 8, g.topk, 1), mtl.Size.of(256, 1, 1));
+                            enc.setPipeline(p.aff_down);
+                            enc.setBuffer(rt.act, 0, 0);
+                            rt.setW(enc, @intCast(lay.w2.off), 1);
+                            rt.setW(enc, @intCast(lay.w2_scale.off), 2);
+                            rt.setW(enc, @intCast(lay.w2_bias.off), 3);
+                            enc.setBuffer(rt.picks, 0, 4);
+                            enc.setValue(MoeBA{ .k = g.expert_inter, .n = h, .slots = g.topk, .topk = g.topk, .gate_cap = 0, .up_cap = 0 }, 5);
+                            enc.setBuffer(rt.down, 0, 6);
+                            enc.dispatchGroups(mtl.Size.of((h + 7) / 8, g.topk, 1), mtl.Size.of(256, 1, 1));
+                        },
+                        12 => {
+                            const mconv_row = ConvRow{ .ring = convAddr(rt.mlp_conv, sl.slot, h), .pos = pos };
+                            const mconv_args = DecodeConvA{ .channels = h, .heads = 0, .ring = conv_ring, .pos = 0, .layout = 0, .norm = norm_post, .residual = 1, .topk = g.topk };
+                            enc.setPipeline(p.batch_conv);
+                            enc.setBuffer(rt.down, 0, 0);
+                            rt.setW(enc, @intCast(lay.mlp_post.off), 1);
+                            enc.setValue(mconv_args, 2);
+                            enc.setValue(mconv_args, 3);
+                            enc.setBuffer(rt.o, 0, 4);
+                            enc.setValue(mconv_row, 5);
+                            enc.setBuffer(rt.wts, 0, 6);
+                            enc.dispatchThreads(mtl.Size.of(h, 1, 1), mtl.Size.of(256, 1, 1));
+                        },
+                        13 => {},
+                        else => unreachable,
+                    }
+                }
+                if (ci == 13) {
+                    if (use_sb) {
+                        enc.setPipeline(p.aot_dense8_sb.?);
+                        enc.setBuffer(rt.n0, 0, 0);
+                        rt.setW(enc, @intCast(rt.sched.globals.unembed.w.off), 1);
+                        rt.setW(enc, @intCast(rt.sched.globals.unembed.sb.off), 2);
+                        enc.setValue(AffineDenseA{ .n = g.unpadded_vocab, .k = h, .rows = 1, .xs = 1, .xb = 0, .bits = 8, .cap = g.logit_cap }, 3);
+                        enc.setBuffer(rt.logits, 0, 4);
+                        enc.dispatchGroups(mtl.Size.of((g.unpadded_vocab + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+                    } else {
+                        enc.setPipeline(p.dense);
+                        enc.setBuffer(rt.n0, 0, 0);
+                        rt.setW(enc, @intCast(rt.sched.globals.unembed.w.off), 1);
+                        rt.setW(enc, @intCast(rt.sched.globals.unembed.s.off), 2);
+                        rt.setW(enc, @intCast(rt.sched.globals.unembed.b.off), 3);
+                        enc.setValue(AffineDenseA{ .n = g.unpadded_vocab, .k = h, .rows = 1, .xs = 1, .xb = 0, .bits = 8, .cap = g.logit_cap }, 4);
+                        enc.setBuffer(rt.logits, 0, 5);
+                        enc.dispatchGroups(mtl.Size.of((g.unpadded_vocab + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+                    }
+                }
+                enc.end();
+                cb.commit();
+                cb.wait();
+                sum_ms += cb.gpuSeconds() * 1000.0;
+            }
+            totals[ci] = sum_ms / @as(f64, @floatFromInt(reps));
+        }
+        var grand: f64 = 0;
+        for (classes, 0..) |name, ci| {
+            grand += totals[ci];
+            std.debug.print("profile {s:<16}: {d:6.3} ms\n", .{ name, totals[ci] });
+        }
+        std.debug.print("profile SUM             : {d:6.3} ms (opt={d}, use_sb={})\n", .{ grand, rt.opt_mask, use_sb });
     }
 };
 

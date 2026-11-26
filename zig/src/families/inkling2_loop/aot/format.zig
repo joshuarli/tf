@@ -15,6 +15,35 @@ pub const layout_predivided_nvfp4: u32 = 1 << 1;
 pub const layout_trimmed_lm_head: u32 = 1 << 2;
 pub const layout_colocated_nvfp4: u32 = 1 << 3;
 pub const layout_fused_kernels: u32 = 1 << 4;
+pub const layout_non_indirect: u32 = 1 << 5;
+pub const layout_packed_w13_gf: u32 = 1 << 6;
+pub const max_weight_chunks: usize = 8;
+pub const max_chunk_bytes: u64 = 3_500_000_000;
+
+pub const ChunkPlan = struct {
+    starts: [max_weight_chunks]u64 = @splat(0),
+    ends: [max_weight_chunks]u64 = @splat(0),
+    count: usize = 0,
+};
+
+pub fn planWeightChunks(sched: *const Schedule) ChunkPlan {
+    var plan = ChunkPlan{};
+    var cur_start: u64 = 0;
+    for (0..num_layers) |li| {
+        const layer_start = sched.layers[li].q_norm.off;
+        const layer_end = if (li + 1 < num_layers) sched.layers[li + 1].q_norm.off else sched.weights_size;
+        if (layer_end - cur_start > max_chunk_bytes and layer_start > cur_start) {
+            plan.starts[plan.count] = cur_start;
+            plan.ends[plan.count] = layer_start;
+            plan.count += 1;
+            cur_start = layer_start;
+        }
+    }
+    plan.starts[plan.count] = cur_start;
+    plan.ends[plan.count] = sched.weights_size;
+    plan.count += 1;
+    return plan;
+}
 
 pub const TensorRef = extern struct {
     off: u64 = 0,
@@ -144,6 +173,11 @@ pub const Schedule = extern struct {
     target_arch: [32]u8 = @splat(0),
     weights_size: u64 = 0,
     weights_sha256: [32]u8 = @splat(0),
+    chunk_count: u32 = 0,
+    chunk_pad: u32 = 0,
+    chunk_starts: [max_weight_chunks]u64 = @splat(0),
+    chunk_ends: [max_weight_chunks]u64 = @splat(0),
+    chunk_sha256: [max_weight_chunks][32]u8 = @splat(@splat(0)),
     geom: Geometry = .{},
     globals: GlobalWeights = .{},
     layers: [num_layers]LayerPlan = @splat(.{}),

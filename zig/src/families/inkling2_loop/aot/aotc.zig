@@ -12,6 +12,7 @@ const experts_metal = @embedFile("../kernels/experts.metal");
 const verify_metal = @embedFile("../kernels/verify.metal");
 const prefill_rows_metal = @embedFile("../kernels/prefill_rows.metal");
 const taps_metal = @embedFile("../kernels/taps.metal");
+const aot_fused_metal = @embedFile("aot_fused.metal");
 
 const decode_pso_names = [_][:0]const u8{
     "i2a_embed",
@@ -45,6 +46,25 @@ const decode_pso_names = [_][:0]const u8{
     "i2e_down1",
     "i2r_controls_down",
     "i2t_tap",
+    "i2_aot_embed_sb",
+    "i2_aot_dense8_sb",
+    "i2_aot_batch_proj8_sb",
+    "i2_aot_expert_up4_sb",
+    "i2_aot_expert_down4_sb",
+    "i2_aot_combine_sig_mul",
+    "i2_aot_gu_nv",
+    "i2_aot_down1_nv",
+    "i2_aot_mix2_inv",
+    "i2_aot_mix_inv",
+    "i2_aot_ctl_down3",
+    "i2_aot_ctl_down1",
+    "i2_aot_ctl_apply3_gf2",
+    "i2_aot_ctl_apply1_gf2",
+    "i2_aot_gu_nv_packed",
+    "i2_aot_argmax_p1",
+    "i2_aot_argmax_p2",
+    "i2_aot_qkv_perm",
+    "i2_aot_split_perm",
 };
 
 const Shard = struct {
@@ -150,9 +170,10 @@ fn packAffine(gpa: std.mem.Allocator, w: *WeightWriter, shards: []const Shard, b
         const packed_sb = try interleaveSB(gpa, s_bytes, b_bytes);
         defer gpa.free(packed_sb);
         ref.sb = try w.append(packed_sb, 256);
+    } else {
+        ref.s = try w.append(s_bytes, 256);
+        ref.b = try w.append(b_bytes, 256);
     }
-    ref.s = try w.append(s_bytes, 256);
-    ref.b = try w.append(b_bytes, 256);
     return ref;
 }
 
@@ -269,21 +290,48 @@ pub fn main(init: std.process.Init) !void {
     const ckpt_dir = args[1];
     const out_dir = args[2];
     var repack_c = false;
+    var repack_c2 = false;
+    var shaders_only = false;
+    var indirect_pso: ?bool = null;
     var runner_bin: ?[]const u8 = null;
     var i: usize = 3;
     while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], "--repack=phase_c")) {
+        if (std.mem.eql(u8, args[i], "--repack=phase_c2")) {
+            repack_c = true;
+            repack_c2 = true;
+        } else if (std.mem.eql(u8, args[i], "--repack=phase_c")) {
             repack_c = true;
         } else if (std.mem.eql(u8, args[i], "--repack=none")) {
             repack_c = false;
+            repack_c2 = false;
+        } else if (std.mem.eql(u8, args[i], "--shaders-only")) {
+            shaders_only = true;
+        } else if (std.mem.eql(u8, args[i], "--indirect=false")) {
+            indirect_pso = false;
+        } else if (std.mem.eql(u8, args[i], "--indirect=true")) {
+            indirect_pso = true;
         } else if (std.mem.eql(u8, args[i], "--runner-bin") and i + 1 < args.len) {
             i += 1;
             runner_bin = args[i];
         } else return error.UnknownArg;
     }
+    const use_indirect = indirect_pso orelse !repack_c;
 
     const t0 = std.Io.Clock.awake.now(io).toNanoseconds();
     try std.Io.Dir.cwd().createDirPath(io, out_dir);
+
+    if (shaders_only) {
+        const sched_path = try std.fs.path.join(arena, &.{ out_dir, "schedule.bin" });
+        const sb = try std.Io.Dir.cwd().readFileAlloc(io, sched_path, arena, .limited(4 << 20));
+        var sched = (try fmt.validateScheduleHeader(sb)).*;
+        if (indirect_pso) |ind| {
+            if (ind) sched.layout_flags &= ~fmt.layout_non_indirect else sched.layout_flags |= fmt.layout_non_indirect;
+        }
+        sched.layout_flags |= fmt.layout_fused_kernels;
+        const eff_indirect = (sched.layout_flags & fmt.layout_non_indirect) == 0;
+        try emitShadersAndManifest(gpa, arena, io, ckpt_dir, out_dir, runner_bin, &sched, eff_indirect, t0);
+        return;
+    }
 
     const cfg_path = try std.fs.path.join(arena, &.{ ckpt_dir, "config.json" });
     const cfg_text = try std.Io.Dir.cwd().readFileAlloc(io, cfg_path, arena, .limited(16 << 20));
@@ -310,8 +358,15 @@ pub fn main(init: std.process.Init) !void {
     defer ww.deinit();
 
     var sched = fmt.Schedule{};
+    sched.layout_flags = fmt.layout_fused_kernels;
     if (repack_c) {
-        sched.layout_flags = fmt.layout_interleaved_sb | fmt.layout_predivided_nvfp4 | fmt.layout_trimmed_lm_head | fmt.layout_colocated_nvfp4;
+        sched.layout_flags |= fmt.layout_interleaved_sb | fmt.layout_predivided_nvfp4 | fmt.layout_trimmed_lm_head | fmt.layout_colocated_nvfp4;
+    }
+    if (repack_c2) {
+        sched.layout_flags |= fmt.layout_packed_w13_gf;
+    }
+    if (!use_indirect) {
+        sched.layout_flags |= fmt.layout_non_indirect;
     }
     const h: u32 = model_cfg.text.hidden;
     const rank: u32 = model_cfg.loop.gate_rank;
@@ -352,7 +407,7 @@ pub fn main(init: std.process.Init) !void {
     var t256_vals: [256]f32 = undefined;
     for (0..256) |k| t256_vals[k] = @floatCast(core.quant.fp8.e4m3(@intCast(k)));
     sched.globals.t256 = try ww.append(std.mem.sliceAsBytes(&t256_vals), 256);
-    const den_val = [1]f32{2688.0};
+    const den_val = [1]f32{if (repack_c) 1.0 else 2688.0};
     sched.globals.nvfp4_den = try ww.append(std.mem.sliceAsBytes(&den_val), 256);
 
     const ctl_down_buf = try gpa.alloc(f32, rank * 2 * h);
@@ -361,6 +416,12 @@ pub fn main(init: std.process.Init) !void {
     defer gpa.free(ctl_gain_buf);
     const ctl_forget_buf = try gpa.alloc(f32, h * rank);
     defer gpa.free(ctl_forget_buf);
+    const ctl_gf_buf = try gpa.alloc(f32, 2 * h * rank);
+    defer gpa.free(ctl_gf_buf);
+    const w13_packed_buf = try gpa.alloc(u8, if (repack_c2) @as(usize, E) * inter * 2 * (h / 2) else 0);
+    defer gpa.free(w13_packed_buf);
+    const s13_packed_buf = try gpa.alloc(u8, if (repack_c2) @as(usize, E) * inter * 2 * (h / 16) else 0);
+    defer gpa.free(s13_packed_buf);
     const prediv_buf = try gpa.alloc(f32, E);
     defer gpa.free(prediv_buf);
 
@@ -414,8 +475,36 @@ pub fn main(init: std.process.Init) !void {
         lp.router = try copyTensor(&ww, shards, try std.fmt.bufPrint(&nb, "{s}mlp.router_weight", .{p}), 256);
         lp.router_bias = try copyTensor(&ww, shards, try std.fmt.bufPrint(&nb, "{s}mlp.router_bias", .{p}), 256);
 
-        lp.w13 = try copyTensor(&ww, shards, try std.fmt.bufPrint(&nb, "{s}mlp.experts.w13.weight", .{p}), 4096);
-        lp.w13_scale = try copyTensor(&ww, shards, try std.fmt.bufPrint(&nb, "{s}mlp.experts.w13.scales", .{p}), 256);
+        if (li < 20 and repack_c2) {
+            const wt = try findTensor(shards, try std.fmt.bufPrint(&nb, "{s}mlp.experts.w13.weight", .{p}));
+            const st_ = try findTensor(shards, try std.fmt.bufPrint(&nb, "{s}mlp.experts.w13.scales", .{p}));
+            const groups: usize = h / 16;
+            const stride: usize = h / 2;
+            const n_ec: usize = @as(usize, E) * inter;
+            for (0..n_ec) |ec| {
+                const row_g = ec * 2;
+                const row_u = row_g + 1;
+                const src_wg = wt.bytes[row_g * stride ..][0..stride];
+                const src_wu = wt.bytes[row_u * stride ..][0..stride];
+                const dst_w = w13_packed_buf[ec * 2 * stride ..][0 .. 2 * stride];
+                for (0..groups) |gi| {
+                    @memcpy(dst_w[gi * 16 ..][0..8], src_wg[gi * 8 ..][0..8]);
+                    @memcpy(dst_w[gi * 16 + 8 ..][0..8], src_wu[gi * 8 ..][0..8]);
+                }
+                const src_sg = st_.bytes[row_g * groups ..][0..groups];
+                const src_su = st_.bytes[row_u * groups ..][0..groups];
+                const dst_s = s13_packed_buf[ec * 2 * groups ..][0 .. 2 * groups];
+                for (0..groups) |gi| {
+                    dst_s[gi * 2 + 0] = src_sg[gi];
+                    dst_s[gi * 2 + 1] = src_su[gi];
+                }
+            }
+            lp.w13 = try ww.append(w13_packed_buf, 4096);
+            lp.w13_scale = try ww.append(s13_packed_buf, 256);
+        } else {
+            lp.w13 = try copyTensor(&ww, shards, try std.fmt.bufPrint(&nb, "{s}mlp.experts.w13.weight", .{p}), 4096);
+            lp.w13_scale = try copyTensor(&ww, shards, try std.fmt.bufPrint(&nb, "{s}mlp.experts.w13.scales", .{p}), 256);
+        }
         if (li < 20) {
             const g13 = try findTensor(shards, try std.fmt.bufPrint(&nb, "{s}mlp.experts.w13.global_scale", .{p}));
             if (repack_c) {
@@ -455,18 +544,29 @@ pub fn main(init: std.process.Init) !void {
                 for (0..rank) |r| for (0..2 * h) |col| {
                     ctl_down_buf[r * 2 * h + col] = ds[(j * 2 * h + col) * rank + r];
                 };
-                for (0..h) |col| for (0..rank) |r| {
-                    ctl_gain_buf[col * rank + r] = gs[(j * rank + r) * 2 * h + col];
-                    ctl_forget_buf[col * rank + r] = gs[(j * rank + r) * 2 * h + h + col];
-                };
-                lp.controllers[j] = .{
-                    .down = try ww.append(std.mem.sliceAsBytes(ctl_down_buf), 256),
-                    .gain = try ww.append(std.mem.sliceAsBytes(ctl_gain_buf), 256),
-                    .forget = try ww.append(std.mem.sliceAsBytes(ctl_forget_buf), 256),
-                };
+                if (repack_c2) {
+                    for (0..h) |col| for (0..rank) |r| {
+                        ctl_gf_buf[(col * rank + r) * 2 + 0] = gs[(j * rank + r) * 2 * h + col];
+                        ctl_gf_buf[(col * rank + r) * 2 + 1] = gs[(j * rank + r) * 2 * h + h + col];
+                    };
+                    lp.controllers[j] = .{
+                        .down = try ww.append(std.mem.sliceAsBytes(ctl_down_buf), 256),
+                        .gain = try ww.append(std.mem.sliceAsBytes(ctl_gf_buf), 256),
+                        .forget = .{},
+                    };
+                } else {
+                    for (0..h) |col| for (0..rank) |r| {
+                        ctl_gain_buf[col * rank + r] = gs[(j * rank + r) * 2 * h + col];
+                        ctl_forget_buf[col * rank + r] = gs[(j * rank + r) * 2 * h + h + col];
+                    };
+                    lp.controllers[j] = .{
+                        .down = try ww.append(std.mem.sliceAsBytes(ctl_down_buf), 256),
+                        .gain = try ww.append(std.mem.sliceAsBytes(ctl_gain_buf), 256),
+                        .forget = try ww.append(std.mem.sliceAsBytes(ctl_forget_buf), 256),
+                    };
+                }
             }
         }
-        _ = inter;
         sched.layers[li] = lp;
     }
 
@@ -474,6 +574,66 @@ pub fn main(init: std.process.Init) !void {
     sched.weights_size = ww.pos;
     sched.slots = fmt.buildSlots(&sched.layers);
 
+    {
+        const plan = fmt.planWeightChunks(&sched);
+        sched.chunk_count = @intCast(plan.count);
+        const wpath_z = try arena.alloc(u8, weights_path.len + 1);
+        @memcpy(wpath_z[0..weights_path.len], weights_path);
+        wpath_z[weights_path.len] = 0;
+        const fd = std.c.open(@ptrCast(wpath_z.ptr), .{ .ACCMODE = .RDONLY });
+        if (fd < 0) return error.OpenFailed;
+        defer _ = std.c.close(fd);
+        _ = std.c.fcntl(fd, @as(c_int, 48), @as(c_int, 1));
+        const Ctx = struct {
+            fd: std.c.fd_t,
+            start: u64,
+            end: u64,
+            out: *[32]u8,
+            ok: bool = false,
+            fn run(ctx: *@This()) void {
+                var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                var buf: [4 << 20]u8 = undefined;
+                var off = ctx.start;
+                while (off < ctx.end) {
+                    const want: usize = @intCast(@min(ctx.end - off, buf.len));
+                    const got = std.c.pread(ctx.fd, &buf, want, @intCast(off));
+                    if (got <= 0) return;
+                    const n: usize = @intCast(got);
+                    hasher.update(buf[0..n]);
+                    off += n;
+                }
+                ctx.out.* = hasher.finalResult();
+                ctx.ok = true;
+            }
+        };
+        var ctxs: [fmt.max_weight_chunks]Ctx = undefined;
+        var threads: [fmt.max_weight_chunks]std.Thread = undefined;
+        for (0..plan.count) |ci| {
+            sched.chunk_starts[ci] = plan.starts[ci];
+            sched.chunk_ends[ci] = plan.ends[ci];
+            ctxs[ci] = .{ .fd = fd, .start = plan.starts[ci], .end = plan.ends[ci], .out = &sched.chunk_sha256[ci] };
+            threads[ci] = try std.Thread.spawn(.{}, Ctx.run, .{&ctxs[ci]});
+        }
+        for (0..plan.count) |ci| {
+            threads[ci].join();
+            if (!ctxs[ci].ok) return error.HashFailed;
+        }
+    }
+
+    try emitShadersAndManifest(gpa, arena, io, ckpt_dir, out_dir, runner_bin, &sched, use_indirect, t0);
+}
+
+fn emitShadersAndManifest(
+    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    io: std.Io,
+    ckpt_dir: []const u8,
+    out_dir: []const u8,
+    runner_bin: ?[]const u8,
+    sched: *fmt.Schedule,
+    use_indirect: bool,
+    t0: i96,
+) !void {
     const pool = mtl.objc.Pool.push();
     defer pool.pop();
     const device = try mtl.Device.init();
@@ -483,7 +643,7 @@ pub fn main(init: std.process.Init) !void {
     sched.setArchName(arch_name);
     sched.min_generation = device.generation();
 
-    const metallib_path = try compileMetallib(gpa, io, out_dir, null);
+    const metallib_path = try compileMetallib(gpa, io, out_dir, aot_fused_metal);
     defer gpa.free(metallib_path);
 
     const archive_path = try std.fs.path.join(arena, &.{ out_dir, "pipelines.mtlarchive" });
@@ -493,17 +653,23 @@ pub fn main(init: std.process.Init) !void {
         const archive = try ba.BinaryArchive.create(device);
         defer archive.deinit();
         for (decode_pso_names) |name| {
-            try archive.addCompute(lib, name, true);
+            try archive.addCompute(lib, name, use_indirect);
         }
         try archive.serialize(archive_path);
     }
 
     const sched_path = try std.fs.path.join(arena, &.{ out_dir, "schedule.bin" });
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = sched_path, .data = std.mem.asBytes(&sched) });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = sched_path, .data = std.mem.asBytes(sched) });
 
-    const tok_src = try std.fs.path.join(arena, &.{ ckpt_dir, "tokenizer.json" });
     const tok_dst = try std.fs.path.join(arena, &.{ out_dir, "tokenizer.json" });
-    const has_tok = try copyFileIfPresent(io, tok_src, tok_dst);
+    var has_tok = false;
+    if (std.Io.Dir.cwd().openFile(io, tok_dst, .{})) |f| {
+        f.close(io);
+        has_tok = true;
+    } else |_| {
+        const tok_src = try std.fs.path.join(arena, &.{ ckpt_dir, "tokenizer.json" });
+        has_tok = try copyFileIfPresent(io, tok_src, tok_dst);
+    }
 
     var has_runner = false;
     const runner_dst = try std.fs.path.join(arena, &.{ out_dir, "tf-inkling2-mini-aot" });
@@ -515,7 +681,10 @@ pub fn main(init: std.process.Init) !void {
             cpath[runner_dst.len] = 0;
             _ = std.c.chmod(@ptrCast(cpath.ptr), 0o755);
         }
-    }
+    } else if (std.Io.Dir.cwd().openFile(io, runner_dst, .{})) |f| {
+        f.close(io);
+        has_runner = true;
+    } else |_| {}
 
     var entries: std.ArrayList(fmt.FileEntry) = .empty;
     defer entries.deinit(gpa);
@@ -554,7 +723,7 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest_path, .data = mw.written() });
 
     const elapsed_ms = @as(f64, @floatFromInt(std.Io.Clock.awake.now(io).toNanoseconds() - t0)) / 1e6;
-    std.debug.print("aotc: compiled {s} -> {s} in {d:.1} ms (arch={s}, weights={d:.2} GB, repack_c={}, psos={d})\n", .{
-        ckpt_dir, out_dir, elapsed_ms, arch_name, @as(f64, @floatFromInt(sched.weights_size)) / 1e9, repack_c, decode_pso_names.len,
+    std.debug.print("aotc: compiled {s} -> {s} in {d:.1} ms (arch={s}, weights={d:.2} GB, indirect={}, psos={d})\n", .{
+        ckpt_dir, out_dir, elapsed_ms, arch_name, @as(f64, @floatFromInt(sched.weights_size)) / 1e9, use_indirect, decode_pso_names.len,
     });
 }

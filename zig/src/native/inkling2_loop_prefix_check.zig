@@ -2,6 +2,8 @@ const std = @import("std");
 const mtl = @import("metal");
 const inkling = @import("inkling");
 
+pub const tf_metal4 = true;
+
 fn prefill(m: *const inkling.Model, s: *inkling.PrefillScratch, c: *inkling.Cache, ids: []const u32) !void {
     var at: usize = 0;
     while (at < ids.len) {

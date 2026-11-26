@@ -4,8 +4,8 @@ This is the single plan for this repository: all current and future work, and th
 
 ## Status
 
-**Active 2026-11-25.**
-- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. Q4 (5h, qualification repair, owner steering) is done on `main` (`campaign/kernels/inkling-q4-qualify.md`). A1 (5i, AOT spike) has completed research (`campaign/aot/research.md`, `inventory.md`) on `lane/inkling-metal-aot` (`90d047572`, rebased on `main`) and is entering Phase A–F. P6's retry (5f, `lane/p6-tail`) and P7 (5g) are now unblocked after Q4, then Q3.
+**Active 2026-11-26.**
+- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. Q4 (5h, qualification repair) is done on `main` (`campaign/kernels/inkling-q4-qualify.md`). A1 (5i, AOT spike) is complete on `lane/inkling-metal-aot` (`campaign/aot/verdict.md`: G0/G1/G2/G4 pass, G3 honest near-miss 1.120× < 1.15× under unchanged arithmetic, 6 extractions ready for `main`). Next: P6 Session 2 + `profile.sh` (5f, `lane/p6-tail`), P7 (5g), Q3 (6), and achieving Decision 17's 2,000 tok/s prefill (1K–31.7K) and 200 tok/s single-stream decode on `main`.
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
 - Acceptance flow (2026-11-24): lanes prove changes with filtered GPU tests; the parent runs the full suite once on an integration commit of main plus the lane and fast-forwards main on green, instead of a lane suite and a second main suite.
 - **Last accepted code: SV2, fast-forwarded from `lane/sv2-serve`** (speculation served by default; integrated suite on `33b38ed43`: `inkling-host` ok, `inkling-gpu` 185/185 plus the restored served test 12/12, oracle pass). Before it, V4 `ec925cb41` (fused fixed-cost verify kernels; integrated main green: `inkling-host` ok, `inkling-gpu` 186/186, oracle pass at 94.73% top-1 and mean KL 0.0199). Before it, PH2 merge `291240211` (half prefill by default; `inkling-gpu` 181/181), P5c merge `7f7cb75a3` (181/181), SC1 merge `1668d5caa` (180/180), V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
@@ -195,30 +195,26 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
       Decision 17's 200 tok/s unmet); `disabled/ar` neutral (every 95% CI includes 1.0). Paired gated prefill curves
       show every `disabled/ar` and `spec/ar` 95% CI includes 1.0 (`b+c` plain 1,892 / 2,001 / 1,933 / 1,833 / 1,694
       tok/s at 1K–31.7K; `off` 1,538–1,616), so SC2's ~3% drafter prefill cost remains an unconfirmed hypothesis for P7.
-5i. A1, running (owner spike 2026-11-25): an ahead-of-time compiled Inkling 2 Mini for M5 Max on
-   `lane/inkling-metal-aot` (`.work/wt/inkling-metal-aot`, base `46061a3aa`; records in `campaign/aot/`). An offline
-   compiler emits a model-specific artifact: a native executable, an immutable specialized schedule, compiled Metal
-   libraries, a deterministic manifest and a memory-mapped weight sidecar. It runs without the checkpoint directory,
-   Python or the Metal compiler, and fails explicitly on an incompatible device or a corrupt artifact. Same
-   checkpoint, contexts to 32,768, the 32 GB budget and the 28 GB cap; no arithmetic, KV or precision change unless
-   isolated and qualified as its own mode. Phases, each measured on its own:
-   1. Research ledger and a TensorFold specialization inventory (`campaign/aot/research.md`, `inventory.md`).
-   2. A: a current-main control with Q4's repaired qualification (dispatches, command buffers, host syncs, encode ms,
-      GPU active time, load, pipeline creation, memory), plus a bandwidth and fixed-cost model.
-   3. B: a static schedule of the complete forward path with today's kernels, arithmetic unchanged. Existing receipts
-      bound it: the GPU idles 2.7-3.3% of a round and verify encode is ~0.6 ms, so a near-zero result is expected.
-   4. C: static memory and weight layout, repacking values bit-exactly.
-   5. D: generated Metal fusion, from small dependent chains up to layer-local groups. No global barrier and no
-      persistent kernel without a documented residency-safe schedule.
-   6. E: GPU-resident token loop, bounded and cancellable.
-   7. F: prefill and few-row and tree verification, reusing the drafter.
-   8. Bounded autotuning on a non-held-out set.
-   9. An independent adversarial audit.
-   Gates: G0 native artifact; G1 the existing Inkling tests, bit-exact differentials and the oMLX oracle passing;
-   G2 work demonstrably moved offline; G3 at least 1.15x geometric-mean plain decode over main with the paired
-   interval excluding 1, and no unexplained long-context regression; G4 memory and usability; G5 stretch (2,000 tok/s
-   prefill, 200 tok/s decode). Plain and speculative results stay separate. Three failed variants of one idea park
-   it. A negative verdict is a valid outcome.
+5i. A1, done on `lane/inkling-metal-aot` (`campaign/aot/verdict.md`, `phase_a..f.md`, `research.md`, `inventory.md`):
+    complete offline AOT compiler (`tf-inkling2-aotc`) and standalone native runner (`tf-inkling2-mini-aot`) for Inkling 2
+    Mini oQ4e on M5 Max (`applegpu_g17s`), compiling all 94 Metal 4.1 / MPP TensorOps PSOs into `kernels.metallib` +
+    `pipelines.mtlarchive` (`3.6–4.1 ms` archive load, `1.52–1.71 s` verified 5-thread `F_NOCACHE pread` + SHA-256 load
+    of `15.57 GB`). Gates:
+    - **G0/G2/G4 PASS:** runs under `env -i PATH=/usr/bin:/bin` with zero runtime Metal compiler/Python/checkpoint
+      dependencies; fails closed on incompatible device (`g13g`/`g16s`) and 1-byte bundle flips; peak memory `16.7–17.0 GB`
+      at V4 / `17.6–18.8 GB` at 32K (2–3.4 GB below `main`, `636.5 MB` dead vision weights stripped).
+    - **G1 PASS:** bit-exact 0-diff logits vs `main` (`stepDirect`, `verifyTree` `chain8/chain16/tree16/commit_rollback`,
+      `generateBurst` 16-step parity + EOS + host cancel, `--taps`); full 16-history (`3,015`-position) oMLX oracle pass
+      (`2,865/3,015 = 95.02%` top-1, mean KL `0.0208875 <= 0.02926`, row-weighted KL `0.0740774 <= 0.09630`, `0` non-finite).
+    - **G3 honest FAIL (near-miss under unchanged arithmetic):** 6 balanced pairs over 2 sessions give V4 6-prompt wall
+      geomean `1.1202×` (95% CI `1.0521–1.1927×`, 6/6 pairs faster, below `1.15×`), GPU geomean `1.1073×` (`1.0394–1.1796×`);
+      no long-context regression (`1.012–1.075×` from `1K–31.7K` with `D9` head-major `half4`-permuted KV, `+7.8–8.1%` at
+      `16K–31.7K`). Remaining `~2.1 ms` above isolated kernel sum is serial barrier drain across 782 dependent dispatches.
+    - **G5 partial:** chunked prefill hits `2,475–2,825` (1K), `2,287–2,604` (4K), `2,100` (8K), `1,875` (16K), `1,653`
+      (31.7K) tok/s (`419–453 ms` first request); rested verify drops to `29.1 ms` (w=8) and `46.8 ms` (w=16) bit-exact.
+    - **Verdict:** keep `lane/inkling-metal-aot` as reference and extract its 6 proven wins into `main` (`MTLBinaryArchive`,
+      5-thread `F_NOCACHE pread` + vision weight strip, Phase D bit-exact fusions, Phase C2 `bfloat2 sb` + `ulong2/uchar2 w13`
+      + `float2(g,f)` repacking for verify, 2-stage GPU argmax, `D9` permuted KV).
 5g. P7, ready: the drafter's prompt-side cost. Profile the tap capture and absorb in the prefill loop by kernel, then
    capture or absorb only the rows the drafter's window and restore points need. The gate is Decision 17's prefill
    at 1K/4K/8K under the default, with every reuse, fork and store contract kept.

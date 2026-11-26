@@ -37,8 +37,13 @@ pub fn tests(b: *std.Build, target: std.Build.ResolvedTarget, test_step: *std.Bu
     const prefix_tests = module(b, target, "zig/src/native/inkling2_loop_prefix.zig");
     const prefix_run = b.addRunArtifact(b.addTest(.{ .root_module = prefix_tests }));
     step.dependOn(&prefix_run.step);
+    const aot_fmt_tests = module(b, target, "zig/src/families/inkling2_loop/aot/format.zig");
+    const aot_fmt_run = b.addRunArtifact(b.addTest(.{ .root_module = aot_fmt_tests }));
+    b.step("test-inkling2-aot-host", "Inkling 2 Mini AOT schedule, manifest, and fail-closed device/corruption checks").dependOn(&aot_fmt_run.step);
+    step.dependOn(&aot_fmt_run.step);
     test_step.dependOn(&run.step);
     test_step.dependOn(&prefix_run.step);
+    test_step.dependOn(&aot_fmt_run.step);
     if (target.result.os.tag == .macos) {
         const metal = b.createModule(.{
             .root_source_file = b.path("zig/src/metal/metal.zig"),
@@ -103,6 +108,30 @@ pub fn metalTests(b: *std.Build, target: std.Build.ResolvedTarget, metal: *std.B
     });
     const exe = b.addExecutable(.{ .name = "tf-inkling2-prefix-check", .root_module = check });
     b.step("tf-inkling2-prefix-check", "Compare retained state to identical replay and full prefill").dependOn(&b.addInstallArtifact(exe, .{}).step);
+
+    const aotc_mod = b.createModule(.{
+        .root_source_file = b.path("zig/src/families/inkling2_loop/aotc_main.zig"),
+        .target = target,
+        .optimize = .fast,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "metal", .module = metal },
+            .{ .name = "core", .module = core },
+            .{ .name = "inkling2_config", .module = b.createModule(.{ .root_source_file = b.path("zig/src/families/inkling2/config.zig"), .target = target, .optimize = .fast }) },
+        },
+    });
+    const aotc_exe = b.addExecutable(.{ .name = "tf-inkling2-aotc", .root_module = aotc_mod });
+    b.step("tf-inkling2-aotc", "Offline AOT compiler for Inkling 2 Mini on Metal").dependOn(&b.addInstallArtifact(aotc_exe, .{}).step);
+
+    const aot_mod = b.createModule(.{
+        .root_source_file = b.path("zig/src/families/inkling2_loop/aot/main.zig"),
+        .target = target,
+        .optimize = .fast,
+        .link_libc = true,
+        .imports = &.{.{ .name = "metal", .module = metal }},
+    });
+    const aot_exe = b.addExecutable(.{ .name = "tf-inkling2-mini-aot", .root_module = aot_mod });
+    b.step("tf-inkling2-mini-aot", "Standalone AOT native runner for Inkling 2 Mini on Metal (zero runtime MSL compiler)").dependOn(&b.addInstallArtifact(aot_exe, .{}).step);
     const family_test = b.addTest(.{ .root_module = m });
     const run = gpuRun(b, family_test);
     const compile = b.step("compile-inkling2-loop", "Compile the Inkling 2 Mini Metal test binaries without running them on the GPU");

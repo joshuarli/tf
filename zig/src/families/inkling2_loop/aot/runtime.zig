@@ -248,10 +248,11 @@ fn loadWeightsPreadChunks(device: mtl.Device, path: [:0]const u8, sched: *const 
     const end = std.c.lseek(fd, 0, std.c.SEEK.END);
     if (end < 0 or @as(u64, @intCast(end)) != sched.weights_size) return error.SizeMismatch;
 
-    const plan = fmt.planWeightChunks(sched);
+    const plan = try fmt.planWeightChunks(sched);
     var loaded: usize = 0;
     errdefer for (0..loaded) |i| chunks[i].buf.deinit();
 
+    if (sched.chunk_count != 0 and sched.chunk_count != plan.count) return error.CorruptArtifact;
     if (sched.chunk_count == plan.count and plan.count > 0) {
         for (0..plan.count) |ci| {
             const cs = sched.chunk_starts[ci];
@@ -262,44 +263,48 @@ fn loadWeightsPreadChunks(device: mtl.Device, path: [:0]const u8, sched: *const 
             chunks[ci] = .{ .buf = buf, .start = cs, .end = ce };
             loaded += 1;
         }
-        const Ctx = struct {
+        const ChunkRead = struct {
             fd: std.c.fd_t,
             dst: []u8,
             start: u64,
             expected: [32]u8,
             err: ?anyerror = null,
-            fn run(ctx: *@This()) void {
+            fn run(task: *@This()) void {
                 var hasher = std.crypto.hash.sha2.Sha256.init(.{});
                 var off: usize = 0;
-                while (off < ctx.dst.len) {
-                    const want = @min(ctx.dst.len - off, 16 << 20);
-                    const got = std.c.pread(ctx.fd, ctx.dst.ptr + off, want, @intCast(ctx.start + off));
+                while (off < task.dst.len) {
+                    const want = @min(task.dst.len - off, 16 << 20);
+                    const got = std.c.pread(task.fd, task.dst.ptr + off, want, @intCast(task.start + off));
                     if (got <= 0) {
-                        ctx.err = error.CorruptArtifact;
+                        task.err = error.CorruptArtifact;
                         return;
                     }
                     const n: usize = @intCast(got);
-                    hasher.update(ctx.dst[off .. off + n]);
+                    hasher.update(task.dst[off .. off + n]);
                     off += n;
                 }
                 const actual = hasher.finalResult();
-                if (!std.mem.eql(u8, &actual, &ctx.expected)) ctx.err = error.DigestMismatch;
+                if (!std.mem.eql(u8, &actual, &task.expected)) task.err = error.DigestMismatch;
             }
         };
-        var ctxs: [max_weight_chunks]Ctx = undefined;
+        var tasks: [max_weight_chunks]ChunkRead = undefined;
         var threads: [max_weight_chunks]std.Thread = undefined;
+        var spawned: usize = 0;
+        errdefer for (0..spawned) |ti| threads[ti].join();
         for (0..plan.count) |ci| {
             const clen: usize = @intCast(chunks[ci].end - chunks[ci].start);
-            ctxs[ci] = .{
+            tasks[ci] = .{
                 .fd = fd,
                 .dst = chunks[ci].buf.contents()[0..clen],
                 .start = chunks[ci].start,
                 .expected = sched.chunk_sha256[ci],
             };
-            threads[ci] = try std.Thread.spawn(.{}, Ctx.run, .{&ctxs[ci]});
+            threads[ci] = try std.Thread.spawn(.{}, ChunkRead.run, .{&tasks[ci]});
+            spawned += 1;
         }
-        for (0..plan.count) |ci| threads[ci].join();
-        for (0..plan.count) |ci| if (ctxs[ci].err) |e| return e;
+        for (0..spawned) |ci| threads[ci].join();
+        spawned = 0;
+        for (0..plan.count) |ci| if (tasks[ci].err) |e| return e;
         return loaded;
     }
 
@@ -330,7 +335,44 @@ fn loadWeightsPreadChunks(device: mtl.Device, path: [:0]const u8, sched: *const 
 
 fn loadWeightsMmapChunks(device: mtl.Device, map: mtl.MappedFile, sched: *const fmt.Schedule, chunks: *[max_weight_chunks]WeightChunk) !usize {
     const page: u64 = std.heap.pageSize();
-    const plan = fmt.planWeightChunks(sched);
+    const plan = try fmt.planWeightChunks(sched);
+    if (sched.chunk_count != 0 and sched.chunk_count != plan.count) return error.CorruptArtifact;
+    if (sched.chunk_count == plan.count and plan.count > 0) {
+        const ChunkVerify = struct {
+            bytes: []const u8,
+            expected: [32]u8,
+            ok: bool = false,
+            fn run(task: *@This()) void {
+                var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                hasher.update(task.bytes);
+                const actual = hasher.finalResult();
+                task.ok = std.mem.eql(u8, &actual, &task.expected);
+            }
+        };
+        var tasks: [max_weight_chunks]ChunkVerify = undefined;
+        var threads: [max_weight_chunks]std.Thread = undefined;
+        var spawned: usize = 0;
+        errdefer for (0..spawned) |ti| threads[ti].join();
+        for (0..plan.count) |ci| {
+            const cs = sched.chunk_starts[ci];
+            const ce = sched.chunk_ends[ci];
+            if (cs != plan.starts[ci] or ce != plan.ends[ci]) return error.CorruptArtifact;
+            tasks[ci] = .{
+                .bytes = map.bytes[@intCast(cs)..@intCast(ce)],
+                .expected = sched.chunk_sha256[ci],
+            };
+            threads[ci] = try std.Thread.spawn(.{}, ChunkVerify.run, .{&tasks[ci]});
+            spawned += 1;
+        }
+        for (0..spawned) |ci| threads[ci].join();
+        spawned = 0;
+        for (0..plan.count) |ci| if (!tasks[ci].ok) return error.DigestMismatch;
+    } else {
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(map.bytes[0..@intCast(sched.weights_size)]);
+        const actual = hasher.finalResult();
+        if (!std.mem.eql(u8, &actual, &sched.weights_sha256)) return error.DigestMismatch;
+    }
     var loaded: usize = 0;
     errdefer for (0..loaded) |i| chunks[i].buf.deinit();
 
@@ -369,6 +411,8 @@ pub const Runtime = struct {
     attn_conv: mtl.Buffer,
     mlp_conv: mtl.Buffer,
     slot_kv_off: [fmt.num_slots]usize = @splat(0),
+    slot_full: [fmt.num_slots]bool = @splat(false),
+    slot_visit: [fmt.num_slots]usize = @splat(0),
 
     ids: mtl.Buffer,
     x: mtl.Buffer,
@@ -437,6 +481,8 @@ pub const Runtime = struct {
         opt_mask: u32 = 0,
     };
 
+    /// Opens and verifies an AOT bundle, returning a heap-allocated `Runtime` owned by the caller.
+    /// Release all GPU resources and free the handle via `Runtime.deinit`.
     pub fn open(gpa: std.mem.Allocator, io: std.Io, bundle_dir: []const u8, opts: OpenOpts) !*Runtime {
         const t_total = std.Io.Clock.awake.now(io).toNanoseconds();
         const pool = mtl.objc.Pool.push();
@@ -450,6 +496,7 @@ pub const Runtime = struct {
         const manifest_bytes = std.Io.Dir.cwd().readFileAlloc(io, manifest_path, arena, .limited(4 << 20)) catch return error.MissingFile;
         const parsed_manifest = try std.json.parseFromSlice(fmt.Manifest, arena, manifest_bytes, .{ .ignore_unknown_fields = true });
         const manifest = parsed_manifest.value;
+        if (manifest.schema != fmt.schema_version) return error.BadVersion;
 
         const device = try mtl.Device.init();
         errdefer device.deinit();
@@ -474,10 +521,12 @@ pub const Runtime = struct {
 
         const sched_path = try std.fs.path.join(arena, &.{ bundle_dir, "schedule.bin" });
         const sched_bytes = try std.Io.Dir.cwd().readFileAlloc(io, sched_path, arena, .limited(4 << 20));
-        const sched_ptr = try fmt.validateScheduleHeader(sched_bytes);
-        const sched = sched_ptr.*;
+        const sched = try fmt.validateScheduleHeader(sched_bytes);
         try fmt.checkDevice(actual_arch, actual_gen, sched.archName(), sched.min_generation);
         if (sched.weights_size != we.size) return error.SizeMismatch;
+        const sched_w_hex = fmt.hexEncode(sched.weights_sha256);
+        if (!std.mem.eql(u8, &sched_w_hex, we.sha256)) return error.DigestMismatch;
+        if (manifest.context_cap != sched.geom.context_cap or manifest.layout_flags != sched.layout_flags) return error.CorruptArtifact;
         if (opts.capacity > sched.geom.context_cap) return error.ContextTooLarge;
         const t_verify = std.Io.Clock.awake.now(io).toNanoseconds();
 
@@ -517,7 +566,10 @@ pub const Runtime = struct {
         var pipes = try Pipes.load(device, lib, archive, sched.layout_flags);
         errdefer pipes.deinit();
         const ind = (sched.layout_flags & fmt.layout_non_indirect) == 0;
-        var extra_pipes: ?prefill_mod.ExtraPipes = prefill_mod.ExtraPipes.load(device, lib, archive, ind) catch null;
+        var extra_pipes: ?prefill_mod.ExtraPipes = if ((sched.layout_flags & fmt.layout_fused_kernels) != 0)
+            try prefill_mod.ExtraPipes.load(device, lib, archive, ind)
+        else
+            null;
         errdefer if (extra_pipes) |*ep| ep.deinit();
         const t_pipes = std.Io.Clock.awake.now(io).toNanoseconds();
 
@@ -534,7 +586,11 @@ pub const Runtime = struct {
         const cap = if (opts.verify_only) 16 else opts.capacity;
         const kv_row_bytes = kvw * 2;
         var slot_full: [fmt.num_slots]bool = @splat(false);
-        for (sched.slots) |sl| slot_full[sl.slot] = sl.is_full != 0;
+        var slot_visit: [fmt.num_slots]usize = @splat(0);
+        for (sched.slots, 0..) |sl, visit_i| {
+            slot_full[sl.slot] = sl.is_full != 0;
+            slot_visit[sl.slot] = visit_i;
+        }
         var slot_kv_off: [fmt.num_slots]usize = @splat(0);
         var kv_total: usize = 0;
         for (0..fmt.num_slots) |sidx| {
@@ -546,73 +602,109 @@ pub const Runtime = struct {
         const priv = mtl.ResourceOptions.private;
         const shr = mtl.ResourceOptions.shared;
 
-        rt.* = .{
-            .gpa = gpa,
-            .device = device,
-            .queue = queue,
-            .sched = sched,
-            .weight_chunks = weight_chunks,
-            .weight_chunk_count = weight_chunk_count,
-            .mapped_weights = mapped_weights,
-            .pipes = pipes,
-            .extra_pipes = extra_pipes,
-            .capacity = cap,
-            .len = 0,
-            .slot_kv_off = slot_kv_off,
-            .keys = try device.buffer(kv_total, priv),
-            .values = try device.buffer(kv_total, priv),
-            .k_conv = try device.buffer(fmt.num_slots * conv_ring * kvw * 4, priv),
-            .v_conv = try device.buffer(fmt.num_slots * conv_ring * kvw * 4, priv),
-            .attn_conv = try device.buffer(fmt.num_slots * conv_ring * h * 4, priv),
-            .mlp_conv = try device.buffer(fmt.num_slots * conv_ring * h * 4, priv),
-            .ids = try device.buffer(16 * 4, shr),
-            .x = try device.buffer(h * 4, priv),
-            .prelude = try device.buffer(h * 4, priv),
-            .passout = try device.buffer(h * 4, priv),
-            .bank = try device.buffer(mix_states * h * 4, priv),
-            .n0 = try device.buffer(h * 4, priv),
-            .n1 = try device.buffer(h * 4, priv),
-            .n2 = try device.buffer(h * 4, priv),
-            .m0 = try device.buffer(h * 4, priv),
-            .q = try device.buffer(qw * 4, priv),
-            .k = try device.buffer(kvw * 4, priv),
-            .v = try device.buffer(kvw * 4, priv),
-            .r = try device.buffer(g.heads * g.d_rel * 4, priv),
-            .kc = try device.buffer(kvw * 4, priv),
-            .vc = try device.buffer(kvw * 4, priv),
-            .kdyn = try device.buffer(g.kv_heads * 4 * 4, priv),
-            .vdyn = try device.buffer(g.kv_heads * 4 * 4, priv),
-            .sink = try device.buffer(g.heads * 4, priv),
-            .relbias = try device.buffer(g.heads * (g.rel_extent + 1) * 4, priv),
-            .attn = try device.buffer(qw * 4, priv),
-            .gate = try device.buffer(qw * 4, priv),
-            .projout = try device.buffer(h * 4, priv),
-            .o = try device.buffer(h * 4, priv),
-            .aconv = try device.buffer(h * 4, priv),
-            .moe = try device.buffer(h * 4, priv),
-            .blocks = try device.buffer(mix_states * h * 4, priv),
-            .mixout = try device.buffer(4 * h * 4, priv),
-            .msg = try device.buffer(4 * h * 4, priv),
-            .h2in = try device.buffer(2 * h * 4, priv),
-            .normed = try device.buffer(g.gate_rank * 4, priv),
-            .router = try device.buffer(g.experts * 4, priv),
-            .picks = try device.buffer(g.topk * 4, priv),
-            .wts = try device.buffer(g.topk * 4, priv),
-            .act = try device.buffer(g.topk * g.expert_inter * 4, priv),
-            .down = try device.buffer(g.topk * h * 4, priv),
-            .logits = try device.buffer(g.unpadded_vocab * 4, shr),
-            .parts = try device.buffer(g.heads * attn_splits * (g.head_dim + 2) * 4, priv),
-            .ctl_in = try device.buffer(3 * 2 * h * 4, priv),
-            .ctl_hid = try device.buffer(3 * g.gate_rank * 4, priv),
-            .ctl_inv = try device.buffer(16 * 4, priv),
-            .argmax_out = try device.buffer(16 * 4, shr),
-            .argmax_tmp_v = try device.buffer(128 * 4, priv),
-            .argmax_tmp_i = try device.buffer(128 * 4, priv),
-            .token_ring = try device.buffer(64 * 4, shr),
-            .loop_ctrl = try device.buffer(@sizeOf(LoopCtrl), shr),
-            .opt_mask = opts.opt_mask,
-            .param_arena = try device.buffer(256 * 1024, shr),
+        rt.* = undefined;
+        rt.gpa = gpa;
+        rt.device = device;
+        rt.queue = queue;
+        rt.sched = sched;
+        rt.weight_chunks = weight_chunks;
+        rt.weight_chunk_count = weight_chunk_count;
+        rt.mapped_weights = mapped_weights;
+        rt.pipes = pipes;
+        rt.extra_pipes = extra_pipes;
+        rt.prefill_scratch = null;
+        rt.verify_scratch = null;
+        rt.residency = null;
+        rt.stats = .{};
+        rt.capacity = cap;
+        rt.len = 0;
+        rt.slot_kv_off = slot_kv_off;
+        rt.slot_full = slot_full;
+        rt.slot_visit = slot_visit;
+        rt.opt_mask = opts.opt_mask;
+        rt.icb_pre = null;
+        rt.icb_main = null;
+        rt.icb_pre_count = 0;
+        rt.icb_main_count = 0;
+        rt.icb_built_argmax = false;
+        rt.dyn_qkv_row_off = @splat(0);
+        rt.dyn_attn_row_off = @splat(0);
+        rt.dyn_attn_split_cmd = @splat(0);
+        rt.dyn_aconv_row_off = @splat(0);
+        rt.dyn_mconv_row_off = @splat(0);
+
+        const BufSpec = struct { len: usize, opts: u32 };
+        const buf_names = [_][]const u8{
+            "keys", "values", "k_conv", "v_conv", "attn_conv", "mlp_conv", "ids", "x", "prelude",
+            "passout", "bank", "n0", "n1", "n2", "m0", "q", "k", "v", "r", "kc", "vc", "kdyn",
+            "vdyn", "sink", "relbias", "attn", "gate", "projout", "o", "aconv", "moe", "blocks",
+            "mixout", "msg", "h2in", "normed", "router", "picks", "wts", "act", "down", "logits",
+            "parts", "ctl_in", "ctl_hid", "ctl_inv", "argmax_out", "argmax_tmp_v", "argmax_tmp_i",
+            "token_ring", "loop_ctrl", "param_arena",
         };
+        const buf_specs = [buf_names.len]BufSpec{
+            .{ .len = kv_total, .opts = priv },
+            .{ .len = kv_total, .opts = priv },
+            .{ .len = fmt.num_slots * conv_ring * kvw * 4, .opts = priv },
+            .{ .len = fmt.num_slots * conv_ring * kvw * 4, .opts = priv },
+            .{ .len = fmt.num_slots * conv_ring * h * 4, .opts = priv },
+            .{ .len = fmt.num_slots * conv_ring * h * 4, .opts = priv },
+            .{ .len = 16 * 4, .opts = shr },
+            .{ .len = h * 4, .opts = priv },
+            .{ .len = h * 4, .opts = priv },
+            .{ .len = h * 4, .opts = priv },
+            .{ .len = mix_states * h * 4, .opts = priv },
+            .{ .len = h * 4, .opts = priv },
+            .{ .len = h * 4, .opts = priv },
+            .{ .len = h * 4, .opts = priv },
+            .{ .len = h * 4, .opts = priv },
+            .{ .len = qw * 4, .opts = priv },
+            .{ .len = kvw * 4, .opts = priv },
+            .{ .len = kvw * 4, .opts = priv },
+            .{ .len = g.heads * g.d_rel * 4, .opts = priv },
+            .{ .len = kvw * 4, .opts = priv },
+            .{ .len = kvw * 4, .opts = priv },
+            .{ .len = g.kv_heads * 4 * 4, .opts = priv },
+            .{ .len = g.kv_heads * 4 * 4, .opts = priv },
+            .{ .len = g.heads * 4, .opts = priv },
+            .{ .len = g.heads * (g.rel_extent + 1) * 4, .opts = priv },
+            .{ .len = qw * 4, .opts = priv },
+            .{ .len = qw * 4, .opts = priv },
+            .{ .len = h * 4, .opts = priv },
+            .{ .len = h * 4, .opts = priv },
+            .{ .len = h * 4, .opts = priv },
+            .{ .len = h * 4, .opts = priv },
+            .{ .len = mix_states * h * 4, .opts = priv },
+            .{ .len = 4 * h * 4, .opts = priv },
+            .{ .len = 4 * h * 4, .opts = priv },
+            .{ .len = 2 * h * 4, .opts = priv },
+            .{ .len = g.gate_rank * 4, .opts = priv },
+            .{ .len = g.experts * 4, .opts = priv },
+            .{ .len = g.topk * 4, .opts = priv },
+            .{ .len = g.topk * 4, .opts = priv },
+            .{ .len = g.topk * g.expert_inter * 4, .opts = priv },
+            .{ .len = g.topk * h * 4, .opts = priv },
+            .{ .len = g.unpadded_vocab * 4, .opts = shr },
+            .{ .len = g.heads * attn_splits * (g.head_dim + 2) * 4, .opts = priv },
+            .{ .len = 3 * 2 * h * 4, .opts = priv },
+            .{ .len = 3 * g.gate_rank * 4, .opts = priv },
+            .{ .len = 16 * 4, .opts = priv },
+            .{ .len = 16 * 4, .opts = shr },
+            .{ .len = 128 * 4, .opts = priv },
+            .{ .len = 128 * 4, .opts = priv },
+            .{ .len = 64 * 4, .opts = shr },
+            .{ .len = @sizeOf(LoopCtrl), .opts = shr },
+            .{ .len = 256 * 1024, .opts = shr },
+        };
+        var built_bufs: [buf_names.len]mtl.Buffer = undefined;
+        var built_count: usize = 0;
+        errdefer for (built_bufs[0..built_count]) |b| b.deinit();
+        inline for (buf_names, 0..) |name, i| {
+            const buf = try device.buffer(buf_specs[i].len, buf_specs[i].opts);
+            built_bufs[built_count] = buf;
+            built_count += 1;
+            @field(rt, name) = buf;
+        }
 
         if (!opts.verify_only) {
             if (device.residencySet(64)) |rs| {
@@ -621,7 +713,10 @@ pub const Runtime = struct {
                 rs.requestResidency();
                 queue.addResidencySet(rs);
                 rt.residency = rs;
-            } else |_| {}
+            } else |err| switch (err) {
+                error.Unsupported => {},
+                else => return err,
+            }
         }
         const t_res = std.Io.Clock.awake.now(io).toNanoseconds();
 
@@ -652,6 +747,8 @@ pub const Runtime = struct {
     }
 
     pub inline fn setW(rt: *const Runtime, target: anytype, off: u64, index: usize) void {
+        std.debug.assert(rt.weight_chunk_count > 0);
+        std.debug.assert(off <= rt.sched.weights_size);
         var i: usize = rt.weight_chunk_count;
         while (i > 0) {
             i -= 1;
@@ -661,12 +758,11 @@ pub const Runtime = struct {
                 return;
             }
         }
-        unreachable;
+        target.setBuffer(rt.weight_chunks[0].buf, 0, index);
     }
 
     pub fn slotIsFull(rt: *const Runtime, slot: u32) bool {
-        for (rt.sched.slots) |sl| if (sl.slot == slot) return sl.is_full != 0;
-        unreachable;
+        return rt.slot_full[slot];
     }
 
     pub fn ensurePrefillScratch(rt: *Runtime) !*prefill_mod.PrefillScratch {
@@ -746,16 +842,29 @@ pub const Runtime = struct {
         }
     };
 
+    /// Snapshots KV and convolution caches into owned GPU buffers; release with `StateSnapshot.deinit`.
     pub fn snapshotState(rt: *Runtime) !StateSnapshot {
         const priv = mtl.ResourceOptions.private;
+        const keys = try rt.device.buffer(rt.keys.length(), priv);
+        errdefer keys.deinit();
+        const values = try rt.device.buffer(rt.values.length(), priv);
+        errdefer values.deinit();
+        const k_conv = try rt.device.buffer(rt.k_conv.length(), priv);
+        errdefer k_conv.deinit();
+        const v_conv = try rt.device.buffer(rt.v_conv.length(), priv);
+        errdefer v_conv.deinit();
+        const attn_conv = try rt.device.buffer(rt.attn_conv.length(), priv);
+        errdefer attn_conv.deinit();
+        const mlp_conv = try rt.device.buffer(rt.mlp_conv.length(), priv);
+        errdefer mlp_conv.deinit();
         const s = StateSnapshot{
             .len = rt.len,
-            .keys = try rt.device.buffer(rt.keys.length(), priv),
-            .values = try rt.device.buffer(rt.values.length(), priv),
-            .k_conv = try rt.device.buffer(rt.k_conv.length(), priv),
-            .v_conv = try rt.device.buffer(rt.v_conv.length(), priv),
-            .attn_conv = try rt.device.buffer(rt.attn_conv.length(), priv),
-            .mlp_conv = try rt.device.buffer(rt.mlp_conv.length(), priv),
+            .keys = keys,
+            .values = values,
+            .k_conv = k_conv,
+            .v_conv = v_conv,
+            .attn_conv = attn_conv,
+            .mlp_conv = mlp_conv,
         };
         const cb = rt.queue.commandBuffer();
         const bl = cb.blit();
@@ -789,16 +898,13 @@ pub const Runtime = struct {
     inline fn kvRowAddr(rt: *const Runtime, base_buf: mtl.Buffer, slot: u32, pos: usize) u64 {
         const g = rt.sched.geom;
         const kvw: usize = g.kv_heads * g.head_dim;
-        const is_full = rt.sched.layers[rt.sched.slots[slot_visit_for(rt, slot)].phys].is_full != 0;
+        const is_full = rt.sched.layers[rt.sched.slots[slotVisitFor(rt, slot)].phys].is_full != 0;
         const row = if (is_full) pos else (pos % g.window);
         return base_buf.gpuAddress() + rt.slot_kv_off[slot] + row * kvw * 2;
     }
 
-    inline fn slot_visit_for(rt: *const Runtime, slot: u32) usize {
-        for (rt.sched.slots, 0..) |sl, idx| {
-            if (sl.slot == slot) return idx;
-        }
-        unreachable;
+    inline fn slotVisitFor(rt: *const Runtime, slot: u32) usize {
+        return rt.slot_visit[slot];
     }
 
     inline fn convAddr(base_buf: mtl.Buffer, slot: u32, channels: u32) u64 {
@@ -1648,6 +1754,7 @@ pub const Runtime = struct {
     pub const BurstStats = struct {
         produced: usize = 0,
         stopped: bool = false,
+        cancelled: bool = false,
         wall_ms: f64 = 0,
         gpu_ms: f64 = 0,
         dispatches: u32 = 0,
@@ -1695,9 +1802,11 @@ pub const Runtime = struct {
         const ring = rt.token_ring.slice(u32, count);
         @memcpy(out_tokens[0..produced], ring[0..produced]);
         rt.len += produced;
+        const was_cancelled = ctrl.cancelled != 0;
         return .{
             .produced = produced,
-            .stopped = ctrl.stopped != 0,
+            .stopped = ctrl.stopped != 0 and !was_cancelled,
+            .cancelled = was_cancelled,
             .wall_ms = wall_ms,
             .gpu_ms = gpu_ms,
             .dispatches = dispatches,
@@ -1705,10 +1814,10 @@ pub const Runtime = struct {
         };
     }
 
-    fn allocParam(arena_bytes: []u8, cursor: *usize, val: anytype) usize {
+    pub fn allocParam(arena_bytes: []u8, cursor: *usize, val: anytype) !usize {
         const off = (cursor.* + 15) & ~@as(usize, 15);
         const bytes = std.mem.asBytes(&val);
-        std.debug.assert(off + bytes.len <= arena_bytes.len);
+        if (off > arena_bytes.len or bytes.len > arena_bytes.len - off) return error.ParamArenaFull;
         @memcpy(arena_bytes[off .. off + bytes.len], bytes);
         cursor.* = off + bytes.len;
         return off;
@@ -1726,7 +1835,7 @@ pub const Runtime = struct {
 
         const arena = rt.param_arena.contents()[0..rt.param_arena.length()];
         var cur: usize = 0;
-        const PA = rt.param_arena;
+        const param_arena = rt.param_arena;
         const p = &rt.pipes;
         const g = rt.sched.geom;
         const h: u32 = g.hidden;
@@ -1746,7 +1855,7 @@ pub const Runtime = struct {
             rt.setW(cmd, @intCast(rt.sched.globals.embed.s.off), 2);
             rt.setW(cmd, @intCast(rt.sched.globals.embed.b.off), 3);
             rt.setW(cmd, @intCast(rt.sched.globals.embed_norm.off), 4);
-            cmd.setBuffer(PA, allocParam(arena, &cur, EmbedA{ .width = h, .rows = 1, .eps = g.eps }), 5);
+            cmd.setBuffer(param_arena, try allocParam(arena, &cur, EmbedA{ .width = h, .rows = 1, .eps = g.eps }), 5);
             cmd.setBuffer(rt.x, 0, 6);
             cmd.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
             idx += 1;
@@ -1767,7 +1876,7 @@ pub const Runtime = struct {
                 cmd.setBuffer(rt.prelude, 0, 2);
                 cmd.setBuffer(rt.bank, 0, 3);
                 cmd.setBuffer(rt.passout, 0, 4);
-                cmd.setBuffer(PA, allocParam(arena, &cur, PassCopyA{ .width = h, .stride = mix_states, .start = 2, .count = sl.bank_n }), 5);
+                cmd.setBuffer(param_arena, try allocParam(arena, &cur, PassCopyA{ .width = h, .stride = mix_states, .start = 2, .count = sl.bank_n }), 5);
                 cmd.dispatchThreads(mtl.Size.of(h, 1, 1), mtl.Size.of(256, 1, 1));
                 idx += 1;
             }
@@ -1808,11 +1917,11 @@ pub const Runtime = struct {
                     rt.setW(c0, @intCast(cpkv + (at * 2 + 1) * h * 4), 11);
                     rt.setW(c0, @intCast(cpq + (at * 2 + 1) * h * 4), 12);
                     c0.setBuffer(rt.msg, 0, 13);
-                    c0.setBuffer(PA, allocParam(arena, &cur, args2), 14);
+                    c0.setBuffer(param_arena, try allocParam(arena, &cur, args2), 14);
                     c0.dispatchGroups(mtl.Size.of(1, 2, 1), mtl.Size.of(256, 1, 1));
                     idx += 1;
 
-                    const ctl_off = allocParam(arena, &cur, ControlsArgs{
+                    const ctl_off = try allocParam(arena, &cur, ControlsArgs{
                         .h = h,
                         .rank = g.gate_rank,
                         .rows = 1,
@@ -1827,7 +1936,7 @@ pub const Runtime = struct {
                     c1.setBuffer(rt.mixout, 0, 1);
                     c1.setBuffer(rt.mixout, 0, 2);
                     c1.setBuffer(rt.msg, 0, 3);
-                    c1.setBuffer(PA, ctl_off, 4);
+                    c1.setBuffer(param_arena, ctl_off, 4);
                     c1.setBuffer(rt.ctl_in, 0, 5);
                     c1.dispatchGroups(mtl.Size.of(6, 1, 1), mtl.Size.of(256, 1, 1));
                     idx += 1;
@@ -1839,7 +1948,7 @@ pub const Runtime = struct {
                     rt.setW(c2, @intCast(lay.controllers[0].down.off), 1);
                     rt.setW(c2, @intCast(lay.controllers[1].down.off), 2);
                     rt.setW(c2, @intCast(lay.controllers[2].down.off), 3);
-                    c2.setBuffer(PA, ctl_off, 4);
+                    c2.setBuffer(param_arena, ctl_off, 4);
                     c2.setBuffer(rt.ctl_hid, 0, 5);
                     c2.dispatchGroups(mtl.Size.of((g.gate_rank + 7) / 8, 1, 3), mtl.Size.of(256, 1, 1));
                     idx += 1;
@@ -1861,7 +1970,7 @@ pub const Runtime = struct {
                     c3.setBuffer(rt.n0, 0, 11);
                     c3.setBuffer(rt.n1, 0, 12);
                     c3.setBuffer(rt.n2, 0, 13);
-                    c3.setBuffer(PA, ctl_off, 14);
+                    c3.setBuffer(param_arena, ctl_off, 14);
                     c3.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 3), mtl.Size.of(256, 1, 1));
                     idx += 1;
 
@@ -1874,7 +1983,7 @@ pub const Runtime = struct {
                     rt.setW(c4, @intCast(lay.q_norm.off), 3);
                     rt.setW(c4, @intCast(lay.k_norm.off), 4);
                     rt.setW(c4, @intCast(lay.v_norm.off), 5);
-                    c4.setBuffer(PA, allocParam(arena, &cur, Rms3A{ .width = h, .xs = .{ 1, 1, 1 }, .xb = .{ 0, 0, 0 }, .eps = g.eps }), 6);
+                    c4.setBuffer(param_arena, try allocParam(arena, &cur, Rms3A{ .width = h, .xs = .{ 1, 1, 1 }, .xb = .{ 0, 0, 0 }, .eps = g.eps }), 6);
                     c4.setBuffer(rt.n0, 0, 7);
                     c4.setBuffer(rt.n1, 0, 8);
                     c4.setBuffer(rt.n2, 0, 9);
@@ -1898,7 +2007,7 @@ pub const Runtime = struct {
                     rt.setW(cmd, q1_off, 3);
                     rt.setW(cmd, q2_off, 4);
                     rt.setW(cmd, q0_off, 5);
-                    cmd.setBuffer(PA, allocParam(arena, &cur, MixArgs{ .width = h, .depth = sl.block_count_before + 1, .stride = mix_states, .k = kq, .norm = 1, .scale = scale_h, .eps = g.eps }), 6);
+                    cmd.setBuffer(param_arena, try allocParam(arena, &cur, MixArgs{ .width = h, .depth = sl.block_count_before + 1, .stride = mix_states, .k = kq, .norm = 1, .scale = scale_h, .eps = g.eps }), 6);
                     cmd.setBuffer(rt.mixout, 0, 7);
                     rt.setW(cmd, @intCast(lay.q_norm.off), 8);
                     rt.setW(cmd, @intCast(lay.k_norm.off), 9);
@@ -1922,7 +2031,7 @@ pub const Runtime = struct {
                 cmd.setPipeline(p.rms);
                 cmd.setBuffer(rt.x, 0, 0);
                 rt.setW(cmd, @intCast(lay.q_norm.off), 1);
-                cmd.setBuffer(PA, allocParam(arena, &cur, RmsBA{ .width = h, .rows = 1, .xs = 1, .xb = 0, .ys = 1, .yb = 0, .wb = 1, .eps = g.eps }), 2);
+                cmd.setBuffer(param_arena, try allocParam(arena, &cur, RmsBA{ .width = h, .rows = 1, .xs = 1, .xb = 0, .ys = 1, .yb = 0, .wb = 1, .eps = g.eps }), 2);
                 cmd.setBuffer(rt.n0, 0, 3);
                 cmd.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
                 idx += 1;
@@ -1957,7 +2066,7 @@ pub const Runtime = struct {
                 cmd.setBuffer(rt.sink, 0, 17);
                 cmd.setBuffer(rt.kdyn, 0, 18);
                 cmd.setBuffer(rt.vdyn, 0, 19);
-                cmd.setBuffer(PA, allocParam(arena, &cur, AffineProjA{ .k = h, .full = sl.is_full, .m = lay.proj_ms }), 20);
+                cmd.setBuffer(param_arena, try allocParam(arena, &cur, AffineProjA{ .k = h, .full = sl.is_full, .m = lay.proj_ms }), 20);
                 cmd.dispatchGroups(mtl.Size.of((total_proj + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
                 idx += 1;
             }
@@ -1980,7 +2089,7 @@ pub const Runtime = struct {
                     .floor = @floatFromInt(g.log_floor),
                     .alpha = g.log_alpha,
                 };
-                const row_off = allocParam(arena, &cur, BatchQkvRow{
+                const row_off = try allocParam(arena, &cur, BatchQkvRow{
                     .k_ring = convAddr(rt.k_conv, sl.slot, kvw),
                     .v_ring = convAddr(rt.v_conv, sl.slot, kvw),
                     .keys = 0,
@@ -2003,9 +2112,9 @@ pub const Runtime = struct {
                 cmd.setBuffer(rt.r, 0, 8);
                 rt.setW(cmd, @intCast(lay.r_scale.off), 9);
                 rt.setW(cmd, @intCast(lay.rel_bias.off), 10);
-                cmd.setBuffer(PA, allocParam(arena, &cur, qkv_args), 11);
+                cmd.setBuffer(param_arena, try allocParam(arena, &cur, qkv_args), 11);
                 cmd.setBuffer(rt.relbias, 0, 12);
-                cmd.setBuffer(PA, row_off, 13);
+                cmd.setBuffer(param_arena, row_off, 13);
                 cmd.setBuffer(rt.kc, 0, 14);
                 cmd.setBuffer(rt.vc, 0, 15);
                 cmd.dispatchGroups(mtl.Size.of(g.kv_heads + g.heads + (g.heads * (lay.extent + 1) + 255) / 256, 1, 1), mtl.Size.of(256, 1, 1));
@@ -2013,7 +2122,7 @@ pub const Runtime = struct {
             }
 
             {
-                const arow_off = allocParam(arena, &cur, BatchRow{
+                const arow_off = try allocParam(arena, &cur, BatchRow{
                     .keys = rt.keys.gpuAddress() + rt.slot_kv_off[sl.slot],
                     .values = rt.values.gpuAddress() + rt.slot_kv_off[sl.slot],
                     .args = .{
@@ -2041,7 +2150,7 @@ pub const Runtime = struct {
                 cs.setBuffer(rt.q, 0, 0);
                 cs.setBuffer(rt.relbias, 0, 1);
                 cs.setBuffer(rt.sink, 0, 2);
-                cs.setBuffer(PA, arow_off, 3);
+                cs.setBuffer(param_arena, arow_off, 3);
                 cs.setBuffer(rt.parts, 0, 4);
                 cs.dispatchGroups(mtl.Size.of(g.kv_heads * attn_splits, 1, 1), mtl.Size.of((g.heads / g.kv_heads) * 32, 1, 1));
                 idx += 1;
@@ -2050,7 +2159,7 @@ pub const Runtime = struct {
                 cc.setBarrier();
                 cc.setPipeline(p.combine);
                 cc.setBuffer(rt.parts, 0, 0);
-                cc.setBuffer(PA, arow_off, 1);
+                cc.setBuffer(param_arena, arow_off, 1);
                 cc.setBuffer(rt.attn, 0, 2);
                 cc.dispatchGroups(mtl.Size.of(g.heads, 1, 1), mtl.Size.of(32, 1, 1));
                 idx += 1;
@@ -2062,7 +2171,7 @@ pub const Runtime = struct {
                 cmd.setPipeline(p.sig_mul);
                 cmd.setBuffer(rt.attn, 0, 0);
                 cmd.setBuffer(rt.gate, 0, 1);
-                cmd.setBuffer(PA, allocParam(arena, &cur, PairA{ .count = qw }), 2);
+                cmd.setBuffer(param_arena, try allocParam(arena, &cur, PairA{ .count = qw }), 2);
                 cmd.setBuffer(rt.attn, 0, 3);
                 cmd.dispatchThreads(mtl.Size.of(qw, 1, 1), mtl.Size.of(256, 1, 1));
                 idx += 1;
@@ -2076,25 +2185,25 @@ pub const Runtime = struct {
                 rt.setW(cmd, @intCast(lay.proj_o.w.off), 1);
                 rt.setW(cmd, @intCast(lay.proj_o.s.off), 2);
                 rt.setW(cmd, @intCast(lay.proj_o.b.off), 3);
-                cmd.setBuffer(PA, allocParam(arena, &cur, AffineDenseA{ .n = h, .k = qw, .rows = 1, .xs = 1, .xb = 0, .bits = 8, .cap = 0 }), 4);
+                cmd.setBuffer(param_arena, try allocParam(arena, &cur, AffineDenseA{ .n = h, .k = qw, .rows = 1, .xs = 1, .xb = 0, .bits = 8, .cap = 0 }), 4);
                 cmd.setBuffer(rt.projout, 0, 5);
                 cmd.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
                 idx += 1;
             }
 
             {
-                const arow_off = allocParam(arena, &cur, ConvRow{ .ring = convAddr(rt.attn_conv, sl.slot, h), .pos = 0 });
+                const arow_off = try allocParam(arena, &cur, ConvRow{ .ring = convAddr(rt.attn_conv, sl.slot, h), .pos = 0 });
                 rt.dyn_aconv_row_off[visit_i] = arow_off;
-                const ca_off = allocParam(arena, &cur, DecodeConvA{ .channels = h, .heads = 0, .ring = conv_ring, .pos = 0, .layout = 0, .norm = norm_post, .residual = @intFromBool(!push), .topk = 0 });
+                const ca_off = try allocParam(arena, &cur, DecodeConvA{ .channels = h, .heads = 0, .ring = conv_ring, .pos = 0, .layout = 0, .norm = norm_post, .residual = @intFromBool(!push), .topk = 0 });
                 const cmd = active_icb.command(idx);
                 cmd.setBarrier();
                 cmd.setPipeline(p.batch_conv);
                 cmd.setBuffer(rt.projout, 0, 0);
                 rt.setW(cmd, @intCast(lay.attn_post.off), 1);
-                cmd.setBuffer(PA, ca_off, 2);
-                cmd.setBuffer(PA, ca_off, 3);
+                cmd.setBuffer(param_arena, ca_off, 2);
+                cmd.setBuffer(param_arena, ca_off, 3);
                 cmd.setBuffer(if (!push) rt.x else rt.o, 0, 4);
-                cmd.setBuffer(PA, arow_off, 5);
+                cmd.setBuffer(param_arena, arow_off, 5);
                 cmd.setBuffer(rt.projout, 0, 6);
                 cmd.dispatchThreads(mtl.Size.of(h, 1, 1), mtl.Size.of(256, 1, 1));
                 idx += 1;
@@ -2105,7 +2214,7 @@ pub const Runtime = struct {
                 cmd.setBarrier();
                 cmd.setPipeline(p.scatter);
                 cmd.setBuffer(rt.x, 0, 0);
-                cmd.setBuffer(PA, allocParam(arena, &cur, ScatterA{ .width = h, .stride = mix_states, .slot = sl.block_count_before }), 1);
+                cmd.setBuffer(param_arena, try allocParam(arena, &cur, ScatterA{ .width = h, .stride = mix_states, .slot = sl.block_count_before }), 1);
                 cmd.setBuffer(rt.blocks, 0, 2);
                 cmd.setBuffer(rt.o, 0, 3);
                 cmd.dispatchThreads(mtl.Size.of(h, 1, 1), mtl.Size.of(256, 1, 1));
@@ -2123,7 +2232,7 @@ pub const Runtime = struct {
                 rt.setW(cmd, mq_off, 3);
                 rt.setW(cmd, mq_off, 4);
                 rt.setW(cmd, mq_off, 5);
-                cmd.setBuffer(PA, allocParam(arena, &cur, MixArgs{ .width = h, .depth = sl.block_count_after_attn + 1, .stride = mix_states, .k = 1, .norm = @intFromBool(!bank), .scale = scale_h, .eps = g.eps }), 6);
+                cmd.setBuffer(param_arena, try allocParam(arena, &cur, MixArgs{ .width = h, .depth = sl.block_count_after_attn + 1, .stride = mix_states, .k = 1, .norm = @intFromBool(!bank), .scale = scale_h, .eps = g.eps }), 6);
                 cmd.setBuffer(rt.mixout, 0, 7);
                 rt.setW(cmd, @intCast(if (!bank) lay.mlp_norm.off else mq_off), 8);
                 rt.setW(cmd, mq_off, 9);
@@ -2142,7 +2251,7 @@ pub const Runtime = struct {
                 c0.setPipeline(p.rms_pair);
                 c0.setBuffer(rt.mixout, 0, 0);
                 c0.setBuffer(rt.msg, 0, 1);
-                c0.setBuffer(PA, allocParam(arena, &cur, RmsPairA{ .width = h, .xs0 = 1, .xb0 = 0, .xs1 = 4, .xb1 = 3, .eps = g.eps }), 2);
+                c0.setBuffer(param_arena, try allocParam(arena, &cur, RmsPairA{ .width = h, .xs0 = 1, .xb0 = 0, .xs1 = 4, .xb1 = 3, .eps = g.eps }), 2);
                 c0.setBuffer(rt.h2in, 0, 3);
                 c0.dispatchGroups(mtl.Size.of(2, 1, 1), mtl.Size.of(256, 1, 1));
                 idx += 1;
@@ -2152,7 +2261,7 @@ pub const Runtime = struct {
                 c1.setPipeline(p.float_mv);
                 c1.setBuffer(rt.h2in, 0, 0);
                 rt.setW(c1, @intCast(ctl.down.off), 1);
-                c1.setBuffer(PA, allocParam(arena, &cur, AffineDenseA{ .n = g.gate_rank, .k = 2 * h, .rows = 1, .xs = 1, .xb = 0, .bits = 0, .cap = 0 }), 2);
+                c1.setBuffer(param_arena, try allocParam(arena, &cur, AffineDenseA{ .n = g.gate_rank, .k = 2 * h, .rows = 1, .xs = 1, .xb = 0, .bits = 0, .cap = 0 }), 2);
                 c1.setBuffer(rt.normed, 0, 3);
                 c1.dispatchGroups(mtl.Size.of((g.gate_rank + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
                 idx += 1;
@@ -2166,7 +2275,7 @@ pub const Runtime = struct {
                 c2.setBuffer(rt.mixout, 0, 3);
                 c2.setBuffer(rt.msg, 0, 4);
                 c2.setBuffer(rt.mixout, 0, 5);
-                c2.setBuffer(PA, allocParam(arena, &cur, AffineBatchCtlA{ .k = g.gate_rank, .m0 = h, .m1 = h, .h = h, .cxs = 1, .cxb = 0, .mxs = 4, .mxb = 3, .ys = 1, .yb = 0 }), 6);
+                c2.setBuffer(param_arena, try allocParam(arena, &cur, AffineBatchCtlA{ .k = g.gate_rank, .m0 = h, .m1 = h, .h = h, .cxs = 1, .cxb = 0, .mxs = 4, .mxb = 3, .ys = 1, .yb = 0 }), 6);
                 c2.dispatchGroups(mtl.Size.of((h + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
                 idx += 1;
 
@@ -2175,7 +2284,7 @@ pub const Runtime = struct {
                 c3.setPipeline(p.rms);
                 c3.setBuffer(rt.mixout, 0, 0);
                 rt.setW(c3, @intCast(lay.mlp_norm.off), 1);
-                c3.setBuffer(PA, allocParam(arena, &cur, RmsBA{ .width = h, .rows = 1, .xs = 1, .xb = 0, .ys = 1, .yb = 0, .wb = 1, .eps = g.eps }), 2);
+                c3.setBuffer(param_arena, try allocParam(arena, &cur, RmsBA{ .width = h, .rows = 1, .xs = 1, .xb = 0, .ys = 1, .yb = 0, .wb = 1, .eps = g.eps }), 2);
                 c3.setBuffer(rt.m0, 0, 3);
                 c3.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(256, 1, 1));
                 idx += 1;
@@ -2187,7 +2296,7 @@ pub const Runtime = struct {
                 c0.setPipeline(p.float_mv);
                 c0.setBuffer(rt.m0, 0, 0);
                 rt.setW(c0, @intCast(lay.router.off), 1);
-                c0.setBuffer(PA, allocParam(arena, &cur, AffineDenseA{ .n = g.experts, .k = h, .rows = 1, .xs = 1, .xb = 0, .bits = 0, .cap = 0 }), 2);
+                c0.setBuffer(param_arena, try allocParam(arena, &cur, AffineDenseA{ .n = g.experts, .k = h, .rows = 1, .xs = 1, .xb = 0, .bits = 0, .cap = 0 }), 2);
                 c0.setBuffer(rt.router, 0, 3);
                 c0.dispatchGroups(mtl.Size.of((g.experts + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
                 idx += 1;
@@ -2197,7 +2306,7 @@ pub const Runtime = struct {
                 c1.setPipeline(p.routepick);
                 c1.setBuffer(rt.router, 0, 0);
                 rt.setW(c1, @intCast(lay.router_bias.off), 1);
-                c1.setBuffer(PA, allocParam(arena, &cur, PickA{ .experts = g.experts, .topk = g.topk, .rows = 1, .route_scale = g.route_scale }), 2);
+                c1.setBuffer(param_arena, try allocParam(arena, &cur, PickA{ .experts = g.experts, .topk = g.topk, .rows = 1, .route_scale = g.route_scale }), 2);
                 c1.setBuffer(rt.picks, 0, 3);
                 c1.setBuffer(rt.wts, 0, 4);
                 c1.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(32, 1, 1));
@@ -2213,7 +2322,7 @@ pub const Runtime = struct {
                 rt.setW(c0, @intCast(lay.w13_scale.off), 2);
                 rt.setW(c0, @intCast(lay.w13_bias.off), 3);
                 c0.setBuffer(rt.picks, 0, 4);
-                c0.setBuffer(PA, allocParam(arena, &cur, MoeBA{ .k = h, .n = g.expert_inter, .slots = g.topk, .topk = g.topk, .gate_cap = g.gate_cap, .up_cap = g.up_cap }), 5);
+                c0.setBuffer(param_arena, try allocParam(arena, &cur, MoeBA{ .k = h, .n = g.expert_inter, .slots = g.topk, .topk = g.topk, .gate_cap = g.gate_cap, .up_cap = g.up_cap }), 5);
                 c0.setBuffer(rt.act, 0, 6);
                 c0.dispatchGroups(mtl.Size.of((g.expert_inter + 7) / 8, g.topk, 1), mtl.Size.of(256, 1, 1));
                 idx += 1;
@@ -2226,7 +2335,7 @@ pub const Runtime = struct {
                 rt.setW(c1, @intCast(lay.w2_scale.off), 2);
                 rt.setW(c1, @intCast(lay.w2_bias.off), 3);
                 c1.setBuffer(rt.picks, 0, 4);
-                c1.setBuffer(PA, allocParam(arena, &cur, MoeBA{ .k = g.expert_inter, .n = h, .slots = g.topk, .topk = g.topk, .gate_cap = 0, .up_cap = 0 }), 5);
+                c1.setBuffer(param_arena, try allocParam(arena, &cur, MoeBA{ .k = g.expert_inter, .n = h, .slots = g.topk, .topk = g.topk, .gate_cap = 0, .up_cap = 0 }), 5);
                 c1.setBuffer(rt.down, 0, 6);
                 c1.dispatchGroups(mtl.Size.of((h + 7) / 8, g.topk, 1), mtl.Size.of(256, 1, 1));
                 idx += 1;
@@ -2240,7 +2349,7 @@ pub const Runtime = struct {
                 rt.setW(c0, @intCast(lay.w13_global.off), 3);
                 rt.setW(c0, @intCast(rt.sched.globals.nvfp4_den.off), 4);
                 c0.setBuffer(rt.picks, 0, 5);
-                c0.setBuffer(PA, allocParam(arena, &cur, MoeBA{ .k = h, .n = g.expert_inter, .slots = g.topk, .topk = g.topk, .gate_cap = g.gate_cap, .up_cap = g.up_cap }), 6);
+                c0.setBuffer(param_arena, try allocParam(arena, &cur, MoeBA{ .k = h, .n = g.expert_inter, .slots = g.topk, .topk = g.topk, .gate_cap = g.gate_cap, .up_cap = g.up_cap }), 6);
                 c0.setBuffer(rt.act, 0, 7);
                 rt.setW(c0, @intCast(rt.sched.globals.t16.off), 8);
                 c0.dispatchGroups(mtl.Size.of(g.expert_inter, g.topk, 1), mtl.Size.of(32, 1, 1));
@@ -2255,7 +2364,7 @@ pub const Runtime = struct {
                 rt.setW(c1, @intCast(lay.w2_global.off), 3);
                 rt.setW(c1, @intCast(rt.sched.globals.nvfp4_den.off), 4);
                 c1.setBuffer(rt.picks, 0, 5);
-                c1.setBuffer(PA, allocParam(arena, &cur, MoeBA{ .k = g.expert_inter, .n = h, .slots = g.topk, .topk = g.topk, .gate_cap = 0, .up_cap = 0 }), 6);
+                c1.setBuffer(param_arena, try allocParam(arena, &cur, MoeBA{ .k = g.expert_inter, .n = h, .slots = g.topk, .topk = g.topk, .gate_cap = 0, .up_cap = 0 }), 6);
                 c1.setBuffer(rt.down, 0, 7);
                 rt.setW(c1, @intCast(rt.sched.globals.t16.off), 8);
                 c1.dispatchGroups(mtl.Size.of((h + 31) / 32, g.topk, 1), mtl.Size.of(256, 1, 1));
@@ -2263,18 +2372,18 @@ pub const Runtime = struct {
             }
 
             {
-                const mrow_off = allocParam(arena, &cur, ConvRow{ .ring = convAddr(rt.mlp_conv, sl.slot, h), .pos = 0 });
+                const mrow_off = try allocParam(arena, &cur, ConvRow{ .ring = convAddr(rt.mlp_conv, sl.slot, h), .pos = 0 });
                 rt.dyn_mconv_row_off[visit_i] = mrow_off;
-                const ma_off = allocParam(arena, &cur, DecodeConvA{ .channels = h, .heads = 0, .ring = conv_ring, .pos = 0, .layout = 0, .norm = norm_post, .residual = 1, .topk = g.topk });
+                const ma_off = try allocParam(arena, &cur, DecodeConvA{ .channels = h, .heads = 0, .ring = conv_ring, .pos = 0, .layout = 0, .norm = norm_post, .residual = 1, .topk = g.topk });
                 const cmd = active_icb.command(idx);
                 cmd.setBarrier();
                 cmd.setPipeline(p.batch_conv);
                 cmd.setBuffer(rt.down, 0, 0);
                 rt.setW(cmd, @intCast(lay.mlp_post.off), 1);
-                cmd.setBuffer(PA, ma_off, 2);
-                cmd.setBuffer(PA, ma_off, 3);
+                cmd.setBuffer(param_arena, ma_off, 2);
+                cmd.setBuffer(param_arena, ma_off, 3);
                 cmd.setBuffer(rt.x, 0, 4);
-                cmd.setBuffer(PA, mrow_off, 5);
+                cmd.setBuffer(param_arena, mrow_off, 5);
                 cmd.setBuffer(rt.wts, 0, 6);
                 cmd.dispatchThreads(mtl.Size.of(h, 1, 1), mtl.Size.of(256, 1, 1));
                 idx += 1;
@@ -2286,7 +2395,7 @@ pub const Runtime = struct {
                 cmd.setPipeline(p.copy);
                 cmd.setBuffer(rt.x, 0, 0);
                 cmd.setBuffer(rt.prelude, 0, 1);
-                cmd.setBuffer(PA, allocParam(arena, &cur, PairA{ .count = h }), 2);
+                cmd.setBuffer(param_arena, try allocParam(arena, &cur, PairA{ .count = h }), 2);
                 cmd.dispatchThreads(mtl.Size.of(h, 1, 1), mtl.Size.of(256, 1, 1));
                 idx += 1;
 
@@ -2307,7 +2416,7 @@ pub const Runtime = struct {
             rt.setW(c0, oq_off, 3);
             rt.setW(c0, oq_off, 4);
             rt.setW(c0, oq_off, 5);
-            c0.setBuffer(PA, allocParam(arena, &cur, MixArgs{ .width = h, .depth = 5, .stride = mix_states, .k = 1, .norm = 1, .scale = scale_h, .eps = g.eps }), 6);
+            c0.setBuffer(param_arena, try allocParam(arena, &cur, MixArgs{ .width = h, .depth = 5, .stride = mix_states, .k = 1, .norm = 1, .scale = scale_h, .eps = g.eps }), 6);
             c0.setBuffer(rt.mixout, 0, 7);
             rt.setW(c0, @intCast(rt.sched.globals.norm.off), 8);
             rt.setW(c0, oq_off, 9);
@@ -2325,7 +2434,7 @@ pub const Runtime = struct {
             rt.setW(c1, @intCast(rt.sched.globals.unembed.w.off), 1);
             rt.setW(c1, @intCast(rt.sched.globals.unembed.s.off), 2);
             rt.setW(c1, @intCast(rt.sched.globals.unembed.b.off), 3);
-            c1.setBuffer(PA, allocParam(arena, &cur, AffineDenseA{ .n = g.unpadded_vocab, .k = h, .rows = 1, .xs = 1, .xb = 0, .bits = 8, .cap = g.logit_cap }), 4);
+            c1.setBuffer(param_arena, try allocParam(arena, &cur, AffineDenseA{ .n = g.unpadded_vocab, .k = h, .rows = 1, .xs = 1, .xb = 0, .bits = 8, .cap = g.logit_cap }), 4);
             c1.setBuffer(rt.logits, 0, 5);
             c1.dispatchGroups(mtl.Size.of((g.unpadded_vocab + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
             idx += 1;
@@ -2335,7 +2444,7 @@ pub const Runtime = struct {
                 c2.setBarrier();
                 c2.setPipeline(p.argmax);
                 c2.setBuffer(rt.logits, 0, 0);
-                c2.setBuffer(PA, allocParam(arena, &cur, ArgmaxA{ .vocab = g.unpadded_vocab }), 1);
+                c2.setBuffer(param_arena, try allocParam(arena, &cur, ArgmaxA{ .vocab = g.unpadded_vocab }), 1);
                 c2.setBuffer(rt.argmax_out, 0, 2);
                 c2.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(1024, 1, 1));
                 idx += 1;
@@ -2423,6 +2532,7 @@ pub const Runtime = struct {
         };
     }
 
+    /// Returns a borrowed view of the most recent step's output logits, valid until the next step, prefill, or `deinit`.
     pub fn logitsSlice(rt: *const Runtime) []const f32 {
         return rt.logits.slice(f32, rt.sched.geom.unpadded_vocab);
     }
@@ -2899,4 +3009,36 @@ pub fn nowNs() u64 {
     var ts: std.c.timespec = undefined;
     _ = std.c.clock_gettime(.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+}
+
+test "allocParam enforces alignment and fails closed on arena overflow" {
+    var buf: [32]u8 = @splat(0);
+    var cur: usize = 0;
+    const o0 = try Runtime.allocParam(&buf, &cur, @as(u64, 0x1122334455667788));
+    try std.testing.expectEqual(@as(usize, 0), o0);
+    try std.testing.expectEqual(@as(usize, 8), cur);
+    const o1 = try Runtime.allocParam(&buf, &cur, @as(u64, 0x99aabbccddeeff00));
+    try std.testing.expectEqual(@as(usize, 16), o1);
+    try std.testing.expectEqual(@as(usize, 24), cur);
+    try std.testing.expectError(error.ParamArenaFull, Runtime.allocParam(&buf, &cur, @as(u64, 1)));
+}
+
+test "Runtime.open fails closed on missing or invalid-schema bundle" {
+    const io = std.testing.io;
+    try std.testing.expectError(error.MissingFile, Runtime.open(std.testing.allocator, io, "/nonexistent-tf-aot-bundle-path", .{ .verify_only = true }));
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const manifest_bad = "{\"schema\":99,\"target_arch\":\"applegpu_g17s\",\"min_generation\":17,\"context_cap\":32768,\"layout_flags\":0,\"files\":[]}";
+    try tmp.dir.writeFile(io, .{ .sub_path = "manifest.json", .data = manifest_bad });
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const n = try tmp.dir.realPath(io, &path_buf);
+    try std.testing.expectError(error.BadVersion, Runtime.open(std.testing.allocator, io, path_buf[0..n], .{ .verify_only = true }));
+}
+
+test "verifyTree rejects empty rows and short parent arrays before GPU access" {
+    var fake_rt: Runtime = undefined;
+    try std.testing.expectError(error.InvalidVerifyRows, prefill_mod.verifyTree(&fake_rt, &.{}, null, false, false));
+    const ids = [_]u32{ 1, 2, 3, 4 };
+    const short_parents = [_]u8{ 0, 1 };
+    try std.testing.expectError(error.BadDraftParents, prefill_mod.verifyTree(&fake_rt, &ids, &short_parents, false, false));
 }

@@ -227,55 +227,74 @@ pub const PrefillScratch = struct {
         const kvw: usize = g.kv_heads * g.head_dim;
         const rel_cols: usize = g.rel_extent + 1;
         const slots_max: usize = chunk * g.topk;
-        return .{
-            .chunk = chunk,
-            .ids = try device.buffer(chunk * 4, shr),
-            .x = try device.buffer(chunk * h * 4, priv),
-            .prelude = try device.buffer(chunk * h * 4, priv),
-            .passout = try device.buffer(chunk * h * 4, priv),
-            .bank = try device.buffer(chunk * mix_states * h * 4, priv),
-            .n0 = try device.buffer(chunk * h * 4, priv),
-            .n1 = try device.buffer(chunk * h * 4, priv),
-            .n2 = try device.buffer(chunk * h * 4, priv),
-            .m0 = try device.buffer(chunk * h * 4, priv),
-            .q = try device.buffer(chunk * qw * 4, priv),
-            .k = try device.buffer(chunk * kvw * 4, priv),
-            .v = try device.buffer(chunk * kvw * 4, priv),
-            .r = try device.buffer(chunk * g.heads * g.d_rel * 4, priv),
-            .kc = try device.buffer(chunk * kvw * 4, priv),
-            .vc = try device.buffer(chunk * kvw * 4, priv),
-            .kh = try device.buffer(chunk * kvw * 2, priv),
-            .vh = try device.buffer(chunk * kvw * 2, priv),
-            .kdyn = try device.buffer(chunk * g.kv_heads * 4 * 4, priv),
-            .vdyn = try device.buffer(chunk * g.kv_heads * 4 * 4, priv),
-            .sink = try device.buffer(chunk * g.heads * 4, priv),
-            .relbias = try device.buffer(chunk * g.heads * rel_cols * 4, priv),
-            .attn = try device.buffer(chunk * qw * 4, priv),
-            .gate = try device.buffer(chunk * qw * 4, priv),
-            .projout = try device.buffer(chunk * h * 4, priv),
-            .o = try device.buffer(chunk * h * 4, priv),
-            .moe = try device.buffer(chunk * h * 4, priv),
-            .blocks = try device.buffer(chunk * mix_states * h * 4, priv),
-            .mixout = try device.buffer(chunk * 4 * h * 4, priv),
-            .msg = try device.buffer(chunk * 4 * h * 4, priv),
-            .h2in = try device.buffer(chunk * 2 * h * 4, priv),
-            .normed = try device.buffer(chunk * g.gate_rank * 4, priv),
-            .router = try device.buffer(chunk * g.experts * 4, priv),
-            .picks = try device.buffer(slots_max * 4, priv),
-            .wts = try device.buffer(slots_max * 4, priv),
-            .act = try device.buffer(slots_max * g.expert_inter * 4, priv),
-            .act_h = try device.buffer(slots_max * g.expert_inter * 2, priv),
-            .xh = try device.buffer(chunk * h * 2, priv),
-            .down = try device.buffer(slots_max * h * 4, priv),
-            .moe_cnt = try device.buffer(g.experts * 4, priv),
-            .moe_off = try device.buffer((g.experts + 1) * 4, priv),
-            .moe_cur = try device.buffer(g.experts * 4, priv),
-            .moe_sorted = try device.buffer(slots_max * 4, priv),
-            .stage_w = try device.buffer(9000 * qw * 2, priv),
-            .stage_x = try device.buffer(2 * chunk * qw * 2, priv),
-            .overflow = try device.buffer(16, shr),
-            .taps = try device.buffer(chunk * dflash_tap_visits.len * h * 2, shr),
+        const Spec = struct { len: usize, opts: u32 };
+        const names = [_][]const u8{
+            "ids", "x", "prelude", "passout", "bank", "n0", "n1", "n2", "m0", "q", "k", "v", "r",
+            "kc", "vc", "kh", "vh", "kdyn", "vdyn", "sink", "relbias", "attn", "gate", "projout",
+            "o", "moe", "blocks", "mixout", "msg", "h2in", "normed", "router", "picks", "wts",
+            "act", "act_h", "xh", "down", "moe_cnt", "moe_off", "moe_cur", "moe_sorted",
+            "stage_w", "stage_x", "overflow", "taps",
         };
+        const specs = [names.len]Spec{
+            .{ .len = chunk * 4, .opts = shr },
+            .{ .len = chunk * h * 4, .opts = priv },
+            .{ .len = chunk * h * 4, .opts = priv },
+            .{ .len = chunk * h * 4, .opts = priv },
+            .{ .len = chunk * mix_states * h * 4, .opts = priv },
+            .{ .len = chunk * h * 4, .opts = priv },
+            .{ .len = chunk * h * 4, .opts = priv },
+            .{ .len = chunk * h * 4, .opts = priv },
+            .{ .len = chunk * h * 4, .opts = priv },
+            .{ .len = chunk * qw * 4, .opts = priv },
+            .{ .len = chunk * kvw * 4, .opts = priv },
+            .{ .len = chunk * kvw * 4, .opts = priv },
+            .{ .len = chunk * g.heads * g.d_rel * 4, .opts = priv },
+            .{ .len = chunk * kvw * 4, .opts = priv },
+            .{ .len = chunk * kvw * 4, .opts = priv },
+            .{ .len = chunk * kvw * 2, .opts = priv },
+            .{ .len = chunk * kvw * 2, .opts = priv },
+            .{ .len = chunk * g.kv_heads * 4 * 4, .opts = priv },
+            .{ .len = chunk * g.kv_heads * 4 * 4, .opts = priv },
+            .{ .len = chunk * g.heads * 4, .opts = priv },
+            .{ .len = chunk * g.heads * rel_cols * 4, .opts = priv },
+            .{ .len = chunk * qw * 4, .opts = priv },
+            .{ .len = chunk * qw * 4, .opts = priv },
+            .{ .len = chunk * h * 4, .opts = priv },
+            .{ .len = chunk * h * 4, .opts = priv },
+            .{ .len = chunk * h * 4, .opts = priv },
+            .{ .len = chunk * mix_states * h * 4, .opts = priv },
+            .{ .len = chunk * 4 * h * 4, .opts = priv },
+            .{ .len = chunk * 4 * h * 4, .opts = priv },
+            .{ .len = chunk * 2 * h * 4, .opts = priv },
+            .{ .len = chunk * g.gate_rank * 4, .opts = priv },
+            .{ .len = chunk * g.experts * 4, .opts = priv },
+            .{ .len = slots_max * 4, .opts = priv },
+            .{ .len = slots_max * 4, .opts = priv },
+            .{ .len = slots_max * g.expert_inter * 4, .opts = priv },
+            .{ .len = slots_max * g.expert_inter * 2, .opts = priv },
+            .{ .len = chunk * h * 2, .opts = priv },
+            .{ .len = slots_max * h * 4, .opts = priv },
+            .{ .len = g.experts * 4, .opts = priv },
+            .{ .len = (g.experts + 1) * 4, .opts = priv },
+            .{ .len = g.experts * 4, .opts = priv },
+            .{ .len = slots_max * 4, .opts = priv },
+            .{ .len = 9000 * qw * 2, .opts = priv },
+            .{ .len = 2 * chunk * qw * 2, .opts = priv },
+            .{ .len = 16, .opts = shr },
+            .{ .len = chunk * dflash_tap_visits.len * h * 2, .opts = shr },
+        };
+        var out: PrefillScratch = undefined;
+        out.chunk = chunk;
+        var built: [names.len]mtl.Buffer = undefined;
+        var count: usize = 0;
+        errdefer for (built[0..count]) |b| b.deinit();
+        inline for (names, 0..) |name, i| {
+            const buf = try device.buffer(specs[i].len, specs[i].opts);
+            built[count] = buf;
+            count += 1;
+            @field(out, name) = buf;
+        }
+        return out;
     }
 
     pub fn deinit(s: *PrefillScratch) void {
@@ -336,55 +355,73 @@ pub const VerifyScratch = struct {
     pub fn init(device: mtl.Device, g: fmt.Geometry) !VerifyScratch {
         const priv = mtl.ResourceOptions.private;
         const shr = mtl.ResourceOptions.shared;
-        const R: usize = max_verify_rows;
+        const max_rows: usize = max_verify_rows;
         const h: usize = g.hidden;
         const qw: usize = g.heads * g.head_dim;
         const kvw: usize = g.kv_heads * g.head_dim;
         const rel_cols: usize = g.rel_extent + 1;
-        const slots_max: usize = R * g.topk;
-        return .{
-            .ids = try device.buffer(R * 4, shr),
-            .x = try device.buffer(R * h * 4, priv),
-            .prelude = try device.buffer(R * h * 4, priv),
-            .passout = try device.buffer(R * h * 4, priv),
-            .bank = try device.buffer(R * mix_states * h * 4, priv),
-            .n0 = try device.buffer(R * h * 4, priv),
-            .n1 = try device.buffer(R * h * 4, priv),
-            .n2 = try device.buffer(R * h * 4, priv),
-            .m0 = try device.buffer(R * h * 4, priv),
-            .q = try device.buffer(R * qw * 4, priv),
-            .k = try device.buffer(R * kvw * 4, priv),
-            .v = try device.buffer(R * kvw * 4, priv),
-            .r = try device.buffer(R * g.heads * g.d_rel * 4, priv),
-            .kc = try device.buffer(R * kvw * 4, priv),
-            .vc = try device.buffer(R * kvw * 4, priv),
-            .kdyn = try device.buffer(R * g.kv_heads * 4 * 4, priv),
-            .vdyn = try device.buffer(R * g.kv_heads * 4 * 4, priv),
-            .sink = try device.buffer(R * g.heads * 4, priv),
-            .relbias = try device.buffer(R * g.heads * rel_cols * 4, priv),
-            .attn = try device.buffer(R * qw * 4, priv),
-            .gate = try device.buffer(R * qw * 4, priv),
-            .projout = try device.buffer(R * h * 4, priv),
-            .o = try device.buffer(R * h * 4, priv),
-            .blocks = try device.buffer(R * mix_states * h * 4, priv),
-            .mixout = try device.buffer(R * 4 * h * 4, priv),
-            .msg = try device.buffer(R * 4 * h * 4, priv),
-            .ctl_hid = try device.buffer(3 * R * g.gate_rank * 4, priv),
-            .router = try device.buffer(R * g.experts * 4, priv),
-            .picks = try device.buffer(slots_max * 4, priv),
-            .wts = try device.buffer(slots_max * 4, priv),
-            .act = try device.buffer(slots_max * g.expert_inter * 4, priv),
-            .down = try device.buffer(slots_max * h * 4, priv),
-            .parts = try device.buffer(R * g.heads * attn_splits * (g.head_dim + 2) * 4, priv),
-            .logits = try device.buffer(R * g.unpadded_vocab * 4, shr),
-            .v_kv = try device.buffer(fmt.num_slots * 2 * R * kvw * 2, priv),
-            .v_conv = try device.buffer(fmt.num_slots * R * (2 * kvw + 2 * h) * 4, priv),
-            .targets = try device.buffer(R * 4, shr),
-            .accepted = try device.buffer(R * 4, shr),
-            .keep = try device.buffer(R * 4, shr),
-            .kept = try device.buffer(R * 4, shr),
-            .taps = try device.buffer(R * dflash_tap_visits.len * h * 2, shr),
+        const slots_max: usize = max_rows * g.topk;
+        const Spec = struct { len: usize, opts: u32 };
+        const names = [_][]const u8{
+            "ids", "x", "prelude", "passout", "bank", "n0", "n1", "n2", "m0", "q", "k", "v", "r",
+            "kc", "vc", "kdyn", "vdyn", "sink", "relbias", "attn", "gate", "projout", "o",
+            "blocks", "mixout", "msg", "ctl_hid", "router", "picks", "wts", "act", "down",
+            "parts", "logits", "v_kv", "v_conv", "targets", "accepted", "keep", "kept", "taps",
         };
+        const specs = [names.len]Spec{
+            .{ .len = max_rows * 4, .opts = shr },
+            .{ .len = max_rows * h * 4, .opts = priv },
+            .{ .len = max_rows * h * 4, .opts = priv },
+            .{ .len = max_rows * h * 4, .opts = priv },
+            .{ .len = max_rows * mix_states * h * 4, .opts = priv },
+            .{ .len = max_rows * h * 4, .opts = priv },
+            .{ .len = max_rows * h * 4, .opts = priv },
+            .{ .len = max_rows * h * 4, .opts = priv },
+            .{ .len = max_rows * h * 4, .opts = priv },
+            .{ .len = max_rows * qw * 4, .opts = priv },
+            .{ .len = max_rows * kvw * 4, .opts = priv },
+            .{ .len = max_rows * kvw * 4, .opts = priv },
+            .{ .len = max_rows * g.heads * g.d_rel * 4, .opts = priv },
+            .{ .len = max_rows * kvw * 4, .opts = priv },
+            .{ .len = max_rows * kvw * 4, .opts = priv },
+            .{ .len = max_rows * g.kv_heads * 4 * 4, .opts = priv },
+            .{ .len = max_rows * g.kv_heads * 4 * 4, .opts = priv },
+            .{ .len = max_rows * g.heads * 4, .opts = priv },
+            .{ .len = max_rows * g.heads * rel_cols * 4, .opts = priv },
+            .{ .len = max_rows * qw * 4, .opts = priv },
+            .{ .len = max_rows * qw * 4, .opts = priv },
+            .{ .len = max_rows * h * 4, .opts = priv },
+            .{ .len = max_rows * h * 4, .opts = priv },
+            .{ .len = max_rows * mix_states * h * 4, .opts = priv },
+            .{ .len = max_rows * 4 * h * 4, .opts = priv },
+            .{ .len = max_rows * 4 * h * 4, .opts = priv },
+            .{ .len = 3 * max_rows * g.gate_rank * 4, .opts = priv },
+            .{ .len = max_rows * g.experts * 4, .opts = priv },
+            .{ .len = slots_max * 4, .opts = priv },
+            .{ .len = slots_max * 4, .opts = priv },
+            .{ .len = slots_max * g.expert_inter * 4, .opts = priv },
+            .{ .len = slots_max * h * 4, .opts = priv },
+            .{ .len = max_rows * g.heads * attn_splits * (g.head_dim + 2) * 4, .opts = priv },
+            .{ .len = max_rows * g.unpadded_vocab * 4, .opts = shr },
+            .{ .len = fmt.num_slots * 2 * max_rows * kvw * 2, .opts = priv },
+            .{ .len = fmt.num_slots * max_rows * (2 * kvw + 2 * h) * 4, .opts = priv },
+            .{ .len = max_rows * 4, .opts = shr },
+            .{ .len = max_rows * 4, .opts = shr },
+            .{ .len = max_rows * 4, .opts = shr },
+            .{ .len = max_rows * 4, .opts = shr },
+            .{ .len = max_rows * dflash_tap_visits.len * h * 2, .opts = shr },
+        };
+        var out: VerifyScratch = undefined;
+        var built: [names.len]mtl.Buffer = undefined;
+        var count: usize = 0;
+        errdefer for (built[0..count]) |b| b.deinit();
+        inline for (names, 0..) |name, i| {
+            const buf = try device.buffer(specs[i].len, specs[i].opts);
+            built[count] = buf;
+            count += 1;
+            @field(out, name) = buf;
+        }
+        return out;
     }
 
     pub fn deinit(s: *VerifyScratch) void {
@@ -986,28 +1023,28 @@ fn prefillOneChunk(
             enc.dispatchGroups(mtl.Size.of(n, 1, 1), mtl.Size.of(256, 1, 1));
         }
 
-        const E: u32 = g.experts;
-        const K: u32 = g.topk;
-        const slots_n: u32 = n * K;
+        const experts: u32 = g.experts;
+        const topk: u32 = g.topk;
+        const slots_n: u32 = n * topk;
         enc.setPipeline(ep.af_gemm);
         enc.setBuffer(s.m0, 0, 0);
         rt.setW(enc, lay.router.off, 1);
-        enc.setValue(StageArgs{ .n = E, .k = h, .rows = n, .xs = 1, .xb = 0, .bits = 0, .cap = 0 }, 2);
+        enc.setValue(StageArgs{ .n = experts, .k = h, .rows = n, .xs = 1, .xb = 0, .bits = 0, .cap = 0 }, 2);
         enc.setBuffer(s.router, 0, 3);
-        enc.dispatchGroups(mtl.Size.of((E + 31) / 32, (n + 15) / 16, 1), mtl.Size.of(128, 1, 1));
+        enc.dispatchGroups(mtl.Size.of((experts + 31) / 32, (n + 15) / 16, 1), mtl.Size.of(128, 1, 1));
 
         enc.setPipeline(p.routepick);
         enc.setBuffer(s.router, 0, 0);
         rt.setW(enc, lay.router_bias.off, 1);
-        enc.setValue(PickA{ .experts = E, .topk = K, .rows = n, .route_scale = g.route_scale }, 2);
+        enc.setValue(PickA{ .experts = experts, .topk = topk, .rows = n, .route_scale = g.route_scale }, 2);
         enc.setBuffer(s.picks, 0, 3);
         enc.setBuffer(s.wts, 0, 4);
         enc.dispatchGroups(mtl.Size.of(n, 1, 1), mtl.Size.of(32, 1, 1));
 
         enc.setPipeline(ep.moe_zero);
         enc.setBuffer(s.moe_cnt, 0, 0);
-        enc.setValue(E, 1);
-        enc.dispatchThreads(mtl.Size.of(E, 1, 1), mtl.Size.of(32, 1, 1));
+        enc.setValue(experts, 1);
+        enc.dispatchThreads(mtl.Size.of(experts, 1, 1), mtl.Size.of(32, 1, 1));
 
         enc.setPipeline(ep.moe_count);
         enc.setBuffer(s.picks, 0, 0);
@@ -1019,7 +1056,7 @@ fn prefillOneChunk(
         enc.setBuffer(s.moe_cnt, 0, 0);
         enc.setBuffer(s.moe_off, 0, 1);
         enc.setBuffer(s.moe_cur, 0, 2);
-        enc.setValue(E, 3);
+        enc.setValue(experts, 3);
         enc.dispatchThreads(mtl.Size.of(128, 1, 1), mtl.Size.of(128, 1, 1));
 
         enc.setPipeline(ep.moe_sort);
@@ -1029,7 +1066,7 @@ fn prefillOneChunk(
         enc.setValue(slots_n, 3);
         enc.dispatchThreads(mtl.Size.of(slots_n, 1, 1), mtl.Size.of(32, 1, 1));
 
-        const tiles: usize = (slots_n + 63) / 64 + E;
+        const tiles: usize = (slots_n + 63) / 64 + experts;
         const hcount: u32 = n * h / 4;
         enc.setPipeline(ep.half_rows);
         enc.setBuffer(s.m0, 0, 0);
@@ -1038,8 +1075,8 @@ fn prefillOneChunk(
         enc.setValue([2]u32{ hcount, @intFromBool(lay.is_affine4 == 0) }, 3);
         enc.dispatchThreads(mtl.Size.of(hcount, 1, 1), mtl.Size.of(256, 1, 1));
 
-        const up_args = MoegA{ .k = h, .n = g.expert_inter, .slots = slots_n, .topk = K, .experts = E, .gate_cap = g.gate_cap, .up_cap = g.up_cap };
-        const down_args = MoegA{ .k = g.expert_inter, .n = h, .slots = slots_n, .topk = K, .experts = E, .gate_cap = 0, .up_cap = 0 };
+        const up_args = MoegA{ .k = h, .n = g.expert_inter, .slots = slots_n, .topk = topk, .experts = experts, .gate_cap = g.gate_cap, .up_cap = g.up_cap };
+        const down_args = MoegA{ .k = g.expert_inter, .n = h, .slots = slots_n, .topk = topk, .experts = experts, .gate_cap = 0, .up_cap = 0 };
         if (lay.is_affine4 != 0) {
             enc.setPipeline(ep.affine_units_up);
             enc.setBuffer(s.xh, 0, 0);
@@ -1097,7 +1134,7 @@ fn prefillOneChunk(
         enc.setPipeline(ep.combine);
         enc.setBuffer(s.down, 0, 0);
         enc.setBuffer(s.wts, 0, 1);
-        enc.setValue(CombineA{ .width = h, .topk = K, .rows = n }, 2);
+        enc.setValue(CombineA{ .width = h, .topk = topk, .rows = n }, 2);
         enc.setBuffer(s.moe, 0, 3);
         enc.dispatchThreads(mtl.Size.of(h, n, 1), mtl.Size.of(256, 1, 1));
 
@@ -1236,13 +1273,14 @@ pub fn verifyTree(
     commit: bool,
     capture_taps: bool,
 ) !VerifyStats {
-    const R = ids.len;
-    if (R == 0 or R > max_verify_rows) return error.InvalidVerifyRows;
+    const rows = ids.len;
+    if (rows == 0 or rows > max_verify_rows) return error.InvalidVerifyRows;
+    if (parents_in) |pl| if (pl.len < rows - 1) return error.BadDraftParents;
     const ep = &(rt.extra_pipes orelse return error.MissingPrefillPipes);
     const vs = try rt.ensureVerifyScratch();
     const g = rt.sched.geom;
     const p = &rt.pipes;
-    const n: u32 = @intCast(R);
+    const n: u32 = @intCast(rows);
     const h: u32 = g.hidden;
     const qw: u32 = g.heads * g.head_dim;
     const kvw: u32 = g.kv_heads * g.head_dim;
@@ -1255,7 +1293,7 @@ pub fn verifyTree(
     var path: [max_verify_rows][max_verify_rows]u8 = @splat(@splat(0));
     var pos_arr: [max_verify_rows]u32 = @splat(0);
     var max_depth: usize = 0;
-    for (0..R) |r| {
+    for (0..rows) |r| {
         if (r > 0) {
             const par: u8 = if (parents_in) |pl| pl[r - 1] else @intCast(r - 1);
             if (par >= r) return error.BadDraftParents;
@@ -1272,7 +1310,7 @@ pub fn verifyTree(
     const t0 = rt_mod.nowNs();
     const pool = mtl.objc.Pool.push();
     defer pool.pop();
-    @memcpy(vs.ids.slice(u32, R), ids);
+    @memcpy(vs.ids.slice(u32, rows), ids);
 
     var cb = rt.queue.commandBuffer();
     var enc = cb.compute(.serial);
@@ -1287,7 +1325,7 @@ pub fn verifyTree(
     enc.setBuffer(vs.x, 0, 5);
     enc.dispatchGroups(mtl.Size.of(n, 1, 1), mtl.Size.of(256, 1, 1));
 
-    const use_t16 = R > 8;
+    const use_t16 = rows > 8;
     const t_dense = if (use_t16) ep.t_dense16_8_1_sb else ep.t_dense_8_2_sb;
     const t_proj = if (use_t16) ep.t_proj16_8_1_sb else ep.t_proj_8_2_sb;
     const t_step: u32 = if (use_t16) 8 else 16;
@@ -1429,7 +1467,7 @@ pub fn verifyTree(
             in2 = vs.n0;
         }
 
-        if (R == 1) {
+        if (rows == 1) {
             var total_proj: u32 = 0;
             for (lay.proj_ms) |m_| total_proj += m_;
             enc.setPipeline(p.aot_batch_proj8_sb.?);
@@ -1481,7 +1519,7 @@ pub fn verifyTree(
         const vh_off = (@as(usize, sl.slot) * 2 + 1) * max_verify_rows * kvw * 2;
         {
             var qrows: [max_verify_rows]VQkvRow = undefined;
-            for (0..R) |r| {
+            for (0..rows) |r| {
                 var back: [4]u8 = @splat(none_u8);
                 const d = depth[r];
                 for (1..conv_ring) |k| if (k <= d) {
@@ -1527,7 +1565,7 @@ pub fn verifyTree(
             rt.setW(enc, lay.rel_bias.off, 10);
             enc.setValue(qkv_args, 11);
             enc.setBuffer(vs.relbias, 0, 12);
-            enc.setBytes(std.mem.sliceAsBytes(qrows[0..R]), 13);
+            enc.setBytes(std.mem.sliceAsBytes(qrows[0..rows]), 13);
             enc.setBuffer(vs.kc, 0, 14);
             enc.setBuffer(vs.vc, 0, 15);
             enc.setBuffer(vs.v_conv, VerifyScratch.convOffset(g, sl.slot, 0), 16);
@@ -1544,7 +1582,7 @@ pub fn verifyTree(
             var max_splits: u32 = 0;
             const kbase = rt.keys.gpuAddress() + rt.slot_kv_off[sl.slot];
             const vbase = rt.values.gpuAddress() + rt.slot_kv_off[sl.slot];
-            for (0..R) |r| {
+            for (0..rows) |r| {
                 const pos = pos_arr[r];
                 const lo: u32 = if (win != 0 and pos + 1 > win) pos + 1 - win else 0;
                 const part = attnPartition(pos + 1 - lo);
@@ -1559,7 +1597,7 @@ pub fn verifyTree(
             enc.setBuffer(vs.q, 0, 0);
             enc.setBuffer(vs.relbias, 0, 1);
             enc.setBuffer(vs.sink, 0, 2);
-            enc.setBytes(std.mem.sliceAsBytes(grows[0..R]), 3);
+            enc.setBytes(std.mem.sliceAsBytes(grows[0..rows]), 3);
             enc.setBuffer(vs.parts, 0, 4);
             enc.setBuffer(vs.v_kv, kh_off, 5);
             enc.setBuffer(vs.v_kv, vh_off, 6);
@@ -1567,13 +1605,13 @@ pub fn verifyTree(
 
             enc.setPipeline(p.aot_combine_sig_mul.?);
             enc.setBuffer(vs.parts, 0, 0);
-            enc.setBytes(std.mem.sliceAsBytes(prows[0..R]), 1);
+            enc.setBytes(std.mem.sliceAsBytes(prows[0..rows]), 1);
             enc.setBuffer(vs.gate, 0, 2);
             enc.setBuffer(vs.attn, 0, 3);
             enc.dispatchGroups(mtl.Size.of(g.heads, n, 1), mtl.Size.of(32, 1, 1));
         }
 
-        if (R == 1) {
+        if (rows == 1) {
             enc.setPipeline(p.aot_dense8_sb.?);
             enc.setBuffer(vs.attn, 0, 0);
             rt.setW(enc, lay.proj_o.w.off, 1);
@@ -1593,7 +1631,7 @@ pub fn verifyTree(
 
         {
             var crows: [max_verify_rows]VConvRow = undefined;
-            for (0..R) |r| {
+            for (0..rows) |r| {
                 var back: [4]u8 = @splat(none_u8);
                 const d = depth[r];
                 for (1..conv_ring) |k| if (k <= d) {
@@ -1608,7 +1646,7 @@ pub fn verifyTree(
             enc.setBuffer(vs.projout, 0, 2);
             enc.setValue(VConvArgs{ .channels = h, .heads = 0, .ring = conv_ring, .pos = 0, .layout = 0, .norm = norm_post, .residual = @intFromBool(!push), .topk = 0 }, 3);
             enc.setBuffer(if (!push) vs.x else vs.o, 0, 4);
-            enc.setBytes(std.mem.sliceAsBytes(crows[0..R]), 5);
+            enc.setBytes(std.mem.sliceAsBytes(crows[0..rows]), 5);
             enc.setBuffer(vs.v_conv, VerifyScratch.convOffset(g, sl.slot, 2), 6);
             enc.setBuffer(vs.projout, 0, 7);
             enc.dispatchThreads(mtl.Size.of(h, n, 1), mtl.Size.of(256, 1, 1));
@@ -1710,7 +1748,7 @@ pub fn verifyTree(
             enc.setValue(TMoeA{ .k = g.expert_inter, .n = h, .slots = slots_n, .topk = g.topk, .gate_cap = 0, .up_cap = 0 }, 5);
             enc.setBuffer(vs.down, 0, 6);
             enc.dispatchGroups(mtl.Size.of((h + 7) / 8, slots_n, 1), mtl.Size.of(256, 1, 1));
-        } else if (R == 1) {
+        } else if (rows == 1) {
             enc.setPipeline(p.aot_gu_nv_packed.?);
             enc.setBuffer(vs.m0, 0, 0);
             rt.setW(enc, lay.w13.off, 1);
@@ -1762,7 +1800,7 @@ pub fn verifyTree(
 
         {
             var mrows: [max_verify_rows]VConvRow = undefined;
-            for (0..R) |r| {
+            for (0..rows) |r| {
                 var back: [4]u8 = @splat(none_u8);
                 const d = depth[r];
                 for (1..conv_ring) |k| if (k <= d) {
@@ -1777,7 +1815,7 @@ pub fn verifyTree(
             enc.setBuffer(vs.down, 0, 2);
             enc.setValue(VConvArgs{ .channels = h, .heads = 0, .ring = conv_ring, .pos = 0, .layout = 0, .norm = norm_post, .residual = 1, .topk = g.topk }, 3);
             enc.setBuffer(vs.x, 0, 4);
-            enc.setBytes(std.mem.sliceAsBytes(mrows[0..R]), 5);
+            enc.setBytes(std.mem.sliceAsBytes(mrows[0..rows]), 5);
             enc.setBuffer(vs.v_conv, VerifyScratch.convOffset(g, sl.slot, 3), 6);
             enc.setBuffer(vs.wts, 0, 7);
             enc.dispatchThreads(mtl.Size.of(h, n, 1), mtl.Size.of(256, 1, 1));
@@ -1819,7 +1857,7 @@ pub fn verifyTree(
 
         if (capture_taps) encodeTap(ep, enc, fmt.num_slots, vs.n0, vs.taps, h, n);
 
-        if (R == 1) {
+        if (rows == 1) {
             enc.setPipeline(p.aot_dense8_sb.?);
             enc.setBuffer(vs.n0, 0, 0);
             rt.setW(enc, rt.sched.globals.unembed.w.off, 1);
@@ -1847,20 +1885,20 @@ pub fn verifyTree(
 
         const streams = [_]VStream{.{ .first = 0, .size = n }};
         var par32: [max_verify_rows]u32 = undefined;
-        for (0..R) |r| par32[r] = if (parent[r] == none_u8) std.math.maxInt(u32) else parent[r];
+        for (0..rows) |r| par32[r] = if (parent[r] == none_u8) std.math.maxInt(u32) else parent[r];
         enc.setPipeline(ep.v_accept);
         enc.setBuffer(vs.ids, 0, 0);
         enc.setBuffer(vs.targets, 0, 1);
         enc.setBytes(std.mem.sliceAsBytes(&streams), 2);
         enc.setValue(@as(u32, 1), 3);
         enc.setBuffer(vs.accepted, 0, 4);
-        enc.setBytes(std.mem.sliceAsBytes(par32[0..R]), 5);
+        enc.setBytes(std.mem.sliceAsBytes(par32[0..rows]), 5);
         enc.setBuffer(vs.keep, 0, 6);
         enc.setBuffer(vs.kept, 0, 7);
         enc.dispatchThreads(mtl.Size.of(1, 1, 1), mtl.Size.of(32, 1, 1));
 
         var rrows: [max_verify_rows]VRoundRow = undefined;
-        for (0..R) |r| {
+        for (0..rows) |r| {
             rrows[r] = .{
                 .keys = rt.keys.gpuAddress(),
                 .values = rt.values.gpuAddress(),
@@ -1884,7 +1922,7 @@ pub fn verifyTree(
         enc.setPipeline(ep.v_round_kv);
         enc.setBuffer(vs.v_kv, 0, 0);
         enc.setValue(cargs, 1);
-        enc.setBytes(std.mem.sliceAsBytes(rrows[0..R]), 2);
+        enc.setBytes(std.mem.sliceAsBytes(rrows[0..rows]), 2);
         enc.setBytes(std.mem.sliceAsBytes(&cslots), 3);
         enc.setBuffer(vs.keep, 0, 4);
         enc.dispatchThreads(mtl.Size.of(kvw, n, fmt.num_slots * 2), mtl.Size.of(256, 1, 1));
@@ -1892,7 +1930,7 @@ pub fn verifyTree(
         enc.setPipeline(ep.v_round_conv);
         enc.setBuffer(vs.v_conv, 0, 0);
         enc.setValue(cargs, 1);
-        enc.setBytes(std.mem.sliceAsBytes(rrows[0..R]), 2);
+        enc.setBytes(std.mem.sliceAsBytes(rrows[0..rows]), 2);
         enc.setBuffer(vs.keep, 0, 3);
         enc.setBuffer(vs.kept, 0, 4);
         enc.dispatchThreads(mtl.Size.of(@max(kvw, h), n, fmt.num_slots * 4), mtl.Size.of(256, 1, 1));
@@ -1920,5 +1958,5 @@ pub fn verifyTree(
         kept_n = @as(usize, depth[acc_last]) + 1;
         rt.len += kept_n;
     }
-    return .{ .wall_ms = wall_ms, .gpu_ms = gpu_ms, .rows = R, .accepted_last = acc_last, .kept_tokens = kept_n };
+    return .{ .wall_ms = wall_ms, .gpu_ms = gpu_ms, .rows = rows, .accepted_last = acc_last, .kept_tokens = kept_n };
 }

@@ -26,19 +26,22 @@ pub const ChunkPlan = struct {
     count: usize = 0,
 };
 
-pub fn planWeightChunks(sched: *const Schedule) ChunkPlan {
+pub fn planWeightChunks(sched: *const Schedule) VerifyError!ChunkPlan {
     var plan = ChunkPlan{};
     var cur_start: u64 = 0;
     for (0..num_layers) |li| {
         const layer_start = sched.layers[li].q_norm.off;
         const layer_end = if (li + 1 < num_layers) sched.layers[li + 1].q_norm.off else sched.weights_size;
+        if (layer_start < cur_start or layer_end < layer_start or layer_end > sched.weights_size) return error.CorruptArtifact;
         if (layer_end - cur_start > max_chunk_bytes and layer_start > cur_start) {
+            if (plan.count + 1 >= max_weight_chunks) return error.CorruptArtifact;
             plan.starts[plan.count] = cur_start;
             plan.ends[plan.count] = layer_start;
             plan.count += 1;
             cur_start = layer_start;
         }
     }
+    if (plan.count >= max_weight_chunks or cur_start > sched.weights_size) return error.CorruptArtifact;
     plan.starts[plan.count] = cur_start;
     plan.ends[plan.count] = sched.weights_size;
     plan.count += 1;
@@ -232,12 +235,91 @@ pub fn checkDevice(actual_arch: []const u8, actual_gen: u32, expected_arch: []co
     if (expected_arch.len > 0 and !std.mem.eql(u8, actual_arch, expected_arch)) return error.UnsupportedDevice;
 }
 
-pub fn validateScheduleHeader(bytes: []const u8) VerifyError!*const Schedule {
+fn checkTensorRef(ref: TensorRef, limit: u64) VerifyError!void {
+    if (ref.off > limit or ref.bytes > limit - ref.off) return error.CorruptArtifact;
+}
+
+fn checkAffineRef(ref: AffineRef, limit: u64) VerifyError!void {
+    try checkTensorRef(ref.w, limit);
+    try checkTensorRef(ref.s, limit);
+    try checkTensorRef(ref.b, limit);
+    try checkTensorRef(ref.sb, limit);
+}
+
+/// Validates raw `schedule.bin` bytes (any alignment) and returns an owned Schedule copy by value.
+pub fn validateScheduleHeader(bytes: []const u8) VerifyError!Schedule {
     if (bytes.len != @sizeOf(Schedule)) return error.CorruptArtifact;
-    const s: *const Schedule = @ptrCast(@alignCast(bytes.ptr));
+    var s: Schedule = undefined;
+    @memcpy(std.mem.asBytes(&s), bytes);
     if (!std.mem.eql(u8, &s.magic, &magic)) return error.BadMagic;
     if (s.version != schema_version) return error.BadVersion;
-    if (s.geom.hidden != 2304 or s.geom.context_cap > 32768) return error.CorruptArtifact;
+    if (s.target_arch_len > s.target_arch.len) return error.CorruptArtifact;
+    const g = s.geom;
+    if (g.hidden != 2304 or g.context_cap == 0 or g.context_cap > 32768) return error.CorruptArtifact;
+    if (g.heads == 0 or g.kv_heads == 0 or g.head_dim == 0 or g.heads % g.kv_heads != 0) return error.CorruptArtifact;
+    if (g.experts == 0 or g.topk == 0 or g.topk > g.experts) return error.CorruptArtifact;
+    if (g.unpadded_vocab == 0 or g.unpadded_vocab > g.vocab) return error.CorruptArtifact;
+    if (g.window == 0 or g.gate_rank == 0 or g.expert_inter == 0) return error.CorruptArtifact;
+    if (s.chunk_count > max_weight_chunks) return error.CorruptArtifact;
+    for (0..s.chunk_count) |ci| {
+        if (s.chunk_starts[ci] > s.chunk_ends[ci] or s.chunk_ends[ci] > s.weights_size) return error.CorruptArtifact;
+    }
+
+    const lim = s.weights_size;
+    try checkAffineRef(s.globals.embed, lim);
+    try checkTensorRef(s.globals.embed_norm, lim);
+    try checkTensorRef(s.globals.norm, lim);
+    try checkAffineRef(s.globals.unembed, lim);
+    try checkTensorRef(s.globals.output_query, lim);
+    try checkTensorRef(s.globals.cross_pass_q, lim);
+    try checkTensorRef(s.globals.cross_pass_kv, lim);
+    for (s.globals.attn_queries) |ref| try checkTensorRef(ref, lim);
+    for (s.globals.mlp_queries) |ref| try checkTensorRef(ref, lim);
+    try checkTensorRef(s.globals.t16, lim);
+    try checkTensorRef(s.globals.t256, lim);
+    try checkTensorRef(s.globals.nvfp4_den, lim);
+
+    for (s.layers, 0..) |lay, li| {
+        if (li > 0 and lay.q_norm.off < s.layers[li - 1].q_norm.off) return error.CorruptArtifact;
+        try checkTensorRef(lay.q_norm, lim);
+        try checkTensorRef(lay.k_norm, lim);
+        try checkTensorRef(lay.v_norm, lim);
+        try checkAffineRef(lay.proj_q, lim);
+        try checkAffineRef(lay.proj_k, lim);
+        try checkAffineRef(lay.proj_v, lim);
+        try checkAffineRef(lay.proj_o, lim);
+        try checkTensorRef(lay.q_scale, lim);
+        try checkTensorRef(lay.r_scale, lim);
+        try checkTensorRef(lay.rel_bias, lim);
+        try checkTensorRef(lay.k_conv, lim);
+        try checkTensorRef(lay.v_conv, lim);
+        try checkTensorRef(lay.attn_post, lim);
+        try checkTensorRef(lay.mlp_norm, lim);
+        try checkTensorRef(lay.mlp_post, lim);
+        try checkTensorRef(lay.router, lim);
+        try checkTensorRef(lay.router_bias, lim);
+        try checkTensorRef(lay.w13, lim);
+        try checkTensorRef(lay.w13_scale, lim);
+        try checkTensorRef(lay.w13_global, lim);
+        try checkTensorRef(lay.w13_bias, lim);
+        try checkTensorRef(lay.w2, lim);
+        try checkTensorRef(lay.w2_scale, lim);
+        try checkTensorRef(lay.w2_global, lim);
+        try checkTensorRef(lay.w2_bias, lim);
+        for (lay.controllers) |ctl| {
+            try checkTensorRef(ctl.down, lim);
+            try checkTensorRef(ctl.gain, lim);
+            try checkTensorRef(ctl.forget, lim);
+        }
+    }
+
+    var seen_slot: [num_slots]bool = @splat(false);
+    for (s.slots) |sl| {
+        if (sl.slot >= num_slots or sl.phys >= num_layers) return error.CorruptArtifact;
+        if (seen_slot[sl.slot]) return error.CorruptArtifact;
+        seen_slot[sl.slot] = true;
+    }
+    _ = try planWeightChunks(&s);
     return s;
 }
 
@@ -339,7 +421,8 @@ pub fn buildSlots(layers: *const [num_layers]LayerPlan) [num_slots]SlotPlan {
     }
 
     std.debug.assert(idx == num_slots);
-    std.debug.assert(locals == 40 and globals == 8);
+    std.debug.assert(locals == 40);
+    std.debug.assert(globals == 8);
     return out;
 }
 
@@ -366,16 +449,45 @@ test "schedule slot topology matches inkling2_loop 48-slot layout" {
     try std.testing.expectEqual(@as(u32, 4), slots[47].block_count_after_attn);
 }
 
-test "device and schedule checks fail closed on mismatch or corruption" {
+test "device and schedule checks fail closed on mismatch, unaligned input, or corruption" {
     try checkDevice("applegpu_g17s", 17, "applegpu_g17s", 17);
     try std.testing.expectError(error.UnsupportedDevice, checkDevice("applegpu_g13g", 13, "applegpu_g17s", 17));
     try std.testing.expectError(error.UnsupportedDevice, checkDevice("applegpu_g16s", 17, "applegpu_g17s", 17));
     var s = Schedule{};
+    for (&s.layers, 0..) |*l, i| {
+        l.is_full = @intFromBool(i % 6 == 5);
+        l.q_norm.off = @as(u64, i) * 64;
+    }
+    s.weights_size = num_layers * 64 + 64;
+    s.slots = buildSlots(&s.layers);
     s.setArchName("applegpu_g17s");
     try std.testing.expectEqualStrings("applegpu_g17s", s.archName());
+    var unaligned: [@sizeOf(Schedule) + 1]u8 = undefined;
+    @memcpy(unaligned[1..], std.mem.asBytes(&s));
+    _ = try validateScheduleHeader(unaligned[1..]);
+
     var bytes = std.mem.toBytes(s);
-    _ = try validateScheduleHeader(&bytes);
     bytes[0] = 'X';
     try std.testing.expectError(error.BadMagic, validateScheduleHeader(&bytes));
     try std.testing.expectError(error.CorruptArtifact, validateScheduleHeader(bytes[0..16]));
+
+    var bad_chunk = s;
+    bad_chunk.chunk_count = max_weight_chunks + 1;
+    try std.testing.expectError(error.CorruptArtifact, validateScheduleHeader(std.mem.asBytes(&bad_chunk)));
+
+    var bad_mono = s;
+    bad_mono.layers[5].q_norm.off = 0;
+    try std.testing.expectError(error.CorruptArtifact, validateScheduleHeader(std.mem.asBytes(&bad_mono)));
+
+    var bad_ref = s;
+    bad_ref.globals.norm = .{ .off = s.weights_size, .bytes = 4 };
+    try std.testing.expectError(error.CorruptArtifact, validateScheduleHeader(std.mem.asBytes(&bad_ref)));
+
+    var bad_slot = s;
+    bad_slot.slots[0].phys = num_layers;
+    try std.testing.expectError(error.CorruptArtifact, validateScheduleHeader(std.mem.asBytes(&bad_slot)));
+
+    var bad_div = s;
+    bad_div.geom.kv_heads = 0;
+    try std.testing.expectError(error.CorruptArtifact, validateScheduleHeader(std.mem.asBytes(&bad_div)));
 }

@@ -196,6 +196,17 @@ fn interleaveSB(gpa: std.mem.Allocator, scales: []const u8, biases: []const u8) 
     return out;
 }
 
+fn readF32At(bytes: []const u8, index: usize) !f32 {
+    const off = std.math.mul(usize, index, 4) catch return error.BadShape;
+    if (off + 4 > bytes.len) return error.BadShape;
+    return @bitCast(std.mem.readInt(u32, bytes[off..][0..4], .little));
+}
+
+fn sliceExact(bytes: []const u8, want: usize) ![]const u8 {
+    if (bytes.len < want) return error.BadShape;
+    return bytes[0..want];
+}
+
 fn packAffine(gpa: std.mem.Allocator, w: *WeightWriter, shards: []const Shard, base: []const u8, rows: u32, cols: u32, bits: u32, trim_rows: ?u32, interleave: bool) !fmt.AffineRef {
     var nb: [192]u8 = undefined;
     const wt = try findTensor(shards, try std.fmt.bufPrint(&nb, "{s}.weight", .{base}));
@@ -204,9 +215,9 @@ fn packAffine(gpa: std.mem.Allocator, w: *WeightWriter, shards: []const Shard, b
     const use_rows: u32 = trim_rows orelse rows;
     const w_row_bytes: usize = @as(usize, cols) * bits / 8;
     const sb_row_bytes: usize = @as(usize, cols) / 64 * 2;
-    const w_bytes = wt.bytes[0 .. @as(usize, use_rows) * w_row_bytes];
-    const s_bytes = st_.bytes[0 .. @as(usize, use_rows) * sb_row_bytes];
-    const b_bytes = bt.bytes[0 .. @as(usize, use_rows) * sb_row_bytes];
+    const w_bytes = try sliceExact(wt.bytes, @as(usize, use_rows) * w_row_bytes);
+    const s_bytes = try sliceExact(st_.bytes, @as(usize, use_rows) * sb_row_bytes);
+    const b_bytes = try sliceExact(bt.bytes, @as(usize, use_rows) * sb_row_bytes);
 
     const w_ref = try w.append(w_bytes, 256);
     var ref = fmt.AffineRef{
@@ -301,12 +312,14 @@ fn compileMetallib(gpa: std.mem.Allocator, io: std.Io, out_dir: []const u8, extr
         const mpath = try std.fmt.allocPrint(gpa, "{s}/{s}.metal", .{ tmp_dir, u.name });
         defer gpa.free(mpath);
         const apath = try std.fmt.allocPrint(gpa, "{s}/{s}.air", .{ tmp_dir, u.name });
+        errdefer gpa.free(apath);
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = mpath, .data = u.src });
         try runCmd(gpa, io, &.{ "xcrun", "-sdk", "macosx", "metal", "-c", "-std=metal4.1", "-fmetal-math-mode=safe", "-O3", mpath, "-o", apath });
         try airs.append(gpa, apath);
     }
 
-    const metallib_path = try std.fs.path.join(gpa, &.{ out_dir, "kernels.metallib" });
+    const metallib_path = try std.fs.path.join(gpa, &.{ out_dir, "kernels.metallib.tmp" });
+    errdefer gpa.free(metallib_path);
     var link_argv: std.ArrayList([]const u8) = .empty;
     defer link_argv.deinit(gpa);
     try link_argv.appendSlice(gpa, &.{ "xcrun", "-sdk", "macosx", "metallib" });
@@ -378,7 +391,7 @@ pub fn main(init: std.process.Init) !void {
     if (shaders_only) {
         const sched_path = try std.fs.path.join(arena, &.{ out_dir, "schedule.bin" });
         const sb = try std.Io.Dir.cwd().readFileAlloc(io, sched_path, arena, .limited(4 << 20));
-        var sched = (try fmt.validateScheduleHeader(sb)).*;
+        var sched = try fmt.validateScheduleHeader(sb);
         if (indirect_pso) |ind| {
             if (ind) sched.layout_flags &= ~fmt.layout_non_indirect else sched.layout_flags |= fmt.layout_non_indirect;
         }
@@ -408,8 +421,10 @@ pub fn main(init: std.process.Init) !void {
         mapped += 1;
     }
 
+    const weights_tmp = try std.fs.path.join(arena, &.{ out_dir, "weights.aot.tmp" });
     const weights_path = try std.fs.path.join(arena, &.{ out_dir, "weights.aot" });
-    var ww = try WeightWriter.init(io, weights_path);
+    var ww = try WeightWriter.init(io, weights_tmp);
+    errdefer std.Io.Dir.cwd().deleteFile(io, weights_tmp) catch {};
     defer ww.deinit();
 
     var sched = fmt.Schedule{};
@@ -426,7 +441,7 @@ pub fn main(init: std.process.Init) !void {
     const h: u32 = model_cfg.text.hidden;
     const rank: u32 = model_cfg.loop.gate_rank;
     const inter: u32 = model_cfg.text.expert_inter;
-    const E: u32 = model_cfg.text.experts;
+    const experts: u32 = model_cfg.text.experts;
 
     sched.globals.embed = try packAffine(gpa, &ww, shards, "model.embed", model_cfg.text.vocab, h, 8, null, repack_c);
     sched.globals.embed_norm = try copyTensor(&ww, shards, "model.embed_norm.weight", 256);
@@ -441,6 +456,7 @@ pub fn main(init: std.process.Init) !void {
     for (0..fmt.num_core_layers) |ci| {
         var nb: [128]u8 = undefined;
         const t = try findTensor(shards, try std.fmt.bufPrint(&nb, "model.layers.{d}.loop_message.query", .{ci + fmt.core_start}));
+        if (t.bytes.len < 4 * @as(usize, h) * 4) return error.BadShape;
         @memcpy(cp_q[(2 * ci) * h * 4 ..][0 .. h * 4], t.bytes[0 .. h * 4]);
         @memcpy(cp_kv[(2 * ci) * h * 4 ..][0 .. 2 * h * 4], t.bytes[h * 4 ..][0 .. 2 * h * 4]);
         @memcpy(cp_q[(2 * ci + 1) * h * 4 ..][0 .. h * 4], t.bytes[3 * h * 4 ..][0 .. h * 4]);
@@ -473,11 +489,11 @@ pub fn main(init: std.process.Init) !void {
     defer gpa.free(ctl_forget_buf);
     const ctl_gf_buf = try gpa.alloc(f32, 2 * h * rank);
     defer gpa.free(ctl_gf_buf);
-    const w13_packed_buf = try gpa.alloc(u8, if (repack_c2) @as(usize, E) * inter * 2 * (h / 2) else 0);
+    const w13_packed_buf = try gpa.alloc(u8, if (repack_c2) @as(usize, experts) * inter * 2 * (h / 2) else 0);
     defer gpa.free(w13_packed_buf);
-    const s13_packed_buf = try gpa.alloc(u8, if (repack_c2) @as(usize, E) * inter * 2 * (h / 16) else 0);
+    const s13_packed_buf = try gpa.alloc(u8, if (repack_c2) @as(usize, experts) * inter * 2 * (h / 16) else 0);
     defer gpa.free(s13_packed_buf);
-    const prediv_buf = try gpa.alloc(f32, E);
+    const prediv_buf = try gpa.alloc(f32, experts);
     defer gpa.free(prediv_buf);
 
     for (0..fmt.num_layers) |li| {
@@ -535,7 +551,8 @@ pub fn main(init: std.process.Init) !void {
             const st_ = try findTensor(shards, try std.fmt.bufPrint(&nb, "{s}mlp.experts.w13.scales", .{p}));
             const groups: usize = h / 16;
             const stride: usize = h / 2;
-            const n_ec: usize = @as(usize, E) * inter;
+            const n_ec: usize = @as(usize, experts) * inter;
+            if (wt.bytes.len < n_ec * 2 * stride or st_.bytes.len < n_ec * 2 * groups) return error.BadShape;
             for (0..n_ec) |ec| {
                 const row_g = ec * 2;
                 const row_u = row_g + 1;
@@ -563,8 +580,8 @@ pub fn main(init: std.process.Init) !void {
         if (li < 20) {
             const g13 = try findTensor(shards, try std.fmt.bufPrint(&nb, "{s}mlp.experts.w13.global_scale", .{p}));
             if (repack_c) {
-                const src = std.mem.bytesAsSlice(f32, @as([]align(4) const u8, @alignCast(g13.bytes)));
-                for (src, 0..) |v, ei| prediv_buf[ei] = v / 2688.0;
+                if (g13.bytes.len != prediv_buf.len * 4) return error.BadShape;
+                for (0..prediv_buf.len) |ei| prediv_buf[ei] = (try readF32At(g13.bytes, ei)) / 2688.0;
                 lp.w13_global = try ww.append(std.mem.sliceAsBytes(prediv_buf), 256);
             } else {
                 lp.w13_global = try ww.append(g13.bytes, 256);
@@ -579,8 +596,8 @@ pub fn main(init: std.process.Init) !void {
         if (li < 20) {
             const g2 = try findTensor(shards, try std.fmt.bufPrint(&nb, "{s}mlp.experts.w2.global_scale", .{p}));
             if (repack_c) {
-                const src = std.mem.bytesAsSlice(f32, @as([]align(4) const u8, @alignCast(g2.bytes)));
-                for (src, 0..) |v, ei| prediv_buf[ei] = v / 2688.0;
+                if (g2.bytes.len != prediv_buf.len * 4) return error.BadShape;
+                for (0..prediv_buf.len) |ei| prediv_buf[ei] = (try readF32At(g2.bytes, ei)) / 2688.0;
                 lp.w2_global = try ww.append(std.mem.sliceAsBytes(prediv_buf), 256);
             } else {
                 lp.w2_global = try ww.append(g2.bytes, 256);
@@ -593,16 +610,16 @@ pub fn main(init: std.process.Init) !void {
         if (lp.has_controllers != 0) {
             const down = try findTensor(shards, try std.fmt.bufPrint(&nb, "{s}loop_down", .{p}));
             const gates = try findTensor(shards, try std.fmt.bufPrint(&nb, "{s}loop_gain_forget", .{p}));
-            const ds = std.mem.bytesAsSlice(f32, @as([]align(4) const u8, @alignCast(down.bytes)));
-            const gs = std.mem.bytesAsSlice(f32, @as([]align(4) const u8, @alignCast(gates.bytes)));
+            const want_ctl = 4 * @as(usize, rank) * 2 * @as(usize, h) * 4;
+            if (down.bytes.len < want_ctl or gates.bytes.len < want_ctl) return error.BadShape;
             for (0..4) |j| {
                 for (0..rank) |r| for (0..2 * h) |col| {
-                    ctl_down_buf[r * 2 * h + col] = ds[(j * 2 * h + col) * rank + r];
+                    ctl_down_buf[r * 2 * h + col] = try readF32At(down.bytes, (j * 2 * h + col) * rank + r);
                 };
                 if (repack_c2) {
                     for (0..h) |col| for (0..rank) |r| {
-                        ctl_gf_buf[(col * rank + r) * 2 + 0] = gs[(j * rank + r) * 2 * h + col];
-                        ctl_gf_buf[(col * rank + r) * 2 + 1] = gs[(j * rank + r) * 2 * h + h + col];
+                        ctl_gf_buf[(col * rank + r) * 2 + 0] = try readF32At(gates.bytes, (j * rank + r) * 2 * h + col);
+                        ctl_gf_buf[(col * rank + r) * 2 + 1] = try readF32At(gates.bytes, (j * rank + r) * 2 * h + h + col);
                     };
                     lp.controllers[j] = .{
                         .down = try ww.append(std.mem.sliceAsBytes(ctl_down_buf), 256),
@@ -611,8 +628,8 @@ pub fn main(init: std.process.Init) !void {
                     };
                 } else {
                     for (0..h) |col| for (0..rank) |r| {
-                        ctl_gain_buf[col * rank + r] = gs[(j * rank + r) * 2 * h + col];
-                        ctl_forget_buf[col * rank + r] = gs[(j * rank + r) * 2 * h + h + col];
+                        ctl_gain_buf[col * rank + r] = try readF32At(gates.bytes, (j * rank + r) * 2 * h + col);
+                        ctl_forget_buf[col * rank + r] = try readF32At(gates.bytes, (j * rank + r) * 2 * h + h + col);
                     };
                     lp.controllers[j] = .{
                         .down = try ww.append(std.mem.sliceAsBytes(ctl_down_buf), 256),
@@ -630,51 +647,54 @@ pub fn main(init: std.process.Init) !void {
     sched.slots = fmt.buildSlots(&sched.layers);
 
     {
-        const plan = fmt.planWeightChunks(&sched);
+        const plan = try fmt.planWeightChunks(&sched);
         sched.chunk_count = @intCast(plan.count);
-        const wpath_z = try arena.alloc(u8, weights_path.len + 1);
-        @memcpy(wpath_z[0..weights_path.len], weights_path);
-        wpath_z[weights_path.len] = 0;
+        const wpath_z = try arena.alloc(u8, weights_tmp.len + 1);
+        @memcpy(wpath_z[0..weights_tmp.len], weights_tmp);
+        wpath_z[weights_tmp.len] = 0;
         const fd = std.c.open(@ptrCast(wpath_z.ptr), .{ .ACCMODE = .RDONLY });
         if (fd < 0) return error.OpenFailed;
         defer _ = std.c.close(fd);
         _ = std.c.fcntl(fd, @as(c_int, 48), @as(c_int, 1));
-        const Ctx = struct {
+        const ChunkHash = struct {
             fd: std.c.fd_t,
             start: u64,
             end: u64,
             out: *[32]u8,
             ok: bool = false,
-            fn run(ctx: *@This()) void {
+            fn run(task: *@This()) void {
                 var hasher = std.crypto.hash.sha2.Sha256.init(.{});
                 var buf: [4 << 20]u8 = undefined;
-                var off = ctx.start;
-                while (off < ctx.end) {
-                    const want: usize = @intCast(@min(ctx.end - off, buf.len));
-                    const got = std.c.pread(ctx.fd, &buf, want, @intCast(off));
+                var off = task.start;
+                while (off < task.end) {
+                    const want: usize = @intCast(@min(task.end - off, buf.len));
+                    const got = std.c.pread(task.fd, &buf, want, @intCast(off));
                     if (got <= 0) return;
                     const n: usize = @intCast(got);
                     hasher.update(buf[0..n]);
                     off += n;
                 }
-                ctx.out.* = hasher.finalResult();
-                ctx.ok = true;
+                task.out.* = hasher.finalResult();
+                task.ok = true;
             }
         };
-        var ctxs: [fmt.max_weight_chunks]Ctx = undefined;
+        var tasks: [fmt.max_weight_chunks]ChunkHash = undefined;
         var threads: [fmt.max_weight_chunks]std.Thread = undefined;
+        var spawned: usize = 0;
+        errdefer for (0..spawned) |ti| threads[ti].join();
         for (0..plan.count) |ci| {
             sched.chunk_starts[ci] = plan.starts[ci];
             sched.chunk_ends[ci] = plan.ends[ci];
-            ctxs[ci] = .{ .fd = fd, .start = plan.starts[ci], .end = plan.ends[ci], .out = &sched.chunk_sha256[ci] };
-            threads[ci] = try std.Thread.spawn(.{}, Ctx.run, .{&ctxs[ci]});
+            tasks[ci] = .{ .fd = fd, .start = plan.starts[ci], .end = plan.ends[ci], .out = &sched.chunk_sha256[ci] };
+            threads[ci] = try std.Thread.spawn(.{}, ChunkHash.run, .{&tasks[ci]});
+            spawned += 1;
         }
-        for (0..plan.count) |ci| {
-            threads[ci].join();
-            if (!ctxs[ci].ok) return error.HashFailed;
-        }
+        for (0..spawned) |ci| threads[ci].join();
+        spawned = 0;
+        for (0..plan.count) |ci| if (!tasks[ci].ok) return error.HashFailed;
     }
 
+    try std.Io.Dir.cwd().rename(weights_tmp, std.Io.Dir.cwd(), weights_path, io);
     try emitShadersAndManifest(gpa, arena, io, ckpt_dir, out_dir, runner_bin, &sched, use_indirect, t0);
 }
 
@@ -698,23 +718,29 @@ fn emitShadersAndManifest(
     sched.setArchName(arch_name);
     sched.min_generation = device.generation();
 
-    const metallib_path = try compileMetallib(gpa, io, out_dir, aot_fused_metal);
-    defer gpa.free(metallib_path);
+    const metallib_tmp = try compileMetallib(gpa, io, out_dir, aot_fused_metal);
+    defer gpa.free(metallib_tmp);
+    errdefer std.Io.Dir.cwd().deleteFile(io, metallib_tmp) catch {};
+    const metallib_path = try std.fs.path.join(arena, &.{ out_dir, "kernels.metallib" });
 
+    const archive_tmp = try std.fs.path.join(arena, &.{ out_dir, "pipelines.mtlarchive.tmp" });
+    errdefer std.Io.Dir.cwd().deleteFile(io, archive_tmp) catch {};
     const archive_path = try std.fs.path.join(arena, &.{ out_dir, "pipelines.mtlarchive" });
     {
-        const lib = try mtl.Library.fromFile(device, metallib_path);
+        const lib = try mtl.Library.fromFile(device, metallib_tmp);
         defer lib.deinit();
         const archive = try ba.BinaryArchive.create(device);
         defer archive.deinit();
         for (decode_pso_names) |name| {
             try archive.addCompute(lib, name, use_indirect);
         }
-        try archive.serialize(archive_path);
+        try archive.serialize(archive_tmp);
     }
 
+    const sched_tmp = try std.fs.path.join(arena, &.{ out_dir, "schedule.bin.tmp" });
+    errdefer std.Io.Dir.cwd().deleteFile(io, sched_tmp) catch {};
     const sched_path = try std.fs.path.join(arena, &.{ out_dir, "schedule.bin" });
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = sched_path, .data = std.mem.asBytes(sched) });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = sched_tmp, .data = std.mem.asBytes(sched) });
 
     const tok_dst = try std.fs.path.join(arena, &.{ out_dir, "tokenizer.json" });
     var has_tok = false;
@@ -729,12 +755,15 @@ fn emitShadersAndManifest(
     var has_runner = false;
     const runner_dst = try std.fs.path.join(arena, &.{ out_dir, "tf-inkling2-mini-aot" });
     if (runner_bin) |rb| {
-        has_runner = try copyFileIfPresent(io, rb, runner_dst);
+        const runner_tmp = try std.fs.path.join(arena, &.{ out_dir, "tf-inkling2-mini-aot.tmp" });
+        errdefer std.Io.Dir.cwd().deleteFile(io, runner_tmp) catch {};
+        has_runner = try copyFileIfPresent(io, rb, runner_tmp);
         if (has_runner) {
-            const cpath = try arena.alloc(u8, runner_dst.len + 1);
-            @memcpy(cpath[0..runner_dst.len], runner_dst);
-            cpath[runner_dst.len] = 0;
-            _ = std.c.chmod(@ptrCast(cpath.ptr), 0o755);
+            const cpath = try arena.alloc(u8, runner_tmp.len + 1);
+            @memcpy(cpath[0..runner_tmp.len], runner_tmp);
+            cpath[runner_tmp.len] = 0;
+            if (std.c.chmod(@ptrCast(cpath.ptr), 0o755) != 0) return error.ChmodFailed;
+            try std.Io.Dir.cwd().rename(runner_tmp, std.Io.Dir.cwd(), runner_dst, io);
         }
     } else if (std.Io.Dir.cwd().openFile(io, runner_dst, .{})) |f| {
         f.close(io);
@@ -743,12 +772,15 @@ fn emitShadersAndManifest(
 
     var entries: std.ArrayList(fmt.FileEntry) = .empty;
     defer entries.deinit(gpa);
-    const fixed_names = [_][]const u8{ "schedule.bin", "kernels.metallib", "pipelines.mtlarchive" };
-    for (fixed_names) |name| {
-        const p = try std.fs.path.join(arena, &.{ out_dir, name });
-        const h_ = try sha256File(io, p);
+    const staged = [_]struct { name: []const u8, path: []const u8 }{
+        .{ .name = "schedule.bin", .path = sched_tmp },
+        .{ .name = "kernels.metallib", .path = metallib_tmp },
+        .{ .name = "pipelines.mtlarchive", .path = archive_tmp },
+    };
+    for (staged) |item| {
+        const h_ = try sha256File(io, item.path);
         const hex = fmt.hexEncode(h_.digest);
-        try entries.append(gpa, .{ .name = name, .size = h_.size, .sha256 = try arena.dupe(u8, &hex) });
+        try entries.append(gpa, .{ .name = item.name, .size = h_.size, .sha256 = try arena.dupe(u8, &hex) });
     }
     const w_hex = fmt.hexEncode(sched.weights_sha256);
     try entries.append(gpa, .{ .name = "weights.aot", .size = sched.weights_size, .sha256 = try arena.dupe(u8, &w_hex) });
@@ -774,8 +806,15 @@ fn emitShadersAndManifest(
     defer mw.deinit();
     try std.json.Stringify.value(manifest, .{ .whitespace = .indent_2 }, &mw.writer);
     try mw.writer.writeByte('\n');
+    const manifest_tmp = try std.fs.path.join(arena, &.{ out_dir, "manifest.json.tmp" });
+    errdefer std.Io.Dir.cwd().deleteFile(io, manifest_tmp) catch {};
     const manifest_path = try std.fs.path.join(arena, &.{ out_dir, "manifest.json" });
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest_path, .data = mw.written() });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = manifest_tmp, .data = mw.written() });
+
+    try std.Io.Dir.cwd().rename(metallib_tmp, std.Io.Dir.cwd(), metallib_path, io);
+    try std.Io.Dir.cwd().rename(archive_tmp, std.Io.Dir.cwd(), archive_path, io);
+    try std.Io.Dir.cwd().rename(sched_tmp, std.Io.Dir.cwd(), sched_path, io);
+    try std.Io.Dir.cwd().rename(manifest_tmp, std.Io.Dir.cwd(), manifest_path, io);
 
     const elapsed_ms = @as(f64, @floatFromInt(std.Io.Clock.awake.now(io).toNanoseconds() - t0)) / 1e6;
     std.debug.print("aotc: compiled {s} -> {s} in {d:.1} ms (arch={s}, weights={d:.2} GB, indirect={}, psos={d})\n", .{

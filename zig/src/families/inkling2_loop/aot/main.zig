@@ -11,6 +11,7 @@ fn digestBytes(bytes: []const u8) [64]u8 {
 }
 
 fn median(vals: []f64) f64 {
+    std.debug.assert(vals.len > 0);
     std.mem.sort(f64, vals, {}, std.sort.asc(f64));
     return if (vals.len % 2 == 1) vals[vals.len / 2] else (vals[vals.len / 2 - 1] + vals[vals.len / 2]) / 2.0;
 }
@@ -103,6 +104,7 @@ pub fn main(init: std.process.Init) !void {
         defer gpa.free(tok_bytes);
         const ids = try std.json.parseFromSlice([]const u32, gpa, tok_bytes, .{});
         defer ids.deinit();
+        if (ids.value.len == 0) return error.EmptyInput;
 
         const rt = try rt_mod.Runtime.open(gpa, io, bundle_dir, .{
             .capacity = @max(ids.value.len + 16, 1024),
@@ -135,7 +137,9 @@ pub fn main(init: std.process.Init) !void {
         defer gpa.free(tok_bytes);
         const ids = try std.json.parseFromSlice([]const u32, gpa, tok_bytes, .{});
         defer ids.deinit();
+        if (ids.value.len == 0) return error.EmptyInput;
         const steps = try std.fmt.parseInt(usize, pos_args.items[1], 10);
+        if (steps < 2) return error.InvalidSteps;
 
         const rt = try rt_mod.Runtime.open(gpa, io, bundle_dir, .{
             .capacity = @max(ids.value.len + steps + 16, 1024),
@@ -194,7 +198,10 @@ pub fn main(init: std.process.Init) !void {
         defer gpa.free(pbytes);
         const prompts = try std.json.parseFromSlice([]const Prompt, gpa, pbytes, .{});
         defer prompts.deinit();
+        if (prompts.value.len == 0) return error.EmptyInput;
+        for (prompts.value) |pr| if (pr.ids.len == 0) return error.EmptyInput;
         const reps = try std.fmt.parseInt(usize, pos_args.items[1], 10);
+        if (reps == 0) return error.InvalidReps;
         var max_len: usize = 1024;
         for (prompts.value) |pr| max_len = @max(max_len, pr.ids.len + reps + 8);
 
@@ -284,7 +291,10 @@ pub fn main(init: std.process.Init) !void {
         defer gpa.free(pbytes);
         const prompts = try std.json.parseFromSlice([]const Prompt, gpa, pbytes, .{});
         defer prompts.deinit();
+        if (prompts.value.len == 0) return error.EmptyInput;
+        for (prompts.value) |pr| if (pr.ids.len == 0) return error.EmptyInput;
         const reps = try std.fmt.parseInt(usize, pos_args.items[1], 10);
+        if (reps == 0) return error.InvalidReps;
         const pr = prompts.value[0];
 
         const rt = try rt_mod.Runtime.open(gpa, io, bundle_dir, .{
@@ -386,7 +396,10 @@ pub fn main(init: std.process.Init) !void {
         defer gpa.free(pbytes);
         const prompts = try std.json.parseFromSlice([]const Prompt, gpa, pbytes, .{});
         defer prompts.deinit();
+        if (prompts.value.len == 0) return error.EmptyInput;
+        for (prompts.value) |pr| if (pr.ids.len == 0) return error.EmptyInput;
         const reps = try std.fmt.parseInt(usize, pos_args.items[1], 10);
+        if (reps == 0) return error.InvalidReps;
         const pr = prompts.value[0];
         const rt = try rt_mod.Runtime.open(gpa, io, bundle_dir, .{
             .capacity = @max(pr.ids.len + 32, 1024),
@@ -409,6 +422,8 @@ pub fn main(init: std.process.Init) !void {
         defer gpa.free(hbytes);
         const histories = try std.json.parseFromSlice([]const History, gpa, hbytes, .{ .ignore_unknown_fields = true });
         defer histories.deinit();
+        if (histories.value.len == 0) return error.EmptyInput;
+        for (histories.value) |h| if (h.token_ids.len == 0) return error.EmptyInput;
         const out_dir = pos_args.items[1];
         try std.Io.Dir.cwd().createDirPath(io, out_dir);
         var max_len: usize = 1024;
@@ -454,6 +469,8 @@ pub fn main(init: std.process.Init) !void {
         defer gpa.free(pbytes);
         const prompts = try std.json.parseFromSlice([]const Prompt, gpa, pbytes, .{});
         defer prompts.deinit();
+        if (prompts.value.len == 0) return error.EmptyInput;
+        for (prompts.value) |pr| if (pr.ids.len == 0) return error.EmptyInput;
         var max_len: usize = 1024;
         for (prompts.value) |pr| max_len = @max(max_len, pr.ids.len + 16);
 
@@ -493,7 +510,10 @@ pub fn main(init: std.process.Init) !void {
         defer gpa.free(pbytes);
         const prompts = try std.json.parseFromSlice([]const Prompt, gpa, pbytes, .{});
         defer prompts.deinit();
+        if (prompts.value.len == 0) return error.EmptyInput;
+        for (prompts.value) |pr| if (pr.ids.len == 0) return error.EmptyInput;
         const reps = try std.fmt.parseInt(usize, pos_args.items[1], 10);
+        if (reps == 0) return error.InvalidReps;
         var max_len: usize = 1024;
         for (prompts.value) |pr| max_len = @max(max_len, pr.ids.len + 64);
 
@@ -619,6 +639,7 @@ pub fn main(init: std.process.Init) !void {
         defer gpa.free(tok_bytes);
         const ids = try std.json.parseFromSlice([]const u32, gpa, tok_bytes, .{});
         defer ids.deinit();
+        if (ids.value.len == 0) return error.EmptyInput;
         const rt = try rt_mod.Runtime.open(gpa, io, bundle_dir, .{
             .capacity = @max(ids.value.len + 64, 1024),
             .opt_mask = opt_mask,
@@ -651,23 +672,23 @@ pub fn main(init: std.process.Init) !void {
         const expected_eos_n = (std.mem.indexOfScalar(u32, &ref_toks, eos_stop) orelse 3) + 1;
         var eos_toks: [8]u32 = undefined;
         const be = try rt.generateBurst(tok, 8, eos_stop, &eos_toks);
-        const eos_ok = be.stopped and be.produced == expected_eos_n and std.mem.eql(u32, ref_toks[0..expected_eos_n], eos_toks[0..expected_eos_n]);
+        const eos_ok = be.stopped and !be.cancelled and be.produced == expected_eos_n and std.mem.eql(u32, ref_toks[0..expected_eos_n], eos_toks[0..expected_eos_n]);
 
         rt.restoreState(saved);
-        const CancelCtx = struct {
+        const CancelTask = struct {
             rt: *rt_mod.Runtime,
-            fn run(ctx: *@This()) void {
+            fn run(task: *@This()) void {
                 var ts = std.c.timespec{ .sec = 0, .nsec = 30 * std.time.ns_per_ms };
                 _ = std.c.nanosleep(&ts, null);
-                ctx.rt.requestCancel();
+                task.rt.requestCancel();
             }
         };
-        var cctx = CancelCtx{ .rt = rt };
-        const th = try std.Thread.spawn(.{}, CancelCtx.run, .{&cctx});
+        var ctask = CancelTask{ .rt = rt };
+        const th = try std.Thread.spawn(.{}, CancelTask.run, .{&ctask});
+        defer th.join();
         var can_toks: [16]u32 = undefined;
         const bc = try rt.generateBurst(tok, 16, 0xffffffff, &can_toks);
-        th.join();
-        const cancel_ok = bc.stopped and bc.produced < 16 and std.mem.eql(u32, ref_toks[0..bc.produced], can_toks[0..bc.produced]);
+        const cancel_ok = bc.cancelled and !bc.stopped and bc.produced < 16 and std.mem.eql(u32, ref_toks[0..bc.produced], can_toks[0..bc.produced]);
 
         std.debug.print("aot phase-e: burst16_parity={} b1={d:.2}ms/tok b2={d:.2}ms/tok eos_stop_ok={} (n={d}) host_cancel_ok={} (n={d}/16 in {d:.1}ms)\n", .{
             parity_ok, b1.wall_ms / 8.0, b2.wall_ms / 8.0, eos_ok, be.produced, cancel_ok, bc.produced, bc.wall_ms,

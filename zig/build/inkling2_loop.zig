@@ -39,7 +39,8 @@ pub fn tests(b: *std.Build, target: std.Build.ResolvedTarget, test_step: *std.Bu
     step.dependOn(&prefix_run.step);
     const aot_fmt_tests = module(b, target, "zig/src/families/inkling2_loop/aot/format.zig");
     const aot_fmt_run = b.addRunArtifact(b.addTest(.{ .root_module = aot_fmt_tests }));
-    b.step("test-inkling2-aot-host", "Inkling 2 Mini AOT schedule, manifest, and fail-closed device/corruption checks").dependOn(&aot_fmt_run.step);
+    const aot_step = b.step("test-inkling2-aot-host", "Inkling 2 Mini AOT schedule, manifest, and fail-closed device/corruption checks");
+    aot_step.dependOn(&aot_fmt_run.step);
     step.dependOn(&aot_fmt_run.step);
     test_step.dependOn(&run.step);
     test_step.dependOn(&prefix_run.step);
@@ -55,6 +56,12 @@ pub fn tests(b: *std.Build, target: std.Build.ResolvedTarget, test_step: *std.Bu
         metal.linkFramework("Foundation", .{});
         metal.linkFramework("IOSurface", .{});
         metal.linkSystemLibrary("objc", .{});
+        const aot_rt_tests = module(b, target, "zig/src/families/inkling2_loop/aot/runtime.zig");
+        aot_rt_tests.addImport("metal", metal);
+        const aot_rt_run = b.addRunArtifact(b.addTest(.{ .root_module = aot_rt_tests }));
+        aot_step.dependOn(&aot_rt_run.step);
+        step.dependOn(&aot_rt_run.step);
+        test_step.dependOn(&aot_rt_run.step);
         const family = engineModule(b, target, metal, readers);
         const facade_file = b.addWriteFiles().add("inkling_host_facade.zig", "pub const inkling2_loop = @import(\"inkling_family\");\n");
         const facade = b.createModule(.{ .root_source_file = facade_file, .target = target, .optimize = .Debug, .link_libc = true });

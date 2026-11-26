@@ -43,7 +43,7 @@ pub const Round = struct {
 /// A request's tokens: its prompt and what it has generated, the newest last.
 pub const History = struct { prompt: []const u32, emitted: []const u32 };
 
-const Lane = struct { context: *rt.Context, first: u64 = 0, kept: Rows = .{}, lookup: inkling.verify.Lookup, plan: inkling.verify.Plan };
+const Lane = struct { context: *rt.Context, first: u64 = 0, kept: Rows = .{}, stash: Rows = .{}, stash_rows: usize = 0, lookup: inkling.verify.Lookup, plan: inkling.verify.Plan };
 
 pub const Draft = struct {
     a: Allocator,
@@ -54,14 +54,13 @@ pub const Draft = struct {
     bound: *tf.checkpoint.Checkpoint,
     config: cfg.Config,
     verifier: inkling.group.Verifier,
-    prompt: inkling.Taps,
     step: inkling.Taps,
     lanes: []Lane,
     gathered: []u8,
     name: []const u8,
     failed: bool = false,
 
-    pub fn open(a: Allocator, io: std.Io, target: *inkling.Model, dir: []const u8, bits: u8, slots: usize, prompt_rows: usize) !*Draft {
+    pub fn open(a: Allocator, io: std.Io, target: *inkling.Model, dir: []const u8, bits: u8, slots: usize) !*Draft {
         if (bits != 0 and bits != 4) return error.UnsupportedDraftBits;
         const c = try admit(a, io, target, dir);
         const text = &target.config.text;
@@ -71,7 +70,7 @@ pub const Draft = struct {
         errdefer a.destroy(d);
         const name = try a.dupe(u8, dir);
         errdefer a.free(name);
-        d.* = .{ .a = a, .model = undefined, .glue = try q.glue_gpu.Kernels.init(target.device), .kernels = .{ .allocator = a, .device = target.device, .raw_tiles = false }, .dims = undefined, .bound = undefined, .config = c, .verifier = undefined, .prompt = undefined, .step = undefined, .lanes = &.{}, .gathered = &.{}, .name = name };
+        d.* = .{ .a = a, .model = undefined, .glue = try q.glue_gpu.Kernels.init(target.device), .kernels = .{ .allocator = a, .device = target.device, .raw_tiles = false }, .dims = undefined, .bound = undefined, .config = c, .verifier = undefined, .step = undefined, .lanes = &.{}, .gathered = &.{}, .name = name };
         errdefer d.glue.deinit();
         errdefer d.kernels.deinit();
         d.dims = try target.device.buffer(4096, mtl.ResourceOptions.shared);
@@ -102,8 +101,6 @@ pub const Draft = struct {
         try d.warm();
         d.verifier = try inkling.group.Verifier.init(target.device, &target.config);
         errdefer d.verifier.deinit();
-        d.prompt = try inkling.Taps.init(target.device, &target.config, tap_ids, prompt_rows);
-        errdefer d.prompt.deinit();
         d.step = try inkling.Taps.init(target.device, &target.config, tap_ids, inkling.group.max_rows);
         errdefer d.step.deinit();
         if (d.step.rowBytes() != d.stride()) return error.TapWidth;
@@ -131,12 +128,12 @@ pub const Draft = struct {
         for (d.lanes) |*l| {
             l.context.deinit(d.a);
             l.kept.deinit(d.a);
+            l.stash.deinit(d.a);
             l.lookup.deinit();
         }
         d.a.free(d.lanes);
         d.a.free(d.gathered);
         d.step.deinit();
-        d.prompt.deinit();
         d.verifier.deinit();
         d.model.deinit();
         d.bound.deinit();
@@ -153,7 +150,7 @@ pub const Draft = struct {
         defer list.deinit(d.a);
         var it = d.model.checkpoint.tensors.valueIterator();
         while (it.next()) |t| try list.append(d.a, t.buffer);
-        try list.appendSlice(d.a, &.{ d.dims, d.model.pending, d.verifier.kv, d.verifier.conv.buffer, d.verifier.targets, d.prompt.buffer, d.step.buffer });
+        try list.appendSlice(d.a, &.{ d.dims, d.model.pending, d.verifier.kv, d.verifier.conv.buffer, d.verifier.targets, d.step.buffer });
         try q.residency.appendDraft(&d.model.backend, d.a, &list);
         for (d.lanes) |l| try l.context.buffers(&list, d.a);
         var total: u64 = 0;
@@ -171,8 +168,59 @@ pub const Draft = struct {
         return @as(usize, d.config.tapWidth()) * 2;
     }
 
-    pub fn promptTaps(d: *const Draft) ?*const inkling.Taps {
-        return if (d.failed) null else &d.prompt;
+    pub fn windowRows(d: *const Draft) usize {
+        return d.config.window;
+    }
+
+    pub fn ringWrite(d: *const Draft, lane: usize, at: usize, take: usize, need_from: usize) ?inkling.Taps.RingWrite {
+        if (d.failed) return null;
+        const start = @max(at, need_from);
+        const end = at + take;
+        if (start >= end) return null;
+        const w: usize = d.config.window;
+        return .{
+            .taps = &d.step,
+            .ring = d.lanes[lane].context.pending,
+            .skip = @intCast(start - at),
+            .rows = @intCast(end - start),
+            .base = @intCast(start % w),
+            .window = d.config.window,
+        };
+    }
+
+    pub fn stashOverwritten(d: *Draft, lane: usize, capture_at: usize, chunk_end: usize) !void {
+        if (d.failed) return;
+        const l = &d.lanes[lane];
+        const w: usize = d.config.window;
+        const from_u64 = @max(l.first, capture_at -| (w -| 1));
+        const overwritten_end = @min(capture_at, chunk_end -| w);
+        if (from_u64 >= overwritten_end) {
+            l.stash_rows = 0;
+            return;
+        }
+        const from: usize = @intCast(from_u64);
+        const n = overwritten_end - from;
+        const s = d.stride();
+        if (l.stash.bytes.len < n * s) l.stash.bytes = try d.a.realloc(l.stash.bytes, n * s);
+        l.stash.first = from;
+        l.stash_rows = n;
+        const ring = l.context.pending.contents();
+        var i: usize = 0;
+        while (i < n) {
+            const slot: usize = (from + i) % w;
+            const count = @min(n - i, w - slot);
+            @memcpy(l.stash.bytes[i * s ..][0 .. count * s], ring[slot * s ..][0 .. count * s]);
+            i += count;
+        }
+    }
+
+    pub fn clearStash(d: *Draft, lane: usize) void {
+        d.lanes[lane].stash_rows = 0;
+    }
+
+    pub fn advanceTo(d: *Draft, lane: usize, end: u64) void {
+        if (d.failed) return;
+        d.lanes[lane].context.committed_end = end;
     }
 
     pub fn stepTaps(d: *const Draft) ?*const inkling.Taps {
@@ -199,6 +247,7 @@ pub const Draft = struct {
         l.context.context = l.context.session.context;
         l.context.committed_end = at;
         l.first = at;
+        l.stash_rows = 0;
     }
 
     pub fn absorb(d: *Draft, lane: usize, rows: []const u8, n: usize) void {
@@ -238,9 +287,15 @@ pub const Draft = struct {
         const s = d.stride();
         out.bytes = try a.realloc(out.bytes, n * s);
         out.first = from;
+        var i: usize = 0;
+        if (l.stash_rows > 0 and from >= l.stash.first and from < l.stash.first + l.stash_rows) {
+            const off: usize = @intCast(from - l.stash.first);
+            const take = @min(n, l.stash_rows - off);
+            @memcpy(out.bytes[0 .. take * s], l.stash.bytes[off * s ..][0 .. take * s]);
+            i = take;
+        }
         const ring = l.context.pending.contents();
         const w: usize = d.config.window;
-        var i: usize = 0;
         while (i < n) {
             const slot: usize = @intCast((from + i) % w);
             const count = @min(n - i, w - slot);

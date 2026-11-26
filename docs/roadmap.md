@@ -5,7 +5,7 @@ This is the single plan for this repository: all current and future work, and th
 ## Status
 
 **Active 2026-11-26.**
-- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. Q4 (5h), A1 (5i, `lane/inkling-metal-aot`), and P6 (5f, fast-forwarded onto `main` `a6bc4fa26`, integrated `inkling-host` + `inkling-gpu` green) are done. Next: P7 (5g, drafter prompt-side cost), Decision 17 long-context prefill (`>= 2,000 tok/s` across `1K–31.7K`), Q3 (6), and Decision 17 single-stream decode (`>= 200 tok/s`).
+- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. Q4 (5h), A1 (5i, `lane/inkling-metal-aot`), P6 (5f, `main` `a6bc4fa26`), and P7 (5g, direct-to-ring selective drafter tap capture + 1,152-row last chunk with drafter) are done. Next: Decision 17 long-context prefill (`>= 2,000 tok/s` across `1K–31.7K`), Q3 (6), and Decision 17 single-stream decode (`>= 200 tok/s`).
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
 - Acceptance flow (2026-11-24): lanes prove changes with filtered GPU tests; the parent runs the full suite once on an integration commit of main plus the lane and fast-forwards main on green, instead of a lane suite and a second main suite.
 - **Last accepted code: SV2, fast-forwarded from `lane/sv2-serve`** (speculation served by default; integrated suite on `33b38ed43`: `inkling-host` ok, `inkling-gpu` 185/185 plus the restored served test 12/12, oracle pass). Before it, V4 `ec925cb41` (fused fixed-cost verify kernels; integrated main green: `inkling-host` ok, `inkling-gpu` 186/186, oracle pass at 94.73% top-1 and mean KL 0.0199). Before it, PH2 merge `291240211` (half prefill by default; `inkling-gpu` 181/181), P5c merge `7f7cb75a3` (181/181), SC1 merge `1668d5caa` (180/180), V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
@@ -218,9 +218,12 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
     - **Verdict:** keep `lane/inkling-metal-aot` as reference and extract its 6 proven wins into `main` (`MTLBinaryArchive`,
       5-thread `F_NOCACHE pread` + vision weight strip, Phase D bit-exact fusions, Phase C2 `bfloat2 sb` + `ulong2/uchar2 w13`
       + `float2(g,f)` repacking for verify, 2-stage GPU argmax, `D9` permuted KV).
-5g. P7, ready: the drafter's prompt-side cost. Profile the tap capture and absorb in the prefill loop by kernel, then
-   capture or absorb only the rows the drafter's window and restore points need. The gate is Decision 17's prefill
-   at 1K/4K/8K under the default, with every reuse, fork and store contract kept.
+5g. P7, done (`campaign/kernels/inkling-p7-taps.md`): replaced the `18.87 MB` `d.prompt` staging buffer and CPU absorb
+   loop with direct-to-ring `i2t_tap_ring` GPU capture, selective skipping outside `tapNeedFrom` (also skipping unused
+   final `mixBlocks + rmsW` on earlier chunks), wraparound-safe fork-point stashing, and restored P6's `1,152`-row last
+   chunk with the drafter loaded. `test-inkling2-loop-host` (`25/25`), `ring tap capture` (`5/5`), and
+   `test-inkling2-loop-served` (`13/13`, 10/10 spec==draft-off, 4/4 spec==no-drafter) pass. Served prefill with drafter
+   loaded reaches `2,434–2,541` (1K), `2,163` (4K), and `2,063` (8K) tok/s (within `0.5–2.3%` of `--no-drafts`).
 6. Q3: the long-reasoning runaways: `code-c02` under exact prefill (open since P3c) and `retrieval-t01` under half prefill.
 7. Deferred off the critical path: see **Later**.
 

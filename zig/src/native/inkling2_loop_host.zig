@@ -497,6 +497,7 @@ pub const Host = struct {
         var at = job.reused;
         if (stored != null) std.debug.assert(at == r.prompt.len) else std.debug.assert(at < r.prompt.len);
         var next = prefix.firstPoint(r.prompt.len, at, h.fork_window, h.fork_interval);
+        const need_from: usize = if (h.draft) |d| prefix.tapNeedFrom(r.prompt.len, job.reused, next, h.prefix_reuse and h.store_limit > 0, d.windowRows()) else r.prompt.len;
         var saved: usize = 0;
         const full = @min(inkling.default_chunk, h.prefill.chunk);
         while (at < r.prompt.len) {
@@ -513,10 +514,20 @@ pub const Host = struct {
                 capture.* = .{ .rollback = &slot.snapshots[saved + i].?, .at = point, .rows = r.prompt.len - point };
             }
             next = plan.next;
-            h.prefill.taps = if (h.draft) |d| d.promptTaps() else null;
+            defer if (h.draft) |d| d.clearStash(h.lane(slot));
+            if (h.draft) |d| {
+                if (job.reused == 0 and saved == 0 and plan.points > 0 and h.store_limit > 0) {
+                    d.stashOverwritten(h.lane(slot), captures[0].at, at + take) catch |e| {
+                        emit(job, .{ .prefilled = 0 });
+                        h.retire(slot, .failed, @errorName(e));
+                        return;
+                    };
+                }
+                h.prefill.taps_ring = d.ringWrite(h.lane(slot), at, take, need_from);
+            }
             h.prefill.captures = captures[0..plan.points];
             const filled = inkling.prefillWant(h.model, &h.prefill, &slot.cache, r.prompt[at..][0..take], if (at + take == r.prompt.len) .last else .none);
-            h.prefill.taps = null;
+            h.prefill.taps_ring = null;
             h.prefill.captures = &.{};
             filled catch |e| {
                 if (e == error.HalfActivationOverflow and h.prefill.half) {
@@ -534,19 +545,19 @@ pub const Host = struct {
                 return;
             };
             slot.resident.appendSliceAssumeCapacity(r.prompt[at..][0..take]);
-            var absorbed: usize = 0;
             for (captures[0..plan.points]) |capture| {
-                const rows = capture.at - at - absorbed;
-                if (h.draft) |d| d.absorb(h.lane(slot), d.prompt.bytes(absorbed, rows), rows);
-                absorbed += rows;
                 slot.points[saved] = capture.at;
-                if (job.reused == 0 and saved == 0) h.store(slot, capture.at, capture.rollback, null) catch |e| {
-                    h.retire(slot, .failed, @errorName(e));
-                    return;
-                };
+                if (job.reused == 0 and saved == 0) {
+                    if (h.draft) |d| d.advanceTo(h.lane(slot), capture.at);
+                    h.store(slot, capture.at, capture.rollback, null) catch |e| {
+                        h.retire(slot, .failed, @errorName(e));
+                        return;
+                    };
+                    if (h.draft) |d| d.clearStash(h.lane(slot));
+                }
                 saved += 1;
             }
-            if (h.draft) |d| d.absorb(h.lane(slot), d.prompt.bytes(absorbed, take - absorbed), take - absorbed);
+            if (h.draft) |d| d.advanceTo(h.lane(slot), at + take);
             at += take;
         }
         if (h.draft) |d| if (h.prefix_reuse) d.keepPrompt(h.lane(slot), slot.cache.len) catch |e| {
@@ -735,7 +746,7 @@ pub fn openHost(gpa: Allocator, io: std.Io, model: *inkling.Model, capacity: usi
     errdefer batch.deinit();
     const batch_logits = try gpa.alloc(f32, count * model.config.text.unpadded_vocab);
     errdefer gpa.free(batch_logits);
-    const most = if (draft) |d| @min(last_chunk_rows, d.prompt.rows) else last_chunk_rows;
+    const most = if (draft) |d| @min(last_chunk_rows, d.windowRows()) else last_chunk_rows;
     var prefill = try inkling.PrefillScratch.initRows(model.device, &model.config, most, 1);
     errdefer prefill.deinit();
     const image_token: u32 = model.config.image_token;

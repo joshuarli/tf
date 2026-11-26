@@ -362,6 +362,7 @@ pub const PrefillScratch = struct {
     verify_conv: ?*ConvCapture,
     captures: []const Capture,
     taps: ?*const @import("taps.zig").Taps,
+    taps_ring: ?@import("taps.zig").Taps.RingWrite,
     gpu_seconds: f64,
     phases: Phases,
 
@@ -415,6 +416,7 @@ pub const PrefillScratch = struct {
         s.verify_conv = null;
         s.captures = &.{};
         s.taps = null;
+        s.taps_ring = null;
         s.gpu_seconds = 0;
         s.phases = .full;
         s.chunk = chunk;
@@ -956,7 +958,7 @@ const Chunk = struct {
 
     fn tap(c: *Chunk, visit: u32) void {
         c.enter(.edges);
-        if (c.s.taps) |taps| taps.encode(c.enc, visit, c.s.x, 0, c.n);
+        if (c.s.taps) |taps| taps.encode(c.enc, visit, c.s.x, 0, c.n) else if (c.s.taps_ring) |rw| rw.encode(c.enc, visit, c.s.x, 0);
     }
 
     fn copyN(c: Chunk, x: B, out: B, count: usize) void {
@@ -1811,7 +1813,13 @@ fn roundName(batch: ?*BatchContext, rows: usize) []const u8 {
 fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, want: WantLogits, batch: ?*BatchContext) !void {
     if (ids.len == 0 or ids.len > s.chunk or (want == .all and ids.len > s.logit_rows)) return error.BadChunk;
     if (batch == null and ids.len + cache.len > cache.capacity) return error.ContextFull;
+    if (s.taps != null and s.taps_ring != null) return error.BadTaps;
     if (s.taps) |taps| if (taps.rows < ids.len) return error.TapsTooSmall;
+    if (s.taps_ring) |rw| {
+        if (rw.window == 0 or rw.base >= rw.window) return error.BadTaps;
+        if (rw.rows > rw.window or @as(usize, rw.skip) + rw.rows > ids.len) return error.TapsTooSmall;
+        if (rw.ring.length() < @as(usize, rw.window) * rw.taps.rowBytes()) return error.TapsTooSmall;
+    }
     for (s.captures) |cap| if (batch != null or cap.at < cache.len or cap.at > cache.len + ids.len) return error.BadCapture;
     if (s.half_overflow) |buf| buf.slice(u32, 1)[0] = 0;
     @memcpy(s.ids.slice(u32, ids.len), ids);
@@ -1894,11 +1902,13 @@ fn run(m: *const Model, s: *PrefillScratch, cache: *Cache, ids: []const u32, wan
     }
     if (profiling) try rounds.next(&c, "inkling2-head");
     c.enter(.head);
-    if (batch == null or !c.mixNorm(b(s.x), m.weights.output_query, bo(s.mixout, 0), &.{m.weights.norm}, @splat(b(s.n0)))) {
-        c.mixBlocks(b(s.x), m.weights.output_query, bo(s.mixout, 0));
-        c.rmsW(.{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, t(m.weights.norm), b(s.n0), 1, 0, c.h, text.eps);
+    if (want != .none or s.taps != null or s.taps_ring != null) {
+        if (batch == null or !c.mixNorm(b(s.x), m.weights.output_query, bo(s.mixout, 0), &.{m.weights.norm}, @splat(b(s.n0)))) {
+            c.mixBlocks(b(s.x), m.weights.output_query, bo(s.mixout, 0));
+            c.rmsW(.{ .buf = bo(s.mixout, 0), .xs = 1, .xb = 0 }, t(m.weights.norm), b(s.n0), 1, 0, c.h, text.eps);
+        }
+        if (s.taps) |taps| taps.encode(c.enc, taps.final, s.n0, 0, c.n) else if (s.taps_ring) |rw| rw.encode(c.enc, rw.taps.final, s.n0, 0);
     }
-    if (s.taps) |taps| taps.encode(c.enc, taps.final, s.n0, 0, c.n);
     if (profiling) try rounds.next(&c, "inkling2-vocabulary");
     switch (want) {
         .none => {},

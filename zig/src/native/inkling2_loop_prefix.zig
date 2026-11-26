@@ -138,6 +138,11 @@ pub fn firstPoint(len: usize, at: usize, window: usize, interval: usize) usize {
     return @max(interval, @max(first, (at + interval - 1) / interval * interval));
 }
 
+pub fn tapNeedFrom(prompt_len: usize, reused: usize, first_point: usize, store_fork: bool, window: usize) usize {
+    const keep_at = if (store_fork and reused == 0 and first_point < prompt_len) first_point else prompt_len;
+    return keep_at -| (window -| 1);
+}
+
 pub const Chunk = struct { rows: usize, points: usize, next: usize };
 
 /// The chunk at `at`: `rows` rows, or the rest of the prompt once it fits in `most`.
@@ -392,4 +397,15 @@ test "a fresh prompt prefills in full chunks with fork points inside them and a 
         try std.testing.expectEqualSlices(usize, case.chunks, chunks[0..n]);
         try std.testing.expectEqualSlices(usize, case.points, points[0..saved]);
     }
+}
+
+test "tapNeedFrom skips prompt prefixes outside every stored or final drafter window" {
+    try std.testing.expectEqual(@as(usize, 0), tapNeedFrom(1027, 0, 896, true, 2048));
+    try std.testing.expectEqual(@as(usize, 0), tapNeedFrom(2048, 0, 1792, true, 2048));
+    try std.testing.expectEqual(@as(usize, 1793), tapNeedFrom(4096, 0, 3840, true, 2048));
+    try std.testing.expectEqual(@as(usize, 2049), tapNeedFrom(4096, 0, 3840, false, 2048));
+    try std.testing.expectEqual(@as(usize, 2049), tapNeedFrom(4096, 1024, 3840, true, 2048));
+    try std.testing.expectEqual(@as(usize, 29441), tapNeedFrom(31744, 0, 31488, true, 2048));
+    try std.testing.expectEqual(@as(usize, 29697), tapNeedFrom(31744, 0, 31488, false, 2048));
+    try std.testing.expectEqual(@as(usize, 1), tapNeedFrom(2048, 0, 2048, true, 2048));
 }

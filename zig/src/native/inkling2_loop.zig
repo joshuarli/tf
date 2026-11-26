@@ -150,7 +150,7 @@ pub fn open(a: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, o: api.Ope
         problem.* = "--parallel must be between 1 and 8";
         return null;
     }
-    const draft: ?*spec.Draft = if (drafter) |dir| spec.Draft.open(gpa, io, m, dir, bits, count, inkling.default_chunk) catch |err| {
+    const draft: ?*spec.Draft = if (drafter) |dir| spec.Draft.open(gpa, io, m, dir, bits, count) catch |err| {
         problem.* = try std.fmt.allocPrint(a, "INKLING_DRAFTER: the DFlash2 drafter in {s} cannot serve this checkpoint ({s})", .{ dir, @errorName(err) });
         m.deinit();
         return null;

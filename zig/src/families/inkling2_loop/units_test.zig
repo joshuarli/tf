@@ -178,7 +178,7 @@ test "tensor-unit routed experts meet fp64 bounds across tiles, thresholds and c
         enc.setValue(args_up, 7);
         enc.setBuffer(act_h, 0, 8);
         enc.setBuffer(overflow, 0, 9);
-        enc.dispatchGroups(mtl.Size.of((fu.cols + 63) / 64, fu.tiles(), 1), mtl.Size.of(128, 1, 1));
+        enc.dispatchGroups(mtl.Size.of((fu.cols + 63) / 64, fu.tiles(), 1), mtl.Size.of(256, 1, 1));
         enc.end();
         try finish(cb);
     }
@@ -239,7 +239,7 @@ test "tensor-unit routed experts meet fp64 bounds across tiles, thresholds and c
         bind(enc, &.{ xd, fd.w, fd.s, fd.amax, fd.den, fd.off, fd.row_of });
         enc.setValue(args_down, 7);
         enc.setBuffer(out, 0, 8);
-        enc.dispatchGroups(mtl.Size.of((n_down + 63) / 64, fd.tiles(), 1), mtl.Size.of(128, 1, 1));
+        enc.dispatchGroups(mtl.Size.of((n_down + 63) / 64, fd.tiles(), 1), mtl.Size.of(256, 1, 1));
         enc.end();
         try finish(cb);
     }
@@ -378,7 +378,7 @@ test "tensor-unit affine experts meet fp64 bounds across tiles and column tails"
     defer act_h.deinit();
     @memset(act_h.slice(f16, slots * n_up), std.math.nan(f16));
     const args_up = Moeg{ .k = k_up, .n = n_up, .slots = @intCast(slots), .topk = topk, .experts = counts.len, .gate_cap = 7, .up_cap = 7 };
-    const tiles = (slots + 63) / 64 + counts.len;
+    const tiles = (slots + 127) / 128 + counts.len;
     {
         const cb = queue.commandBuffer();
         const enc = cb.compute(.serial);
@@ -392,7 +392,7 @@ test "tensor-unit affine experts meet fp64 bounds across tiles and column tails"
         enc.setValue(args_up, 7);
         enc.setBuffer(act_h, 0, 8);
         enc.setBuffer(overflow, 0, 9);
-        enc.dispatchGroups(mtl.Size.of((2 * n_up + 63) / 64, tiles, 1), mtl.Size.of(128, 1, 1));
+        enc.dispatchGroups(mtl.Size.of((2 * n_up + 63) / 64, tiles, 1), mtl.Size.of(256, 1, 1));
         enc.end();
         try finish(cb);
     }
@@ -438,7 +438,7 @@ test "tensor-unit affine experts meet fp64 bounds across tiles and column tails"
         enc.setValue(args_down, 7);
         enc.setBuffer(out, 0, 8);
         enc.setBuffer(overflow, 0, 9);
-        enc.dispatchGroups(mtl.Size.of((n_down + 63) / 64, tiles, 1), mtl.Size.of(128, 1, 1));
+        enc.dispatchGroups(mtl.Size.of((n_down + 63) / 64, tiles, 1), mtl.Size.of(256, 1, 1));
         enc.end();
         try finish(cb);
     }

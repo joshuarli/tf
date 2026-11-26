@@ -172,6 +172,10 @@ pub const Draft = struct {
         return d.config.window;
     }
 
+    pub fn windowBytes(d: *const Draft, len: usize) usize {
+        return @min(len, @as(usize, d.config.window) -| 1) * d.stride();
+    }
+
     pub fn ringWrite(d: *const Draft, lane: usize, at: usize, take: usize, need_from: usize) ?inkling.Taps.RingWrite {
         if (d.failed) return null;
         const start = @max(at, need_from);

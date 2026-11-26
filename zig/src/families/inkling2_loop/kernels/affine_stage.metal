@@ -51,6 +51,15 @@ kernel void i2as_split(device const float* x [[buffer(0)]], constant i2as_args& 
   *(device half4*)(y + size_t(a.rows + row) * a.k + k) = half4(v - float4(hi));
 }
 
+kernel void i2as_split_hi(device const float* x [[buffer(0)]], constant i2as_args& a [[buffer(1)]],
+    device half* y [[buffer(2)]], device atomic_uint* overflow [[buffer(3)]], uint i [[thread_position_in_grid]]) {
+  if (i >= a.rows * a.k / 4u) return;
+  const uint row = i / (a.k / 4u), k = (i % (a.k / 4u)) * 4u;
+  const float4 v = *(device const float4*)(x + size_t(a.xb + row * a.xs) * a.k + k);
+  if (any(abs(v) > 65504.0f)) atomic_fetch_add_explicit(overflow, 1u, memory_order_relaxed);
+  *(device half4*)(y + size_t(row) * a.k + k) = half4(clamp(v, -65504.0f, 65504.0f));
+}
+
 // i2as_gemm with split rows: the hi and lo halves times the staged half weights, both into one f32 sum.
 kernel void i2as_gemm_split(device half* x [[buffer(0)]], device half* w [[buffer(1)]], constant i2as_args& a [[buffer(2)]],
     device float* y [[buffer(3)]], uint2 gid [[threadgroup_position_in_grid]]) {

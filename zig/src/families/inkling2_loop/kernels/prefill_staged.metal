@@ -6,11 +6,12 @@ using namespace mpp::tensor_ops;
 
 struct i2ps_part { uint tile, row, n, pad; };
 struct i2ps_args { uint k, rows, count, pad; i2ps_part part[6]; };
-struct i2ps_gate_args { uint count; };
+struct i2ps_gate_args { uint count, hi_only; };
 
 template <bool LO>
 inline void i2ps_gemm(device half* x, device half* w, constant i2ps_args& a, device float* y0, device float* y1,
     device float* y2, device float* y3, device float* y4, device float* y5, uint2 gid) {
+  constexpr int BM = LO ? 64 : 128;
   uint p = 0;
   for (uint i = 1; i < a.count; ++i) if (gid.x >= a.part[i].tile) p = i;
   const i2ps_part part = a.part[p];
@@ -20,17 +21,21 @@ inline void i2ps_gemm(device half* x, device half* w, constant i2ps_args& a, dev
   tensor<device half, dextents<int, 2>, tensor_inline> lo(x + size_t(a.rows) * a.k, dextents<int, 2>(a.k, a.rows));
   tensor<device half, dextents<int, 2>, tensor_inline> right(w + size_t(part.row) * a.k, dextents<int, 2>(a.k, part.n));
   tensor<device float, dextents<int, 2>, tensor_inline> dest(y, dextents<int, 2>(part.n, a.rows));
-  constexpr auto desc = matmul2d_descriptor(64, 64, static_cast<int>(dynamic_extent), false, true, false,
-      matmul2d_descriptor::mode::multiply_accumulate);
+  constexpr auto desc = matmul2d_descriptor(BM, 64, static_cast<int>(dynamic_extent), false, true, false,
+      LO ? matmul2d_descriptor::mode::multiply_accumulate : matmul2d_descriptor::mode::multiply);
   matmul2d<desc, execution_simdgroups<4>> op;
-  auto ah = hi.slice(0, gid.y * 64);
-  auto al = lo.slice(0, gid.y * 64);
+  auto ah = hi.slice(0, gid.y * BM);
+  auto al = lo.slice(0, gid.y * BM);
   auto bb = right.slice(0, col);
-  auto cc = dest.slice(col, gid.y * 64);
-  auto acc = op.get_destination_cooperative_tensor<metal::remove_addrspace_t<decltype(ah)>, metal::remove_addrspace_t<decltype(bb)>, float>();
-  for (uint i = 0; i < acc.get_capacity(); ++i) acc[i] = 0;
-  op.run(ah, bb, acc);
-  if (LO) op.run(al, bb, acc);
+  auto cc = dest.slice(col, gid.y * BM);
+  auto acc = op.template get_destination_cooperative_tensor<metal::remove_addrspace_t<decltype(ah)>, metal::remove_addrspace_t<decltype(bb)>, float>();
+  if (LO) {
+    for (uint i = 0; i < acc.get_capacity(); ++i) acc[i] = 0;
+    op.run(ah, bb, acc);
+    op.run(al, bb, acc);
+  } else {
+    op.run(ah, bb, acc);
+  }
   acc.store(cc);
 }
 
@@ -55,5 +60,5 @@ kernel void i2ps_split_gated(device const float* x [[buffer(0)]], device const f
   if (any(abs(v) > 65504.0f)) atomic_fetch_add_explicit(overflow, 1u, memory_order_relaxed);
   const half4 hi = half4(clamp(v, -65504.0f, 65504.0f));
   *(device half4*)(y + 4u * i) = hi;
-  *(device half4*)(y + a.count + 4u * i) = half4(v - float4(hi));
+  if (a.hi_only == 0u) *(device half4*)(y + a.count + 4u * i) = half4(v - float4(hi));
 }

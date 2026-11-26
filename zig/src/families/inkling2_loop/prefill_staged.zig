@@ -34,7 +34,7 @@ pub const Pipes = struct {
 const StageArgs = extern struct { n: u32, k: u32, rows: u32, xs: u32, xb: u32, bits: u32, cap: f32 };
 const PartArgs = extern struct { tile: u32, row: u32, n: u32, pad: u32 = 0 };
 const GemmArgs = extern struct { k: u32, rows: u32, count: u32, pad: u32 = 0, part: [max_parts]PartArgs };
-const GateArgs = extern struct { count: u32 };
+const GateArgs = extern struct { count: u32, hi_only: u32 };
 
 pub const Input = struct {
     buf: mtl.Buffer,
@@ -178,7 +178,8 @@ pub fn encode(s: Stage, sources: []const Tensor, parts: []const Part, inputs: [3
         s.enc.setBuffer(s.weights, 0, 1);
         s.enc.setValue(args, 2);
         for (outs, 0..) |out, i| s.enc.setBuffer(out, 0, 3 + i);
-        s.enc.dispatchGroups(mtl.Size.of(tiles, (s.rows + 63) / 64, 1), mtl.Size.of(128, 1, 1));
+        const bm: u32 = if (s.half_inputs) 128 else 64;
+        s.enc.dispatchGroups(mtl.Size.of(tiles, (s.rows + bm - 1) / bm, 1), mtl.Size.of(128, 1, 1));
     }
     return true;
 }
@@ -193,7 +194,7 @@ pub fn gatedProjection(s: Stage, w: Tensor, out: mtl.Buffer, x: mtl.Buffer, gate
     s.enc.setPipeline(s.pipes.gated);
     s.enc.setBuffer(x, 0, 0);
     s.enc.setBuffer(gate, 0, 1);
-    s.enc.setValue(GateArgs{ .count = count }, 2);
+    s.enc.setValue(GateArgs{ .count = count, .hi_only = @intFromBool(s.half_inputs) }, 2);
     s.enc.setBuffer(s.inputs, 0, 3);
     s.enc.setBuffer(s.overflow, 0, 4);
     s.enc.dispatchThreads(mtl.Size.of(count / 4, 1, 1), mtl.Size.of(256, 1, 1));
@@ -206,7 +207,7 @@ pub fn gatedProjection(s: Stage, w: Tensor, out: mtl.Buffer, x: mtl.Buffer, gate
         s.enc.setBuffer(s.weights, 0, 1);
         s.enc.setValue(args, 2);
         for (0..max_parts) |i| s.enc.setBuffer(out, 0, 3 + i);
-        s.enc.dispatchGroups(mtl.Size.of((n + 63) / 64, (s.rows + 63) / 64, 1), mtl.Size.of(128, 1, 1));
+        s.enc.dispatchGroups(mtl.Size.of((n + 63) / 64, (s.rows + 127) / 128, 1), mtl.Size.of(128, 1, 1));
         return true;
     }
     s.enc.setPipeline(s.gemm_split);

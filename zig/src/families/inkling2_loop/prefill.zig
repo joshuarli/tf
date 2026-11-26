@@ -135,6 +135,7 @@ pub const Pipes = struct {
     affine_stage_prepare: ?mtl.Pipeline,
     affine_stage_gemm: ?mtl.Pipeline,
     affine_stage_split: ?mtl.Pipeline,
+    affine_stage_split_hi: ?mtl.Pipeline,
     affine_stage_gemm_split: ?mtl.Pipeline,
     float_mpp: ?mtl.Pipeline,
     gate_ctl: ?mtl.Pipeline,
@@ -203,6 +204,7 @@ pub const Pipes = struct {
         if (p.affine_stage_prepare) |pipe| pipe.deinit();
         if (p.affine_stage_gemm) |pipe| pipe.deinit();
         if (p.affine_stage_split) |pipe| pipe.deinit();
+        if (p.affine_stage_split_hi) |pipe| pipe.deinit();
         if (p.affine_stage_gemm_split) |pipe| pipe.deinit();
         if (p.float_mpp) |pipe| pipe.deinit();
         if (p.gate_ctl) |pipe| pipe.deinit();
@@ -514,6 +516,7 @@ pub const PrefillScratch = struct {
         s.pipes.affine_stage_prepare = null;
         s.pipes.affine_stage_gemm = null;
         s.pipes.affine_stage_split = null;
+        s.pipes.affine_stage_split_hi = null;
         s.pipes.affine_stage_gemm_split = null;
         if (s.affine_stage_w != null) {
             const stage_lib = try mtl.Library.fromSource(device, kernels.affine_stage, opts);
@@ -524,11 +527,14 @@ pub const PrefillScratch = struct {
             errdefer s.pipes.affine_stage_gemm.?.deinit();
             s.pipes.affine_stage_split = try mtl.Pipeline.init(device, stage_lib, "i2as_split", false);
             errdefer s.pipes.affine_stage_split.?.deinit();
+            s.pipes.affine_stage_split_hi = try mtl.Pipeline.init(device, stage_lib, "i2as_split_hi", false);
+            errdefer s.pipes.affine_stage_split_hi.?.deinit();
             s.pipes.affine_stage_gemm_split = try mtl.Pipeline.init(device, stage_lib, "i2as_gemm_split", false);
         }
         errdefer if (s.pipes.affine_stage_prepare) |pipe| pipe.deinit();
         errdefer if (s.pipes.affine_stage_gemm) |pipe| pipe.deinit();
         errdefer if (s.pipes.affine_stage_split) |pipe| pipe.deinit();
+        errdefer if (s.pipes.affine_stage_split_hi) |pipe| pipe.deinit();
         errdefer if (s.pipes.affine_stage_gemm_split) |pipe| pipe.deinit();
         s.pipes.staged = if (s.affine_stage_w != null) try staged_mod.Pipes.init(device) else null;
         errdefer if (s.pipes.staged) |pipes| pipes.deinit();
@@ -1310,7 +1316,7 @@ const Chunk = struct {
         return .{
             .enc = c.enc,
             .prepare = s.pipes.affine_stage_prepare orelse return null,
-            .split = s.pipes.affine_stage_split orelse return null,
+            .split = (if (s.rounding.inputs) s.pipes.affine_stage_split_hi else s.pipes.affine_stage_split) orelse return null,
             .gemm_split = s.pipes.affine_stage_gemm_split orelse return null,
             .pipes = s.pipes.staged orelse return null,
             .weights = s.affine_stage_w orelse return null,
@@ -1586,17 +1592,21 @@ const Chunk = struct {
     fn unitExperts(c: Chunk, lay: *const Layer, input: B, up: Moeg, codes: B) void {
         const s = c.s;
         const overflow = b(s.half_overflow.?);
-        const tiles: usize = (up.slots + 63) / 64 + up.experts;
+        const tiles: usize = (up.slots + 127) / 128 + up.experts;
         c.halfRows(input, true);
-        c.setP(s.pipes.wide_gu_nv.?, up, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes, b(s.act_h.?), overflow });
-        c.enc.dispatchGroups(mtl.Size.of(up.n, up.experts, 1), mtl.Size.of(32, 1, 1));
+        if (!s.rounding.experts) {
+            c.setP(s.pipes.wide_gu_nv.?, up, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act), codes, b(s.act_h.?), overflow });
+            c.enc.dispatchGroups(mtl.Size.of(up.n, up.experts, 1), mtl.Size.of(32, 1, 1));
+        }
         c.setP(s.pipes.units_up.?, up, &.{ b(s.xh.?), t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.moe_off), b(s.moe_sorted), A, b(s.act_h.?), overflow });
-        c.enc.dispatchGroups(mtl.Size.of(2 * up.n / 64, tiles, 1), mtl.Size.of(128, 1, 1));
+        c.enc.dispatchGroups(mtl.Size.of(2 * up.n / 64, tiles, 1), mtl.Size.of(256, 1, 1));
         const down = Moeg{ .k = up.n, .n = c.h, .slots = up.slots, .topk = up.topk, .experts = up.experts, .gate_cap = 0, .up_cap = 0 };
-        c.setP(s.pipes.wide_down_nv.?, down, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.moe_off), b(s.moe_sorted), A, b(s.down), codes });
-        c.enc.dispatchGroups(mtl.Size.of(c.h, up.experts, 1), mtl.Size.of(32, 1, 1));
+        if (!s.rounding.experts) {
+            c.setP(s.pipes.wide_down_nv.?, down, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.moe_off), b(s.moe_sorted), A, b(s.down), codes });
+            c.enc.dispatchGroups(mtl.Size.of(c.h, up.experts, 1), mtl.Size.of(32, 1, 1));
+        }
         c.setP(s.pipes.units_down.?, down, &.{ b(s.act_h.?), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.moe_off), b(s.moe_sorted), A, b(s.down), overflow });
-        c.enc.dispatchGroups(mtl.Size.of(c.h / 64, tiles, 1), mtl.Size.of(128, 1, 1));
+        c.enc.dispatchGroups(mtl.Size.of(c.h / 64, tiles, 1), mtl.Size.of(256, 1, 1));
         c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = up.topk, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
         c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
     }
@@ -1612,13 +1622,13 @@ const Chunk = struct {
     fn affineUnitExperts(c: Chunk, lay: *const Layer, input: B, up: Moeg) void {
         const s = c.s;
         const overflow = b(s.half_overflow.?);
-        const tiles: usize = (up.slots + 63) / 64 + up.experts;
+        const tiles: usize = (up.slots + 127) / 128 + up.experts;
         c.halfRows(input, false);
         c.setP(s.pipes.affine_units_up.?, up, &.{ b(s.xh.?), t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), A, b(s.moe_off), b(s.moe_sorted), A, b(s.act_h.?), overflow });
-        c.enc.dispatchGroups(mtl.Size.of(2 * up.n / 64, tiles, 1), mtl.Size.of(128, 1, 1));
+        c.enc.dispatchGroups(mtl.Size.of(2 * up.n / 64, tiles, 1), mtl.Size.of(256, 1, 1));
         const down = Moeg{ .k = up.n, .n = c.h, .slots = up.slots, .topk = up.topk, .experts = up.experts, .gate_cap = 0, .up_cap = 0 };
         c.setP(s.pipes.affine_units_down.?, down, &.{ b(s.act_h.?), t(lay.w2), t(lay.w2_scale), t(lay.w2_bias.?), A, b(s.moe_off), b(s.moe_sorted), A, b(s.down), overflow });
-        c.enc.dispatchGroups(mtl.Size.of(c.h / 64, tiles, 1), mtl.Size.of(128, 1, 1));
+        c.enc.dispatchGroups(mtl.Size.of(c.h / 64, tiles, 1), mtl.Size.of(256, 1, 1));
         c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = up.topk, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
         c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
     }

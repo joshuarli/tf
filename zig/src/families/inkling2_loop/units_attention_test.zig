@@ -47,6 +47,7 @@ test "tensor-unit attention meets fp64 bounds across windows, cached keys and ro
     for ([_]AttnArgs{
         .{ .heads = heads, .kv = kv, .dim = dim, .rel = 16, .extent = 48, .window = 48, .base = 100, .rows = 45, .rmode = 1, .scale = 1.0 / @sqrt(128.0), .floor = 16, .alpha = 0.1 },
         .{ .heads = heads, .kv = kv, .dim = dim, .rel = 16, .extent = 64, .window = 0, .base = 70, .rows = 37, .rmode = 0, .scale = 1.0 / @sqrt(128.0), .floor = 16, .alpha = 0.1 },
+        .{ .heads = heads, .kv = kv, .dim = dim, .rel = 16, .extent = 64, .window = 0, .base = 160, .rows = 77, .rmode = 0, .scale = 1.0 / @sqrt(128.0), .floor = 16, .alpha = 0.1 },
     }) |args| {
         const rows: usize = args.rows;
         const base: usize = args.base;

@@ -381,6 +381,11 @@ pub const Host = struct {
         if (old.logits) |row| h.gpa.free(row);
     }
 
+    fn entryBytes(h: *const Host, len: usize, taps: usize, with_logits: bool) u64 {
+        const row_bytes: u64 = if (with_logits) @as(u64, h.model.config.text.unpadded_vocab) *| @sizeOf(f32) else 0;
+        return inkling.Cache.fixedBytes(&h.model.config) +| @as(u64, len) *| inkling.Cache.bytesPerToken(&h.model.config) +| @as(u64, len) *| @sizeOf(u32) +| taps +| row_bytes;
+    }
+
     fn store(h: *Host, slot: *Slot, len: usize, snapshot: ?*inkling.Cache.Rollback, logits: ?[]const f32) !void {
         if (!h.prefix_reuse or len == 0 or h.store_limit == 0) return;
         std.debug.assert(len <= slot.resident.items.len);
@@ -400,8 +405,7 @@ pub const Host = struct {
             .add => {},
         }
         const taps: usize = if (h.draft) |d| d.keepBytes(h.lane(slot), len) else 0;
-        const row_bytes: usize = if (logits) |row| row.len *| @sizeOf(f32) else 0;
-        const bytes = inkling.Cache.fixedBytes(&h.model.config) +| len *| inkling.Cache.bytesPerToken(&h.model.config) +| tokens.len *| @sizeOf(u32) +| taps +| row_bytes;
+        const bytes = h.entryBytes(len, taps, logits != null);
         if (bytes > h.store_limit) return;
         while (prefix.eviction(h.entries.items, h.store_bytes, h.store_limit, bytes)) |i| h.evict(i);
         const ids = try h.gpa.dupe(u32, tokens);
@@ -497,7 +501,10 @@ pub const Host = struct {
         var at = job.reused;
         if (stored != null) std.debug.assert(at == r.prompt.len) else std.debug.assert(at < r.prompt.len);
         var next = prefix.firstPoint(r.prompt.len, at, h.fork_window, h.fork_interval);
-        const need_from: usize = if (h.draft) |d| prefix.tapNeedFrom(r.prompt.len, job.reused, next, h.prefix_reuse and h.store_limit > 0, d.windowRows()) else r.prompt.len;
+        const store_fork = h.prefix_reuse and h.store_limit > 0 and job.reused == 0 and next < r.prompt.len and
+            h.entryBytes(next, if (h.draft) |d| d.windowBytes(next) else 0, false) +|
+            h.entryBytes(r.prompt.len, if (h.draft) |d| d.windowBytes(r.prompt.len) else 0, true) <= h.store_limit;
+        const need_from: usize = if (h.draft) |d| prefix.tapNeedFrom(r.prompt.len, job.reused, next, store_fork, d.windowRows()) else r.prompt.len;
         var saved: usize = 0;
         const full = @min(inkling.default_chunk, h.prefill.chunk);
         while (at < r.prompt.len) {
@@ -516,7 +523,7 @@ pub const Host = struct {
             next = plan.next;
             defer if (h.draft) |d| d.clearStash(h.lane(slot));
             if (h.draft) |d| {
-                if (job.reused == 0 and saved == 0 and plan.points > 0 and h.store_limit > 0) {
+                if (store_fork and saved == 0 and plan.points > 0) {
                     d.stashOverwritten(h.lane(slot), captures[0].at, at + take) catch |e| {
                         emit(job, .{ .prefilled = 0 });
                         h.retire(slot, .failed, @errorName(e));
@@ -547,7 +554,7 @@ pub const Host = struct {
             slot.resident.appendSliceAssumeCapacity(r.prompt[at..][0..take]);
             for (captures[0..plan.points]) |capture| {
                 slot.points[saved] = capture.at;
-                if (job.reused == 0 and saved == 0) {
+                if (store_fork and saved == 0) {
                     if (h.draft) |d| d.advanceTo(h.lane(slot), capture.at);
                     h.store(slot, capture.at, capture.rollback, null) catch |e| {
                         h.retire(slot, .failed, @errorName(e));

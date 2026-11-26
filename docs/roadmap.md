@@ -4,8 +4,8 @@ This is the single plan for this repository: all current and future work, and th
 
 ## Status
 
-**Active 2026-11-24.**
-- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. Q4 (5h, qualification repair, owner steering) has merged its code and completed-task run; its served sessions and scorecard are open. A1 (5i, AOT spike) is in research on `lane/inkling-metal-aot`; its GPU phases wait for Q4's runs. P6's retry (5f) and P7 (5g) resume after Q4, then Q3.
+**Active 2026-11-25.**
+- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. Q4 (5h, qualification repair, owner steering) is done on `main` (`campaign/kernels/inkling-q4-qualify.md`). A1 (5i, AOT spike) has completed research (`campaign/aot/research.md`, `inventory.md`) on `lane/inkling-metal-aot` (`90d047572`, rebased on `main`) and is entering Phase A–F. P6's retry (5f, `lane/p6-tail`) and P7 (5g) are now unblocked after Q4, then Q3.
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
 - Acceptance flow (2026-11-24): lanes prove changes with filtered GPU tests; the parent runs the full suite once on an integration commit of main plus the lane and fast-forwards main on green, instead of a lane suite and a second main suite.
 - **Last accepted code: SV2, fast-forwarded from `lane/sv2-serve`** (speculation served by default; integrated suite on `33b38ed43`: `inkling-host` ok, `inkling-gpu` 185/185 plus the restored served test 12/12, oracle pass). Before it, V4 `ec925cb41` (fused fixed-cost verify kernels; integrated main green: `inkling-host` ok, `inkling-gpu` 186/186, oracle pass at 94.73% top-1 and mean KL 0.0199). Before it, PH2 merge `291240211` (half prefill by default; `inkling-gpu` 181/181), P5c merge `7f7cb75a3` (181/181), SC1 merge `1668d5caa` (180/180), V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
@@ -167,29 +167,34 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
      inconclusive).
    - Quality: PH2's results stand, since no arithmetic changed since.
    - Correction: SV2's `idle` mode was plain decode, because `--no-drafts` drops the drafter at load.
-5h. Q4, running (owner steering 2026-11-25, from an independent audit of `46061a3aa`): make serving qualification
-   enforce and describe the accepted policies before any further performance claim. P6 and P7 resume after it.
+5h. Q4, done (`campaign/kernels/inkling-q4-qualify.md`, owner steering 2026-11-25, from an independent audit of
+   `46061a3aa`): serving qualification now enforces and describes the accepted policies before any further performance
+   claim. P6 and P7 are unblocked.
    1. Equality: compare served streams by token and output hashes, token counts, finish reasons and tool output;
       missing evidence fails, with mutation tests (`campaign/tests/test_served_equality.py`). Done in `1f285be08`:
       the old check compared a status field; SC2's records still match under the repaired check.
-   2. Completed tasks beside the fixed 512-token window (relabelled fixed-window generation throughput): a frozen
-      suite with EOS on and room to answer, scoring success and format and recording cap hits, total time, first
-      answer latency, reasoning, answer and total tokens. Follow-up turns are built from completed answers.
-   3. Corpus: exclude model outputs, results, receipts and run records from prompt sources. Keep the existing
-      prompts as regression cases, and add frozen tasks from outside this repository (low-copy and copy-heavy,
-      labelled), with lengths in the target tokenizer.
+   2. Completed tasks beside the fixed 512-token window (relabelled fixed-window generation throughput): frozen 36-task
+      suite with EOS on and 8,192 tokens of room, scoring success and format, recording cap hits, total time, first
+      answer latency, reasoning/answer/total tokens, and follow-up turns from completed answers. Quiet-host `tasks-half`
+      (0/72 timing-invalid, 36/36 valid pairs): `ar == spec` on every task and follow-up, 32/36 passed (2 cap hits:
+      `code-c13`, `retrieval-t01`), total time 715.2 → 440.0 s (1.625×; low-copy 1.802×, copy-heavy 1.424×,
+      tool-continuation 1.588×; first-answer 1.652× / 1.383×). `tasks-off`: `ar == spec`, 31/36 passed (3 cap hits:
+      `code-c13`, `code-c15`, `retrieval-t04`; `retrieval-t01` passes), 22/72 timing-invalid from a pressure burst.
+   3. Corpus: exclude model outputs, results, receipts and run records from prompt sources. Existing prompts kept as
+      regression cases; frozen external tasks labelled low-copy / copy-heavy / tool-continuation with target-tokenizer
+      lengths.
    4. Configuration identity on every result: checkpoint, KV dtype, prefill rounding, decode arithmetic, drafter,
-      lookup, sampler, context and output policy. Report half and `off` prefill separately, and never present a
-      cross-precision chronological gain as faster execution of one continuation.
-   5. Decision 19 as an executable gate: the net-runaway rule, every lost case listed (`retrieval-t01`), and explicit
-      unsupported, over-context, missing and invalid cases.
-   6. A regenerated scorecard: valid pairs counted from records (SC2's code-1024 has none), a genuinely loaded drafter
-      with per-request `draft: false` as the disabled control, prefill curves gated and paired, the ~3% drafter
-      prefill cost treated as a hypothesis, and only the extra paired runs needed to fill the gaps.
-   Status (2026-11-25): items 1, 3, 4 and 5 are done. Item 2 ran in full (`campaign/kernels/inkling-q4-qualify.md`):
-   `ar` and `spec` are equal on every task under both prefill modes; half passes 32/36 and `off` 31/36. The timings
-   are invalid because of host memory pressure. Open: the fixed-window served sessions (`run.sh served a`, `b`,
-   `off`) and item 6's scorecard, both on a quiet host with at least 50% free memory.
+      lookup, sampler, context and output policy. Half and `off` prefill reported separately.
+   5. Decision 19 as an executable gate (`campaign/quality/decision19.py`, `test_decision19.py`): net-runaway rule,
+      every lost case listed (`retrieval-t01`), explicit unsupported/over-context/missing/invalid handling. Passes on
+      PH2's records (29/32 vs 28/32, runaways 2 vs 3, KL 1.021×, top-1 −0.23 pts, Pi 7/8 both).
+   6. Regenerated scorecard on `main` (`b925b31e…15f6`): three rotated half-prefill served sessions (`a`, `b`, `c`:
+      95/108 valid trials; quiet `b+c` 69/72 valid, 24/24 curve gates) plus `off` (36/36 valid, 12/12 curve gates),
+      100% equality across `ar`, `disabled` (loaded drafter + `draft: false`) and `spec`. Valid pairs counted from
+      records for all 12 prompts: `spec/ar` 1.351–2.842× (1.351–2.579× in `b+c`, best 171.3 tok/s on `code-1024`;
+      Decision 17's 200 tok/s unmet); `disabled/ar` neutral (every 95% CI includes 1.0). Paired gated prefill curves
+      show every `disabled/ar` and `spec/ar` 95% CI includes 1.0 (`b+c` plain 1,892 / 2,001 / 1,933 / 1,833 / 1,694
+      tok/s at 1K–31.7K; `off` 1,538–1,616), so SC2's ~3% drafter prefill cost remains an unconfirmed hypothesis for P7.
 5i. A1, running (owner spike 2026-11-25): an ahead-of-time compiled Inkling 2 Mini for M5 Max on
    `lane/inkling-metal-aot` (`.work/wt/inkling-metal-aot`, base `46061a3aa`; records in `campaign/aot/`). An offline
    compiler emits a model-specific artifact: a native executable, an immutable specialized schedule, compiled Metal

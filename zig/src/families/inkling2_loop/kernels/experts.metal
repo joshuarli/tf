@@ -598,4 +598,160 @@ I2E_ROUTED(i2e_gate_up16, true, 4, 2, 4, 3, false, false)
 I2E_ROUTED(i2e_down1, false, 8, 4, 2, 1, true, true)
 I2E_ROUTED(i2e_down, false, 8, 4, 2, 3, false, false)
 I2E_ROUTED(i2e_down16, false, 8, 4, 4, 3, false, false)
+
+inline float i2e_aff4_situ(float gate, float up, float gate_cap, float up_cap) {
+  const float g = gate_cap * precise::tanh(gate / gate_cap) / (1.0f + precise::exp(-gate));
+  const float u = up_cap > 0.0f ? up_cap * precise::tanh(up / up_cap) : up;
+  return g * u;
+}
+
+#define I2E_AFF4_ARGS const device float* X [[buffer(0)]], const device uint* W [[buffer(1)]], \
+    const device bfloat* S [[buffer(2)]], const device bfloat* B [[buffer(3)]], \
+    const device int* PICKS [[buffer(4)]], constant i2t_moe& a [[buffer(5)]], device float* Y [[buffer(6)]], \
+    uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]], \
+    uint lane [[thread_index_in_simdgroup]]
+
+template <bool GU, uint SG, uint T, uint Q>
+[[kernel]] void i2e_aff4_routed(I2E_AFF4_ARGS) {
+  constexpr uint CL = 32u / SG;
+  threadgroup float2 part[SG * T * 32];
+  const uint slot = tg.y;
+  if (slot >= a.slots) return;
+  uint member[8];
+  const uint count = i2e_run<Q>(PICKS, a.slots, slot, lane, member);
+  if (count == 0u) return;
+  const uint e = uint(PICKS[slot]);
+  const uint wrows = GU ? 2u * a.n : a.n;
+  const uint r0 = tg.x * 8u * T;
+  const uint words = a.k / 8u, groups = a.k / 64u;
+  const device uint* We = W + (size_t)e * wrows * words;
+  const device bfloat* Se = S + (size_t)e * wrows * groups;
+  const device bfloat* Be = B + (size_t)e * wrows * groups;
+  if (count <= 2u) {
+    constexpr uint PER = (GU ? 4u : 8u) * T / SG;
+    const uint first = (GU ? r0 / 2u : r0) + sg * PER;
+    const device float* x0 = X + (size_t)(GU ? member[0] / a.topk : member[0]) * a.k;
+    const device float* x1 = count > 1u ? X + (size_t)(GU ? member[1] / a.topk : member[1]) * a.k : x0;
+    const uint4 shift = uint4(0u, 4u, 8u, 12u);
+    for (uint j = 0; j < PER; ++j) {
+      const uint col = first + j;
+      if (col >= a.n) break;
+      if (GU) {
+        float ag0 = 0.0f, ag1 = 0.0f, au0 = 0.0f, au1 = 0.0f;
+        const size_t ra0 = 2u * col, ra1 = 2u * col + 1u;
+        for (uint w = lane; w < words; w += 32u) {
+          const uint g = w / 8u;
+          const uint pg = We[ra0 * words + w], pu = We[ra1 * words + w];
+          const float sg0 = float(Se[ra0 * groups + g]), bg0 = float(Be[ra0 * groups + g]);
+          const float su0 = float(Se[ra1 * groups + g]), bu0 = float(Be[ra1 * groups + g]);
+          const float4 vg0 = fma(float4((uint4(pg) >> shift) & 15u), float4(sg0), float4(bg0));
+          const float4 vg1 = fma(float4((uint4(pg >> 16u) >> shift) & 15u), float4(sg0), float4(bg0));
+          const float4 vu0 = fma(float4((uint4(pu) >> shift) & 15u), float4(su0), float4(bu0));
+          const float4 vu1 = fma(float4((uint4(pu >> 16u) >> shift) & 15u), float4(su0), float4(bu0));
+          const float4 i00 = float4(*reinterpret_cast<const device packed_float4*>(x0 + w * 8u));
+          const float4 i01 = float4(*reinterpret_cast<const device packed_float4*>(x0 + w * 8u + 4u));
+          ag0 = fma(i00.w, vg0.w, fma(i00.z, vg0.z, fma(i00.y, vg0.y, fma(i00.x, vg0.x, ag0))));
+          ag0 = fma(i01.w, vg1.w, fma(i01.z, vg1.z, fma(i01.y, vg1.y, fma(i01.x, vg1.x, ag0))));
+          au0 = fma(i00.w, vu0.w, fma(i00.z, vu0.z, fma(i00.y, vu0.y, fma(i00.x, vu0.x, au0))));
+          au0 = fma(i01.w, vu1.w, fma(i01.z, vu1.z, fma(i01.y, vu1.y, fma(i01.x, vu1.x, au0))));
+          if (count > 1u) {
+            const float4 i10 = float4(*reinterpret_cast<const device packed_float4*>(x1 + w * 8u));
+            const float4 i11 = float4(*reinterpret_cast<const device packed_float4*>(x1 + w * 8u + 4u));
+            ag1 = fma(i10.w, vg0.w, fma(i10.z, vg0.z, fma(i10.y, vg0.y, fma(i10.x, vg0.x, ag1))));
+            ag1 = fma(i11.w, vg1.w, fma(i11.z, vg1.z, fma(i11.y, vg1.y, fma(i11.x, vg1.x, ag1))));
+            au1 = fma(i10.w, vu0.w, fma(i10.z, vu0.z, fma(i10.y, vu0.y, fma(i10.x, vu0.x, au1))));
+            au1 = fma(i11.w, vu1.w, fma(i11.z, vu1.z, fma(i11.y, vu1.y, fma(i11.x, vu1.x, au1))));
+          }
+        }
+        ag0 = simd_sum(ag0);
+        au0 = simd_sum(au0);
+        if (lane == 0u) Y[(size_t)member[0] * a.n + col] = i2e_aff4_situ(ag0, au0, a.gate_cap, a.up_cap);
+        if (count > 1u) {
+          ag1 = simd_sum(ag1);
+          au1 = simd_sum(au1);
+          if (lane == 0u) Y[(size_t)member[1] * a.n + col] = i2e_aff4_situ(ag1, au1, a.gate_cap, a.up_cap);
+        }
+      } else {
+        float a0 = 0.0f, a1 = 0.0f;
+        for (uint w = lane; w < words; w += 32u) {
+          const uint g = w / 8u;
+          const uint p = We[(size_t)col * words + w];
+          const float sc = float(Se[(size_t)col * groups + g]), bi = float(Be[(size_t)col * groups + g]);
+          const float4 v0 = fma(float4((uint4(p) >> shift) & 15u), float4(sc), float4(bi));
+          const float4 v1 = fma(float4((uint4(p >> 16u) >> shift) & 15u), float4(sc), float4(bi));
+          const float4 i00 = float4(*reinterpret_cast<const device packed_float4*>(x0 + w * 8u));
+          const float4 i01 = float4(*reinterpret_cast<const device packed_float4*>(x0 + w * 8u + 4u));
+          a0 = fma(i00.w, v0.w, fma(i00.z, v0.z, fma(i00.y, v0.y, fma(i00.x, v0.x, a0))));
+          a0 = fma(i01.w, v1.w, fma(i01.z, v1.z, fma(i01.y, v1.y, fma(i01.x, v1.x, a0))));
+          if (count > 1u) {
+            const float4 i10 = float4(*reinterpret_cast<const device packed_float4*>(x1 + w * 8u));
+            const float4 i11 = float4(*reinterpret_cast<const device packed_float4*>(x1 + w * 8u + 4u));
+            a1 = fma(i10.w, v0.w, fma(i10.z, v0.z, fma(i10.y, v0.y, fma(i10.x, v0.x, a1))));
+            a1 = fma(i11.w, v1.w, fma(i11.z, v1.z, fma(i11.y, v1.y, fma(i11.x, v1.x, a1))));
+          }
+        }
+        a0 = simd_sum(a0);
+        if (lane == 0u) Y[(size_t)member[0] * a.n + col] = a0;
+        if (count > 1u) {
+          a1 = simd_sum(a1);
+          if (lane == 0u) Y[(size_t)member[1] * a.n + col] = a1;
+        }
+      }
+    }
+    return;
+  }
+  uint fm, fn;
+  i2t_lane(lane, fm, fn);
+  const bool live0 = fn < count, live1 = fn + 1u < count;
+  const device float* x0 = X + (size_t)(live0 ? (GU ? member[fn] / a.topk : member[fn]) : 0u) * a.k;
+  const device float* x1 = X + (size_t)(live1 ? (GU ? member[fn + 1u] / a.topk : member[fn + 1u]) : 0u) * a.k;
+  float2 acc[CL][T] = {};
+  size_t row[T];
+#pragma unroll
+  for (uint t = 0; t < T; ++t) row[t] = min(r0 + t * 8u + fm, wrows - 1u);
+  const uint shift = 4u * fn;
+  for (uint base = sg * CL; base < words; base += 32u) {
+#pragma unroll
+    for (uint l = 0; l < CL; ++l) {
+      const uint w = base + l;
+      if (w >= words) break;
+      const uint g = w / 8u;
+      const uint kk = w * 8u + fm;
+      const float2 bx = float2(live0 ? x0[kk] : 0.0f, live1 ? x1[kk] : 0.0f);
+#pragma unroll
+      for (uint t = 0; t < T; ++t) {
+        const uint packed = We[row[t] * words + w];
+        const float sc = float(Se[row[t] * groups + g]), bi = float(Be[row[t] * groups + g]);
+        const float2 code = float2(float((packed >> shift) & 15u), float((packed >> (shift + 4u)) & 15u));
+        i2t_mma(acc[l][t], fma(code, float2(sc), float2(bi)), bx);
+      }
+    }
+  }
+  i2t_partials<SG, CL, T>(acc, part, sg, lane);
+  if (sg != 0u) return;
+#pragma unroll
+  for (uint t = 0; t < T; ++t) {
+    const uint r = r0 + t * 8u + fm;
+    const float2 sum = i2t_total<SG, T>(part, t, lane);
+    const size_t y0 = (size_t)member[fn] * a.n, y1 = (size_t)member[fn + 1u] * a.n;
+    if (GU) {
+      const float2 up = float2(simd_shuffle_xor(sum.x, 2u), simd_shuffle_xor(sum.y, 2u));
+      if ((fm & 1u) == 0u && r < wrows) {
+        if (live0) Y[y0 + r / 2u] = i2e_aff4_situ(sum.x, up.x, a.gate_cap, a.up_cap);
+        if (live1) Y[y1 + r / 2u] = i2e_aff4_situ(sum.y, up.y, a.gate_cap, a.up_cap);
+      }
+    } else if (r < wrows) {
+      if (live0) Y[y0 + r] = sum.x;
+      if (live1) Y[y1 + r] = sum.y;
+    }
+  }
+}
+
+#define I2E_AFF4(name, gu, sgs, t, q) \
+  template [[host_name(#name)]] [[kernel]] void i2e_aff4_routed<gu, sgs, t, q>(I2E_AFF4_ARGS);
+
+I2E_AFF4(i2e_aff4_up, true, 4, 2, 2)
+I2E_AFF4(i2e_aff4_up16, true, 4, 2, 4)
+I2E_AFF4(i2e_aff4_down, false, 8, 4, 2)
+I2E_AFF4(i2e_aff4_down16, false, 8, 4, 4)
 #endif

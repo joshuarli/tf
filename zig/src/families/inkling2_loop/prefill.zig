@@ -1165,7 +1165,7 @@ const Chunk = struct {
 
     fn batchAttention(c: *Chunk, lay: *const Layer, slot: u32, full: bool, extent: u32, batch: *BatchContext, stored: bool, fused_gate: bool) void {
         if (batch.group) |g| {
-            g.attend(if (stored) null else c.encFor(.attn_store), c.encFor(.attn_core), c.m, lay.attn.rel_bias, slot, full, extent, .{ .q = c.s.q, .k = c.s.kc, .v = c.s.vc, .r = c.s.r, .sink = c.s.sink, .relbias = c.s.relbias, .out = c.s.attn, .parts = batch.scratch.parts, .combine = if (fused_gate) batch.scratch.combine_sig_mul else batch.scratch.combine, .gate = if (fused_gate) c.s.gate else null });
+            g.attend(if (stored) null else c.encFor(.attn_store), c.encFor(.attn_core), c.m, lay.attn.rel_bias, slot, full, extent, .{ .q = c.s.q, .k = c.s.kc, .v = c.s.vc, .r = c.s.r, .sink = c.s.sink, .relbias = c.s.relbias, .out = c.s.attn, .parts = batch.scratch.parts, .combine = if (fused_gate) .{ .gated = .{ .pipe = batch.scratch.combine_sig_mul, .gate = c.s.gate } } else .{ .plain = batch.scratch.combine } });
             return;
         }
         const s = c.s;
@@ -1494,6 +1494,17 @@ const Chunk = struct {
                 c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = K, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
                 c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
                 return;
+            }
+            if (c.batch) |batch| {
+                const shared = &batch.scratch.shared;
+                if (shared.aff4GateUp(c.n, inter, c.h, slots)) |gu| if (shared.aff4Down(c.n, c.h, inter, slots)) |dn| {
+                    c.setP(gu.pipe, MoeB{ .k = c.h, .n = inter, .slots = slots, .topk = K, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), b(s.picks), A, b(s.act) });
+                    c.enc.dispatchGroups(gu.groups, gu.threads);
+                    c.setP(dn.pipe, MoeB{ .k = inter, .n = c.h, .slots = slots, .topk = K, .gate_cap = 0, .up_cap = 0 }, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), t(lay.w2_bias.?), b(s.picks), A, b(s.down) });
+                    c.enc.dispatchGroups(dn.groups, dn.threads);
+                    c.combine(K);
+                    return;
+                };
             }
             c.setP(p.up, MoeB{ .k = c.h, .n = inter, .slots = slots, .topk = K, .gate_cap = cc.text.gate_cap, .up_cap = cc.text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), b(s.picks), A, b(s.act) });
             c.enc.dispatchGroups(mtl.Size.of((inter + 7) / 8, slots, 1), mtl.Size.of(256, 1, 1));

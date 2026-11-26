@@ -35,7 +35,7 @@ pub const Drafter = struct {
         const unembed = try affine8(target.weights.unembed, target.config.text.vocab, target.config.text.hidden);
         const d = try a.create(Drafter);
         errdefer a.destroy(d);
-        d.* = .{ .a = a, .model = undefined, .glue = try q.glue_gpu.Kernels.init(target.device), .kernels = .{ .allocator = a, .device = target.device, .raw_tiles = false }, .dims = undefined, .bound = undefined, .config = c };
+        d.* = .{ .a = a, .model = undefined, .glue = try q.glue_gpu.Kernels.init(target.device), .kernels = .{ .allocator = a, .device = target.device, .raw_tiles = true }, .dims = undefined, .bound = undefined, .config = c };
         errdefer d.glue.deinit();
         errdefer d.kernels.deinit();
         d.dims = try target.device.buffer(4096, mtl.ResourceOptions.shared);

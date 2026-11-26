@@ -23,9 +23,13 @@ const kernels = [_]Kernel{
     .{ .name = "i2e_gate_up16", .sg = 4, .t = 2 },
     .{ .name = "i2e_down", .sg = 8, .t = 4 },
     .{ .name = "i2e_down16", .sg = 8, .t = 4 },
+    .{ .name = "i2e_aff4_up", .sg = 4, .t = 2 },
+    .{ .name = "i2e_aff4_up16", .sg = 4, .t = 2 },
+    .{ .name = "i2e_aff4_down", .sg = 8, .t = 4 },
+    .{ .name = "i2e_aff4_down16", .sg = 8, .t = 4 },
     .{ .name = "i2e_down1", .sg = 8, .t = 4 },
 };
-const Kind = enum(u8) { dense, projections, gate_up, down };
+const Kind = enum(u8) { dense, projections, gate_up, down, aff4_up, aff4_down };
 
 /// The batch step's few-row kernels: every row's output has its one-row kernel's bits at every width.
 pub const Pipes = struct {
@@ -92,6 +96,18 @@ pub const Pipes = struct {
     pub fn downs(p: *const Pipes, rows: usize, n: u32, k: u32, slots: u32) ?Dispatch {
         if (!p.tiles or k % 16 != 0 or rows == 0 or rows > max_rows or slots > 8 * (if (rows > tile_rows) max_rows else tile_rows)) return null;
         return p.pick(.down, rows, &.{n}, slots);
+    }
+
+    /// Affine 4-bit routed gate and up for 2 to 16 rows (`k % 64 == 0`); one row keeps `i2a_expert_up`.
+    pub fn aff4GateUp(p: *const Pipes, rows: usize, inter: u32, k: u32, slots: u32) ?Dispatch {
+        if (!p.tiles or k % 64 != 0 or inter > std.math.maxInt(u32) / 2 or rows < 2 or rows > max_rows or slots > 8 * (if (rows > tile_rows) max_rows else tile_rows)) return null;
+        return p.pick(.aff4_up, rows, &.{2 * inter}, slots);
+    }
+
+    /// Affine 4-bit routed down for 2 to 16 rows (`k % 64 == 0`); one row keeps `i2a_expert_down`.
+    pub fn aff4Down(p: *const Pipes, rows: usize, n: u32, k: u32, slots: u32) ?Dispatch {
+        if (!p.tiles or k % 64 != 0 or rows < 2 or rows > max_rows or slots > 8 * (if (rows > tile_rows) max_rows else tile_rows)) return null;
+        return p.pick(.aff4_down, rows, &.{n}, slots);
     }
 };
 

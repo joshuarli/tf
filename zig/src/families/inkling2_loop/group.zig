@@ -30,8 +30,8 @@ const CommitArgs = extern struct { kvw: u32, hidden: u32, rows: u32, stride: u32
 const RoundRow = extern struct { keys: u64, values: u64, conv: [4]u64, pos: u32, capacity: u32, owner: u32, depth: u32 };
 const Stream = extern struct { first: u32, size: u32 };
 
-const names = [_][:0]const u8{ "i2v_conv", "i2v_store_rel", "i2v_split", "i2v_split_shared", "i2v_commit_kv", "i2v_commit_conv", "i2v_argmax", "i2v_argmax_p1", "i2v_argmax_p2", "i2v_accept", "i2v_round_kv", "i2v_round_conv", "i2v_qkv" };
-const Kernel = enum { conv, store_rel, split, split_shared, commit_kv, commit_conv, argmax, argmax_p1, argmax_p2, accept, round_kv, round_conv, qkv };
+const names = [_][:0]const u8{ "i2v_conv", "i2v_store_rel", "i2v_split", "i2v_commit_kv", "i2v_commit_conv", "i2v_argmax", "i2v_argmax_p1", "i2v_argmax_p2", "i2v_accept", "i2v_round_kv", "i2v_round_conv", "i2v_qkv" };
+const Kernel = enum { conv, store_rel, split, commit_kv, commit_conv, argmax, argmax_p1, argmax_p2, accept, round_kv, round_conv, qkv };
 const QkvRow = extern struct { k_ring: u64, v_ring: u64, pos: u32, start: u32, back: [4]u8, pad: u32 = 0 };
 pub const QkvArgs = extern struct { kv: u32, heads: u32, dim: u32, rel: u32, extent: u32, layout: u32, dyn: u32, tau: u32, norm: f32, q_threshold: f32, rel_threshold: f32, eps: f32, floor: f32, alpha: f32 };
 pub const QkvWeights = struct { k_conv: Tensor, v_conv: Tensor, q_scale: Tensor, r_scale: Tensor, rel_bias: Tensor };
@@ -168,6 +168,9 @@ pub const Verifier = struct {
     }
 
     fn encodeArgmax(v: *const Verifier, enc: mtl.ComputeEncoder, vocab: u32, logits: mtl.Buffer, rows: usize) void {
+        std.debug.assert(rows > 0);
+        std.debug.assert(rows <= max_rows);
+        std.debug.assert(vocab > 0);
         enc.setPipeline(v.pipe(.argmax_p1));
         enc.setBuffer(logits, 0, 0);
         enc.setValue(vocab, 1);
@@ -184,6 +187,10 @@ pub const Verifier = struct {
     }
 
     pub fn encodeFinish(v: *const Verifier, enc: mtl.ComputeEncoder, m: *const Model, ids: mtl.Buffer, logits: mtl.Buffer, g: *const Group, finish: Finish) void {
+        std.debug.assert(g.rows > 0);
+        std.debug.assert(g.rows <= max_rows);
+        std.debug.assert(g.caches.len > 0);
+        std.debug.assert(g.caches.len <= max_rows);
         v.encodeArgmax(enc, m.config.text.unpadded_vocab, logits, g.rows);
         if (finish == .picks) return;
         var streams: [max_rows]Stream = undefined;
@@ -457,7 +464,13 @@ pub const Group = struct {
         enc.dispatchGroups(mtl.Size.of(args.kv + args.heads + (args.heads * (args.extent + 1) + 255) / 256, g.rows, 1), mtl.Size.of(256, 1, 1));
     }
 
-    pub const AttnBuffers = struct { q: mtl.Buffer, k: mtl.Buffer, v: mtl.Buffer, r: mtl.Buffer, sink: mtl.Buffer, relbias: mtl.Buffer, out: mtl.Buffer, parts: mtl.Buffer, combine: mtl.Pipeline, gate: ?mtl.Buffer = null };
+    /// Combine stage after split attention: `plain` expects `i2_batch_combine`, `gated` expects `i2_batch_combine_sig_mul`.
+    pub const AttnCombine = union(enum) {
+        plain: mtl.Pipeline,
+        gated: struct { pipe: mtl.Pipeline, gate: mtl.Buffer },
+    };
+
+    pub const AttnBuffers = struct { q: mtl.Buffer, k: mtl.Buffer, v: mtl.Buffer, r: mtl.Buffer, sink: mtl.Buffer, relbias: mtl.Buffer, out: mtl.Buffer, parts: mtl.Buffer, combine: AttnCombine };
 
     pub fn attend(g: *const Group, stores: ?mtl.ComputeEncoder, enc: mtl.ComputeEncoder, m: *const Model, rel_bias: Tensor, slot: u32, full: bool, extent: u32, bufs: AttnBuffers) void {
         const v = g.verifier;
@@ -472,7 +485,6 @@ pub const Group = struct {
         var plain: [max_rows]BatchRow = undefined;
         var positions: [max_rows]u32 = undefined;
         var max_splits: u32 = 0;
-        var same_partition = g.caches.len == 1 and g.rows > 1 and dim == 128 and heads == 3 * kv;
         for (0..g.rows) |r| {
             const cache = g.caches[g.owner[r]];
             const pos = g.pos[r];
@@ -484,7 +496,6 @@ pub const Group = struct {
             plain[r] = .{ .keys = rows[r].keys, .values = rows[r].values, .args = parts };
             positions[r] = pos;
             max_splits = @max(max_splits, part.splits);
-            if (r > 0 and (part.splits != rows[0].args.splits or part.chunk != rows[0].args.chunk)) same_partition = false;
             enc.useResource(cache.keys, mtl.ResourceUsage.read);
             enc.useResource(cache.values, mtl.ResourceUsage.read);
         }
@@ -503,35 +514,30 @@ pub const Group = struct {
             store.setBuffer(v.kv, vh, 8);
             store.dispatchGroups(mtl.Size.of(kv + (heads * (extent + 1) + 255) / 256, g.rows, 1), mtl.Size.of(256, 1, 1));
         }
-        if (same_partition) {
-            enc.setPipeline(v.pipe(.split_shared));
-            enc.setBuffer(bufs.q, 0, 0);
-            enc.setBuffer(bufs.relbias, 0, 1);
-            enc.setBuffer(bufs.sink, 0, 2);
-            enc.setBytes(std.mem.sliceAsBytes(rows[0..g.rows]), 3);
-            enc.setBuffer(bufs.parts, 0, 4);
-            enc.setBuffer(v.kv, kh, 5);
-            enc.setBuffer(v.kv, vh, 6);
-            enc.setValue(@as(u32, @intCast(g.rows)), 7);
-            enc.dispatchGroups(mtl.Size.of(kv * max_splits, (g.rows + 3) / 4, 1), mtl.Size.of(96, 1, 1));
-        } else {
-            enc.setPipeline(v.pipe(.split));
-            enc.setBuffer(bufs.q, 0, 0);
-            enc.setBuffer(bufs.relbias, 0, 1);
-            enc.setBuffer(bufs.sink, 0, 2);
-            enc.setBytes(std.mem.sliceAsBytes(rows[0..g.rows]), 3);
-            enc.setBuffer(bufs.parts, 0, 4);
-            enc.setBuffer(v.kv, kh, 5);
-            enc.setBuffer(v.kv, vh, 6);
-            enc.dispatchGroups(mtl.Size.of(kv * max_splits, g.rows, 1), mtl.Size.of((heads / kv) * 32, 1, 1));
+        enc.setPipeline(v.pipe(.split));
+        enc.setBuffer(bufs.q, 0, 0);
+        enc.setBuffer(bufs.relbias, 0, 1);
+        enc.setBuffer(bufs.sink, 0, 2);
+        enc.setBytes(std.mem.sliceAsBytes(rows[0..g.rows]), 3);
+        enc.setBuffer(bufs.parts, 0, 4);
+        enc.setBuffer(v.kv, kh, 5);
+        enc.setBuffer(v.kv, vh, 6);
+        enc.dispatchGroups(mtl.Size.of(kv * max_splits, g.rows, 1), mtl.Size.of((heads / kv) * 32, 1, 1));
+        switch (bufs.combine) {
+            .plain => |pipe| {
+                enc.setPipeline(pipe);
+                enc.setBuffer(bufs.parts, 0, 0);
+                enc.setBytes(std.mem.sliceAsBytes(plain[0..g.rows]), 1);
+                enc.setBuffer(bufs.out, 0, 2);
+            },
+            .gated => |gated| {
+                enc.setPipeline(gated.pipe);
+                enc.setBuffer(bufs.parts, 0, 0);
+                enc.setBytes(std.mem.sliceAsBytes(plain[0..g.rows]), 1);
+                enc.setBuffer(gated.gate, 0, 2);
+                enc.setBuffer(bufs.out, 0, 3);
+            },
         }
-        enc.setPipeline(bufs.combine);
-        enc.setBuffer(bufs.parts, 0, 0);
-        enc.setBytes(std.mem.sliceAsBytes(plain[0..g.rows]), 1);
-        if (bufs.gate) |gate| {
-            enc.setBuffer(gate, 0, 2);
-            enc.setBuffer(bufs.out, 0, 3);
-        } else enc.setBuffer(bufs.out, 0, 2);
         enc.dispatchGroups(mtl.Size.of(heads, g.rows, 1), mtl.Size.of(32, 1, 1));
     }
 };
@@ -586,5 +592,90 @@ test "a tree's accepted path follows the child whose token is its parent's pick,
         var picks = [_]u32{ 5, 6, 7, 8 };
         if (n < 3) picks[n] = 0;
         try std.testing.expectEqual(acceptedDrafts(drafts[1..], &picks), walk(&chain, &drafts, &picks));
+    }
+}
+
+fn scalarArgmax(values: []const f32) u32 {
+    var best: usize = 0;
+    for (values[1..], 1..) |v, i| if (v > values[best]) {
+        best = i;
+    };
+    return @intCast(best);
+}
+
+test "two-stage gpu argmax matches host scan on boundary vocabs, ties, infinities, and NaNs" {
+    const device = mtl.Device.init() catch return error.SkipZigTest;
+    defer device.deinit();
+    const pool = mtl.objc.Pool.push();
+    defer pool.pop();
+    const queue = try device.queue();
+    defer queue.deinit();
+    const lib = try mtl.Library.fromSource(device, source, mtl.CompileOptions.mlx());
+    defer lib.deinit();
+    const p1 = try mtl.Pipeline.init(device, lib, "i2v_argmax_p1", false);
+    defer p1.deinit();
+    const p2 = try mtl.Pipeline.init(device, lib, "i2v_argmax_p2", false);
+    defer p2.deinit();
+    const pv = try device.buffer(max_rows * 64 * 4, mtl.ResourceOptions.private);
+    defer pv.deinit();
+    const pi = try device.buffer(max_rows * 64 * 4, mtl.ResourceOptions.private);
+    defer pi.deinit();
+    const out = try device.buffer(max_rows * 4, mtl.ResourceOptions.shared);
+    defer out.deinit();
+    var prng = std.Random.DefaultPrng.init(0x6172_676d);
+    const rng = prng.random();
+    const nan = std.math.nan(f32);
+    const neg_inf = -std.math.inf(f32);
+    for ([_]u32{ 1, 31, 64, 16384, 16385, 32771 }) |vocab| {
+        const logits = try device.buffer(max_rows * @as(usize, vocab) * 4, mtl.ResourceOptions.shared);
+        defer logits.deinit();
+        for ([_]usize{ 1, 7, max_rows }) |rows| {
+            const slice = logits.slice(f32, rows * vocab);
+            for (slice) |*v| v.* = rng.float(f32) * 20 - 10;
+            if (vocab > 1) {
+                slice[0] = 50.0;
+                slice[vocab - 1] = 50.0;
+            }
+            if (rows > 1) {
+                const r1 = slice[vocab..][0..vocab];
+                @memset(r1, neg_inf);
+                if (vocab > 2) r1[vocab / 2] = nan;
+            }
+            if (rows > 2) {
+                const r2 = slice[2 * vocab ..][0..vocab];
+                r2[0] = nan;
+                if (vocab > 1) r2[vocab - 1] = 999.0;
+            }
+            if (rows > 3 and vocab > 5) {
+                const r3 = slice[3 * vocab ..][0..vocab];
+                r3[2] = 100.0;
+                r3[vocab - 2] = 100.0;
+                r3[vocab / 2] = nan;
+            }
+            const cb = queue.commandBuffer();
+            const enc = cb.compute(.serial);
+            enc.setPipeline(p1);
+            enc.setBuffer(logits, 0, 0);
+            enc.setValue(vocab, 1);
+            enc.setBuffer(pv, 0, 2);
+            enc.setBuffer(pi, 0, 3);
+            enc.dispatchGroups(mtl.Size.of(64, rows, 1), mtl.Size.of(256, 1, 1));
+            enc.setPipeline(p2);
+            enc.setBuffer(logits, 0, 0);
+            enc.setBuffer(pv, 0, 1);
+            enc.setBuffer(pi, 0, 2);
+            enc.setValue(vocab, 3);
+            enc.setBuffer(out, 0, 4);
+            enc.dispatchGroups(mtl.Size.of(rows, 1, 1), mtl.Size.of(64, 1, 1));
+            enc.end();
+            cb.commit();
+            cb.wait();
+            if (cb.failure() != null) return error.GpuFailed;
+            const got = out.slice(u32, rows);
+            for (0..rows) |r| {
+                const expected = scalarArgmax(slice[r * vocab ..][0..vocab]);
+                try std.testing.expectEqual(expected, got[r]);
+            }
+        }
     }
 }

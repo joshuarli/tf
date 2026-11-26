@@ -5,7 +5,7 @@ This is the single plan for this repository: all current and future work, and th
 ## Status
 
 **Active 2026-11-26.**
-- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. Q4 (5h, qualification repair) is done on `main` (`campaign/kernels/inkling-q4-qualify.md`). A1 (5i, AOT spike) is complete on `lane/inkling-metal-aot` (`campaign/aot/verdict.md`: G0/G1/G2/G4 pass, G3 honest near-miss 1.120× < 1.15× under unchanged arithmetic, 6 extractions ready for `main`). Next: P6 Session 2 + `profile.sh` (5f, `lane/p6-tail`), P7 (5g), Q3 (6), and achieving Decision 17's 2,000 tok/s prefill (1K–31.7K) and 200 tok/s single-stream decode on `main`.
+- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. Q4 (5h), A1 (5i, `lane/inkling-metal-aot`), and P6 (5f, fast-forwarded onto `main` `a6bc4fa26`, integrated `inkling-host` + `inkling-gpu` green) are done. Next: P7 (5g, drafter prompt-side cost), Decision 17 long-context prefill (`>= 2,000 tok/s` across `1K–31.7K`), Q3 (6), and Decision 17 single-stream decode (`>= 200 tok/s`).
 - First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
 - Acceptance flow (2026-11-24): lanes prove changes with filtered GPU tests; the parent runs the full suite once on an integration commit of main plus the lane and fast-forwards main on green, instead of a lane suite and a second main suite.
 - **Last accepted code: SV2, fast-forwarded from `lane/sv2-serve`** (speculation served by default; integrated suite on `33b38ed43`: `inkling-host` ok, `inkling-gpu` 185/185 plus the restored served test 12/12, oracle pass). Before it, V4 `ec925cb41` (fused fixed-cost verify kernels; integrated main green: `inkling-host` ok, `inkling-gpu` 186/186, oracle pass at 94.73% top-1 and mean KL 0.0199). Before it, PH2 merge `291240211` (half prefill by default; `inkling-gpu` 181/181), P5c merge `7f7cb75a3` (181/181), SC1 merge `1668d5caa` (180/180), V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
@@ -140,12 +140,15 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    `INKLING_ROUND_SPLIT=1`, a bit-identical selector, and a plain-greedy scratch determinism test (rerun it with
    chaining on before reviving the chain). Decision 17's levers are verify GPU time, tokens per round and drafter
    GPU time; hiding the verify's ~0.6 ms encode joins V4.
-5f. P6, parked at `lane/p6-tail` code `4e4a86531` (`inkling-p6-tail.md`): the 1K dev tail merged into a last chunk of
-   up to 1,152 rows, and the store keeps the whole prompt's state with its last-row logits so a hit needs no replay.
-   The session was interrupted before a build; on wind-down the host build passed 37/37, but no GPU test, Decision 20
-   or timing result exists and no acceptance is claimed. V4 has since changed `prefill.zig` on main, which this lane
-   does not own: retry by rebasing onto current main, re-running the correctness checks, then `tests.sh`, `d20.sh`,
-   `quality.sh`, and only then the gated `tail.sh`, `session.sh` and `profile.sh`.
+5f. P6, done and fast-forwarded `a6bc4fa26` (`inkling-p6-tail.md`): the 1K dev tail merged into a last chunk of up to
+   1,152 rows, and the store keeps the whole prompt's state with its last-row logits so a hit needs no replay. Six
+   balanced pairs across two sessions (plain prefill): `1.095×` geomean (95% CI `1.048–1.143×`), 1K dev `2,002 → 2,654`
+   (`1.243×`), 1K held-out `2,415`, 4K `2,249`, 8K `2,092` (all ≥ 2,000 on 6/6 trials), 16K `1,879` (`1.000×`), 31.7K
+   `1,749` (`1.011×`), memory `+84 MB`. Decision 20 passes (oracle `94.73%` top-1 and `0.0199132` mean KL identical to
+   main; `lane` vs `main reuse-off` 100% bit-equal; quality dev 1 case lost `retrieval-t02`, 0 new runaways); integrated
+   `inkling-host` + `inkling-gpu` green. Metal 4 `profile.sh` (`chunkcurve.md`: `492.7 ms + 5.51 ms / 1,024 base`;
+   `buckets.md`) identifies `i2p_attn_units` (`32.1 → 266.8 ms` at base `30,720`) and `15.4 ms` of empty
+   `i2p_gu_grouped`/`i2p_down_grouped` dispatches as the 16K/31.7K bottlenecks.
 5c. SV2, done and merged (`inkling-sv2-served.md`). Speculation is now the served default. On six untouched
    qualify prompts (`campaign/prompts/qualify/`) over three rotated sessions, speculative decode is 1.43–2.43× plain
    (every lower 95% bound above 1; code/prose/structured-1024 148/172/127 tok/s, 4K 101–113). Every reply is

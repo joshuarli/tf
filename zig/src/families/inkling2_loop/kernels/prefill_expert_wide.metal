@@ -155,7 +155,7 @@ inline void i2p_mma_nn(thread i2p_f8& lo, thread i2p_f8& hi, thread const i2p_h8
   }
 }
 
-// The tile'th 64-row tile over the experts holding at least `least` sorted rows: its expert, first row and rows.
+// The tile'th 128-row tile over the experts holding at least `least` sorted rows: its expert, first row and rows.
 inline bool i2p_expert_tile(const device int* OFF, int experts, int least, int tile, ushort lane,
     thread int& expert, thread int& row, thread int& rows) {
   int before = 0;
@@ -176,12 +176,17 @@ inline bool i2p_expert_tile(const device int* OFF, int experts, int least, int t
   return false;
 }
 
-// The e2m1 codes in bits 0 to 15 of w as halves.
+inline half i2p_fp8_half(uchar bits) {
+  const ushort v = bits & 127u;
+  const ushort sign = ushort(bits & 128u) << 8u;
+  const ushort u = (v << 7u) | (((v + 1u) >> 7u) << 14u) | sign;
+  return as_type<half>(u) * 256.0h;
+}
+
 inline half4 i2p_fp4x4(uint w) {
-  const uint4 c = (uint4(w) >> uint4(0u, 4u, 8u, 12u)) & 15u;
-  const uint4 mag = c & 7u;
-  const uint4 bits = select(0x3800u + (mag << 9), mag * 0x3800u, mag < 2u) | ((c & 8u) << 12);
-  return as_type<half4>(ushort4(bits));
+  const ushort4 c = ushort4(w & 15u, (w >> 4u) & 15u, (w >> 8u) & 15u, (w >> 12u) & 15u);
+  const half4 mag = as_type<half4>(ushort4((c & 7u) << 9u)) * 16384.0h;
+  return as_type<half4>(as_type<ushort4>(mag) | ushort4((c & 8u) << 12u));
 }
 
 // f32 rows as halves, clamped when a.y is set (as the NVFP4 matrix rounds them); values past half range counted.
@@ -194,7 +199,6 @@ inline half4 i2p_fp4x4(uint w) {
   Y[i] = a.y ? half4(clamp(v, -65504.0f, 65504.0f)) : half4(v);
 }
 
-// A 64 x 64 routed expert tile on the tensor units: half rows times half weights (as the half matrices round them).
 template <bool GU, bool AFFINE>
 inline void i2p_expert_units(const device half* X, const device uchar* W, const device uchar* S,
     const device uchar* G, const device float* den, const device int* OFF, const device int* ROW_OF,
@@ -206,7 +210,7 @@ inline void i2p_expert_units(const device half* X, const device uchar* W, const 
   if (!i2p_expert_tile(OFF, int(a.experts), least, int(tg.y), lane, expert, row0, rows)) return;
   const int cols = GU ? 2 * int(a.n) : int(a.n), K = int(a.k), n0 = int(tg.x) * 64;
   const int t = int(sg) * 32 + int(lane);
-  if (!AFFINE) e4m3_lut[t] = half(i2p_e4m3(uchar(t)));
+  if (!AFFINE) e4m3_lut[t] = i2p_fp8_half(uchar(t));
   const int tm = 32 * (int(sg) / 2), tn = 32 * (int(sg) % 2);
   const bool sg_live = tm < rows;
   const short2 home = i2p_home(lane);
@@ -227,7 +231,8 @@ inline void i2p_expert_units(const device half* X, const device uchar* W, const 
   const device uchar* wp = W + wrow * size_t(K / 2) + wk / 2;
   const device uchar* sp = S + (AFFINE ? 2 * wrow * size_t(K / 64) : wrow * size_t(K / 16) + wk / 16);
   const device bfloat* bp = (const device bfloat*)G + wrow * size_t(K / 64);
-  threadgroup half* mine = w + wr * PAD + wk;
+  constexpr int STRIDE_W = 64 * PAD;
+  threadgroup half* mine0 = w + wr * PAD + wk;
   i2p_f8 acc[2][2];
   _Pragma("clang loop unroll(full)")
   for (short m = 0; m < 2; m++) {
@@ -235,8 +240,9 @@ inline void i2p_expert_units(const device half* X, const device uchar* W, const 
     acc[m][1] = i2p_f8(0.0f);
   }
   uint over = 0u;
-  for (int k0 = 0; k0 < K; k0 += BK) {
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (!AFFINE) threadgroup_barrier(mem_flags::mem_threadgroup);
+  auto load_tile = [&](int k0, int buf) {
+    threadgroup half* mine = mine0 + buf * STRIDE_W;
     const uint2 c = wvalid ? *(const device uint2*)(wp + k0 / 2) : uint2(0u);
     if (AFFINE) {
       const float scale = wvalid ? float(((const device bfloat*)sp)[k0 / 64]) : 0.0f;
@@ -254,19 +260,28 @@ inline void i2p_expert_units(const device half* X, const device uchar* W, const 
       *(threadgroup half4*)(mine + 8) = i2p_fp4x4(c.y) * s0;
       *(threadgroup half4*)(mine + 12) = i2p_fp4x4(c.y >> 16) * s0;
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (!sg_live) continue;
-    _Pragma("clang loop unroll(full)")
-    for (short q = 0; q < 4; q++) {
-      const threadgroup half* b = w + (tn + home.y) * PAD + 16 * q + home.x;
-      const i2p_h8 b0 = i2p_h8(*(const threadgroup half4*)b, *(const threadgroup half4*)(b + 8 * PAD));
-      const i2p_h8 b1 = i2p_h8(*(const threadgroup half4*)(b + 16 * PAD), *(const threadgroup half4*)(b + 24 * PAD));
+  };
+  int buf = 0;
+  if (K > 0) load_tile(0, 0);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (int k0 = 0; k0 < K; k0 += BK) {
+    if (k0 + BK < K) load_tile(k0 + BK, buf ^ 1);
+    if (sg_live) {
+      const threadgroup half* wb = w + buf * STRIDE_W + (tn + home.y) * PAD + home.x;
       _Pragma("clang loop unroll(full)")
-      for (short m = 0; m < 2; m++) {
-        const i2p_h8 x = i2p_h8(*(const device half4*)(xr[m][0] + k0 + 16 * q), *(const device half4*)(xr[m][1] + k0 + 16 * q));
-        i2p_mma(acc[m][0], acc[m][1], x, b0, b1);
+      for (short q = 0; q < 4; q++) {
+        const threadgroup half* b = wb + 16 * q;
+        const i2p_h8 b0 = i2p_h8(*(const threadgroup half4*)b, *(const threadgroup half4*)(b + 8 * PAD));
+        const i2p_h8 b1 = i2p_h8(*(const threadgroup half4*)(b + 16 * PAD), *(const threadgroup half4*)(b + 24 * PAD));
+        _Pragma("clang loop unroll(full)")
+        for (short m = 0; m < 2; m++) {
+          const i2p_h8 x = i2p_h8(*(const device half4*)(xr[m][0] + k0 + 16 * q), *(const device half4*)(xr[m][1] + k0 + 16 * q));
+          i2p_mma(acc[m][0], acc[m][1], x, b0, b1);
+        }
       }
     }
+    if (k0 + BK < K) threadgroup_barrier(mem_flags::mem_threadgroup);
+    buf ^= 1;
   }
   if (!sg_live) {
     if (over) atomic_fetch_add_explicit(overflow, over, memory_order_relaxed);
@@ -317,15 +332,18 @@ inline void i2p_expert_units(const device half* X, const device uchar* W, const 
   const int cols = int(a.extent) + 1;
   int row[2], pos[2];
   bool active[2];
-  float tau[2], sk[2], far_bias[2];
+  float scale_log2[2], sk_log2[2], far_shift[2];
   _Pragma("clang loop unroll(full)")
   for (short i = 0; i < 2; i++) {
     row[i] = r0 + home.y + 8 * i;
     active[i] = row[i] < rows;
     pos[i] = int(a.base) + row[i];
-    tau[i] = a.window ? 1.0f : 1.0f + a.alpha * precise::log(max(1.0f, (float(pos[i]) + 1.0f) / a.floor));
-    sk[i] = active[i] ? sink[size_t(row[i]) * a.heads + h] : 0.0f;
-    far_bias[i] = active[i] ? B[(size_t(row[i]) * a.heads + h) * cols + a.extent] : 0.0f;
+    const float tau = a.window ? 1.0f : 1.0f + a.alpha * precise::log(max(1.0f, (float(pos[i]) + 1.0f) / a.floor));
+    const float sk = active[i] ? sink[size_t(row[i]) * a.heads + h] : 0.0f;
+    const float far_bias = active[i] ? B[(size_t(row[i]) * a.heads + h) * cols + a.extent] : 0.0f;
+    scale_log2[i] = a.scale * tau * M_LOG2E_F;
+    sk_log2[i] = sk * M_LOG2E_F;
+    far_shift[i] = (far_bias - sk) * M_LOG2E_F;
   }
   uint over = 0u;
   i2p_h8 q[D / 16];
@@ -383,7 +401,7 @@ inline void i2p_expert_units(const device half* X, const device uchar* W, const 
         _Pragma("clang loop unroll(full)")
         for (short e = 0; e < 8; e++) {
           const short i = e >> 2;
-          const float score = active[i] ? (s[j][e] * a.scale * tau[i] + far_bias[i] - sk[i]) * M_LOG2E_F : -INFINITY;
+          const float score = active[i] ? fma(s[j][e], scale_log2[i], far_shift[i]) : -INFINITY;
           s[j][e] = score;
           bound[i] = max(bound[i], score);
         }
@@ -398,7 +416,7 @@ inline void i2p_expert_units(const device half* X, const device uchar* W, const 
           float score = -INFINITY;
           if (active[i] && key <= pos[i] && (!a.window || pos[i] - key < int(a.window))) {
             const int distance = min(pos[i] - key, int(a.extent));
-            score = (s[j][e] * a.scale * tau[i] + B[(size_t(row[i]) * a.heads + h) * cols + distance] - sk[i]) * M_LOG2E_F;
+            score = fma(s[j][e], scale_log2[i], fma(B[(size_t(row[i]) * a.heads + h) * cols + distance], M_LOG2E_F, -sk_log2[i]));
           }
           s[j][e] = score;
           bound[i] = max(bound[i], score);
@@ -411,7 +429,7 @@ inline void i2p_expert_units(const device half* X, const device uchar* W, const 
       bound[i] = max(bound[i], simd_shuffle_xor(bound[i], ushort(1)));
       bound[i] = max(bound[i], simd_shuffle_xor(bound[i], ushort(8)));
       bound[i] = max(bound[i], maximum[i]);
-      rescale[i] = precise::exp2(maximum[i] - bound[i]);
+      rescale[i] = fast::exp2(maximum[i] - bound[i]);
       maximum[i] = bound[i];
     }
     float total[2] = {0.0f, 0.0f};
@@ -421,7 +439,7 @@ inline void i2p_expert_units(const device half* X, const device uchar* W, const 
       _Pragma("clang loop unroll(full)")
       for (short e = 0; e < 8; e++) {
         const short i = e >> 2;
-        const float weight = precise::exp2(s[j][e] - bound[i]);
+        const float weight = fast::exp2(s[j][e] - bound[i]);
         total[i] += weight;
         p[j][e] = half(weight);
       }
@@ -432,22 +450,24 @@ inline void i2p_expert_units(const device half* X, const device uchar* W, const 
       total[i] += simd_shuffle_xor(total[i], ushort(8));
       denominator[i] = rescale[i] * denominator[i] + total[i];
     }
-    _Pragma("clang loop unroll(full)")
-    for (short d = 0; d < D / 16; d++) {
+      if (rescale[0] != 1.0f || rescale[1] != 1.0f) {
+        _Pragma("clang loop unroll(full)")
+        for (short d = 0; d < D / 16; d++) {
+          _Pragma("clang loop unroll(full)")
+          for (short e = 0; e < 8; e++) acc[d][e] *= rescale[e >> 2];
+        }
+      }
       _Pragma("clang loop unroll(full)")
-      for (short e = 0; e < 8; e++) acc[d][e] *= rescale[e >> 2];
-    }
-    _Pragma("clang loop unroll(full)")
-    for (short j = 0; j < 2; j++) {
-      _Pragma("clang loop unroll(full)")
-      for (short d = 0; d < D / 32; d++) {
-        const threadgroup half* vp = values + (16 * j + home.y) * PAD + 32 * d + home.x;
-        const i2p_h8 v0 = i2p_h8(*(const threadgroup half4*)vp, *(const threadgroup half4*)(vp + 8 * PAD));
-        const i2p_h8 v1 = i2p_h8(*(const threadgroup half4*)(vp + 16), *(const threadgroup half4*)(vp + 8 * PAD + 16));
-        i2p_mma_nn(acc[2 * d], acc[2 * d + 1], p[j], v0, v1);
+      for (short j = 0; j < 2; j++) {
+        _Pragma("clang loop unroll(full)")
+        for (short d = 0; d < D / 32; d++) {
+          const threadgroup half* vp = values + (16 * j + home.y) * PAD + 32 * d + home.x;
+          const i2p_h8 v0 = i2p_h8(*(const threadgroup half4*)vp, *(const threadgroup half4*)(vp + 8 * PAD));
+          const i2p_h8 v1 = i2p_h8(*(const threadgroup half4*)(vp + 16), *(const threadgroup half4*)(vp + 8 * PAD + 16));
+          i2p_mma_nn(acc[2 * d], acc[2 * d + 1], p[j], v0, v1);
+        }
       }
     }
-  }
   if (over) atomic_fetch_add_explicit(overflow, over, memory_order_relaxed);
   _Pragma("clang loop unroll(full)")
   for (short i = 0; i < 2; i++) {
@@ -467,7 +487,7 @@ inline void i2p_expert_units(const device half* X, const device uchar* W, const 
     device void* Y [[buffer(8)]], device atomic_uint* overflow [[buffer(9)]], \
     uint3 tg [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]], \
     ushort lane [[thread_index_in_simdgroup]]) { \
-  threadgroup half w[64 * 72]; \
+  threadgroup half w[2 * 64 * 72]; \
   threadgroup half e4m3_lut[AFFINE ? 1 : 256]; \
   i2p_expert_units<GU, AFFINE>(X, W, S, G, den, OFF, ROW_OF, a, (device half*)Y, (device float*)Y, overflow, w, e4m3_lut, tg, sg, lane); \
 }

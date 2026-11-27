@@ -624,12 +624,10 @@ struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; 
   const uint row = tg.y, cols = a.extent + 1u, dist = tg.x * 256u + ti;
   for (uint i = ti; i < a.heads * a.rel; i += 256u) r[i] = R[(size_t)row * a.heads * a.rel + i];
   threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (tg.x == 0u && ti < a.heads) O[(size_t)row * cols * a.heads + ti * cols + a.extent] = 0.0f;
   if (dist >= cols) return;
   device float* out = O + (size_t)row * cols * a.heads + dist;
-  if (dist == a.extent) {
-    for (uint h = 0; h < a.heads; ++h) out[h * cols] = 0.0f;
-    return;
-  }
+  if (dist == a.extent) return;
   const uint pos = a.base + row;
   const float tau = a.tau ? 1.0f + a.alpha * precise::log(max(1.0f, (float(pos) + 1.0f) / a.floor)) : 1.0f;
   if (a.rel == 16u) {
@@ -1416,8 +1414,21 @@ struct i2p_moeg_args { uint k, n, slots, topk, experts; float gate_cap, up_cap; 
 
 [[kernel]] void i2p_combine(const device float* DOWN [[buffer(0)]], const device float* wts [[buffer(1)]],
     constant i2p_combine_args& a [[buffer(2)]], device float* OUT [[buffer(3)]], uint2 p [[thread_position_in_grid]]) {
-  if (p.x >= a.width || p.y >= a.rows) return;
-  float sum = 0.0f;
-  for (uint j = 0; j < a.topk; ++j) sum = fma(wts[(size_t)p.y * a.topk + j], DOWN[((size_t)p.y * a.topk + j) * a.width + p.x], sum);
-  OUT[(size_t)p.y * a.width + p.x] = sum;
+  if (p.y >= a.rows) return;
+  const uint x4 = p.x * 4u;
+  if (x4 + 3u < a.width) {
+    float4 sum = float4(0.0f);
+    for (uint j = 0; j < a.topk; ++j) {
+      const float w = wts[(size_t)p.y * a.topk + j];
+      const float4 d = *reinterpret_cast<const device float4*>(DOWN + ((size_t)p.y * a.topk + j) * a.width + x4);
+      sum = fma(w, d, sum);
+    }
+    *reinterpret_cast<device float4*>(OUT + (size_t)p.y * a.width + x4) = sum;
+  } else {
+    for (uint x = x4; x < a.width; ++x) {
+      float sum = 0.0f;
+      for (uint j = 0; j < a.topk; ++j) sum = fma(wts[(size_t)p.y * a.topk + j], DOWN[((size_t)p.y * a.topk + j) * a.width + x], sum);
+      OUT[(size_t)p.y * a.width + x] = sum;
+    }
+  }
 }

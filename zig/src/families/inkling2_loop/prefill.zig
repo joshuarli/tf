@@ -1156,7 +1156,7 @@ const Chunk = struct {
         const args = RelB{ .heads = c.heads, .rel = c.drel, .extent = extent, .rows = c.n, .base = c.base, .tau = @intFromBool(full), .floor = @floatFromInt(text.log_floor), .alpha = text.log_alpha };
         if (c.heads * c.drel <= 1024 and c.drel <= 32) {
             c.setP(c.s.pipes.rel_rows, args, &.{ t(lay.attn.rel_bias), r, A, b(c.s.relbias) });
-            c.enc.dispatchGroups(mtl.Size.of((extent + 1 + 255) / 256, c.n, 1), mtl.Size.of(256, 1, 1));
+            c.enc.dispatchGroups(mtl.Size.of((extent + 255) / 256, c.n, 1), mtl.Size.of(256, 1, 1));
             return;
         }
         c.setP(c.s.pipes.rel, args, &.{ t(lay.attn.rel_bias), r, A, b(c.s.relbias) });
@@ -1289,7 +1289,11 @@ const Chunk = struct {
         const fusable = c.batch == null and s.fuse and c.n > 8 and s.half and s.pipes.float_mpp != null and (gf_f32 or gf_bf16) and nrows(ctl.gain) == c.h and nrows(ctl.forget) == c.h and width(ctl.forget) == rank;
         if (fusable) if (if (gf_bf16) s.pipes.gate_ctl_bf16 else s.pipes.gate_ctl) |pipe| {
             c.setP(pipe, GateCtl{ .h = c.h, .rows = c.n, .k = rank, .cxs = cur.xs, .cxb = cur.xb, .mxs = msg.xs, .mxb = msg.xb, .ys = ys, .yb = yb }, &.{ b(s.normed), t(ctl.gain), t(ctl.forget), A, cur.buf, msg.buf, out });
-            c.enc.dispatchGroups(mtl.Size.of((c.h + 31) / 32, (c.n + 15) / 16, 1), mtl.Size.of(128, 1, 1));
+            if (gf_bf16) {
+                c.enc.dispatchGroups(mtl.Size.of((c.h + 63) / 64, (c.n + 31) / 32, 1), mtl.Size.of(128, 1, 1));
+            } else {
+                c.enc.dispatchGroups(mtl.Size.of((c.h + 31) / 32, (c.n + 15) / 16, 1), mtl.Size.of(128, 1, 1));
+            }
             return;
         };
         c.lin(ctl.gain, .{ .buf = b(s.normed), .xs = 1, .xb = 0 }, b(s.tanhg));
@@ -1547,7 +1551,7 @@ const Chunk = struct {
                 } else c.setP(p.group_down, down_args, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), t(lay.w2_bias.?), b(s.moe_off), b(s.moe_sorted), A, b(s.down) });
                 c.enc.dispatchGroups(mtl.Size.of((c.h + 63) / 64, E, (c.n + 31) / 32), mtl.Size.of(256, 1, 1));
                 c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = K, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
-                c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
+                c.enc.dispatchThreads(mtl.Size.of((c.h + 3) / 4, c.n, 1), mtl.Size.of(256, 1, 1));
                 return;
             }
             if (c.batch) |batch| {
@@ -1627,7 +1631,7 @@ const Chunk = struct {
         }
         c.enc.dispatchGroups(mtl.Size.of(if (wide_matrix or half_matrix == null) (c.h + 63) / 64 else (c.h + 31) / 32, E, (c.n + 31) / 32), mtl.Size.of(if (wide_matrix or half_matrix == null) 256 else 128, 1, 1));
         c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = K, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
-        c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
+        c.enc.dispatchThreads(mtl.Size.of((c.h + 3) / 4, c.n, 1), mtl.Size.of(256, 1, 1));
     }
 
     fn applyCols(c: Chunk) u32 {
@@ -1646,7 +1650,7 @@ const Chunk = struct {
     fn combine(c: Chunk, topk: u32) void {
         if (c.moeInConv()) return;
         c.setP(c.s.pipes.combine, CombineB{ .width = c.h, .topk = topk, .rows = c.n }, &.{ b(c.s.down), b(c.s.wts), A, b(c.s.moe) });
-        c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
+        c.enc.dispatchThreads(mtl.Size.of((c.h + 3) / 4, c.n, 1), mtl.Size.of(256, 1, 1));
     }
 
     fn naxExperts(c: Chunk, lay: *const Layer, input: B, batch: *BatchContext, affine: bool) bool {
@@ -1717,7 +1721,7 @@ const Chunk = struct {
         c.setP(s.pipes.units_down.?, down, &.{ b(s.act_h.?), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.moe_off), b(s.moe_sorted), A, b(s.down), overflow });
         c.enc.dispatchGroups(mtl.Size.of(c.h / 64, tiles, 1), mtl.Size.of(256, 1, 1));
         c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = up.topk, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
-        c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
+        c.enc.dispatchThreads(mtl.Size.of((c.h + 3) / 4, c.n, 1), mtl.Size.of(256, 1, 1));
     }
 
     /// The chunk's expert input rows as halves in `xh`, clamped as the NVFP4 matrices round them when `clamp`.
@@ -1739,7 +1743,7 @@ const Chunk = struct {
         c.setP(s.pipes.affine_units_down.?, down, &.{ b(s.act_h.?), t(lay.w2), t(lay.w2_scale), t(lay.w2_bias.?), A, b(s.moe_off), b(s.moe_sorted), A, b(s.down), overflow });
         c.enc.dispatchGroups(mtl.Size.of(c.h / 64, tiles, 1), mtl.Size.of(256, 1, 1));
         c.setP(s.pipes.combine, CombineB{ .width = c.h, .topk = up.topk, .rows = c.n }, &.{ b(s.down), b(s.wts), A, b(s.moe) });
-        c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
+        c.enc.dispatchThreads(mtl.Size.of((c.h + 3) / 4, c.n, 1), mtl.Size.of(256, 1, 1));
     }
 
     fn layer(c: *Chunk, slot: u32, ip: u32, bank: ?Bank) !void {

@@ -23,10 +23,11 @@ inline float i2pr_total(float sum, threadgroup float* part, uint t) {
     const device bfloat* W0 [[buffer(8)]], const device bfloat* W1 [[buffer(9)]], const device bfloat* W2 [[buffer(10)]],
     device float* O0 [[buffer(11)]], device float* O1 [[buffer(12)]], device float* O2 [[buffer(13)]],
     uint row [[threadgroup_position_in_grid]], uint t [[thread_position_in_threadgroup]]) {
-  threadgroup float part[I2PR_THREADS / 32u];
+  threadgroup float part[I2PR_DEPTH][I2PR_THREADS / 32u];
   threadgroup float w[4][I2PR_DEPTH];
   float src[I2PR_DEPTH][I2PR_PER];
   float inv[I2PR_DEPTH];
+  const uint sg = t / 32u, lane = t % 32u;
   for (uint j = 0; j < a.depth; ++j) {
     const device float* s = j + 1u < a.depth ? BLK + ((size_t)row * a.stride + (a.depth - 2u - j)) * a.width
                                              : CUR + (size_t)row * a.width;
@@ -36,23 +37,43 @@ inline float i2pr_total(float sum, threadgroup float* part, uint t) {
       src[j][i] = v;
       sum = fma(v, v, sum);
     }
-    const float total = i2pr_total(sum, part, t);
+    sum = simd_sum(sum);
+    if (lane == 0u) part[j][sg] = sum;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint j = 0; j < a.depth; ++j) {
+    float total = 0.0f;
+    for (uint s = 0; s < I2PR_THREADS / 32u; ++s) total += part[j][s];
     inv[j] = 1.0f / sqrt(total / float(a.width) + 1e-6f);
   }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
   for (uint k = 0; k < a.k; ++k) {
     const device float* q = k == 0u ? Q0 : k == 1u ? Q1 : k == 2u ? Q2 : Q3;
+    float qv[I2PR_PER];
+    for (uint i = 0; i < I2PR_PER; ++i) qv[i] = q[t + i * I2PR_THREADS];
     for (uint j = 0; j < a.depth; ++j) {
       float sum = 0.0f;
-      for (uint i = 0; i < I2PR_PER; ++i) sum = fma(src[j][i] * inv[j], q[t + i * I2PR_THREADS], sum);
-      const float total = i2pr_total(sum, part, t);
-      if (t == 0u) w[k][j] = total * a.scale;
+      for (uint i = 0; i < I2PR_PER; ++i) sum = fma(src[j][i] * inv[j], qv[i], sum);
+      sum = simd_sum(sum);
+      if (lane == 0u) part[j][sg] = sum;
     }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
     if (t == 0u) {
-      float peak = w[k][0];
-      for (uint j = 1; j < a.depth; ++j) peak = max(peak, w[k][j]);
+      float peak = -INFINITY;
+      for (uint j = 0; j < a.depth; ++j) {
+        float total = 0.0f;
+        for (uint s = 0; s < I2PR_THREADS / 32u; ++s) total += part[j][s];
+        w[k][j] = total * a.scale;
+        peak = max(peak, w[k][j]);
+      }
       float total = 0.0f;
-      for (uint j = 0; j < a.depth; ++j) total += precise::exp(w[k][j] - peak);
-      for (uint j = 0; j < a.depth; ++j) w[k][j] = precise::exp(w[k][j] - peak) / total;
+      for (uint j = 0; j < a.depth; ++j) {
+        const float e = precise::exp(w[k][j] - peak);
+        w[k][j] = e;
+        total += e;
+      }
+      const float inv_t = 1.0f / total;
+      for (uint j = 0; j < a.depth; ++j) w[k][j] *= inv_t;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     float out[I2PR_PER];
@@ -66,11 +87,16 @@ inline float i2pr_total(float sum, threadgroup float* part, uint t) {
       sum2 = fma(sum, sum, sum2);
     }
     if (a.norm == 0u) continue;
-    const float total = i2pr_total(sum2, part, t);
+    sum2 = simd_sum(sum2);
+    if (lane == 0u) part[0][sg] = sum2;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float total = 0.0f;
+    for (uint s = 0; s < I2PR_THREADS / 32u; ++s) total += part[0][s];
     const float r = 1.0f / sqrt(total / float(a.width) + a.eps);
     const device bfloat* g = k == 0u ? W0 : k == 1u ? W1 : W2;
     device float* o = (k == 0u ? O0 : k == 1u ? O1 : O2) + (size_t)row * a.width;
     for (uint i = 0; i < I2PR_PER; ++i) o[t + i * I2PR_THREADS] = out[i] * r * float(g[t + i * I2PR_THREADS]);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
   }
 }
 

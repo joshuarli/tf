@@ -20,6 +20,30 @@ const none: u8 = 0xff;
 const DecodeParts = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, splits: u32, chunk: u32, scale: f32, floor: f32, alpha: f32 };
 const BatchRow = extern struct { keys: u64, values: u64, args: DecodeParts };
 const GroupRow = extern struct { keys: u64, values: u64, args: DecodeParts, gpos: u32, path: [max_rows]u8 };
+const NaxAttnTile = extern struct {
+    keys: u64,
+    values: u64,
+    stream_first: u32,
+    stream_size: u32,
+    row0: u32,
+    count: u32,
+    gpos: u32,
+    lo: u32,
+    hi: u32,
+    splits: u32,
+    chunk: u32,
+    heads: u32,
+    kv: u32,
+    dim: u32,
+    extent: u32,
+    window: u32,
+    tau: u32,
+    scale: f32,
+    floor: f32,
+    alpha: f32,
+    anc_mask: [16]u32,
+    depth: [32]u8,
+};
 const RelArgs = extern struct { heads: u32, kv: u32, dim: u32, rel: u32, extent: u32, window: u32, pos: u32, tau: u32, scale: f32, floor: f32, alpha: f32, eps: f32 };
 const ConvRow = extern struct { ring: u64, pos: u32, start: u32, back: [4]u8 };
 const ConvArgs = extern struct { channels: u32, heads: u32, ring: u32, pos: u32, layout: u32, norm: f32, residual: u32, topk: u32 };
@@ -333,7 +357,7 @@ pub fn scratch(device: mtl.Device, config: *const Config) !batch_mod.BatchScratc
     errdefer parts.deinit();
     const controls_input = try device.buffer(capacity * 3 * 2 * config.text.hidden * 4, mtl.ResourceOptions.private);
     errdefer controls_input.deinit();
-    const controls_hidden = try device.buffer(capacity * 3 * config.loop.gate_rank * 4, mtl.ResourceOptions.private);
+    const controls_hidden = try device.buffer(6 * capacity * 3 * config.loop.gate_rank * 4, mtl.ResourceOptions.private);
     errdefer controls_hidden.deinit();
     const lib = try mtl.Library.fromSource(device, @import("kernels.zig").attention, mtl.CompileOptions.mlx());
     defer lib.deinit();
@@ -476,7 +500,7 @@ pub const Group = struct {
         gated: struct { pipe: mtl.Pipeline, gate: mtl.Buffer },
     };
 
-    pub const AttnBuffers = struct { q: mtl.Buffer, k: mtl.Buffer, v: mtl.Buffer, r: mtl.Buffer, sink: mtl.Buffer, relbias: mtl.Buffer, out: mtl.Buffer, parts: mtl.Buffer, combine: AttnCombine };
+    pub const AttnBuffers = struct { q: mtl.Buffer, k: mtl.Buffer, v: mtl.Buffer, r: mtl.Buffer, sink: mtl.Buffer, relbias: mtl.Buffer, out: mtl.Buffer, parts: mtl.Buffer, combine: AttnCombine, nax_split: ?mtl.Pipeline = null };
 
     pub fn attend(g: *const Group, stores: ?mtl.ComputeEncoder, enc: mtl.ComputeEncoder, m: *const Model, rel_bias: Tensor, slot: u32, full: bool, extent: u32, bufs: AttnBuffers) void {
         const v = g.verifier;
@@ -520,15 +544,105 @@ pub const Group = struct {
             store.setBuffer(v.kv, vh, 8);
             store.dispatchGroups(mtl.Size.of(kv + (heads * (extent + 1) + 255) / 256, g.rows, 1), mtl.Size.of(256, 1, 1));
         }
-        enc.setPipeline(v.pipe(.split));
-        enc.setBuffer(bufs.q, 0, 0);
-        enc.setBuffer(bufs.relbias, 0, 1);
-        enc.setBuffer(bufs.sink, 0, 2);
-        enc.setBytes(std.mem.sliceAsBytes(rows[0..g.rows]), 3);
-        enc.setBuffer(bufs.parts, 0, 4);
-        enc.setBuffer(v.kv, kh, 5);
-        enc.setBuffer(v.kv, vh, 6);
-        enc.dispatchGroups(mtl.Size.of(kv * max_splits, g.rows, 1), mtl.Size.of((heads / kv) * 32, 1, 1));
+        var max_stream: usize = 0;
+        var max_cached: u32 = 0;
+        for (g.caches, g.sizes) |cache, sz| {
+            max_stream = @max(max_stream, sz);
+            const gpos: u32 = @intCast(cache.len);
+            const lo_min: u32 = if (win != 0 and gpos + 1 > win) gpos + 1 - win else 0;
+            max_cached = @max(max_cached, if (gpos > lo_min) gpos - lo_min else 0);
+        }
+        const use_nax_split = bufs.nax_split != null and heads == 24 and kv == 8 and dim == 128 and g.rows <= 32 and
+            (max_stream >= 5 or (max_stream >= 3 and max_cached >= 2048));
+        if (use_nax_split) {
+            var tiles: [20]NaxAttnTile = undefined;
+            var n_tiles: usize = 0;
+            var tile_max_splits: u32 = 1;
+            var stream_first: usize = 0;
+            for (g.caches, g.sizes) |cache, size| {
+                const gpos: u32 = @intCast(cache.len);
+                const base = cache.row(config, slot, 0);
+                const keys_addr = cache.keys.gpuAddress() + base;
+                const values_addr = cache.values.gpuAddress() + base;
+                var depth_arr: [32]u8 = @splat(0);
+                var max_depth: u32 = 0;
+                for (0..size) |j| {
+                    const d = g.depth[stream_first + j];
+                    depth_arr[j] = d;
+                    max_depth = @max(max_depth, d);
+                }
+                const lo_min: u32 = if (win != 0 and gpos + 1 > win) gpos + 1 - win else 0;
+                const hi_max: u32 = gpos + max_depth + 1;
+                const part = state.attnPartition(hi_max - lo_min);
+                const cached_len: u32 = if (gpos > lo_min) gpos - lo_min else 0;
+                const target_splits: u32 = if (g.caches.len == 1 and cached_len >= 512 and cached_len <= 2048) 10 else part.splits;
+                const raw_chunk: u32 = if (cached_len > 0) (cached_len + target_splits - 1) / target_splits else 0;
+                const chunk32: u32 = if (raw_chunk > 0) ((raw_chunk + 31) / 32) * 32 else 0;
+                const actual_splits: u32 = if (chunk32 > 0) @max(1, (cached_len + chunk32 - 1) / chunk32) else 1;
+                tile_max_splits = @max(tile_max_splits, actual_splits);
+                for (0..size) |j| plain[stream_first + j].args.splits = actual_splits;
+                var off: usize = 0;
+                while (off < size) : (off += 16) {
+                    const cnt = @min(16, size - off);
+                    var anc_mask: [16]u32 = @splat(0);
+                    for (0..cnt) |lr| {
+                        const r = stream_first + off + lr;
+                        var mask: u32 = 0;
+                        const d_len: usize = @as(usize, g.depth[r]) + 1;
+                        for (0..d_len) |di| {
+                            const anc_r = g.path[r][di];
+                            mask |= @as(u32, 1) << @intCast(anc_r - stream_first);
+                        }
+                        anc_mask[lr] = mask;
+                    }
+                    tiles[n_tiles] = .{
+                        .keys = keys_addr,
+                        .values = values_addr,
+                        .stream_first = @intCast(stream_first),
+                        .stream_size = @intCast(size),
+                        .row0 = @intCast(stream_first + off),
+                        .count = @intCast(cnt),
+                        .gpos = gpos,
+                        .lo = lo_min,
+                        .hi = hi_max,
+                        .splits = actual_splits,
+                        .chunk = chunk32,
+                        .heads = heads,
+                        .kv = kv,
+                        .dim = dim,
+                        .extent = extent,
+                        .window = win,
+                        .tau = @intFromBool(full),
+                        .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(dim))),
+                        .floor = @floatFromInt(text.log_floor),
+                        .alpha = text.log_alpha,
+                        .anc_mask = anc_mask,
+                        .depth = depth_arr,
+                    };
+                    n_tiles += 1;
+                }
+                stream_first += size;
+            }
+            enc.setPipeline(bufs.nax_split.?);
+            enc.setBuffer(bufs.q, 0, 0);
+            enc.setBuffer(bufs.relbias, 0, 1);
+            enc.setBuffer(bufs.sink, 0, 2);
+            enc.setBytes(std.mem.sliceAsBytes(tiles[0..n_tiles]), 3);
+            enc.setBuffer(bufs.parts, 0, 4);
+            enc.setBuffer(v.kv, kh, 5);
+            enc.setBuffer(v.kv, vh, 6);
+            enc.dispatchGroups(mtl.Size.of(kv, tile_max_splits, n_tiles), mtl.Size.of(96, 1, 1));
+        } else {
+            enc.setPipeline(v.pipe(.split));
+            enc.setBuffer(bufs.q, 0, 0);
+            enc.setBuffer(bufs.relbias, 0, 1);
+            enc.setBuffer(bufs.sink, 0, 2);
+            enc.setBytes(std.mem.sliceAsBytes(rows[0..g.rows]), 3);
+            enc.setBuffer(bufs.parts, 0, 4);
+            enc.setBuffer(v.kv, kh, 5);
+            enc.setBuffer(v.kv, vh, 6);
+            enc.dispatchGroups(mtl.Size.of(kv * max_splits, g.rows, 1), mtl.Size.of((heads / kv) * 32, 1, 1));
+        }
         switch (bufs.combine) {
             .plain => |pipe| {
                 enc.setPipeline(pipe);

@@ -443,6 +443,34 @@ inline void i2r_affine8_vec(const device float* x, size_t step, const device uin
       }
     }
   }
+  if ((k & 256u) != 0u) {
+    const uint base = steps * 512u;
+    float4 xv[R][2];
+    float xsum[R];
+#pragma unroll
+    for (uint r = 0u; r < R; ++r) {
+      const device float* xp = x + size_t(r) * step + base + 8u * lane;
+      xv[r][0] = *reinterpret_cast<const device float4*>(xp);
+      xv[r][1] = *reinterpret_cast<const device float4*>(xp + 4u);
+      const float4 s0 = xv[r][0] + xv[r][1];
+      xsum[r] = (s0.x + s0.y) + (s0.z + s0.w);
+    }
+    const uint g = 8u * steps + (lane >> 3u);
+#pragma unroll
+    for (uint p = 0u; p < PER; ++p) {
+      const uint2 wv = *reinterpret_cast<const device uint2*>(w + wr[p] * words + 128u * steps + 2u * lane);
+      const float4 c0 = float4((uint4(wv.x) >> shift8) & 255u);
+      const float4 c1 = float4((uint4(wv.y) >> shift8) & 255u);
+      const float sc = float(s[wr[p] * groups + g]);
+      const float bi = float(b[wr[p] * groups + g]);
+#pragma unroll
+      for (uint r = 0u; r < R; ++r) {
+        float dot = fma(c0.w, xv[r][0].w, fma(c0.z, xv[r][0].z, fma(c0.y, xv[r][0].y, c0.x * xv[r][0].x)));
+        dot = fma(c1.w, xv[r][1].w, fma(c1.z, xv[r][1].z, fma(c1.y, xv[r][1].y, fma(c1.x, xv[r][1].x, dot))));
+        acc[p][r] = fma(sc, dot, fma(bi, xsum[r], acc[p][r]));
+      }
+    }
+  }
 }
 
 [[kernel]] void i2r_dense1(const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]],
@@ -534,32 +562,106 @@ template [[host_name("i2r_projections2")]] [[kernel]] void i2r_proj_few_t<2u, 2u
     uint group [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]]);
 
-[[kernel]] void i2r_router_f32(const device float* x [[buffer(0)]], const device float* w [[buffer(1)]],
-    constant i2t_dense_args& a [[buffer(2)]], device float* y [[buffer(3)]],
-    uint2 group [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+struct i2r_gemm_args { uint n, k, rows, xs, xb; float cap; };
+
+template <uint R>
+[[kernel]] void i2r_router_bf16_t(const device float* x [[buffer(0)]], const device bfloat* w [[buffer(1)]],
+    constant i2r_gemm_args& a [[buffer(2)]], device float* y [[buffer(3)]],
+    uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]]) {
-  threadgroup float red[4 * 2];
-  const uint col0 = group.x * 2u;
-  if (col0 >= a.n) return;
-  const uint row = group.y;
-  const device float* input = x + (size_t)(row * a.xs + a.xb) * a.k;
-  const device float* w0 = w + (size_t)col0 * a.k;
-  const device float* w1 = w + (size_t)min(col0 + 1u, a.n - 1u) * a.k;
-  float a0 = 0.0f, a1 = 0.0f;
-  for (uint base = sg * 128u; base + 128u <= a.k; base += 512u) {
+  const uint col = tg.x * 8u + sg;
+  const uint row0 = tg.y * R;
+  if (col >= a.n || row0 >= a.rows) return;
+  const uint rem = min(R, a.rows - row0);
+  const device bfloat* wp = w + size_t(col) * a.k;
+  const device float* xr[R];
+#pragma unroll
+  for (uint r = 0u; r < R; ++r) xr[r] = x + size_t((row0 + (r < rem ? r : 0u)) * a.xs + a.xb) * a.k;
+  float acc[R] = {};
+  for (uint base = 0u; base + 128u <= a.k; base += 128u) {
     const uint k = base + lane * 4u;
-    const float4 xv = *reinterpret_cast<const device float4*>(input + k);
-    const float4 v0 = *reinterpret_cast<const device float4*>(w0 + k);
-    const float4 v1 = *reinterpret_cast<const device float4*>(w1 + k);
-    a0 = fma(xv.w, v0.w, fma(xv.z, v0.z, fma(xv.y, v0.y, fma(xv.x, v0.x, a0))));
-    a1 = fma(xv.w, v1.w, fma(xv.z, v1.z, fma(xv.y, v1.y, fma(xv.x, v1.x, a1))));
+    const float4 wv = i2r_load4(wp + k);
+#pragma unroll
+    for (uint r = 0u; r < R; ++r) {
+      if (r >= rem) break;
+      const float4 xv = *reinterpret_cast<const device float4*>(xr[r] + k);
+      acc[r] = fma(xv.w, wv.w, fma(xv.z, wv.z, fma(xv.y, wv.y, fma(xv.x, wv.x, acc[r]))));
+    }
   }
-  a0 = simd_sum(a0);
-  a1 = simd_sum(a1);
-  if (lane == 0u) { red[sg * 2u] = a0; red[sg * 2u + 1u] = a1; }
-  threadgroup_barrier(mem_flags::mem_threadgroup);
-  if (sg == 0u && lane == 0u) {
-    y[(size_t)row * a.n + col0] = red[0] + red[2] + red[4] + red[6];
-    if (col0 + 1u < a.n) y[(size_t)row * a.n + col0 + 1u] = red[1] + red[3] + red[5] + red[7];
+#pragma unroll
+  for (uint r = 0u; r < R; ++r) {
+    if (r >= rem) break;
+    const float s = simd_sum(acc[r]);
+    if (lane == 0u) y[size_t(row0 + r) * a.n + col] = s;
   }
 }
+
+template [[host_name("i2r_router_bf16_1")]] [[kernel]] void i2r_router_bf16_t<1u>(const device float* x [[buffer(0)]],
+    const device bfloat* w [[buffer(1)]], constant i2r_gemm_args& a [[buffer(2)]], device float* y [[buffer(3)]],
+    uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]);
+template [[host_name("i2r_router_bf16_2")]] [[kernel]] void i2r_router_bf16_t<2u>(const device float* x [[buffer(0)]],
+    const device bfloat* w [[buffer(1)]], constant i2r_gemm_args& a [[buffer(2)]], device float* y [[buffer(3)]],
+    uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]);
+template [[host_name("i2r_router_bf16_4")]] [[kernel]] void i2r_router_bf16_t<4u>(const device float* x [[buffer(0)]],
+    const device bfloat* w [[buffer(1)]], constant i2r_gemm_args& a [[buffer(2)]], device float* y [[buffer(3)]],
+    uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]);
+template [[host_name("i2r_router_bf16_6")]] [[kernel]] void i2r_router_bf16_t<6u>(const device float* x [[buffer(0)]],
+    const device bfloat* w [[buffer(1)]], constant i2r_gemm_args& a [[buffer(2)]], device float* y [[buffer(3)]],
+    uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]);
+
+struct i2r_ctl_batch_args { uint h, rank, rows; uint xs[3], xb[3]; uint msg0, cols; };
+
+template <uint R>
+[[kernel]] void i2r_controls_down_batch_bf16_t(const device float* X [[buffer(0)]],
+    const device bfloat* W0 [[buffer(1)]], const device bfloat* W1 [[buffer(2)]],
+    const device bfloat* W2 [[buffer(3)]], constant i2r_ctl_batch_args& a [[buffer(4)]],
+    device float* OUT [[buffer(5)]], uint2 tg [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+  threadgroup float red[4][R];
+  const uint col = tg.x, j_ctl = tg.y;
+  if (col >= a.rank) return;
+  const uint width = 2u * a.h;
+  const device bfloat* wp = (j_ctl == 0u ? W0 : j_ctl == 1u ? W1 : W2) + size_t(col) * width;
+  const device float* xbase = X + size_t(j_ctl) * a.rows * width;
+  const device float* xr[R];
+#pragma unroll
+  for (uint r = 0u; r < R; ++r) {
+    xr[r] = xbase + size_t(r < a.rows ? r : 0u) * width;
+  }
+  float acc[R] = {};
+  for (uint base = sg * 128u; base + 128u <= width; base += 512u) {
+    const uint k = base + lane * 4u;
+    const float4 wv = i2r_load4(wp + k);
+#pragma unroll
+    for (uint r = 0u; r < R; ++r) {
+      if (r >= a.rows) break;
+      const float4 xv = *reinterpret_cast<const device float4*>(xr[r] + k);
+      acc[r] = fma(xv.w, wv.w, fma(xv.z, wv.z, fma(xv.y, wv.y, fma(xv.x, wv.x, acc[r]))));
+    }
+  }
+#pragma unroll
+  for (uint r = 0u; r < R; ++r) {
+    if (r >= a.rows) break;
+    const float s = simd_sum(acc[r]);
+    if (lane == 0u) red[sg][r] = s;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (sg == 0u && lane < a.rows) {
+    OUT[(size_t(j_ctl) * a.rows + lane) * a.rank + col] = (red[0][lane] + red[1][lane]) + (red[2][lane] + red[3][lane]);
+  }
+}
+
+template [[host_name("i2r_controls_down_b4_bf16")]] [[kernel]] void i2r_controls_down_batch_bf16_t<4u>(
+    const device float* X [[buffer(0)]], const device bfloat* W0 [[buffer(1)]], const device bfloat* W1 [[buffer(2)]],
+    const device bfloat* W2 [[buffer(3)]], constant i2r_ctl_batch_args& a [[buffer(4)]], device float* OUT [[buffer(5)]],
+    uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]);
+template [[host_name("i2r_controls_down_b8_bf16")]] [[kernel]] void i2r_controls_down_batch_bf16_t<8u>(
+    const device float* X [[buffer(0)]], const device bfloat* W0 [[buffer(1)]], const device bfloat* W1 [[buffer(2)]],
+    const device bfloat* W2 [[buffer(3)]], constant i2r_ctl_batch_args& a [[buffer(4)]], device float* OUT [[buffer(5)]],
+    uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]);

@@ -209,7 +209,7 @@ pub fn mapMlxLayer(m: anytype, i: u32) !@TypeOf(m.model.weights.layers[0]) {
     out.attn_post = try m.mlxConv(mlxSub(a, p, "attn_conv"), h, false);
     out.mlp_norm = try m.want(mlxSub(a, p, "mlp_norm.weight"), .bf16, &.{h});
     out.mlp_post = try m.mlxConv(mlxSub(a, p, "mlp_conv"), h, false);
-    out.router = try m.want(mlxSub(a, p, "mlp.router_weight"), .f32, &.{ expert_count, h });
+    out.router = try m.routerWeight(mlxSub(a, p, "mlp.router_weight"), expert_count, h);
     out.router_bias = try m.want(mlxSub(a, p, "mlp.router_bias"), .f32, &.{expert_count});
     const w13 = mlxSub(a, p, "mlp.experts.w13");
     const w2 = mlxSub(a, p, "mlp.experts.w2");

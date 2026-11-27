@@ -455,6 +455,15 @@ const MlxLoader = struct {
     pub fn controllers(l: MlxLoader, prefix: []const u8, out: *Layer) !void {
         return mapMlxControllers(l.model, prefix, out);
     }
+    pub fn routerWeight(l: MlxLoader, name: []const u8, rows: usize, cols: usize) !Tensor {
+        const src = try l.model.want(name, .f32, &.{ rows, cols });
+        const vals = src.buffer.slice(f32, src.offset / 4 + rows * cols)[src.offset / 4 ..][0 .. rows * cols];
+        if (!exactBf16(vals)) return src;
+        const dst = try l.model.ownedBf16Tensor(rows, cols);
+        const out = dst.buffer.slice(u16, rows * cols);
+        for (vals, out) |v, *o| o.* = @truncate(@as(u32, @bitCast(v)) >> 16);
+        return dst;
+    }
 };
 
 fn exactBf16(values: []const f32) bool {

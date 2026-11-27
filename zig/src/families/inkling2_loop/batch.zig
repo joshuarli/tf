@@ -37,7 +37,7 @@ pub const BatchScratch = struct {
         errdefer parts.deinit();
         const controls_input = try device.buffer(capacity * 3 * 2 * config.text.hidden * 4, mtl.ResourceOptions.private);
         errdefer controls_input.deinit();
-        const controls_hidden = try device.buffer(capacity * 3 * config.loop.gate_rank * 4, mtl.ResourceOptions.private);
+        const controls_hidden = try device.buffer(6 * capacity * 3 * config.loop.gate_rank * 4, mtl.ResourceOptions.private);
         errdefer controls_hidden.deinit();
         const lib = try mtl.Library.fromSource(device, @import("kernels.zig").attention, mtl.CompileOptions.mlx());
         defer lib.deinit();

@@ -152,13 +152,13 @@ inline void i2v_split_blocks(const device float* Q, const device half* KEYS, con
   constexpr uint D = 128u, G = 3u, N = 96u, R = 32u, CELLS = (R * 32u + N - 1u) / N;
   const uint kv = tgp / a.splits, s = tgp % a.splits, h = kv * G + sg;
   const float tau = a.tau ? 1.0f + a.alpha * precise::log(max(1.0f, (float(a.pos) + 1.0f) / a.floor)) : 1.0f;
-  float qv[4];
-  for (uint j = 0; j < 4u; ++j) qv[j] = Q[h * D + lane + 32u * j] * a.scale * tau;
+  const float4 qv = *reinterpret_cast<const device float4*>(Q + h * D + lane * 4u) * (a.scale * tau);
   const float sk = sink[h];
   const uint lo = a.window ? (a.pos + 1u > a.window ? a.pos + 1u - a.window : 0u) : 0u;
   const size_t base = ((size_t)h * a.splits + s) * (D + 2u);
   const uint js = lo + s * a.chunk, je = min(js + a.chunk, a.pos + 1u);
-  float top = -INFINITY, mass = 0.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+  float top = -INFINITY, mass = 0.0f;
+  float4 acc = float4(0.0f);
   for (uint j0 = js; j0 < je; j0 += R) {
     const uint n = min(R, je - j0);
     const uint first = a.window ? j0 % a.window : j0;
@@ -169,11 +169,9 @@ inline void i2v_split_blocks(const device float* Q, const device half* KEYS, con
       const uint r = min(e / 32u, n - 1u), j = first + r;
       const uint rj = a.window && j >= a.window ? j - a.window : j;
       const bool fresh = j0 + r >= gpos;
-      const size_t at = fresh ? ((size_t)path[j0 + r - gpos] * a.kv + kv) * D : ((size_t)rj * a.kv + kv) * D;
-      const device half* kr = (fresh ? KH : KEYS) + at + e % 32u;
-      const device half* vr = (fresh ? VH : VALUES) + at + e % 32u;
-      kc[i] = half4(kr[0], kr[32], kr[64], kr[96]);
-      vc[i] = half4(vr[0], vr[32], vr[64], vr[96]);
+      const size_t at = (fresh ? ((size_t)path[j0 + r - gpos] * a.kv + kv) * D : ((size_t)rj * a.kv + kv) * D) + (e % 32u) * 4u;
+      kc[i] = *reinterpret_cast<const device half4*>((fresh ? KH : KEYS) + at);
+      vc[i] = *reinterpret_cast<const device half4*>((fresh ? VH : VALUES) + at);
     }
     float own = 0.0f;
     if (lane < n) own = B[h * (a.extent + 1u) + min(a.pos - (j0 + lane), a.extent)] - sk;
@@ -190,55 +188,35 @@ inline void i2v_split_blocks(const device float* Q, const device half* KEYS, con
 #pragma unroll
     for (uint r = 0; r < R; ++r) {
       const float4 kk = float4(KS4[r * 32u + lane]);
-      float dot = 0.0f;
-      dot = fma(qv[0], kk.x, dot);
-      dot = fma(qv[1], kk.y, dot);
-      dot = fma(qv[2], kk.z, dot);
-      dot = fma(qv[3], kk.w, dot);
-      p[r] = dot;
+      p[r] = fma(qv.w, kk.w, fma(qv.z, kk.z, fma(qv.y, kk.y, qv.x * kk.x)));
     }
     const float score = i2_rows_sum(p, lane) + own;
-    float run = lane < n ? score : -INFINITY;
-    for (ushort off = 1; off < 32; off <<= 1) {
-      const float other = simd_shuffle_up(run, off);
-      if (lane >= off) run = max(other, run);
-    }
-    const float peak = max(top, run);
-    const float before = lane == 0u ? top : simd_shuffle_up(peak, ushort(1));
-    const float rescales = precise::exp(before - peak);
-    const float weights = precise::exp(score - peak);
+    const float bmax = simd_max(lane < n ? score : -INFINITY);
+    const float peak = max(top, bmax);
+    const float rescale = top == -INFINITY ? 0.0f : fast::exp2((top - peak) * M_LOG2E_F);
+    const float weights = lane < n ? fast::exp2((score - peak) * M_LOG2E_F) : 0.0f;
+    mass = mass * rescale + simd_sum(weights);
+    acc *= rescale;
     if (n == R) {
 #pragma unroll
       for (uint r = 0; r < R; ++r) {
-        const float rescale = simd_shuffle(rescales, ushort(r));
         const float w = simd_shuffle(weights, ushort(r));
-        mass = mass * rescale + w;
-        const float4 vv = float4(VS4[r * 32u + lane]);
-        acc[0] = acc[0] * rescale + w * vv.x;
-        acc[1] = acc[1] * rescale + w * vv.y;
-        acc[2] = acc[2] * rescale + w * vv.z;
-        acc[3] = acc[3] * rescale + w * vv.w;
+        acc = fma(float4(w), float4(VS4[r * 32u + lane]), acc);
       }
     } else {
       for (uint r = 0; r < n; ++r) {
-        const float rescale = simd_shuffle(rescales, ushort(r));
         const float w = simd_shuffle(weights, ushort(r));
-        mass = mass * rescale + w;
-        const float4 vv = float4(VS4[r * 32u + lane]);
-        acc[0] = acc[0] * rescale + w * vv.x;
-        acc[1] = acc[1] * rescale + w * vv.y;
-        acc[2] = acc[2] * rescale + w * vv.z;
-        acc[3] = acc[3] * rescale + w * vv.w;
+        acc = fma(float4(w), float4(VS4[r * 32u + lane]), acc);
       }
     }
-    top = simd_shuffle(peak, ushort(n - 1u));
+    top = peak;
     threadgroup_barrier(mem_flags::mem_threadgroup);
   }
   if (lane == 0u) {
     PART[base] = top;
     PART[base + 1u] = mass;
   }
-  for (uint u = 0; u < 4u; ++u) PART[base + 2u + lane + 32u * u] = acc[u];
+  *reinterpret_cast<device packed_float4*>(PART + base + 2u + lane * 4u) = packed_float4(acc);
 }
 
 struct i2v_row { device half* keys; device half* values; i2_attn_parts args; uint gpos; uchar path[16]; };

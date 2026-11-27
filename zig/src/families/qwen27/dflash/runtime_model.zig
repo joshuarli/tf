@@ -140,13 +140,17 @@ pub const Model = struct {
         overhead_ms: f64 = 0,
         defer_price: bool = true,
         chain: bool = false,
+        children: ?u32 = null,
+        edge: f64 = 0.6,
         noise: ?selector.Noise = null, // a sampled stream's keyed draw noise for a token at a position
         temperature: f64 = 1,
     };
     /// The lane core prices complete candidate prefixes with its calibrated landing rates.
     pub fn selection(p: Proposal) selector.Options {
         var options = if (p.costs.len > 0) loneSelection(p.nodes) else selector.Options{ .nodes = p.nodes };
+        if (p.children) |children| options.children = children;
         if (p.chain) options.children = 1;
+        options.edge = p.edge;
         options.costs = if (p.defer_price) &.{} else p.costs;
         options.overhead_ms = if (p.defer_price) 0 else p.overhead_ms;
         options.noise = p.noise;

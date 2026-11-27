@@ -371,6 +371,132 @@ pub const Draft = struct {
         return r;
     }
 
+    pub const BatchSlot = struct {
+        lane: usize,
+        cache: *inkling.Cache,
+        history: History,
+        offered: u32,
+        absorb: bool,
+    };
+
+    /// One shared tree round across 2 to 8 concurrent streams: one batched drafter pass and one grouped verify.
+    pub fn roundBatch(d: *Draft, m: *inkling.Model, batch: *inkling.BatchScratch, slots: []const BatchSlot, out: []Round) !void {
+        const count = slots.len;
+        std.debug.assert(count >= 2 and count <= 8 and out.len == count);
+        const t0 = now();
+        var chains: [8][inkling.verify.max_drafts]u32 = undefined;
+        var chained: [8]u32 = @splat(0);
+        var match_lengths: [8]u32 = @splat(0);
+        var entries: [8]rt.Model.Proposal = undefined;
+        var draft_owners: [8]usize = undefined;
+        var draft_count: usize = 0;
+        for (slots, 0..) |sl, i| {
+            const l = &d.lanes[sl.lane];
+            const pending = sl.history.emitted[sl.history.emitted.len - 1];
+            if (sl.offered > 0) {
+                if (catchUp(&l.lookup, sl.history)) |_| {
+                    if (l.lookup.match()) |found| {
+                        chained[i] = l.lookup.proposals(found, chains[i][0..sl.offered]);
+                        match_lengths[i] = found.length;
+                    }
+                } else |_| l.lookup.reset();
+                if (!l.plan.lookupSuffices(chained[i], match_lengths[i])) {
+                    entries[draft_count] = .{
+                        .context = l.context,
+                        .pending = pending,
+                        .nodes = l.plan.nodes,
+                        .children = l.plan.children,
+                        .edge = 1,
+                    };
+                    draft_owners[draft_count] = i;
+                    draft_count += 1;
+                }
+            }
+        }
+        var proposals: [8]?tf.qwen27.dflash.selector.Tree = @splat(null);
+        defer for (&proposals) |*p| if (p.*) |*t| t.deinit();
+        if (draft_count == 1) {
+            const owner = draft_owners[0];
+            const l = &d.lanes[slots[owner].lane];
+            proposals[owner] = d.propose(slots[owner].lane, entries[0].pending, l.plan.nodes, l.plan.children) catch |e| {
+                d.fail(e);
+                return error.DrafterFailed;
+            };
+        } else if (draft_count >= 2) {
+            var batch_trees: [8]tf.qwen27.dflash.selector.Tree = undefined;
+            d.proposeBatch(entries[0..draft_count], batch_trees[0..draft_count]) catch |e| {
+                d.fail(e);
+                return error.DrafterFailed;
+            };
+            for (draft_owners[0..draft_count], batch_trees[0..draft_count]) |owner, t| proposals[owner] = t;
+        }
+        var inputs: [8]inkling.verify.Plan.BatchInput = undefined;
+        for (slots, 0..) |sl, i| {
+            const l = &d.lanes[sl.lane];
+            const pending = sl.history.emitted[sl.history.emitted.len - 1];
+            const drafted: ?inkling.verify.Drafted = if (proposals[i]) |t| .{ .tokens = t.tokens, .parents = t.parents, .scores = t.scores } else null;
+            inputs[i] = .{
+                .plan = &l.plan,
+                .pending = pending,
+                .drafted = drafted,
+                .chain = chains[i][0..chained[i]],
+                .match_length = match_lengths[i],
+                .limit = @as(usize, sl.offered) + 1,
+            };
+        }
+        var trees: [8]inkling.verify.Tree = undefined;
+        inkling.verify.Plan.buildBatch(inputs[0..count], d.verifier.limit, trees[0..count]);
+        var caches: [8]*inkling.Cache = undefined;
+        var sizes: [8]usize = undefined;
+        var parents: [inkling.group.max_rows]u8 = undefined;
+        var ids: [inkling.group.max_rows]u32 = undefined;
+        var parent_len: usize = 0;
+        var row_len: usize = 0;
+        for (slots, 0..) |sl, i| {
+            caches[i] = sl.cache;
+            sizes[i] = trees[i].rows;
+            @memcpy(ids[row_len..][0..trees[i].rows], trees[i].tokens[0..trees[i].rows]);
+            row_len += trees[i].rows;
+            const sh = trees[i].shape();
+            @memcpy(parents[parent_len..][0..sh.len], sh);
+            parent_len += sh.len;
+        }
+        const t1 = now();
+        const g = try d.verifier.tree(caches[0..count], sizes[0..count], parents[0..parent_len]);
+        batch.rows.taps = &d.step;
+        const decided = d.verifier.decide(m, batch, &g, ids[0..row_len], .commit);
+        batch.rows.taps = null;
+        const outcome = try decided;
+        const t2 = now();
+        const s = d.stride();
+        var first: usize = 0;
+        for (slots, 0..) |sl, i| {
+            var r: Round = .{};
+            var line: [inkling.group.max_rows]usize = undefined;
+            const path = g.line(i, outcome.last[i], &line);
+            const stream_picks = outcome.picks[first..][0..trees[i].rows];
+            for (path[1..], 0..) |row, j| {
+                r.tokens[j] = trees[i].tokens[row];
+                r.looked_kept += @intFromBool(trees[i].chain[row] != inkling.verify.Plan.unlooked);
+            }
+            r.tokens[path.len - 1] = stream_picks[path[path.len - 1]];
+            r.offered = @intCast(trees[i].rows - 1);
+            r.kept = @intCast(path.len - 1);
+            r.looked = @intCast(trees[i].looked());
+            if (sl.offered > 0) d.lanes[sl.lane].plan.learn(&trees[i], stream_picks);
+            if (sl.absorb) {
+                for (path, 0..) |row, j| @memcpy(d.gathered[j * s ..][0..s], d.step.bytes(first + row, 1));
+                d.absorb(sl.lane, d.gathered[0 .. path.len * s], path.len);
+            }
+            r.draft_ns = t1 - t0;
+            r.verify_ns = t2 - t1;
+            out[i] = r;
+            first += trees[i].rows;
+        }
+        const commit_ns = now() - t2;
+        for (out) |*r| r.commit_ns = commit_ns;
+    }
+
     fn catchUp(lookup: *inkling.verify.Lookup, history: History) !void {
         var have = lookup.tokens.items.len;
         if (have < history.prompt.len) {
@@ -392,6 +518,12 @@ pub const Draft = struct {
             return e;
         };
         return result;
+    }
+
+    fn proposeBatch(d: *Draft, entries: []const rt.Model.Proposal, out: []tf.qwen27.dflash.selector.Tree) !void {
+        const pool = mtl.objc.Pool.push();
+        defer pool.pop();
+        return d.model.proposeBatch(entries, out);
     }
 
     fn warm(d: *Draft) !void {

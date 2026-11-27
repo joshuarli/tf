@@ -665,9 +665,16 @@ pub const Host = struct {
                 }
             };
             if (count == 0) continue;
-            if (h.draft) |d| if (count == 1 and selected[0].job.?.request.drafts and d.ready(h.lane(selected[0]), selected[0].cache.len)) {
-                h.speculate(d, selected[0]);
-                continue;
+            if (h.draft) |d| if (count <= d.verifier.limit) {
+                if (count == 1) {
+                    if (selected[0].job.?.request.drafts and d.ready(h.lane(selected[0]), selected[0].cache.len)) {
+                        h.speculate(d, selected[0]);
+                        continue;
+                    }
+                } else if (h.canSpeculateBatch(d, selected[0..count])) {
+                    h.speculateBatch(d, selected[0..count]);
+                    continue;
+                }
             };
             const vocab = h.model.config.text.unpadded_vocab;
             h.batch.rows.taps = if (h.draft) |d| d.stepTaps() else null;
@@ -725,6 +732,67 @@ pub const Host = struct {
         for (0..round.kept + 1) |j| {
             h.token(slot, round.token(j));
             if (slot.job != job) return;
+        }
+    }
+
+    fn canSpeculateBatch(h: *Host, d: *const spec.Draft, slots: []*Slot) bool {
+        if (d.failed) return false;
+        for (slots) |slot| {
+            const job = slot.job.?;
+            if (!job.request.drafts or !d.ready(h.lane(slot), slot.cache.len)) continue;
+            const remaining = job.request.max_tokens - job.emitted.items.len;
+            const room = slot.cache.capacity -| slot.cache.len;
+            if (remaining > 1 and room > 1) return true;
+        }
+        return false;
+    }
+
+    fn speculateBatch(h: *Host, d: *spec.Draft, slots: []*Slot) void {
+        var batch_slots: [8]spec.Draft.BatchSlot = undefined;
+        var rounds: [8]spec.Round = undefined;
+        for (slots, 0..) |slot, i| {
+            const job = slot.job.?;
+            const lane_idx = h.lane(slot);
+            const ready = d.ready(lane_idx, slot.cache.len);
+            const remaining = job.request.max_tokens - job.emitted.items.len;
+            const offered: u32 = if (job.request.drafts and ready)
+                @intCast(@min(@min(spec.max_drafts, remaining - 1), (slot.cache.capacity -| slot.cache.len) -| 1))
+            else
+                0;
+            batch_slots[i] = .{
+                .lane = lane_idx,
+                .cache = &slot.cache,
+                .history = .{ .prompt = job.request.prompt, .emitted = job.emitted.items },
+                .offered = offered,
+                .absorb = ready,
+            };
+        }
+        d.roundBatch(h.model, &h.batch, batch_slots[0..slots.len], rounds[0..slots.len]) catch |e| {
+            if (e != error.DrafterFailed) for (slots) |slot| h.retire(slot, .failed, @errorName(e));
+            return;
+        };
+        for (slots, rounds[0..slots.len]) |slot, round| {
+            const job = slot.job.?;
+            job.rounds += 1;
+            if (round.offered > 0) {
+                job.spec_rounds += 1;
+                job.drafted += round.offered;
+                job.accepted += round.kept;
+                job.min_rows = if (job.min_rows == 0) round.offered + 1 else @min(job.min_rows, round.offered + 1);
+                job.draft_ns += round.draft_ns;
+                job.verify_ns += round.verify_ns;
+                job.commit_ns += round.commit_ns;
+                job.looked += round.looked;
+                job.looked_kept += round.looked_kept;
+            }
+            if (h.cancelled(job)) {
+                h.retire(slot, .cancelled, "");
+                continue;
+            }
+            for (0..round.kept + 1) |j| {
+                h.token(slot, round.token(j));
+                if (slot.job != job) break;
+            }
         }
     }
 };

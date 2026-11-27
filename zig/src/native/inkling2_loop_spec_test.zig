@@ -189,6 +189,7 @@ test "inkling served speculation: tree rounds with lookup equal draft-off replie
         try expectSame(long_on, long_off);
         try expectSame(short_on, short_off);
         try expectDrafted("two lanes", long_on);
+        try expectDrafted("two lanes short", short_on);
 
         const repeat = try std.mem.concat(gpa, u32, &.{ agent, agent[0..40] });
         defer gpa.free(repeat);

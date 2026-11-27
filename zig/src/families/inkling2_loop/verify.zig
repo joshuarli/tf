@@ -368,10 +368,18 @@ pub const Plan = struct {
     }
 
     const Node = struct { token: u32, parent: u8, depth: u8, q: f32, chain: u8, p: f64, path: f64 };
+    const max_pool_nodes = 1 + 64 + max_drafts;
 
-    /// The best drafts by estimated path acceptance, as many as commit the most tokens a millisecond, up to `limit`.
-    pub fn build(p: *const Plan, pending: u32, drafted: ?Drafted, chain: []const u32, match_length: u32, limit: usize) Tree {
-        var nodes: [1 + 64 + max_drafts]Node = undefined;
+    pub const BatchInput = struct {
+        plan: *const Plan,
+        pending: u32,
+        drafted: ?Drafted,
+        chain: []const u32,
+        match_length: u32,
+        limit: usize,
+    };
+
+    fn collectNodes(p: *const Plan, pending: u32, drafted: ?Drafted, chain: []const u32, match_length: u32, nodes: *[max_pool_nodes]Node) usize {
         nodes[0] = .{ .token = pending, .parent = 0, .depth = 0, .q = 0, .chain = unlooked, .p = 1, .path = 1 };
         var n: usize = 1;
         if (drafted) |d| {
@@ -415,7 +423,14 @@ pub const Plan = struct {
             };
         }
         for (nodes[1..n]) |*node| node.path = nodes[node.parent].path * node.p;
-        var order: [nodes.len]u8 = undefined;
+        return n;
+    }
+
+    /// The best drafts by estimated path acceptance, as many as commit the most tokens a millisecond, up to `limit`.
+    pub fn build(p: *const Plan, pending: u32, drafted: ?Drafted, chain: []const u32, match_length: u32, limit: usize) Tree {
+        var nodes: [max_pool_nodes]Node = undefined;
+        const n = p.collectNodes(pending, drafted, chain, match_length, &nodes);
+        var order: [max_pool_nodes]u8 = undefined;
         for (1..n) |i| order[i - 1] = @intCast(i);
         const Rank = struct {
             nodes: []const Node,
@@ -444,7 +459,7 @@ pub const Plan = struct {
             }
         }
         var t = Tree{ .rows = rows, .match = if (chain.len > 0) match_length else 0, .expected = expected, .drafted = drafted != null };
-        var row_of: [nodes.len]u8 = undefined;
+        var row_of: [max_pool_nodes]u8 = undefined;
         row_of[0] = 0;
         t.tokens[0] = pending;
         for (order[0 .. rows - 1], 1..) |i, r| {
@@ -457,6 +472,83 @@ pub const Plan = struct {
             t.chain[r] = node.chain;
         }
         return t;
+    }
+
+    /// Jointly allocates up to `total_limit` rows across concurrent streams to maximize combined tokens per millisecond.
+    pub fn buildBatch(inputs: []const BatchInput, total_limit: usize, out: []Tree) void {
+        std.debug.assert(inputs.len > 0 and inputs.len <= 8 and inputs.len == out.len);
+        const n = inputs.len;
+        var all_nodes: [8][max_pool_nodes]Node = undefined;
+        var counts: [8]usize = undefined;
+        var any_drafted = false;
+        const ref = inputs[0].plan;
+        const Item = struct { stream: u8, node: u8, depth: u8, path: f64 };
+        var pool: [8 * max_pool_nodes]Item = undefined;
+        var pool_len: usize = 0;
+        for (inputs, 0..) |inp, s| {
+            if (inp.drafted != null) any_drafted = true;
+            counts[s] = inp.plan.collectNodes(inp.pending, inp.drafted, inp.chain, inp.match_length, &all_nodes[s]);
+            if (inp.limit > 1) {
+                for (1..counts[s]) |i| {
+                    const nd = all_nodes[s][i];
+                    pool[pool_len] = .{ .stream = @intCast(s), .node = @intCast(i), .depth = nd.depth, .path = nd.path };
+                    pool_len += 1;
+                }
+            }
+        }
+        const Rank = struct {
+            fn less(_: void, a: Item, b: Item) bool {
+                if (a.path != b.path) return a.path > b.path;
+                if (a.depth != b.depth) return a.depth < b.depth;
+                if (a.stream != b.stream) return a.stream < b.stream;
+                return a.node < b.node;
+            }
+        };
+        std.mem.sort(Item, pool[0..pool_len], {}, Rank.less);
+        const cap = @min(total_limit, max_rows);
+        const draft = if (any_drafted) ref.draft_ms else 0;
+        var picked: [max_rows]Item = undefined;
+        var picked_len: usize = 0;
+        var stream_rows: [8]usize = @splat(1);
+        var total_rows: usize = n;
+        var sum: f64 = @floatFromInt(n);
+        var best = sum / (draft + ref.verify_ms[@min(total_rows, max_rows)]);
+        var best_picked: usize = 0;
+        for (pool[0..pool_len]) |item| {
+            if (total_rows >= cap) break;
+            const s = item.stream;
+            const stream_cap = @min(inputs[s].limit, inputs[s].plan.most);
+            if (stream_rows[s] >= stream_cap) continue;
+            picked[picked_len] = item;
+            picked_len += 1;
+            stream_rows[s] += 1;
+            total_rows += 1;
+            sum += item.path;
+            const value = sum / (draft + ref.verify_ms[total_rows]);
+            if (value > best) {
+                best = value;
+                best_picked = picked_len;
+            }
+        }
+        var row_of: [8][max_pool_nodes]u8 = undefined;
+        for (inputs, 0..) |inp, s| {
+            out[s] = .{ .rows = 1, .match = if (inp.chain.len > 0) inp.match_length else 0, .expected = 1, .drafted = inp.drafted != null };
+            out[s].tokens[0] = inp.pending;
+            row_of[s][0] = 0;
+        }
+        for (picked[0..best_picked]) |item| {
+            const s = item.stream;
+            const node = all_nodes[s][item.node];
+            const r = out[s].rows;
+            row_of[s][item.node] = @intCast(r);
+            out[s].tokens[r] = node.token;
+            out[s].parents[r - 1] = row_of[s][node.parent];
+            out[s].depth[r] = node.depth;
+            out[s].q[r] = node.q;
+            out[s].chain[r] = node.chain;
+            out[s].expected += node.path;
+            out[s].rows = r + 1;
+        }
     }
 
     /// Learns from each row whose parent the target accepted: whether the target's pick there is the row's token.
@@ -538,3 +630,32 @@ pub const pooled_prior = [max_drafts][Plan.length_bins]f64{
 
 /// Both drafting the same token, by `Plan.q_edges` bin.
 pub const agree_prior = [Plan.q_bins]f64{ 0.347, 0.347, 0.347, 0.385, 0.385, 0.853, 0.853, 0.853, 0.989, 0.995 };
+
+test "Plan.buildBatch allocates rows across concurrent streams by path probability and reduces to Plan.build for one stream" {
+    const plan = Plan.init();
+    const d0 = Drafted{
+        .tokens = &.{ 10, 11, 12, 13, 14, 15, 16 },
+        .parents = &.{ -1, 0, 1, 2, 3, 4, 5 },
+        .scores = &.{ -0.02, -0.04, -0.06, -0.08, -0.10, -0.12, -0.14 },
+    };
+    const d1 = Drafted{
+        .tokens = &.{ 20, 21, 22, 23 },
+        .parents = &.{ -1, 0, 1, 2 },
+        .scores = &.{ -0.05, -2.5, -5.0, -7.5 },
+    };
+    const solo = plan.build(1, d0, &.{}, 0, 16);
+    var one: [1]Tree = undefined;
+    Plan.buildBatch(&.{.{ .plan = &plan, .pending = 1, .drafted = d0, .chain = &.{}, .match_length = 0, .limit = 16 }}, 16, &one);
+    try std.testing.expectEqual(solo.rows, one[0].rows);
+    try std.testing.expectEqualSlices(u32, solo.tokens[0..solo.rows], one[0].tokens[0..one[0].rows]);
+    try std.testing.expectEqualSlices(u8, solo.shape(), one[0].shape());
+
+    var pair: [2]Tree = undefined;
+    Plan.buildBatch(&.{
+        .{ .plan = &plan, .pending = 1, .drafted = d0, .chain = &.{}, .match_length = 0, .limit = 16 },
+        .{ .plan = &plan, .pending = 2, .drafted = d1, .chain = &.{}, .match_length = 0, .limit = 16 },
+    }, 10, &pair);
+    try std.testing.expect(pair[0].rows + pair[1].rows <= 10);
+    try std.testing.expect(pair[0].rows > pair[1].rows);
+    try std.testing.expect(pair[1].rows >= 2);
+}

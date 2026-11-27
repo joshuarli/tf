@@ -601,7 +601,7 @@ inline void i2_qkv_query(device float* Q, const device bfloat* QS, constant i2_q
 }
 
 inline void i2_qkv_rel(const device float* R, const device bfloat* RS, const device bfloat* P, constant i2_qkv_args& a,
-    device float* O, uint row, uint block, uint pos, threadgroup float (&rc)[2][16], uint tid) {
+    device float* O, uint row, uint block, uint pos, threadgroup float (&rc)[2][16], threadgroup float& tg_tau, uint tid) {
   const uint cols = a.extent + 1u, first = block * 256u, h0 = first / cols;
   if (tid < 64u) {
     const uint s = tid / 32u, lane = tid % 32u, h = h0 + s;
@@ -611,16 +611,16 @@ inline void i2_qkv_rel(const device float* R, const device bfloat* RS, const dev
     const float clip = clamp(a.rel_threshold / (sqrt(total) + 1e-6f), 0.0f, 1.0f);
     if (lane < 16u) rc[s][lane] = v * clip;
   }
+  if (tid == 0u) tg_tau = a.tau ? 1.0f + a.alpha * precise::log(max(1.0f, (float(pos) + 1.0f) / a.floor)) : 1.0f;
   threadgroup_barrier(mem_flags::mem_threadgroup);
   const uint i = first + tid;
   if (i >= cols * a.heads) return;
   const uint h = i / cols, dist = i % cols;
   const size_t out = (size_t)row * cols * a.heads + i;
   if (dist == a.extent) { O[out] = 0.0f; return; }
-  const float tau = a.tau ? 1.0f + a.alpha * precise::log(max(1.0f, (float(pos) + 1.0f) / a.floor)) : 1.0f;
   float sum = 0.0f;
   for (uint u = 0; u < a.rel; ++u) sum = fma(float(P[u * a.extent + dist]), rc[h - h0][u], sum);
-  O[out] = sum * tau;
+  O[out] = sum * tg_tau;
 }
 
 struct i2_batch_qkv_row { device float* k_ring; device float* v_ring; device half* keys; device half* values; uint pos, pad; };
@@ -634,9 +634,10 @@ struct i2_batch_qkv_row { device float* k_ring; device float* v_ring; device hal
     uint2 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
   threadgroup float part[8];
   threadgroup float rc[2][16];
+  threadgroup float tg_tau;
   const uint row = group.y, pos = rows[row].pos;
   if (group.x >= a.kv + a.heads) {
-    i2_qkv_rel(R, RS, P, a, REL, row, group.x - a.kv - a.heads, pos, rc, tid);
+    i2_qkv_rel(R, RS, P, a, REL, row, group.x - a.kv - a.heads, pos, rc, tg_tau, tid);
     return;
   }
   if (group.x >= a.kv) {

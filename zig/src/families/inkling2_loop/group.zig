@@ -454,7 +454,8 @@ pub const Group = struct {
         enc.setBytes(std.mem.sliceAsBytes(rows[0..g.rows]), 5);
         enc.setBuffer(v.conv.buffer, v.conv.offset(slot, site, 0), 6);
         if (into.topk > 0) enc.setBuffer(into.wts, 0, 7) else enc.setBuffer(x, x_off, 7);
-        enc.dispatchThreads(mtl.Size.of(channels, g.rows, 1), mtl.Size.of(256, 1, 1));
+        const vec4 = (channels & 3) == 0 and (heads == 0 or ((channels / heads) & 3) == 0);
+        enc.dispatchThreads(mtl.Size.of(if (vec4) channels / 4 else channels, g.rows, 1), mtl.Size.of(256, 1, 1));
     }
 
     pub fn qkv(g: *const Group, enc: mtl.ComputeEncoder, args: QkvArgs, w: QkvWeights, bufs: QkvBuffers, slot: u32) void {

@@ -178,15 +178,18 @@ inline void i2n_nvfp4_few_lut(const device float* X, const device uchar* W, cons
   const uint groups = a.k >> 4u;
   const float global = G[expert] / den[0];
   uint slots[R];
-  const device float* xs[R];
+  const device float* xs_f[R];
+  const device half* xs_h[R];
   _Pragma("clang loop unroll(full)")
   for (uint r = 0u; r < R; ++r) {
     slots[r] = META[384u + off + r];
-    xs[r] = X + size_t(GU ? slots[r] / a.topk : slots[r]) * a.k;
+    if (GU) xs_f[r] = X + size_t(slots[r] / a.topk) * a.k;
+    else xs_h[r] = ((const device half*)X) + size_t(slots[r]) * a.k;
   }
   const device uchar* We = W + size_t(expert) * cols * stride;
   const device uchar* Se = S_buf + size_t(expert) * cols * groups;
   if (GU) {
+    device half* Yh = (device half*)Y;
     const uint pair_base = (n0 >> 1u) + uint(sg) * 4u;
     for (uint pass = 0u; pass < 2u; ++pass) {
       const uint p0 = pair_base + pass * 2u;
@@ -198,7 +201,7 @@ inline void i2n_nvfp4_few_lut(const device float* X, const device uchar* W, cons
         _Pragma("clang loop unroll(full)")
         for (uint r = 0u; r < R; ++r) {
           _Pragma("clang loop unroll(full)")
-          for (uint q = 0u; q < 4u; ++q) xv[r][q] = *reinterpret_cast<const device float4*>(xs[r] + g * 16u + 4u * q);
+          for (uint q = 0u; q < 4u; ++q) xv[r][q] = *reinterpret_cast<const device float4*>(xs_f[r] + g * 16u + 4u * q);
         }
         _Pragma("clang loop unroll(full)")
         for (uint p = 0u; p < 2u; ++p) {
@@ -232,7 +235,7 @@ inline void i2n_nvfp4_few_lut(const device float* X, const device uchar* W, cons
         _Pragma("clang loop unroll(full)")
         for (uint r = 0u; r < R; ++r) {
           const float gs = simd_sum(dg[p][r]), us = simd_sum(du[p][r]);
-          if (lane == 0u) Y[size_t(slots[r]) * a.n + p0 + p] = i2n_situ(gs * global, us * global, a.gate_cap, a.up_cap);
+          if (lane == 0u) Yh[size_t(slots[r]) * a.n + p0 + p] = half(clamp(i2n_situ(gs * global, us * global, a.gate_cap, a.up_cap), -65504.0f, 65504.0f));
         }
       }
     }
@@ -248,7 +251,7 @@ inline void i2n_nvfp4_few_lut(const device float* X, const device uchar* W, cons
       _Pragma("clang loop unroll(full)")
       for (uint r = 0u; r < R; ++r) {
         _Pragma("clang loop unroll(full)")
-        for (uint q = 0u; q < 4u; ++q) xv[r][q] = *reinterpret_cast<const device float4*>(xs[r] + g * 16u + 4u * q);
+        for (uint q = 0u; q < 4u; ++q) xv[r][q] = float4(*reinterpret_cast<const device half4*>(xs_h[r] + g * 16u + 4u * q));
       }
       _Pragma("clang loop unroll(full)")
       for (uint p = 0u; p < 4u; ++p) {
@@ -300,8 +303,10 @@ inline void i2n_expert_body(const device float* X, const device uchar* W, const 
   const uint q4 = uint(home.x) >> 2u;
   const bool xlive0 = fm < cnt;
   const bool xlive1 = (fm + 8u) < cnt;
-  const device float* xr0 = xlive0 ? X + size_t(GU ? META[384u + off + fm] / a.topk : META[384u + off + fm]) * a.k + 16u * q4 : nullptr;
-  const device float* xr1 = xlive1 ? X + size_t(GU ? META[384u + off + fm + 8u] / a.topk : META[384u + off + fm + 8u]) * a.k + 16u * q4 : nullptr;
+  const device float* xr0 = (GU && xlive0) ? X + size_t(META[384u + off + fm] / a.topk) * a.k + 16u * q4 : nullptr;
+  const device float* xr1 = (GU && xlive1) ? X + size_t(META[384u + off + fm + 8u] / a.topk) * a.k + 16u * q4 : nullptr;
+  const device half* xh0 = (!GU && xlive0) ? ((const device half*)X) + size_t(META[384u + off + fm]) * a.k + 16u * q4 : nullptr;
+  const device half* xh1 = (!GU && xlive1) ? ((const device half*)X) + size_t(META[384u + off + fm + 8u]) * a.k + 16u * q4 : nullptr;
   const device uchar* wp[4];
   const device uchar* sp[4];
   const device bfloat* bp[4];
@@ -332,10 +337,16 @@ inline void i2n_expert_body(const device float* X, const device uchar* W, const 
     }
     _Pragma("clang loop unroll(full)")
     for (uint q = 0u; q < 4u; ++q) {
-      const float4 x0f = xlive0 ? *reinterpret_cast<const device float4*>(xr0 + 64u * g + 4u * q) : float4(0.0f);
-      const float4 x1f = xlive1 ? *reinterpret_cast<const device float4*>(xr1 + 64u * g + 4u * q) : float4(0.0f);
-      const half4 x0h = AFFINE ? half4(x0f) : half4(clamp(x0f, -65504.0f, 65504.0f));
-      const half4 x1h = AFFINE ? half4(x1f) : half4(clamp(x1f, -65504.0f, 65504.0f));
+      half4 x0h, x1h;
+      if (GU) {
+        const float4 x0f = xlive0 ? *reinterpret_cast<const device float4*>(xr0 + 64u * g + 4u * q) : float4(0.0f);
+        const float4 x1f = xlive1 ? *reinterpret_cast<const device float4*>(xr1 + 64u * g + 4u * q) : float4(0.0f);
+        x0h = AFFINE ? half4(x0f) : half4(clamp(x0f, -65504.0f, 65504.0f));
+        x1h = AFFINE ? half4(x1f) : half4(clamp(x1f, -65504.0f, 65504.0f));
+      } else {
+        x0h = xlive0 ? *reinterpret_cast<const device half4*>(xh0 + 64u * g + 4u * q) : half4(0.0h);
+        x1h = xlive1 ? *reinterpret_cast<const device half4*>(xh1 + 64u * g + 4u * q) : half4(0.0h);
+      }
       half4 bw[4];
       _Pragma("clang loop unroll(full)")
       for (uint j = 0u; j < 4u; ++j) {
@@ -362,17 +373,24 @@ inline void i2n_expert_body(const device float* X, const device uchar* W, const 
     for (uint j = 0u; j < 2u; ++j) {
       const uint col = n0 + 16u * j + uint(home.x);
       if (GU) {
-        _Pragma("clang loop unroll(full)")
-        for (uint e = 0u; e < 2u; ++e) {
-          if (col / 2u + e < a.n) {
-            Y[slot * a.n + col / 2u + e] = i2n_situ(vs[j][4u * h + 2u * e] * global,
-                vs[j][4u * h + 2u * e + 1u] * global, a.gate_cap, a.up_cap);
-          }
+        device half* Yh = (device half*)Y;
+        const uint out_col = col >> 1u;
+        const float v0 = i2n_situ(vs[j][4u * h] * global, vs[j][4u * h + 1u] * global, a.gate_cap, a.up_cap);
+        const float v1 = i2n_situ(vs[j][4u * h + 2u] * global, vs[j][4u * h + 3u] * global, a.gate_cap, a.up_cap);
+        if (out_col + 1u < a.n) {
+          *reinterpret_cast<device half2*>(Yh + slot * a.n + out_col) = half2(clamp(v0, -65504.0f, 65504.0f), clamp(v1, -65504.0f, 65504.0f));
+        } else if (out_col < a.n) {
+          Yh[slot * a.n + out_col] = half(clamp(v0, -65504.0f, 65504.0f));
         }
       } else {
-        _Pragma("clang loop unroll(full)")
-        for (uint e = 0u; e < 4u; ++e) {
-          if (col + e < a.n) Y[slot * a.n + col + e] = vs[j][4u * h + e] * global;
+        if (col + 4u <= a.n) {
+          *reinterpret_cast<device float4*>(Y + slot * a.n + col) =
+              float4(vs[j][4u * h], vs[j][4u * h + 1u], vs[j][4u * h + 2u], vs[j][4u * h + 3u]) * global;
+        } else {
+          _Pragma("clang loop unroll(full)")
+          for (uint e = 0u; e < 4u; ++e) {
+            if (col + e < a.n) Y[slot * a.n + col + e] = vs[j][4u * h + e] * global;
+          }
         }
       }
     }

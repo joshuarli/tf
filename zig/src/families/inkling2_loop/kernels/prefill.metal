@@ -237,6 +237,24 @@ struct i2p_rms3_args { uint width, xs[3], xb[3]; float eps; };
   const device float* src = (j == 0u ? X0 : j == 1u ? X1 : X2) + (size_t)(a.xb[j] + row * a.xs[j]) * a.width;
   const device bfloat* w = j == 0u ? W0 : j == 1u ? W1 : W2;
   device float* dst = (j == 0u ? O0 : j == 1u ? O1 : O2) + (size_t)row * a.width;
+  if (a.width == 2304u && nth == 256u) {
+    float v[9];
+    float sum = 0.0f;
+    _Pragma("clang loop unroll(full)")
+    for (uint k = 0u; k < 9u; ++k) {
+      v[k] = src[t + k * 256u];
+      sum = fma(v[k], v[k], sum);
+    }
+    sum = simd_sum(sum);
+    if (t % 32u == 0u) part[t / 32u] = sum;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float total = 0.0f;
+    for (uint i = 0; i < 8u; ++i) total += part[i];
+    const float inv = 1.0f / sqrt(total / 2304.0f + a.eps);
+    _Pragma("clang loop unroll(full)")
+    for (uint k = 0u; k < 9u; ++k) dst[t + k * 256u] = v[k] * inv * float(w[t + k * 256u]);
+    return;
+  }
   float sum = 0.0f;
   for (uint i = t; i < a.width; i += nth) sum = fma(src[i], src[i], sum);
   sum = simd_sum(sum);

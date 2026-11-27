@@ -626,21 +626,38 @@ struct i2n_controls_args { uint h, rank, rows; uint xs[3], xb[3]; uint msg0, col
     constant i2n_controls_args& a [[buffer(14)]], uint2 tg [[threadgroup_position_in_grid]],
     ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
   constexpr uint KS = 6u;
-  threadgroup float red[3u * 16u * 32u];
+  threadgroup half x_tg[16u * 256u];
+  threadgroup float red[2u * 16u * 32u];
   const uint j_ctl = tg.y;
-  const uint row0 = tg.x * 32u;
+  const uint tid = uint(sg) * 32u + uint(lane);
+  const size_t ks_stride = size_t(3u) * a.rows * a.rank;
+  const device float* xbase = X + size_t(j_ctl) * a.rows * a.rank;
+  const uint x_vecs = (a.rows * a.rank) >> 2u;
+  if (a.rank <= 256u) {
+    for (uint v = tid; v < x_vecs; v += 128u) {
+      const uint r = (v * 4u) / a.rank;
+      const uint c = (v * 4u) % a.rank;
+      float4 xv = *reinterpret_cast<const device float4*>(xbase + size_t(r) * a.rank + c);
+      if (a.cols != 1u) {
+        _Pragma("clang loop unroll(full)")
+        for (uint ks = 1u; ks < KS; ++ks) {
+          xv += *reinterpret_cast<const device float4*>(xbase + size_t(ks) * ks_stride + size_t(r) * a.rank + c);
+        }
+      }
+      *reinterpret_cast<threadgroup half4*>(x_tg + r * 256u + c) = half4(xv);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  const uint tile_id = uint(sg) >> 1u;
+  const bool is_f = (uint(sg) & 1u) != 0u;
+  const uint row0 = tg.x * 64u + tile_id * 32u;
+  if (row0 >= a.h) return;
   const uint groups = a.rank >> 6u;
   const short2 home = i2n_home(lane);
   const uint fm = uint(home.y);
   const uint q4 = uint(home.x) >> 2u;
   const bool xlive0 = fm < a.rows;
   const bool xlive1 = (fm + 8u) < a.rows;
-  const size_t ks_stride = size_t(3u) * a.rows * a.rank;
-  const device float* xbase = X + size_t(j_ctl) * a.rows * a.rank;
-  const device float* xr0 = xlive0 ? xbase + size_t(fm) * a.rank + 16u * q4 : nullptr;
-  const device float* xr1 = xlive1 ? xbase + size_t(fm + 8u) * a.rank + 16u * q4 : nullptr;
-  const bool is_f = sg >= 2u;
-  const uint half_sg = uint(sg) & 1u;
   const device bfloat* W = is_f ? (j_ctl == 0u ? F0 : j_ctl == 1u ? F1 : F2)
                                 : (j_ctl == 0u ? G0 : j_ctl == 1u ? G1 : G2);
   const device bfloat* wp[4];
@@ -652,24 +669,28 @@ struct i2n_controls_args { uint h, rank, rows; uint xs[3], xb[3]; uint msg0, col
     wp[j] = W + size_t(wvalid[j] ? wr : 0u) * a.rank + 16u * q4;
   }
   i2n_f8 acc0 = i2n_f8(0.0f), acc1 = i2n_f8(0.0f);
-  for (uint g = half_sg; g < groups; g += 2u) {
+  for (uint g = 0u; g < groups; ++g) {
     _Pragma("clang loop unroll(full)")
     for (uint q = 0u; q < 4u; ++q) {
-      float4 x0f = float4(0.0f), x1f = float4(0.0f);
-      if (a.cols == 1u) {
-        if (xlive0) x0f = *reinterpret_cast<const device float4*>(xr0 + 64u * g + 4u * q);
-        if (xlive1) x1f = *reinterpret_cast<const device float4*>(xr1 + 64u * g + 4u * q);
+      half4 x0h = half4(0.0h), x1h = half4(0.0h);
+      if (a.rank <= 256u) {
+        if (xlive0) x0h = *reinterpret_cast<const threadgroup half4*>(x_tg + fm * 256u + 64u * g + 16u * q4 + 4u * q);
+        if (xlive1) x1h = *reinterpret_cast<const threadgroup half4*>(x_tg + (fm + 8u) * 256u + 64u * g + 16u * q4 + 4u * q);
       } else {
+        float4 x0f = float4(0.0f), x1f = float4(0.0f);
+        const uint k_off = 64u * g + 16u * q4 + 4u * q;
         if (xlive0) {
-          _Pragma("clang loop unroll(full)")
-          for (uint ks = 0u; ks < KS; ++ks) x0f += *reinterpret_cast<const device float4*>(xr0 + size_t(ks) * ks_stride + 64u * g + 4u * q);
+          x0f = *reinterpret_cast<const device float4*>(xbase + size_t(fm) * a.rank + k_off);
+          if (a.cols != 1u) for (uint ks = 1u; ks < KS; ++ks) x0f += *reinterpret_cast<const device float4*>(xbase + size_t(ks) * ks_stride + size_t(fm) * a.rank + k_off);
         }
         if (xlive1) {
-          _Pragma("clang loop unroll(full)")
-          for (uint ks = 0u; ks < KS; ++ks) x1f += *reinterpret_cast<const device float4*>(xr1 + size_t(ks) * ks_stride + 64u * g + 4u * q);
+          x1f = *reinterpret_cast<const device float4*>(xbase + size_t(fm + 8u) * a.rank + k_off);
+          if (a.cols != 1u) for (uint ks = 1u; ks < KS; ++ks) x1f += *reinterpret_cast<const device float4*>(xbase + size_t(ks) * ks_stride + size_t(fm + 8u) * a.rank + k_off);
         }
+        x0h = half4(x0f);
+        x1h = half4(x1f);
       }
-      const i2n_h8 xv = i2n_h8(half4(x0f), half4(x1f));
+      const i2n_h8 xv = i2n_h8(x0h, x1h);
       half4 bw[4];
       _Pragma("clang loop unroll(full)")
       for (uint j = 0u; j < 4u; ++j) {
@@ -678,8 +699,8 @@ struct i2n_controls_args { uint h, rank, rows; uint xs[3], xb[3]; uint msg0, col
       i2n_mma(acc0, acc1, xv, i2n_h8(bw[0], bw[1]), i2n_h8(bw[2], bw[3]));
     }
   }
-  if (sg > 0u) {
-    const uint base = (uint(sg) - 1u) * 16u;
+  if (is_f) {
+    const uint base = tile_id * 16u;
     _Pragma("clang loop unroll(full)")
     for (uint e = 0u; e < 8u; ++e) {
       red[(base + e) * 32u + lane] = acc0[e];
@@ -687,14 +708,13 @@ struct i2n_controls_args { uint h, rank, rows; uint xs[3], xb[3]; uint msg0, col
     }
   }
   threadgroup_barrier(mem_flags::mem_threadgroup);
-  if (sg != 0u) return;
+  if (is_f) return;
+  const uint base = tile_id * 16u;
   i2n_f8 af0, af1;
   _Pragma("clang loop unroll(full)")
   for (uint e = 0u; e < 8u; ++e) {
-    acc0[e] += red[e * 32u + lane];
-    acc1[e] += red[(8u + e) * 32u + lane];
-    af0[e] = red[(16u + e) * 32u + lane] + red[(32u + e) * 32u + lane];
-    af1[e] = red[(24u + e) * 32u + lane] + red[(40u + e) * 32u + lane];
+    af0[e] = red[(base + e) * 32u + lane];
+    af1[e] = red[(base + 8u + e) * 32u + lane];
   }
   const device float* C = j_ctl == 0u ? C0 : j_ctl == 1u ? C1 : C2;
   device float* O = j_ctl == 0u ? O0 : j_ctl == 1u ? O1 : O2;
@@ -710,12 +730,20 @@ struct i2n_controls_args { uint h, rank, rows; uint xs[3], xb[3]; uint msg0, col
     _Pragma("clang loop unroll(full)")
     for (uint j = 0u; j < 2u; ++j) {
       const uint col = row0 + 16u * j + uint(home.x);
-      _Pragma("clang loop unroll(full)")
-      for (uint e = 0u; e < 4u; ++e) {
-        if (col + e < a.h) {
-          const float c_val = cur[col + e];
-          const float m_val = msg[col + e];
-          out[col + e] = c_val - precise::tanh(vf[j][4u * h + e]) * c_val + precise::tanh(vg[j][4u * h + e]) * m_val;
+      if (col + 4u <= a.h) {
+        const float4 cv = *reinterpret_cast<const device float4*>(cur + col);
+        const float4 mv = *reinterpret_cast<const device float4*>(msg + col);
+        const float4 fg = float4(vf[j][4u * h], vf[j][4u * h + 1u], vf[j][4u * h + 2u], vf[j][4u * h + 3u]);
+        const float4 gg = float4(vg[j][4u * h], vg[j][4u * h + 1u], vg[j][4u * h + 2u], vg[j][4u * h + 3u]);
+        *reinterpret_cast<device float4*>(out + col) = cv - precise::tanh(fg) * cv + precise::tanh(gg) * mv;
+      } else {
+        _Pragma("clang loop unroll(full)")
+        for (uint e = 0u; e < 4u; ++e) {
+          if (col + e < a.h) {
+            const float c_val = cur[col + e];
+            const float m_val = msg[col + e];
+            out[col + e] = c_val - precise::tanh(vf[j][4u * h + e]) * c_val + precise::tanh(vg[j][4u * h + e]) * m_val;
+          }
         }
       }
     }

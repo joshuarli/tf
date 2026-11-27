@@ -240,7 +240,7 @@ pub const Pipes = struct {
     pub fn naxDense(p: *const Pipes, rows: usize, n: u32, k: u32, bits: u32) ?Dispatch {
         const nax = p.nax orelse return null;
         if (bits != 8 or rows < 3 or rows > max_rows or k % 64 != 0) return null;
-        if (n <= 4096) return .{ .pipe = nax.dense8, .groups = mtl.Size.of((n + 31) / 32, 1, 1), .threads = mtl.Size.of(256, 1, 1) };
+        if (n <= 1024) return .{ .pipe = nax.dense8, .groups = mtl.Size.of((n + 31) / 32, 1, 1), .threads = mtl.Size.of(256, 1, 1) };
         return .{ .pipe = nax.dense4, .groups = mtl.Size.of((n + 31) / 32, 1, 1), .threads = mtl.Size.of(128, 1, 1) };
     }
 

@@ -425,6 +425,23 @@ struct i2_controls_args { uint h, rank, rows; uint xs[3], xb[3]; uint msg0, cols
     : MSG + size_t(a.msg0 + controller + row * 4u) * a.h;
   device float* dst = OUT + (size_t(controller) * a.rows + row) * 2u * a.h + which * a.h;
   float sum = 0.0f;
+  if ((a.h & 3u) == 0u) {
+    const uint h4 = a.h >> 2u;
+    const device float4* src4 = reinterpret_cast<const device float4*>(src);
+    device float4* dst4 = reinterpret_cast<device float4*>(dst);
+    for (uint i = tid; i < h4; i += nth) {
+      const float4 v = src4[i];
+      sum = fma(v.w, v.w, fma(v.z, v.z, fma(v.y, v.y, fma(v.x, v.x, sum))));
+    }
+    sum = simd_sum(sum);
+    if (tid % 32u == 0u) part[tid / 32u] = sum;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float total = 0.0f;
+    for (uint i = 0; i < nth / 32u; ++i) total += part[i];
+    const float inv = 1.0f / sqrt(total / float(a.h) + 1e-6f);
+    for (uint i = tid; i < h4; i += nth) dst4[i] = src4[i] * inv;
+    return;
+  }
   for (uint i = tid; i < a.h; i += nth) sum = fma(src[i], src[i], sum);
   sum = simd_sum(sum);
   if (tid % 32u == 0u) part[tid / 32u] = sum;

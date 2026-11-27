@@ -1273,7 +1273,7 @@ const Chunk = struct {
                     c.enc.dispatchGroups(mtl.Size.of((rank + 31) / 32, 1, 6), mtl.Size.of(64, 1, 1));
                 }
                 c.setP(nax.controls_apply_bf16, args, &.{ b(scratch.controls_hidden), t(ctl.gain), t(ctl.gain), t(ctl.gain), t(ctl.forget), t(ctl.forget), t(ctl.forget), cur.buf, cur.buf, cur.buf, msg.buf, out, out, out, A });
-                c.enc.dispatchGroups(mtl.Size.of((c.h + 31) / 32, 1, 1), mtl.Size.of(128, 1, 1));
+                c.enc.dispatchGroups(mtl.Size.of((c.h + 63) / 64, 1, 1), mtl.Size.of(128, 1, 1));
                 return;
             };
             const down_pipe = if (is_bf16) scratch.shared.controls_down_bf16 else scratch.shared.controls_down;
@@ -1332,7 +1332,7 @@ const Chunk = struct {
                 c.enc.dispatchGroups(mtl.Size.of((rank + 31) / 32, 3, 6), mtl.Size.of(64, 1, 1));
             }
             c.setP(nax.controls_apply_bf16, nargs, &.{ b(scratch.controls_hidden), t(controllers[0].gain), t(controllers[1].gain), t(controllers[2].gain), t(controllers[0].forget), t(controllers[1].forget), t(controllers[2].forget), ins[0].buf, ins[1].buf, ins[2].buf, msg, b(c.s.n0), b(c.s.n1), b(c.s.n2), A });
-            c.enc.dispatchGroups(mtl.Size.of((c.h + 31) / 32, 3, 1), mtl.Size.of(128, 1, 1));
+            c.enc.dispatchGroups(mtl.Size.of((c.h + 63) / 64, 3, 1), mtl.Size.of(128, 1, 1));
             return;
         };
         if (fused_down) {

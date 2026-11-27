@@ -12,7 +12,9 @@ const batch_mod = @import("batch.zig");
 pub const source = @import("kernels.zig").attention ++ "\n" ++ @embedFile("kernels/verify.metal");
 
 /// The most rows one grouped verify takes: a stream's newest token and a tree of drafts under it.
-pub const max_rows: usize = 16;
+pub const max_rows: usize = 32;
+/// The most rows without tensor units (exact few-row kernels cap at 16).
+pub const exact_max_rows: usize = 16;
 /// The most rows where not every projection is affine: past eight its batch step leaves the few-row kernels.
 pub const plain_rows: usize = 8;
 const none: u8 = 0xff;
@@ -108,7 +110,7 @@ pub const Verifier = struct {
         errdefer v.keep.deinit();
         v.kept = try device.buffer(max_rows * 4, mtl.ResourceOptions.shared);
         v.slot_count = config.slots();
-        v.limit = if (config.checkpoint == .mlx) max_rows else plain_rows;
+        v.limit = if (config.checkpoint == .mlx) (if (device.tensorUnits()) max_rows else exact_max_rows) else plain_rows;
         var locals: u32 = 0;
         var globals: u32 = 0;
         for (0..config.slots()) |s| {
@@ -553,10 +555,10 @@ pub const Group = struct {
             const lo_min: u32 = if (win != 0 and gpos + 1 > win) gpos + 1 - win else 0;
             max_cached = @max(max_cached, if (gpos > lo_min) gpos - lo_min else 0);
         }
-        const use_nax_split = bufs.nax_split != null and heads == 24 and kv == 8 and dim == 128 and g.rows <= 32 and
+        const use_nax_split = bufs.nax_split != null and heads == 24 and kv == 8 and dim == 128 and g.rows <= 32 and g.caches.len <= 16 and
             (max_stream >= 5 or (max_stream >= 3 and max_cached >= 2048));
         if (use_nax_split) {
-            var tiles: [20]NaxAttnTile = undefined;
+            var tiles: [22]NaxAttnTile = undefined;
             var n_tiles: usize = 0;
             var tile_max_splits: u32 = 1;
             var stream_first: usize = 0;

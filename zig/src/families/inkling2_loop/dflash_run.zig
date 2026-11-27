@@ -331,7 +331,7 @@ fn widths(gpa: std.mem.Allocator, m: *inkling.Model, prompts: []const Prompt, re
     const load_rows = 8;
     var all_equal = true;
     for (prompts) |prompt| {
-        var cache = try inkling.Cache.init(m.device, &m.config, prompt.ids.len + 16);
+        var cache = try inkling.Cache.init(m.device, &m.config, prompt.ids.len + inkling.group.max_rows);
         defer cache.deinit();
         const first = try spec.prefillPlain(m, &ps, &cache, prompt.ids);
         var rows: [inkling.group.max_rows]u32 = undefined;
@@ -437,7 +437,7 @@ fn routeOverlap(gpa: std.mem.Allocator, m: *inkling.Model, verifier: *const inkl
         try out.print(gpa, "{s}{d}", .{ if (slot == 0 and i == 0) "" else ",", e });
     };
     try out.appendSlice(gpa, "]}\n");
-    for ([_]usize{ 1, 2, 4, 8, 12, 16 }) |width| {
+    for ([_]usize{ 1, 2, 4, 8, 12, 16, 24, 32 }) |width| {
         if (width > rows.len) continue;
         var total: usize = 0;
         var most: usize = 0;

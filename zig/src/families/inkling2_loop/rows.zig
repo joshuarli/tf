@@ -4,6 +4,7 @@ const mtl = @import("metal");
 pub const source = @embedFile("kernels/rows.metal") ++ "\n#define I2T_ROUTED 1\n" ++ @embedFile("kernels/experts.metal");
 
 pub const max_rows: usize = 16;
+pub const nax_max_rows: usize = 32;
 /// The most rows one 8-row tile of batch rows holds; wider steps take two.
 const tile_rows: usize = 8;
 pub const wide_output: u32 = 65536;
@@ -81,7 +82,7 @@ pub const Pipes = struct {
             errdefer router_bf16.deinit();
             const pick_ks9 = try mtl.Pipeline.init(device, lib, "i2n_pick_ks9", false);
             errdefer pick_ks9.deinit();
-            const meta = try device.buffer(640 * 4, mtl.ResourceOptions.private);
+            const meta = try device.buffer(768 * 4, mtl.ResourceOptions.private);
             errdefer meta.deinit();
             const indirect = try device.buffer(8 * 4, mtl.ResourceOptions.private);
             errdefer indirect.deinit();
@@ -244,17 +245,18 @@ pub const Pipes = struct {
 
     pub fn naxDense(p: *const Pipes, rows: usize, n: u32, k: u32, bits: u32) ?Dispatch {
         const nax = p.nax orelse return null;
-        if (bits != 8 or rows < 3 or rows > max_rows or k % 64 != 0) return null;
-        if (n <= 1024) return .{ .pipe = nax.dense8, .groups = mtl.Size.of((n + 31) / 32, 1, 1), .threads = mtl.Size.of(256, 1, 1) };
-        return .{ .pipe = nax.dense4, .groups = mtl.Size.of((n + 31) / 32, 1, 1), .threads = mtl.Size.of(128, 1, 1) };
+        if (bits != 8 or rows < 3 or rows > nax_max_rows or k % 64 != 0) return null;
+        const m_tiles: u32 = @intCast((rows + 15) / 16);
+        if (n <= 1024) return .{ .pipe = nax.dense8, .groups = mtl.Size.of((n + 31) / 32, m_tiles, 1), .threads = mtl.Size.of(256, 1, 1) };
+        return .{ .pipe = nax.dense4, .groups = mtl.Size.of((n + 31) / 32, m_tiles, 1), .threads = mtl.Size.of(128, 1, 1) };
     }
 
     pub fn naxProjections(p: *const Pipes, rows: usize, m: [8]u32, k: u32) ?Dispatch {
         const nax = p.nax orelse return null;
-        if (rows < 3 or rows > max_rows or k % 64 != 0) return null;
+        if (rows < 3 or rows > nax_max_rows or k % 64 != 0) return null;
         var groups: u32 = 0;
         for (m) |n| groups += (n + 31) / 32;
-        return .{ .pipe = nax.projections, .groups = mtl.Size.of(groups, 1, 1), .threads = mtl.Size.of(128, 1, 1) };
+        return .{ .pipe = nax.projections, .groups = mtl.Size.of(groups, @intCast((rows + 15) / 16), 1), .threads = mtl.Size.of(128, 1, 1) };
     }
 
     fn pick(p: *const Pipes, kind: Kind, rows: usize, outputs: []const u32, slots: u32) Dispatch {

@@ -284,7 +284,7 @@ inline void i2v_split_blocks(const device float* Q, const device half* KEYS, con
   *reinterpret_cast<device packed_float4*>(PART + base + 2u + lane * 4u) = packed_float4(acc);
 }
 
-struct i2v_row { device half* keys; device half* values; i2_attn_parts args; uint gpos; uchar path[16]; };
+struct i2v_row { device half* keys; device half* values; i2_attn_parts args; uint gpos; uchar path[32]; };
 
 [[kernel]] void i2v_split(const device float* Q [[buffer(0)]], const device float* B [[buffer(1)]],
     const device float* sink [[buffer(2)]], constant i2v_row* rows [[buffer(3)]], device float* PART [[buffer(4)]],

@@ -1260,8 +1260,9 @@ const Chunk = struct {
             const rank: u32 = @intCast(nrows(ctl.down));
             const xs: [3]u32 = @splat(cur.xs);
             const xb: [3]u32 = @splat(cur.xb);
-            if (c.s.rounding.experts and is_bf16 and c.n >= 3 and c.n <= @import("rows.zig").max_rows and c.h % 64 == 0 and rank % 64 == 0) if (scratch.shared.nax) |nax| {
+            if (c.s.rounding.experts and is_bf16 and c.n >= 3 and c.n <= @import("rows.zig").nax_max_rows and c.h % 64 == 0 and rank % 64 == 0) if (scratch.shared.nax) |nax| {
                 const use_scalar_down = scratch.shared.controlsDownBatchBf16(c.n, rank, c.h, 1);
+                const m_tiles: u32 = (c.n + 15) / 16;
                 const args = ControlsArgs{ .h = c.h, .rank = rank, .rows = c.n, .xs = xs, .xb = xb, .msg0 = msg.xb, .cols = if (use_scalar_down != null) 1 else 6 };
                 c.setP(scratch.controls_norm, args, &.{ cur.buf, cur.buf, cur.buf, msg.buf, A, b(scratch.controls_input) });
                 c.enc.dispatchGroups(mtl.Size.of(2 * c.n, 1, 1), mtl.Size.of(256, 1, 1));
@@ -1270,10 +1271,10 @@ const Chunk = struct {
                     c.enc.dispatchGroups(d.groups, d.threads);
                 } else {
                     c.setP(nax.controls_down_bf16, args, &.{ b(scratch.controls_input), t(ctl.down), t(ctl.down), t(ctl.down), A, b(scratch.controls_hidden) });
-                    c.enc.dispatchGroups(mtl.Size.of((rank + 31) / 32, 1, 6), mtl.Size.of(64, 1, 1));
+                    c.enc.dispatchGroups(mtl.Size.of((rank + 31) / 32, 1, 6 * m_tiles), mtl.Size.of(64, 1, 1));
                 }
                 c.setP(nax.controls_apply_bf16, args, &.{ b(scratch.controls_hidden), t(ctl.gain), t(ctl.gain), t(ctl.gain), t(ctl.forget), t(ctl.forget), t(ctl.forget), cur.buf, cur.buf, cur.buf, msg.buf, out, out, out, A });
-                c.enc.dispatchGroups(mtl.Size.of((c.h + 63) / 64, 1, 1), mtl.Size.of(128, 1, 1));
+                c.enc.dispatchGroups(mtl.Size.of((c.h + 63) / 64, 1, m_tiles), mtl.Size.of(128, 1, 1));
                 return;
             };
             const down_pipe = if (is_bf16) scratch.shared.controls_down_bf16 else scratch.shared.controls_down;
@@ -1318,8 +1319,9 @@ const Chunk = struct {
         const fused_down = c.s.fuse;
         const multi_col = c.s.fuse and c.n > 1;
         const args = ControlsArgs{ .h = c.h, .rank = rank, .rows = c.n, .xs = .{ ins[0].xs, ins[1].xs, ins[2].xs }, .xb = .{ ins[0].xb, ins[1].xb, ins[2].xb }, .cols = if (multi_col) c.applyCols() else 1 };
-        if (c.s.rounding.experts and is_bf16 and c.n >= 3 and c.n <= @import("rows.zig").max_rows and c.h % 64 == 0 and rank % 64 == 0) if (scratch.shared.nax) |nax| {
+        if (c.s.rounding.experts and is_bf16 and c.n >= 3 and c.n <= @import("rows.zig").nax_max_rows and c.h % 64 == 0 and rank % 64 == 0) if (scratch.shared.nax) |nax| {
             const use_scalar_down = scratch.shared.controlsDownBatchBf16(c.n, rank, c.h, 3);
+            const m_tiles: u32 = (c.n + 15) / 16;
             var nargs = args;
             nargs.cols = if (use_scalar_down != null) 1 else 6;
             c.setP(scratch.controls_norm, nargs, &.{ ins[0].buf, ins[1].buf, ins[2].buf, msg, A, b(scratch.controls_input) });
@@ -1329,10 +1331,10 @@ const Chunk = struct {
                 c.enc.dispatchGroups(d.groups, d.threads);
             } else {
                 c.setP(nax.controls_down_bf16, nargs, &.{ b(scratch.controls_input), t(controllers[0].down), t(controllers[1].down), t(controllers[2].down), A, b(scratch.controls_hidden) });
-                c.enc.dispatchGroups(mtl.Size.of((rank + 31) / 32, 3, 6), mtl.Size.of(64, 1, 1));
+                c.enc.dispatchGroups(mtl.Size.of((rank + 31) / 32, 3, 6 * m_tiles), mtl.Size.of(64, 1, 1));
             }
             c.setP(nax.controls_apply_bf16, nargs, &.{ b(scratch.controls_hidden), t(controllers[0].gain), t(controllers[1].gain), t(controllers[2].gain), t(controllers[0].forget), t(controllers[1].forget), t(controllers[2].forget), ins[0].buf, ins[1].buf, ins[2].buf, msg, b(c.s.n0), b(c.s.n1), b(c.s.n2), A });
-            c.enc.dispatchGroups(mtl.Size.of((c.h + 63) / 64, 3, 1), mtl.Size.of(128, 1, 1));
+            c.enc.dispatchGroups(mtl.Size.of((c.h + 63) / 64, 3, m_tiles), mtl.Size.of(128, 1, 1));
             return;
         };
         if (fused_down) {
@@ -1520,10 +1522,10 @@ const Chunk = struct {
         const K: u32 = cc.text.topk;
         const inter: u32 = cc.text.expert_inter;
         c.enter(.router);
-        const nax_router = if (c.batch) |batch| (if (lay.router.dtype == .bf16 and c.s.rounding.experts and c.s.fuse and E <= 128 and c.h % 64 == 0 and c.n >= 7 and c.n <= @import("rows.zig").max_rows) batch.scratch.shared.nax else null) else null;
+        const nax_router = if (c.batch) |batch| (if (lay.router.dtype == .bf16 and c.s.rounding.experts and c.s.fuse and E <= 128 and c.h % 64 == 0 and c.n >= 7 and c.n <= @import("rows.zig").nax_max_rows) batch.scratch.shared.nax else null) else null;
         if (nax_router) |nax| {
             c.setP(nax.router_bf16, Gemm{ .n = E, .k = c.h, .rows = c.n, .xs = 1, .xb = 0, .cap = 0 }, &.{ input, t(lay.router), A, b(nax.router_ks) });
-            c.enc.dispatchGroups(mtl.Size.of((E + 31) / 32, 9, 1), mtl.Size.of(64, 1, 1));
+            c.enc.dispatchGroups(mtl.Size.of((E + 31) / 32, 9, (c.n + 15) / 16), mtl.Size.of(64, 1, 1));
             c.setP(nax.pick_ks9, Pick{ .experts = E, .topk = K, .rows = c.n, .route_scale = cc.text.route_scale }, &.{ b(nax.router_ks), t(lay.router_bias), A, b(s.router), b(s.picks), b(s.wts) });
             c.enc.dispatchGroups(mtl.Size.of(c.n, 1, 1), mtl.Size.of(32, 1, 1));
         } else {
@@ -1684,7 +1686,7 @@ const Chunk = struct {
         const nax = batch.scratch.shared.nax orelse return false;
         const text = &c.m.config.text;
         const s = c.s;
-        if (c.n < 3 or c.n > @import("rows.zig").max_rows or text.experts > 128) return false;
+        if (c.n < 3 or c.n > @import("rows.zig").nax_max_rows or text.experts > 128) return false;
         if (c.h % 64 != 0 or text.expert_inter % 64 != 0 or c.h > 4096) return false;
         const slots: u32 = c.n * text.topk;
         if (slots > 256) return false;

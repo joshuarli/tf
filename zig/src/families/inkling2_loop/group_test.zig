@@ -372,7 +372,7 @@ fn checkTrees(path: []const u8) !void {
     var verifier = try group.Verifier.init(m.device, config);
     defer verifier.deinit();
     const limit = verifier.limit;
-    try std.testing.expectEqual(if (config.checkpoint == .mlx) group.max_rows else group.plain_rows, limit);
+    try std.testing.expectEqual(if (config.checkpoint == .mlx) (if (m.device.tensorUnits()) group.max_rows else group.exact_max_rows) else group.plain_rows, limit);
     const visits = [_]u32{ 5, 23, 41, config.slots() };
     var tree_taps = try Taps.init(m.device, config, &visits, group.max_rows);
     defer tree_taps.deinit();
@@ -398,7 +398,7 @@ fn checkTrees(path: []const u8) !void {
     }
     const cases = [_]TreeCase{
         .{ .parents = &.{ 0, 0, 0, 1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 2, 14 }, .greedy = &.{ 1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 } },
-        .{ .parents = &.{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 }, .greedy = &.{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 } },
+        .{ .parents = &.{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30 }, .greedy = &.{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31 } },
         .{ .parents = &.{ 0, 0, 1, 1, 2, 2, 3, 5 }, .greedy = &.{ 2, 5, 8 } },
         .{ .parents = &.{ 0, 1, 1, 0, 4, 2, 3 }, .greedy = &.{ 4, 5 } },
         .{ .parents = &.{ 0, 0, 0, 0 } },
@@ -516,17 +516,17 @@ test "hybrid M5 NAX grouped verify produces finite logits and matches exact f32 
     var verifier = try group.Verifier.init(m.device, config);
     defer verifier.deinit();
     const start = config.text.window - 4;
-    var base = try state.Cache.init(m.device, config, config.text.window + 32);
+    var base = try state.Cache.init(m.device, config, config.text.window + group.max_rows + 16);
     defer base.deinit();
     try prefillTokens(m, &ps, &base, agent[0..start]);
-    var work_e = try state.Cache.init(m.device, config, config.text.window + 32);
+    var work_e = try state.Cache.init(m.device, config, config.text.window + group.max_rows + 16);
     defer work_e.deinit();
-    var work_n = try state.Cache.init(m.device, config, config.text.window + 32);
+    var work_n = try state.Cache.init(m.device, config, config.text.window + group.max_rows + 16);
     defer work_n.deinit();
     const ids = agent[start .. start + group.max_rows];
     var total: usize = 0;
     var agreed: usize = 0;
-    for ([_]usize{ 1, 4, 8, group.max_rows }) |w| {
+    for ([_]usize{ 1, 4, 8, 16, group.max_rows }) |w| {
         try cloneCache(m, &base, &work_e);
         try cloneCache(m, &base, &work_n);
         const ge = try verifier.group(&.{&work_e}, &.{w});

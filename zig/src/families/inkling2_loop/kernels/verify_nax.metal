@@ -135,12 +135,12 @@ struct i2n_sort_args { uint slots, experts, grid_x_up, grid_x_down, rows, k, cla
   }
   threadgroup_barrier(mem_flags::mem_threadgroup);
   const uint c = tid < a.experts ? atomic_load_explicit(&cnt[tid], memory_order_relaxed) : 0u;
-  const uint act = c > 0u ? 1u : 0u;
+  const uint tiles = (c + 15u) >> 4u;
   const uint c_local = simd_prefix_exclusive_sum(c);
-  const uint a_local = simd_prefix_exclusive_sum(act);
+  const uint a_local = simd_prefix_exclusive_sum(tiles);
   if (lane == 31u) {
     sg_sum[sg] = c_local + c;
-    sg_act[sg] = a_local + act;
+    sg_act[sg] = a_local + tiles;
   }
   threadgroup_barrier(mem_flags::mem_threadgroup);
   uint c_base = 0u, a_base = 0u;
@@ -150,26 +150,31 @@ struct i2n_sort_args { uint slots, experts, grid_x_up, grid_x_down, rows, k, cla
   }
   const uint off = c_base + c_local;
   const uint idx = a_base + a_local;
-  if (act != 0u) {
+  if (tiles != 0u) {
     META[idx] = tid;
-    META[128u + idx] = off;
-    META[256u + idx] = c;
+    META[160u + idx] = off;
+    META[320u + idx] = min(16u, c);
+    if (tiles > 1u) {
+      META[idx + 1u] = tid;
+      META[160u + idx + 1u] = off + 16u;
+      META[320u + idx + 1u] = c - 16u;
+    }
     atomic_store_explicit(&cur[tid], off, memory_order_relaxed);
   }
   if (tid == 127u) {
-    const uint total_act = idx + act;
+    const uint total_tiles = idx + tiles;
     INDIRECT[0] = a.grid_x_up;
-    INDIRECT[1] = total_act;
+    INDIRECT[1] = total_tiles;
     INDIRECT[2] = 1u;
     INDIRECT[3] = a.grid_x_down;
-    INDIRECT[4] = total_act;
+    INDIRECT[4] = total_tiles;
     INDIRECT[5] = 1u;
   }
   threadgroup_barrier(mem_flags::mem_threadgroup);
   for (uint s = tid; s < a.slots; s += 128u) {
     const uint e = uint(PICKS[s]);
     const uint p = atomic_fetch_add_explicit(&cur[e], 1u, memory_order_relaxed);
-    META[384u + p] = s;
+    META[480u + p] = s;
   }
 }
 
@@ -196,7 +201,7 @@ inline void i2n_nvfp4_few_lut(const device float* X, const device uchar* W, cons
   const device half* xs_h[R];
   _Pragma("clang loop unroll(full)")
   for (uint r = 0u; r < R; ++r) {
-    slots[r] = META[384u + off + r];
+    slots[r] = META[480u + off + r];
     xs_h[r] = ((const device half*)X) + size_t(GU ? slots[r] / a.topk : slots[r]) * a.k;
   }
   const device uchar* We = W + size_t(expert) * cols * stride;
@@ -302,8 +307,8 @@ inline void i2n_expert_body(const device float* X, const device uchar* W, const 
     const device uchar* G, const device float* den, const device uint* META, constant i2n_moe_args& a,
     device float* Y, threadgroup float* red, uint2 tg, ushort sg, ushort lane) {
   const uint expert = META[tg.y];
-  const uint off = META[128u + tg.y];
-  const uint cnt = META[256u + tg.y];
+  const uint off = META[160u + tg.y];
+  const uint cnt = META[320u + tg.y];
   const uint cols = GU ? 2u * a.n : a.n;
   const uint n0 = tg.x * 32u;
   if (!AFFINE && S == 4u) {
@@ -317,8 +322,8 @@ inline void i2n_expert_body(const device float* X, const device uchar* W, const 
   const bool xlive0 = fm < cnt;
   const bool xlive1 = (fm + 8u) < cnt;
   const device half* xh = (const device half*)X;
-  const device half* xh0 = xlive0 ? xh + size_t(GU ? META[384u + off + fm] / a.topk : META[384u + off + fm]) * a.k + 16u * q4 : nullptr;
-  const device half* xh1 = xlive1 ? xh + size_t(GU ? META[384u + off + fm + 8u] / a.topk : META[384u + off + fm + 8u]) * a.k + 16u * q4 : nullptr;
+  const device half* xh0 = xlive0 ? xh + size_t(GU ? META[480u + off + fm] / a.topk : META[480u + off + fm]) * a.k + 16u * q4 : nullptr;
+  const device half* xh1 = xlive1 ? xh + size_t(GU ? META[480u + off + fm + 8u] / a.topk : META[480u + off + fm + 8u]) * a.k + 16u * q4 : nullptr;
   const device uchar* wp[4];
   const device uchar* sp[4];
   const device bfloat* bp[4];
@@ -372,7 +377,7 @@ inline void i2n_expert_body(const device float* X, const device uchar* W, const 
   for (uint h = 0u; h < 2u; ++h) {
     const uint r = fm + 8u * h;
     if (r >= cnt) continue;
-    const size_t slot = size_t(META[384u + off + r]);
+    const size_t slot = size_t(META[480u + off + r]);
     _Pragma("clang loop unroll(full)")
     for (uint j = 0u; j < 2u; ++j) {
       const uint col = n0 + 16u * j + uint(home.x);
@@ -475,19 +480,22 @@ template <uint S>
 [[kernel]] void i2n_dense_t(const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]],
     const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
     constant i2n_dense_args& a [[buffer(4)]], device float* y [[buffer(5)]],
-    uint group [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]],
+    uint2 tg [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]],
     ushort lane [[thread_index_in_simdgroup]]) {
   threadgroup float red[(S > 1u ? S - 1u : 1u) * 16u * 32u];
-  const uint row0 = group * 32u;
+  const uint row0 = tg.x * 32u;
+  const uint row_off = tg.y * 16u;
+  if (row_off >= a.rows) return;
+  const uint m_cnt = min(16u, a.rows - row_off);
   i2n_f8 acc0, acc1;
-  i2n_affine8_body<S>(x + size_t(a.xb) * a.k, size_t(a.xs) * a.k, a.rows, w, s, b, row0, a.n - 1u, a.k, red, sg, lane, acc0, acc1);
+  i2n_affine8_body<S>(x + size_t(a.xb + row_off * a.xs) * a.k, size_t(a.xs) * a.k, m_cnt, w, s, b, row0, a.n - 1u, a.k, red, sg, lane, acc0, acc1);
   if (sg != 0u) return;
   const short2 home = i2n_home(lane);
   const i2n_f8 vs[2] = { acc0, acc1 };
   _Pragma("clang loop unroll(full)")
   for (uint h = 0u; h < 2u; ++h) {
     const uint r = uint(home.y) + 8u * h;
-    if (r >= a.rows) continue;
+    if (r >= m_cnt) continue;
     _Pragma("clang loop unroll(full)")
     for (uint j = 0u; j < 2u; ++j) {
       const uint col = row0 + 16u * j + uint(home.x);
@@ -496,7 +504,7 @@ template <uint S>
         if (col + e < a.n) {
           float v = vs[j][4u * h + e];
           if (a.cap > 0.0f) v = a.cap * precise::tanh(v / a.cap);
-          y[size_t(r) * a.n + col + e] = v;
+          y[size_t(row_off + r) * a.n + col + e] = v;
         }
       }
     }
@@ -505,12 +513,12 @@ template <uint S>
 
 template [[host_name("i2n_dense4")]] [[kernel]] void i2n_dense_t<4>(const device float* x [[buffer(0)]],
     const device uint* w [[buffer(1)]], const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
-    constant i2n_dense_args& a [[buffer(4)]], device float* y [[buffer(5)]], uint group [[threadgroup_position_in_grid]],
+    constant i2n_dense_args& a [[buffer(4)]], device float* y [[buffer(5)]], uint2 tg [[threadgroup_position_in_grid]],
     ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]);
 
 template [[host_name("i2n_dense8")]] [[kernel]] void i2n_dense_t<8>(const device float* x [[buffer(0)]],
     const device uint* w [[buffer(1)]], const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
-    constant i2n_dense_args& a [[buffer(4)]], device float* y [[buffer(5)]], uint group [[threadgroup_position_in_grid]],
+    constant i2n_dense_args& a [[buffer(4)]], device float* y [[buffer(5)]], uint2 tg [[threadgroup_position_in_grid]],
     ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]);
 
 struct i2n_projection_args { uint k, full, rows; uint m[8]; };
@@ -522,11 +530,14 @@ struct i2n_projection_args { uint k, full, rows; uint m[8]; };
     const device bfloat* bv [[buffer(11)]], device float* oq [[buffer(12)]], device float* ok [[buffer(13)]],
     device float* ov [[buffer(14)]], device float* orl [[buffer(15)]], device float* og [[buffer(16)]],
     device float* os [[buffer(17)]], device float* okd [[buffer(18)]], device float* ovd [[buffer(19)]],
-    constant i2n_projection_args& a [[buffer(20)]], uint group [[threadgroup_position_in_grid]],
+    constant i2n_projection_args& a [[buffer(20)]], uint2 tg [[threadgroup_position_in_grid]],
     ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
   constexpr uint S = 4u;
   threadgroup float red[(S - 1u) * 16u * 32u];
-  uint which = 0u, first = group;
+  const uint row_off = tg.y * 16u;
+  if (row_off >= a.rows) return;
+  const uint m_cnt = min(16u, a.rows - row_off);
+  uint which = 0u, first = tg.x;
   for (; which < 8u; ++which) {
     const uint span = (a.m[which] + 31u) / 32u;
     if (first < span) break;
@@ -545,7 +556,7 @@ struct i2n_projection_args { uint k, full, rows; uint m[8]; };
   if (which == 7u) offset = a.m[2];
   const uint m = a.m[which], row0 = first * 32u;
   i2n_f8 acc0, acc1;
-  i2n_affine8_body<S>(key ? xk : val ? xv : xq, a.k, a.rows,
+  i2n_affine8_body<S>((key ? xk : val ? xv : xq) + size_t(row_off) * a.k, a.k, m_cnt,
       a.full && key ? wk : a.full && val ? wv : wq,
       a.full && key ? sk : a.full && val ? sv : sq,
       a.full && key ? bk : a.full && val ? bv : bq,
@@ -558,13 +569,13 @@ struct i2n_projection_args { uint k, full, rows; uint m[8]; };
   _Pragma("clang loop unroll(full)")
   for (uint h = 0u; h < 2u; ++h) {
     const uint r = uint(home.y) + 8u * h;
-    if (r >= a.rows) continue;
+    if (r >= m_cnt) continue;
     _Pragma("clang loop unroll(full)")
     for (uint j = 0u; j < 2u; ++j) {
       const uint col = row0 + 16u * j + uint(home.x);
       _Pragma("clang loop unroll(full)")
       for (uint e = 0u; e < 4u; ++e) {
-        if (col + e < m) y[size_t(r) * m + col + e] = vs[j][4u * h + e];
+        if (col + e < m) y[size_t(row_off + r) * m + col + e] = vs[j][4u * h + e];
       }
     }
   }
@@ -586,18 +597,21 @@ struct i2n_controls_args { uint h, rank, rows; uint xs[3], xb[3]; uint msg0, col
   constexpr uint KS = 6u, S = 2u;
   threadgroup float red[(S - 1u) * 16u * 32u];
   const uint j_ctl = tg.y;
-  const uint ks = tg.z;
+  const uint ks = tg.z % KS;
+  const uint row_off = (tg.z / KS) * 16u;
+  if (row_off >= a.rows) return;
+  const uint m_cnt = min(16u, a.rows - row_off);
   const uint row0 = tg.x * 32u;
   const uint k = 2u * a.h;
   const uint groups = k >> 6u;
   const short2 home = i2n_home(lane);
   const uint fm = uint(home.y);
   const uint q4 = uint(home.x) >> 2u;
-  const bool xlive0 = fm < a.rows;
-  const bool xlive1 = (fm + 8u) < a.rows;
+  const bool xlive0 = fm < m_cnt;
+  const bool xlive1 = (fm + 8u) < m_cnt;
   const device float* xbase = X + size_t(j_ctl) * a.rows * k;
-  const device float* xr0 = xlive0 ? xbase + size_t(fm) * k + 16u * q4 : nullptr;
-  const device float* xr1 = xlive1 ? xbase + size_t(fm + 8u) * k + 16u * q4 : nullptr;
+  const device float* xr0 = xlive0 ? xbase + size_t(row_off + fm) * k + 16u * q4 : nullptr;
+  const device float* xr1 = xlive1 ? xbase + size_t(row_off + fm + 8u) * k + 16u * q4 : nullptr;
   const device bfloat* W = j_ctl == 0u ? W0 : j_ctl == 1u ? W1 : W2;
   const device bfloat* wp[4];
   bool wvalid[4];
@@ -628,13 +642,13 @@ struct i2n_controls_args { uint h, rank, rows; uint xs[3], xb[3]; uint msg0, col
   _Pragma("clang loop unroll(full)")
   for (uint h = 0u; h < 2u; ++h) {
     const uint r = fm + 8u * h;
-    if (r >= a.rows) continue;
+    if (r >= m_cnt) continue;
     _Pragma("clang loop unroll(full)")
     for (uint j = 0u; j < 2u; ++j) {
       const uint col = row0 + 16u * j + uint(home.x);
       _Pragma("clang loop unroll(full)")
       for (uint e = 0u; e < 4u; ++e) {
-        if (col + e < a.rank) OUT[out_base + size_t(r) * a.rank + col + e] = vs[j][4u * h + e];
+        if (col + e < a.rank) OUT[out_base + size_t(row_off + r) * a.rank + col + e] = vs[j][4u * h + e];
       }
     }
   }
@@ -645,28 +659,32 @@ struct i2n_controls_args { uint h, rank, rows; uint xs[3], xb[3]; uint msg0, col
     const device bfloat* F1 [[buffer(5)]], const device bfloat* F2 [[buffer(6)]], const device float* C0 [[buffer(7)]],
     const device float* C1 [[buffer(8)]], const device float* C2 [[buffer(9)]], const device float* MSG [[buffer(10)]],
     device float* O0 [[buffer(11)]], device float* O1 [[buffer(12)]], device float* O2 [[buffer(13)]],
-    constant i2n_controls_args& a [[buffer(14)]], uint2 tg [[threadgroup_position_in_grid]],
+    constant i2n_controls_args& a [[buffer(14)]], uint3 tg [[threadgroup_position_in_grid]],
     ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
   constexpr uint KS = 6u;
   threadgroup half x_tg[16u * 256u];
   threadgroup float red[2u * 16u * 32u];
   const uint j_ctl = tg.y;
+  const uint row_off = tg.z * 16u;
+  if (row_off >= a.rows) return;
+  const uint m_cnt = min(16u, a.rows - row_off);
   const uint tid = uint(sg) * 32u + uint(lane);
   const size_t ks_stride = size_t(3u) * a.rows * a.rank;
   const device float* xbase = X + size_t(j_ctl) * a.rows * a.rank;
-  const uint x_vecs = (a.rows * a.rank) >> 2u;
+  const uint x_vecs = (m_cnt * a.rank) >> 2u;
   if (a.rank <= 256u) {
     for (uint v = tid; v < x_vecs; v += 128u) {
-      const uint r = (v * 4u) / a.rank;
+      const uint lr = (v * 4u) / a.rank;
       const uint c = (v * 4u) % a.rank;
-      float4 xv = *reinterpret_cast<const device float4*>(xbase + size_t(r) * a.rank + c);
+      const uint gr = row_off + lr;
+      float4 xv = *reinterpret_cast<const device float4*>(xbase + size_t(gr) * a.rank + c);
       if (a.cols != 1u) {
         _Pragma("clang loop unroll(full)")
         for (uint ks = 1u; ks < KS; ++ks) {
-          xv += *reinterpret_cast<const device float4*>(xbase + size_t(ks) * ks_stride + size_t(r) * a.rank + c);
+          xv += *reinterpret_cast<const device float4*>(xbase + size_t(ks) * ks_stride + size_t(gr) * a.rank + c);
         }
       }
-      *reinterpret_cast<threadgroup half4*>(x_tg + r * 256u + c) = half4(xv);
+      *reinterpret_cast<threadgroup half4*>(x_tg + lr * 256u + c) = half4(xv);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
   }
@@ -678,8 +696,8 @@ struct i2n_controls_args { uint h, rank, rows; uint xs[3], xb[3]; uint msg0, col
   const short2 home = i2n_home(lane);
   const uint fm = uint(home.y);
   const uint q4 = uint(home.x) >> 2u;
-  const bool xlive0 = fm < a.rows;
-  const bool xlive1 = (fm + 8u) < a.rows;
+  const bool xlive0 = fm < m_cnt;
+  const bool xlive1 = (fm + 8u) < m_cnt;
   const device bfloat* W = is_f ? (j_ctl == 0u ? F0 : j_ctl == 1u ? F1 : F2)
                                 : (j_ctl == 0u ? G0 : j_ctl == 1u ? G1 : G2);
   const device bfloat* wp[4];
@@ -702,12 +720,12 @@ struct i2n_controls_args { uint h, rank, rows; uint xs[3], xb[3]; uint msg0, col
         float4 x0f = float4(0.0f), x1f = float4(0.0f);
         const uint k_off = 64u * g + 16u * q4 + 4u * q;
         if (xlive0) {
-          x0f = *reinterpret_cast<const device float4*>(xbase + size_t(fm) * a.rank + k_off);
-          if (a.cols != 1u) for (uint ks = 1u; ks < KS; ++ks) x0f += *reinterpret_cast<const device float4*>(xbase + size_t(ks) * ks_stride + size_t(fm) * a.rank + k_off);
+          x0f = *reinterpret_cast<const device float4*>(xbase + size_t(row_off + fm) * a.rank + k_off);
+          if (a.cols != 1u) for (uint ks = 1u; ks < KS; ++ks) x0f += *reinterpret_cast<const device float4*>(xbase + size_t(ks) * ks_stride + size_t(row_off + fm) * a.rank + k_off);
         }
         if (xlive1) {
-          x1f = *reinterpret_cast<const device float4*>(xbase + size_t(fm + 8u) * a.rank + k_off);
-          if (a.cols != 1u) for (uint ks = 1u; ks < KS; ++ks) x1f += *reinterpret_cast<const device float4*>(xbase + size_t(ks) * ks_stride + size_t(fm + 8u) * a.rank + k_off);
+          x1f = *reinterpret_cast<const device float4*>(xbase + size_t(row_off + fm + 8u) * a.rank + k_off);
+          if (a.cols != 1u) for (uint ks = 1u; ks < KS; ++ks) x1f += *reinterpret_cast<const device float4*>(xbase + size_t(ks) * ks_stride + size_t(row_off + fm + 8u) * a.rank + k_off);
         }
         x0h = half4(x0f);
         x1h = half4(x1f);
@@ -745,10 +763,11 @@ struct i2n_controls_args { uint h, rank, rows; uint xs[3], xb[3]; uint msg0, col
   _Pragma("clang loop unroll(full)")
   for (uint h = 0u; h < 2u; ++h) {
     const uint r = fm + 8u * h;
-    if (r >= a.rows) continue;
-    const device float* cur = C + size_t(a.xb[j_ctl] + r * a.xs[j_ctl]) * a.h;
-    const device float* msg = MSG + size_t(a.msg0 + j_ctl + r * 4u) * a.h;
-    device float* out = O + size_t(r) * a.h;
+    if (r >= m_cnt) continue;
+    const uint gr = row_off + r;
+    const device float* cur = C + size_t(a.xb[j_ctl] + gr * a.xs[j_ctl]) * a.h;
+    const device float* msg = MSG + size_t(a.msg0 + j_ctl + gr * 4u) * a.h;
+    device float* out = O + size_t(gr) * a.h;
     _Pragma("clang loop unroll(full)")
     for (uint j = 0u; j < 2u; ++j) {
       const uint col = row0 + 16u * j + uint(home.x);
@@ -1060,20 +1079,23 @@ struct i2n_router_args { uint n, k, rows, xs, xb; float cap; };
 
 [[kernel]] void i2n_router_bf16(const device float* X [[buffer(0)]], const device bfloat* W [[buffer(1)]],
     constant i2n_router_args& a [[buffer(2)]], device float* OUT [[buffer(3)]],
-    uint2 tg [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]],
+    uint3 tg [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]],
     ushort lane [[thread_index_in_simdgroup]]) {
   constexpr uint KS = 9u, S = 2u;
   threadgroup float red[(S - 1u) * 16u * 32u];
   const uint row0 = tg.x * 32u;
   const uint ks = tg.y;
+  const uint row_off = tg.z * 16u;
+  if (row_off >= a.rows) return;
+  const uint m_cnt = min(16u, a.rows - row_off);
   const uint groups = a.k >> 6u;
   const short2 home = i2n_home(lane);
   const uint fm = uint(home.y);
   const uint q4 = uint(home.x) >> 2u;
-  const bool xlive0 = fm < a.rows;
-  const bool xlive1 = (fm + 8u) < a.rows;
-  const device float* xr0 = xlive0 ? X + size_t(fm * a.xs + a.xb) * a.k + 16u * q4 : nullptr;
-  const device float* xr1 = xlive1 ? X + size_t((fm + 8u) * a.xs + a.xb) * a.k + 16u * q4 : nullptr;
+  const bool xlive0 = fm < m_cnt;
+  const bool xlive1 = (fm + 8u) < m_cnt;
+  const device float* xr0 = xlive0 ? X + size_t((row_off + fm) * a.xs + a.xb) * a.k + 16u * q4 : nullptr;
+  const device float* xr1 = xlive1 ? X + size_t((row_off + fm + 8u) * a.xs + a.xb) * a.k + 16u * q4 : nullptr;
   const device bfloat* wp[4];
   bool wvalid[4];
   _Pragma("clang loop unroll(full)")
@@ -1103,13 +1125,13 @@ struct i2n_router_args { uint n, k, rows, xs, xb; float cap; };
   _Pragma("clang loop unroll(full)")
   for (uint h = 0u; h < 2u; ++h) {
     const uint r = fm + 8u * h;
-    if (r >= a.rows) continue;
+    if (r >= m_cnt) continue;
     _Pragma("clang loop unroll(full)")
     for (uint j = 0u; j < 2u; ++j) {
       const uint col = row0 + 16u * j + uint(home.x);
       _Pragma("clang loop unroll(full)")
       for (uint e = 0u; e < 4u; ++e) {
-        if (col + e < a.n) OUT[ks_base + size_t(r) * a.n + col + e] = vs[j][4u * h + e];
+        if (col + e < a.n) OUT[ks_base + size_t(row_off + r) * a.n + col + e] = vs[j][4u * h + e];
       }
     }
   }

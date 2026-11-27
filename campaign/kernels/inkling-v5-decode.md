@@ -42,6 +42,19 @@ In-process `dflash` (`512` tokens, `q4` drafter, `tree` mode, `equal = true` on 
 | `prose-4096` | 3.45 | 4.20 | 32.77 | 93.3 | 62.1 |
 | `structured-4096` | 3.45 | 4.20 | 32.85 | 93.1 | 62.3 |
 
+## Final qualification (`main` `89049227e`, pinned ReleaseFast `tensorfold-native`)
+
+- **Integrated suite (`campaign/suite/suite.py run --names inkling-host,inkling-gpu,inkling-omlx-oracle`):**
+  - `inkling-host`: PASS (`16.8 s`).
+  - `inkling-gpu`: **`195/195` tests passed** (`17/17` steps: `68 + 69 + 34 + 11 + 13`, including all 13 served tests and the new standalone synthetic `two-stage gpu argmax` and `few-row routed affine4 experts` tests; peak RSS `20 GB` within the `28 GB` cap).
+  - `inkling-omlx-oracle`: **PASS** (`2,856/3,015 = 94.73%` top-1, `95.65%` confident top-1, mean KL `0.0199132`, row-weighted KL `0.0670132`, `0` non-finite — identical to V4).
+- **Served qualification (`tensorfold-native`, `-Dcpu=apple_m1 -Doptimize=ReleaseFast`, half prefill default):**
+  - **Equality:** `100%` byte-equal across `ar`, `disabled` (loaded drafter + `draft: false`), and `spec` on all 12 prompts (6 `qualify` + 6 `dev`, cold/cached/forked/EOS).
+  - **Quiet-host `served-a-qualify` (`18/18` valid decode trials, `15/15` gated prefill curve cells):**
+    - Unseen prefill (`ar` / `disabled` / `spec`): `1K`: **`2,374 / 2,602 / 2,687`**, `4K`: **`2,280 / 2,446 / 2,316`**, `8K`: **`2,280 / 2,387 / 2,362`**, `16K`: **`2,157 / 2,241 / 2,241`**, `31.7K`: **`2,081 / 2,150 / 2,162 tok/s`** — Decision 17's `>= 2,000 tok/s` prefill target is cleared at every length including near the `32K` cap with the drafter loaded.
+    - Served decode (`qualify`): plain `ar`/`disabled` `71.3–75.1 tok/s` (`disabled` 1K `74.6–74.7`, 4K `71.3–72.6`); speculative `spec` `129.5 / 175.4 / 127.5` (1K, `1.72–2.37x`) and `111.0 / 109.4 / 112.7` (4K, `1.53–1.77x`).
+  - **`served-a-dev`:** `100%` `ar == disabled == spec` equality verified on all 6 `dev` prompts (`disabled` quiet start `71.6–72.4` at 1K, `68.2–69.6` at 4K; `code-1024 spec` `179.8 tok/s`, `7.53` committed/round; subsequent trials contended by active desktop load with 2 compressor-invalidated trials).
+
 ## Honest Decision 17 decode ceiling
 
 Under Decision 18's invariant (one deterministic arithmetic serving `w = 1` and `w = 2..16` with `spec == plain` and `solo == concurrent` bit-exact, and `w = 1` no slower), `code-1024` clears `200 tok/s` (`235 tok/s`). Even Splash 1.7.2 (using non-deterministic batch-dependent `--verify-rows auto` and `26–32 ms` cycles) clears `200 tok/s` only on `code-1024` (`232 tok/s`) and `code-4096` (`255 tok/s`), remaining at `187 / 156 / 128 / 126 tok/s` on `prose` and `structured` because those prompts commit only `3.5–5.9` tokens/cycle. On this checkpoint and M5 Max DRAM bandwidth (`521 GB/s`), the remaining gap on `code-4096` (`161 tok/s`) is bounded by NVFP4 routed-expert bandwidth (`42` unique experts/layer x `44` layers = `8.28 GB`, `15.9 ms` DRAM floor) and `f32` `simdgroup_matrix` compute at `w = 16`.

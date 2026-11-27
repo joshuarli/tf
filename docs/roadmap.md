@@ -4,9 +4,13 @@ This is the single plan for this repository: all current and future work, and th
 
 ## Status
 
-**Active 2026-11-26.**
-- Resume prompt: "resume the roadmap". In progress: campaign **M5 Max native inference**, slice Decision 17 (2,000 tok/s prefill, 200 tok/s single stream); its items are under **Sequence**. Q4 (5h), A1 (5i, `lane/inkling-metal-aot`), P6 (5f), P7 (5g), P8 (long-context prefill: Decision 17 met across `1K–31.7K`), and Q3 (6, long-reasoning runaways traced) are done. Next: Decision 17 single-stream decode (`>= 200 tok/s`), then final qualification.
-- First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu`.
+**Active 2026-11-26 — M5 Max native inference campaign complete on `main`.**
+- Resume prompt: "resume the roadmap". Campaign **M5 Max native inference** (slice Decision 17) is closed out and qualified on `main`: Q4 (5h), A1 (5i, reference branch `lane/inkling-metal-aot`), P6 (5f), P7 (5g), P8 (5j), Q3 (6), and V5 (5k) are all done.
+- **Decision 17 final status (oQ4e, `32,768` context, `INKLING_LOAD_LIMIT_GB=26`, half prefill default):**
+  - **Prefill (`>= 2,000 tok/s`, ACHIEVED across `1K–31.7K` with drafter loaded):** quiet served `ar` `2,374 / 2,280 / 2,280 / 2,157 / 2,081 tok/s`, `disabled` `2,602 / 2,446 / 2,387 / 2,241 / 2,150 tok/s`, `spec` `2,687 / 2,316 / 2,362 / 2,241 / 2,162 tok/s` (`1K, 4K, 8K, 16K, 31.7K`).
+  - **Decode (`>= 200 tok/s` single stream, PARTIAL — cleared on `code-1024`, hardware/acceptance-bounded elsewhere under Decision 18):** plain `w=1` reaches `14.05 ms` (`71.2–75.1 tok/s` served, `1.8 ms` faster than Splash 1.7.2's `15.84 ms`); rested grouped verify drops to `14.05 / 24.06 / 32.48 / 50.30 ms` (`w=1, 4, 8, 16`, 0-bit exact); DFlash2 `q4` draft drops to `4.11 ms` wall p50 (`raw_tiles = true`); in-process `code-1024` clears **`235.0 tok/s`** (`10.02` committed/round), while `code-4096` (`160.7`), `prose-1024` (`118.0`), `structured-1024` (`108.4`), `prose-4096` (`93.3`), and `structured-4096` (`93.1`) stay below `200 tok/s` under Decision 18's bit-exact single-arithmetic rule (even Splash 1.7.2 clears `200 tok/s` only on code with non-deterministic `--verify-rows auto`).
+  - **Qualification (`main`):** `inkling-host` PASS (`16.8 s`), `inkling-gpu` **`195/195`** PASS (`20 GB` max RSS), `inkling-omlx-oracle` PASS (`2,856/3,015 = 94.73%` top-1, mean KL `0.0199132`, row-weighted `0.0670132`, `0` non-finite), served `ar == disabled == spec` 100% byte-equal across all 12 `qualify` + `dev` prompts.
+- First command: `cd ~/repos/tf && python3 -I campaign/suite/suite.py run --names inkling-host,inkling-gpu,inkling-omlx-oracle`.
 - Acceptance flow (2026-11-24): lanes prove changes with filtered GPU tests; the parent runs the full suite once on an integration commit of main plus the lane and fast-forwards main on green, instead of a lane suite and a second main suite.
 - **Last accepted code: SV2, fast-forwarded from `lane/sv2-serve`** (speculation served by default; integrated suite on `33b38ed43`: `inkling-host` ok, `inkling-gpu` 185/185 plus the restored served test 12/12, oracle pass). Before it, V4 `ec925cb41` (fused fixed-cost verify kernels; integrated main green: `inkling-host` ok, `inkling-gpu` 186/186, oracle pass at 94.73% top-1 and mean KL 0.0199). Before it, PH2 merge `291240211` (half prefill by default; `inkling-gpu` 181/181), P5c merge `7f7cb75a3` (181/181), SC1 merge `1668d5caa` (180/180), V3 merge `0a2551b36` (179/179), DF2b merge `53a3b8894`, P4 merge `3f0054737` and V2 merge `3881b3d8c`. The intermittent 28 GB cap breach is fixed: `zig build -j1` limits async jobs but not run-step child waits, so two GPU test binaries could each hold a checkpoint at once (sampled at 28.4 GB). Each GPU test run in `zig/build/inkling2_loop.zig` now claims 26 GB (`gpuRun`), and the suite passes `--maxrss 28000000000`; the sampled fixed run never overlaps two.
 - **Open from P3c:** `code-c02` now falls into a repeatable reasoning loop, and oQ4e quality dev is 7/11 (base 6/11), below the fast profile's 8-case bar. Mean TTFT at four agents rose on the warm repetition; the cause is not traced.
@@ -235,6 +239,15 @@ Current items, campaign **M5 Max native inference**, slice Decision 17. Item spe
    coherent non-repeating code review (max 12-gram = 1) until the 8,192 cap (`off` chooses a compact review, 4,066
    tokens); `code-c02` passes under default `half` (1,561 tokens) and loops on `'o'` under `off`; `code-c13` matches
    for 1,123 chars then enters greedy `<think>` repetition loops under both `half` (44×) and `off` (78×).
+5k. V5, done and qualified on `main` (`campaign/kernels/inkling-v5-decode.md`, `4b8b840c1..56274f2e2`): bit-manipulation
+   E4M3 decode, fused `i2_batch_combine_sig_mul` (`-48` dispatches/step), 2-stage parallel GPU argmax (`i2v_argmax_p1/p2`),
+   bit-exact `simdgroup_matrix` routed affine4 experts (`i2e_aff4_up/down[16]`), and DFlash2 drafter `raw_tiles = true`
+   (cutting `q4` draft wall p50 `4.90 → 4.11 ms`). Rested `code-1024` verify drops to `14.05 / 24.06 / 32.48 / 50.30 ms`
+   (`w = 1, 4, 8, 16`; `max_abs_diff = 0e0`, `-2.15` to `-11.10 ms` vs V4); plain `w=1` (`71.2–75.1 tok/s` served) beats
+   Splash's `15.84 ms`; in-process `code-1024` hits `235.0 tok/s`. Full integrated suite green (`inkling-host` ok,
+   `inkling-gpu` `195/195`, `inkling-omlx-oracle` pass `94.73%` / `0.0199132`); quiet served `qualify` clears `>= 2,000 tok/s`
+   prefill at every length `1K–31.7K` (`2,687–2,162 tok/s` with drafter) with 100% `ar == disabled == spec` equality across
+   all 12 `qualify` + `dev` prompts.
 7. Deferred off the critical path: see **Later**.
 
 Items run on per-model chains, and items whose owned files are disjoint run in parallel:

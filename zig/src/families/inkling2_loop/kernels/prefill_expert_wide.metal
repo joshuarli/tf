@@ -323,11 +323,12 @@ inline void i2p_expert_units(const device half* X, const device uchar* W, const 
     const device half* KC [[buffer(7)]], const device half* VC [[buffer(8)]],
     device atomic_uint* overflow [[buffer(9)]], uint2 tg [[threadgroup_position_in_grid]],
     ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
-  constexpr int D = 128, R = 32, KB = 32, PAD = 136, THREADS = 192;
+  constexpr int D = 128, R = 32, KB = 32, PAD = 128, THREADS = 192;
   threadgroup half keys[KB * PAD], values[KB * PAD];
   const int kv = int(tg.x), q0 = int(tg.y) * R, t = int(sg) * 32 + int(lane);
   const int h = kv * 3 + int(sg) / 2, r0 = q0 + 16 * (int(sg) % 2);
   const short2 home = i2p_home(lane);
+  const int swz = (home.y & 7) << 4;
   const int rows = int(a.rows);
   const int cols = int(a.extent) + 1;
   int row[2], pos[2];
@@ -368,20 +369,21 @@ inline void i2p_expert_units(const device half* X, const device uchar* W, const 
     const bool full_cache = !a.window && block + KB <= int(a.base);
     for (int e = t; e < KB * D / 8; e += THREADS) {
       const int k = e / (D / 8), c = (e % (D / 8)) * 8, j = block + k;
+      const int sc = c ^ ((k & 7) << 4);
       if (full_cache) {
         const size_t at = (size_t(j) * a.kv + kv) * D + c;
-        *(threadgroup ulong2*)(keys + k * PAD + c) = *(const device ulong2*)(KEYS + at);
-        *(threadgroup ulong2*)(values + k * PAD + c) = *(const device ulong2*)(VALUES + at);
+        *(threadgroup ulong2*)(keys + k * PAD + sc) = *(const device ulong2*)(KEYS + at);
+        *(threadgroup ulong2*)(values + k * PAD + sc) = *(const device ulong2*)(VALUES + at);
       } else if (j <= last) {
         const int rj = a.rmode && a.window ? j % int(a.window) : j;
         const size_t at = ((j < int(a.base) ? size_t(rj) : size_t(j - int(a.base))) * a.kv + kv) * D + c;
         const device half* ks = j < int(a.base) ? KEYS : KC;
         const device half* vs = j < int(a.base) ? VALUES : VC;
-        *(threadgroup ulong2*)(keys + k * PAD + c) = *(const device ulong2*)(ks + at);
-        *(threadgroup ulong2*)(values + k * PAD + c) = *(const device ulong2*)(vs + at);
+        *(threadgroup ulong2*)(keys + k * PAD + sc) = *(const device ulong2*)(ks + at);
+        *(threadgroup ulong2*)(values + k * PAD + sc) = *(const device ulong2*)(vs + at);
       } else {
-        *(threadgroup ulong2*)(keys + k * PAD + c) = ulong2(0ul);
-        *(threadgroup ulong2*)(values + k * PAD + c) = ulong2(0ul);
+        *(threadgroup ulong2*)(keys + k * PAD + sc) = ulong2(0ul);
+        *(threadgroup ulong2*)(values + k * PAD + sc) = ulong2(0ul);
       }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -389,7 +391,7 @@ inline void i2p_expert_units(const device half* X, const device uchar* W, const 
     i2p_f8 s[2] = {i2p_f8(0.0f), i2p_f8(0.0f)};
     _Pragma("clang loop unroll(full)")
     for (short d = 0; d < D / 16; d++) {
-      const threadgroup half* kp = keys + home.y * PAD + 16 * d + home.x;
+      const threadgroup half* kp = keys + home.y * PAD + ((16 * d) ^ swz) + home.x;
       const i2p_h8 k0 = i2p_h8(*(const threadgroup half4*)kp, *(const threadgroup half4*)(kp + 8 * PAD));
       const i2p_h8 k1 = i2p_h8(*(const threadgroup half4*)(kp + 16 * PAD), *(const threadgroup half4*)(kp + 24 * PAD));
       i2p_mma(s[0], s[1], q[d], k0, k1);
@@ -409,17 +411,51 @@ inline void i2p_expert_units(const device half* X, const device uchar* W, const 
     } else {
       _Pragma("clang loop unroll(full)")
       for (short j = 0; j < 2; j++) {
+        const int key0 = block + 16 * j + home.x;
         _Pragma("clang loop unroll(full)")
-        for (short e = 0; e < 8; e++) {
-          const short i = e >> 2;
-          const int key = block + 16 * j + home.x + (e & 3);
-          float score = -INFINITY;
-          if (active[i] && key <= pos[i] && (!a.window || pos[i] - key < int(a.window))) {
-            const int distance = min(pos[i] - key, int(a.extent));
-            score = fma(s[j][e], scale_log2[i], fma(B[(size_t(row[i]) * a.heads + h) * cols + distance], M_LOG2E_F, -sk_log2[i]));
+        for (short i = 0; i < 2; i++) {
+          const int d0 = pos[i] - key0;
+          if (active[i] && key0 + 3 <= pos[i] && (!a.window || d0 < int(a.window))) {
+            if (d0 - 3 >= int(a.extent)) {
+              _Pragma("clang loop unroll(full)")
+              for (short u = 0; u < 4; u++) {
+                const float score = fma(s[j][4 * i + u], scale_log2[i], far_shift[i]);
+                s[j][4 * i + u] = score;
+                bound[i] = max(bound[i], score);
+              }
+            } else if (d0 <= int(a.extent)) {
+              const float4 bv = float4(*(const device packed_float4*)(B + (size_t(row[i]) * a.heads + h) * cols + (d0 - 3)));
+              const float sc0 = fma(s[j][4 * i + 0], scale_log2[i], fma(bv.w, M_LOG2E_F, -sk_log2[i]));
+              const float sc1 = fma(s[j][4 * i + 1], scale_log2[i], fma(bv.z, M_LOG2E_F, -sk_log2[i]));
+              const float sc2 = fma(s[j][4 * i + 2], scale_log2[i], fma(bv.y, M_LOG2E_F, -sk_log2[i]));
+              const float sc3 = fma(s[j][4 * i + 3], scale_log2[i], fma(bv.x, M_LOG2E_F, -sk_log2[i]));
+              s[j][4 * i + 0] = sc0;
+              s[j][4 * i + 1] = sc1;
+              s[j][4 * i + 2] = sc2;
+              s[j][4 * i + 3] = sc3;
+              bound[i] = max(bound[i], max(max(sc0, sc1), max(sc2, sc3)));
+            } else {
+              _Pragma("clang loop unroll(full)")
+              for (short u = 0; u < 4; u++) {
+                const int distance = min(d0 - u, int(a.extent));
+                const float score = fma(s[j][4 * i + u], scale_log2[i], fma(B[(size_t(row[i]) * a.heads + h) * cols + distance], M_LOG2E_F, -sk_log2[i]));
+                s[j][4 * i + u] = score;
+                bound[i] = max(bound[i], score);
+              }
+            }
+          } else {
+            _Pragma("clang loop unroll(full)")
+            for (short u = 0; u < 4; u++) {
+              const int key = key0 + u;
+              float score = -INFINITY;
+              if (active[i] && key <= pos[i] && (!a.window || pos[i] - key < int(a.window))) {
+                const int distance = min(pos[i] - key, int(a.extent));
+                score = fma(s[j][4 * i + u], scale_log2[i], fma(B[(size_t(row[i]) * a.heads + h) * cols + distance], M_LOG2E_F, -sk_log2[i]));
+              }
+              s[j][4 * i + u] = score;
+              bound[i] = max(bound[i], score);
+            }
           }
-          s[j][e] = score;
-          bound[i] = max(bound[i], score);
         }
       }
     }
@@ -461,9 +497,12 @@ inline void i2p_expert_units(const device half* X, const device uchar* W, const 
       for (short j = 0; j < 2; j++) {
         _Pragma("clang loop unroll(full)")
         for (short d = 0; d < D / 32; d++) {
-          const threadgroup half* vp = values + (16 * j + home.y) * PAD + 32 * d + home.x;
-          const i2p_h8 v0 = i2p_h8(*(const threadgroup half4*)vp, *(const threadgroup half4*)(vp + 8 * PAD));
-          const i2p_h8 v1 = i2p_h8(*(const threadgroup half4*)(vp + 16), *(const threadgroup half4*)(vp + 8 * PAD + 16));
+          const int c0 = ((32 * d) ^ swz) + home.x;
+          const int c1 = c0 ^ 16;
+          const threadgroup half* vp0 = values + (16 * j + home.y) * PAD + c0;
+          const threadgroup half* vp1 = values + (16 * j + home.y) * PAD + c1;
+          const i2p_h8 v0 = i2p_h8(*(const threadgroup half4*)vp0, *(const threadgroup half4*)(vp0 + 8 * PAD));
+          const i2p_h8 v1 = i2p_h8(*(const threadgroup half4*)vp1, *(const threadgroup half4*)(vp1 + 8 * PAD));
           i2p_mma_nn(acc[2 * d], acc[2 * d + 1], p[j], v0, v1);
         }
       }

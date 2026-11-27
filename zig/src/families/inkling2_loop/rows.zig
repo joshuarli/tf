@@ -50,6 +50,7 @@ pub const Pipes = struct {
         meta: mtl.Buffer,
         indirect: mtl.Buffer,
         router_ks: mtl.Buffer,
+        xh: mtl.Buffer,
 
         pub fn init(device: mtl.Device) !Nax {
             const lib = try mtl.Library.fromSource(device, @import("kernels.zig").verify_nax, mtl.CompileOptions.mlx());
@@ -85,6 +86,8 @@ pub const Pipes = struct {
             const indirect = try device.buffer(8 * 4, mtl.ResourceOptions.private);
             errdefer indirect.deinit();
             const router_ks = try device.buffer(9 * 32 * 128 * 4, mtl.ResourceOptions.private);
+            errdefer router_ks.deinit();
+            const xh = try device.buffer(32 * 4096 * 2, mtl.ResourceOptions.private);
             return .{
                 .sort = sort,
                 .nvfp4_up = nvfp4_up,
@@ -102,10 +105,12 @@ pub const Pipes = struct {
                 .meta = meta,
                 .indirect = indirect,
                 .router_ks = router_ks,
+                .xh = xh,
             };
         }
 
         pub fn deinit(n: *Nax) void {
+            n.xh.deinit();
             n.router_ks.deinit();
             n.indirect.deinit();
             n.meta.deinit();

@@ -1685,23 +1685,23 @@ const Chunk = struct {
         const text = &c.m.config.text;
         const s = c.s;
         if (c.n < 3 or c.n > @import("rows.zig").max_rows or text.experts > 128) return false;
-        if (c.h % 64 != 0 or text.expert_inter % 64 != 0) return false;
+        if (c.h % 64 != 0 or text.expert_inter % 64 != 0 or c.h > 4096) return false;
         const slots: u32 = c.n * text.topk;
         if (slots > 256) return false;
-        const SortArgs = extern struct { slots: u32, experts: u32, grid_x_up: u32, grid_x_down: u32 };
+        const SortArgs = extern struct { slots: u32, experts: u32, grid_x_up: u32, grid_x_down: u32, rows: u32, k: u32, clamp_x: u32 };
         const grid_x_up: u32 = (2 * text.expert_inter + 31) / 32;
         const grid_x_down: u32 = (c.h + 31) / 32;
-        c.setP(nax.sort, SortArgs{ .slots = slots, .experts = text.experts, .grid_x_up = grid_x_up, .grid_x_down = grid_x_down }, &.{ b(s.picks), A, b(nax.meta), b(nax.indirect) });
-        c.enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(128, 1, 1));
+        c.setP(nax.sort, SortArgs{ .slots = slots, .experts = text.experts, .grid_x_up = grid_x_up, .grid_x_down = grid_x_down, .rows = c.n, .k = c.h, .clamp_x = @intFromBool(!affine) }, &.{ b(s.picks), A, b(nax.meta), b(nax.indirect), input, b(nax.xh) });
+        c.enc.dispatchGroups(mtl.Size.of(1 + c.n, 1, 1), mtl.Size.of(128, 1, 1));
         const up_args = MoeB{ .k = c.h, .n = text.expert_inter, .slots = slots, .topk = text.topk, .gate_cap = text.gate_cap, .up_cap = text.up_cap };
         const dn_args = MoeB{ .k = text.expert_inter, .n = c.h, .slots = slots, .topk = text.topk, .gate_cap = 0, .up_cap = 0 };
         if (affine) {
-            c.setP(nax.aff4_up, up_args, &.{ input, t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), b(s.act), b(nax.meta), A, b(s.act) });
+            c.setP(nax.aff4_up, up_args, &.{ b(nax.xh), t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), b(s.act), b(nax.meta), A, b(s.act) });
             c.enc.dispatchIndirect(nax.indirect, 0, mtl.Size.of(128, 1, 1));
             c.setP(nax.aff4_down, dn_args, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), t(lay.w2_bias.?), b(s.down), b(nax.meta), A, b(s.down) });
             c.enc.dispatchIndirect(nax.indirect, 12, mtl.Size.of(128, 1, 1));
         } else {
-            c.setP(nax.nvfp4_up, up_args, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(nax.meta), A, b(s.act) });
+            c.setP(nax.nvfp4_up, up_args, &.{ b(nax.xh), t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(nax.meta), A, b(s.act) });
             c.enc.dispatchIndirect(nax.indirect, 0, mtl.Size.of(128, 1, 1));
             c.setP(nax.nvfp4_down, dn_args, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(nax.meta), A, b(s.down) });
             c.enc.dispatchIndirect(nax.indirect, 12, mtl.Size.of(128, 1, 1));

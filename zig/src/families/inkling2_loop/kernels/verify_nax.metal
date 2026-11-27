@@ -103,12 +103,27 @@ inline void i2n_reduce(thread i2n_f8& acc0, thread i2n_f8& acc1, threadgroup flo
   }
 }
 
-struct i2n_sort_args { uint slots, experts, grid_x_up, grid_x_down; };
+struct i2n_sort_args { uint slots, experts, grid_x_up, grid_x_down, rows, k, clamp_x; };
 
 [[kernel]] void i2n_moe_sort(const device int* PICKS [[buffer(0)]], constant i2n_sort_args& a [[buffer(1)]],
     device uint* META [[buffer(2)]], device uint* INDIRECT [[buffer(3)]],
+    const device float* X [[buffer(4)]], device half* XH [[buffer(5)]],
+    uint tg [[threadgroup_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]]) {
+  if (tg > 0u) {
+    const uint r = tg - 1u;
+    if (r < a.rows) {
+      const uint vecs = a.k >> 2u;
+      const device float4* src = reinterpret_cast<const device float4*>(X + size_t(r) * a.k);
+      device half4* dst = reinterpret_cast<device half4*>(XH + size_t(r) * a.k);
+      for (uint i = tid; i < vecs; i += 128u) {
+        const float4 v = src[i];
+        dst[i] = a.clamp_x ? half4(clamp(v, -65504.0f, 65504.0f)) : half4(v);
+      }
+    }
+    return;
+  }
   threadgroup atomic_uint cnt[128];
   threadgroup atomic_uint cur[128];
   threadgroup uint sg_sum[4];
@@ -178,13 +193,11 @@ inline void i2n_nvfp4_few_lut(const device float* X, const device uchar* W, cons
   const uint groups = a.k >> 4u;
   const float global = G[expert] / den[0];
   uint slots[R];
-  const device float* xs_f[R];
   const device half* xs_h[R];
   _Pragma("clang loop unroll(full)")
   for (uint r = 0u; r < R; ++r) {
     slots[r] = META[384u + off + r];
-    if (GU) xs_f[r] = X + size_t(slots[r] / a.topk) * a.k;
-    else xs_h[r] = ((const device half*)X) + size_t(slots[r]) * a.k;
+    xs_h[r] = ((const device half*)X) + size_t(GU ? slots[r] / a.topk : slots[r]) * a.k;
   }
   const device uchar* We = W + size_t(expert) * cols * stride;
   const device uchar* Se = S_buf + size_t(expert) * cols * groups;
@@ -201,7 +214,7 @@ inline void i2n_nvfp4_few_lut(const device float* X, const device uchar* W, cons
         _Pragma("clang loop unroll(full)")
         for (uint r = 0u; r < R; ++r) {
           _Pragma("clang loop unroll(full)")
-          for (uint q = 0u; q < 4u; ++q) xv[r][q] = *reinterpret_cast<const device float4*>(xs_f[r] + g * 16u + 4u * q);
+          for (uint q = 0u; q < 4u; ++q) xv[r][q] = float4(*reinterpret_cast<const device half4*>(xs_h[r] + g * 16u + 4u * q));
         }
         _Pragma("clang loop unroll(full)")
         for (uint p = 0u; p < 2u; ++p) {
@@ -303,10 +316,9 @@ inline void i2n_expert_body(const device float* X, const device uchar* W, const 
   const uint q4 = uint(home.x) >> 2u;
   const bool xlive0 = fm < cnt;
   const bool xlive1 = (fm + 8u) < cnt;
-  const device float* xr0 = (GU && xlive0) ? X + size_t(META[384u + off + fm] / a.topk) * a.k + 16u * q4 : nullptr;
-  const device float* xr1 = (GU && xlive1) ? X + size_t(META[384u + off + fm + 8u] / a.topk) * a.k + 16u * q4 : nullptr;
-  const device half* xh0 = (!GU && xlive0) ? ((const device half*)X) + size_t(META[384u + off + fm]) * a.k + 16u * q4 : nullptr;
-  const device half* xh1 = (!GU && xlive1) ? ((const device half*)X) + size_t(META[384u + off + fm + 8u]) * a.k + 16u * q4 : nullptr;
+  const device half* xh = (const device half*)X;
+  const device half* xh0 = xlive0 ? xh + size_t(GU ? META[384u + off + fm] / a.topk : META[384u + off + fm]) * a.k + 16u * q4 : nullptr;
+  const device half* xh1 = xlive1 ? xh + size_t(GU ? META[384u + off + fm + 8u] / a.topk : META[384u + off + fm + 8u]) * a.k + 16u * q4 : nullptr;
   const device uchar* wp[4];
   const device uchar* sp[4];
   const device bfloat* bp[4];
@@ -337,16 +349,8 @@ inline void i2n_expert_body(const device float* X, const device uchar* W, const 
     }
     _Pragma("clang loop unroll(full)")
     for (uint q = 0u; q < 4u; ++q) {
-      half4 x0h, x1h;
-      if (GU) {
-        const float4 x0f = xlive0 ? *reinterpret_cast<const device float4*>(xr0 + 64u * g + 4u * q) : float4(0.0f);
-        const float4 x1f = xlive1 ? *reinterpret_cast<const device float4*>(xr1 + 64u * g + 4u * q) : float4(0.0f);
-        x0h = AFFINE ? half4(x0f) : half4(clamp(x0f, -65504.0f, 65504.0f));
-        x1h = AFFINE ? half4(x1f) : half4(clamp(x1f, -65504.0f, 65504.0f));
-      } else {
-        x0h = xlive0 ? *reinterpret_cast<const device half4*>(xh0 + 64u * g + 4u * q) : half4(0.0h);
-        x1h = xlive1 ? *reinterpret_cast<const device half4*>(xh1 + 64u * g + 4u * q) : half4(0.0h);
-      }
+      const half4 x0h = xlive0 ? *reinterpret_cast<const device half4*>(xh0 + 64u * g + 4u * q) : half4(0.0h);
+      const half4 x1h = xlive1 ? *reinterpret_cast<const device half4*>(xh1 + 64u * g + 4u * q) : half4(0.0h);
       half4 bw[4];
       _Pragma("clang loop unroll(full)")
       for (uint j = 0u; j < 4u; ++j) {

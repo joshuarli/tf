@@ -310,7 +310,7 @@ pub const Plan = struct {
     const Count = struct { hits: f64, trials: f64 };
 
     pub const default_verify_ms = [max_rows + 1]f64{ 0.0, 13.6, 17.8, 21.0, 23.6, 25.4, 27.0, 28.4, 29.8, 31.3, 32.7, 34.0, 35.3, 36.4, 37.4, 38.4, 39.4 };
-    pub const default_draft_ms: f64 = 3.8;
+    pub const default_draft_ms: f64 = 3.0;
 
     pub fn init() Plan {
         var p = Plan{};

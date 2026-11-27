@@ -21,6 +21,7 @@ pub const Drafter = struct {
     kernels: q.quant_gpu.Kernels,
     dims: mtl.Buffer,
     bound: *tf.checkpoint.Checkpoint,
+    head_q4: ?tf.affine4_lane.Packed = null,
     config: cfg.Config,
     step_ms: f64 = 0,
 
@@ -35,7 +36,7 @@ pub const Drafter = struct {
         const unembed = try affine8(target.weights.unembed, target.config.text.vocab, target.config.text.hidden);
         const d = try a.create(Drafter);
         errdefer a.destroy(d);
-        d.* = .{ .a = a, .model = undefined, .glue = try q.glue_gpu.Kernels.init(target.device), .kernels = .{ .allocator = a, .device = target.device, .raw_tiles = true }, .dims = undefined, .bound = undefined, .config = c };
+        d.* = .{ .a = a, .model = undefined, .glue = try q.glue_gpu.Kernels.init(target.device), .kernels = .{ .allocator = a, .device = target.device, .raw_tiles = true }, .dims = undefined, .bound = undefined, .head_q4 = null, .config = c };
         errdefer d.glue.deinit();
         errdefer d.kernels.deinit();
         d.dims = try target.device.buffer(4096, mtl.ResourceOptions.shared);
@@ -45,14 +46,32 @@ pub const Drafter = struct {
         d.bound.* = tf.checkpoint.Checkpoint.init(a);
         errdefer d.bound.deinit();
         const hidden = target.config.text.hidden;
-        const head = tf.row_projection.Weights{ .w = unembed.weight.buffer, .w_off = unembed.weight.offset, .scales = unembed.scales.buffer, .s_off = unembed.scales.offset, .biases = unembed.biases.buffer, .b_off = unembed.biases.offset, .n = head_rows, .k = hidden, .group = 64, .bits = 8 };
-        try head.validate();
+        const head_linear: q.projection.Linear = if (bits == 4 and target.device.tensorUnits()) blk: {
+            var prep = try tf.affine4.prepareFromAffine8(
+                a,
+                unembed.weight.host(u32)[0 .. head_rows * (hidden / 4)],
+                unembed.scales.host(u16)[0 .. head_rows * (hidden / 64)],
+                unembed.biases.host(u16)[0 .. head_rows * (hidden / 64)],
+                head_rows,
+                hidden,
+            );
+            defer prep.deinit();
+            const order = try tf.lane_projection.RegOrder.init(target.device);
+            defer order.deinit();
+            d.head_q4 = try tf.affine4_lane.pack(target.device, prep, 1, order);
+            break :blk .{ .words = .{ .buffer = d.head_q4.?.words }, .pairs = .{ .buffer = d.head_q4.?.metadata }, .n = head_rows, .k = @intCast(hidden), .tile = 32, .slices = 1, .raw = null, .bits = 4, .group = 64 };
+        } else blk: {
+            const head = tf.row_projection.Weights{ .w = unembed.weight.buffer, .w_off = unembed.weight.offset, .scales = unembed.scales.buffer, .s_off = unembed.scales.offset, .biases = unembed.biases.buffer, .b_off = unembed.biases.offset, .n = head_rows, .k = hidden, .group = 64, .bits = 8 };
+            try head.validate();
+            break :blk .{ .words = .{ .buffer = head.w, .offset = head.w_off }, .pairs = .{ .buffer = head.scales, .offset = head.s_off }, .n = head_rows, .k = @intCast(hidden), .tile = 32, .slices = 1, .raw = head, .bits = 8, .group = 64 };
+        };
+        errdefer if (d.head_q4) |hq| hq.deinit();
         const bindings: q.dflash.runtime_backend.Target = .{
             .device = target.device,
             .queue = target.queue,
             .checkpoint = d.bound,
             .config = .{ .hidden = hidden, .vocab = target.config.text.vocab, .layers = target.config.slots() },
-            .weights = .{ .embed = embed, .head = .{ .words = .{ .buffer = head.w, .offset = head.w_off }, .pairs = .{ .buffer = head.scales, .offset = head.s_off }, .n = head_rows, .k = @intCast(hidden), .tile = 32, .slices = 1, .raw = head, .bits = 8, .group = 64 } },
+            .weights = .{ .embed = embed, .head = head_linear },
             .kernels = &d.kernels,
             .glue = &d.glue,
             .dims = .{ .buffer = d.dims },
@@ -70,6 +89,7 @@ pub const Drafter = struct {
 
     pub fn deinit(d: *Drafter) void {
         d.model.deinit();
+        if (d.head_q4) |hq| hq.deinit();
         d.bound.deinit();
         d.a.destroy(d.bound);
         d.dims.deinit();
@@ -119,6 +139,7 @@ pub const Drafter = struct {
         var it = d.model.checkpoint.tensors.valueIterator();
         while (it.next()) |t| try list.append(d.a, t.buffer);
         try list.appendSlice(d.a, &.{ d.dims, d.model.pending });
+        if (d.head_q4) |hq| try list.appendSlice(d.a, &.{ hq.words, hq.metadata });
         try q.residency.appendDraft(&d.model.backend, d.a, list);
     }
 

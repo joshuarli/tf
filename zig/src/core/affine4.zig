@@ -38,10 +38,67 @@ pub fn prepare(a: std.mem.Allocator, weights: []const u16, n: usize, k: usize) !
     for (results[0..workers]) |r| try r;
     return .{ .allocator = a, .n = n, .k = k, .words = words, .scales = scales, .biases = biases };
 }
+pub fn prepareFromAffine8(a: std.mem.Allocator, words8: []const u32, scales8: []const u16, biases8: []const u16, n: usize, k: usize) !Prepared {
+    if (n == 0 or k == 0 or k % 64 != 0) return error.BadAffineShape;
+    const total = try std.math.mul(usize, n, k);
+    if (words8.len != total / 4 or scales8.len != total / 64 or biases8.len != total / 64) return error.BadAffineShape;
+    const words = try a.alloc(u32, total / 8);
+    errdefer a.free(words);
+    const scales = try a.alloc(u16, total / 64);
+    errdefer a.free(scales);
+    const biases = try a.alloc(u16, scales.len);
+    errdefer a.free(biases);
+    const workers = @min(max_workers, std.Thread.getCpuCount() catch 1, @max(1, scales.len / 4096));
+    const per = (scales.len + workers - 1) / workers;
+    var results: [max_workers]Error!void = @splat({});
+    var threads: [max_workers]?std.Thread = @splat(null);
+    for (1..workers) |w| threads[w] = std.Thread.spawn(.{}, run8, .{ &results[w], words8, scales8, biases8, words, scales, biases, w * per, @min(scales.len, (w + 1) * per) }) catch null;
+    run8(&results[0], words8, scales8, biases8, words, scales, biases, 0, @min(scales.len, per));
+    for (1..workers) |w| if (threads[w]) |t| t.join() else run8(&results[w], words8, scales8, biases8, words, scales, biases, w * per, @min(scales.len, (w + 1) * per));
+    for (results[0..workers]) |r| try r;
+    return .{ .allocator = a, .n = n, .k = k, .words = words, .scales = scales, .biases = biases };
+}
 const max_workers = 16;
 const Error = error{ NonFiniteAffineInput, NonFiniteAffineRange };
 fn run(out: *Error!void, weights: []const u16, words: []u32, scales: []u16, biases: []u16, first: usize, last: usize) void {
     out.* = groups(weights, words, scales, biases, first, last);
+}
+fn run8(out: *Error!void, words8: []const u32, scales8: []const u16, biases8: []const u16, words: []u32, scales: []u16, biases: []u16, first: usize, last: usize) void {
+    out.* = groups8(words8, scales8, biases8, words, scales, biases, first, last);
+}
+fn groups8(words8: []const u32, scales8: []const u16, biases8: []const u16, words: []u32, scales: []u16, biases: []u16, first: usize, last: usize) Error!void {
+    for (first..last) |group| {
+        const s8 = asFloat(scales8[group]);
+        const b8 = asFloat(biases8[group]);
+        if (!std.math.isFinite(s8) or !std.math.isFinite(b8)) return error.NonFiniteAffineInput;
+        var vals: [64]f32 = undefined;
+        var lower: f32 = std.math.inf(f32);
+        var upper: f32 = 0;
+        const src = words8[group * 16 ..][0..16];
+        for (src, 0..) |packed_w, wi| {
+            inline for (0..4) |j| {
+                const c: f32 = @floatFromInt((packed_w >> @as(u5, @intCast(j * 8))) & 255);
+                const v = c * s8 + b8;
+                vals[wi * 4 + j] = v;
+                lower = @min(lower, v);
+                upper = @max(upper, v);
+            }
+        }
+        var bias: f32 = if (@abs(lower) > @abs(upper)) lower else upper;
+        var scale: f32 = @max((upper - lower) / @as(f32, 15), @as(f32, 1e-7));
+        if (bias >= 0) scale = -scale;
+        const zero = @round(bias / scale);
+        if (zero != 0) scale = bias / zero else bias = 0;
+        if (!std.math.isFinite(scale) or scale == 0) return error.NonFiniteAffineRange;
+        scales[group] = asBf16(scale);
+        biases[group] = asBf16(bias);
+        const dst = words[group * 8 ..][0..8];
+        @memset(dst, 0);
+        for (vals, 0..) |v, index| {
+            const code: u32 = @intFromFloat(@min(@as(f32, 15), @max(@as(f32, 0), @round((v - bias) / scale))));
+            dst[index / 8] |= code << @as(u5, @intCast(4 * (index % 8)));
+        }
+    }
 }
 /// Groups [first, last): each group's 64 inputs to one scale, one bias and eight low-bit-first words.
 fn groups(weights: []const u16, words: []u32, scales: []u16, biases: []u16, first: usize, last: usize) Error!void {
@@ -109,6 +166,55 @@ test "constant positive, negative and tiny groups retain signed scales and exact
     try std.testing.expectEqual(@as(u16, 0x3d89), p.scales[1]);
     try std.testing.expectEqual(@as(u16, 0), p.biases[2]);
     for (p.words) |word| try std.testing.expectEqual(@as(u32, 0), word);
+}
+test "prepareFromAffine8 matches prepare on dequantized bf16 groups" {
+    const a = std.testing.allocator;
+    const n = 4;
+    const k = 128;
+    const groups_n = n * (k / 64);
+    const w8 = try a.alloc(u32, n * (k / 4));
+    defer a.free(w8);
+    const s8 = try a.alloc(u16, groups_n);
+    defer a.free(s8);
+    const b8 = try a.alloc(u16, groups_n);
+    defer a.free(b8);
+    const bf = try a.alloc(u16, n * k);
+    defer a.free(bf);
+    var prng = std.Random.DefaultPrng.init(0x8844);
+    const rng = prng.random();
+    for (0..groups_n) |g| {
+        const sc: f32 = rng.float(f32) * 0.02 + 0.002;
+        const bi: f32 = rng.float(f32) * 2.0 - 1.0;
+        s8[g] = asBf16(sc);
+        b8[g] = asBf16(bi);
+        const s_f = asFloat(s8[g]);
+        const b_f = asFloat(b8[g]);
+        for (0..16) |wi| {
+            var word: u32 = 0;
+            for (0..4) |j| {
+                const c: u8 = rng.int(u8);
+                word |= @as(u32, c) << @as(u5, @intCast(j * 8));
+                bf[g * 64 + wi * 4 + j] = asBf16(@as(f32, @floatFromInt(c)) * s_f + b_f);
+            }
+            w8[g * 16 + wi] = word;
+        }
+    }
+    var from8 = try prepareFromAffine8(a, w8, s8, b8, n, k);
+    defer from8.deinit();
+    var from_bf = try prepare(a, bf, n, k);
+    defer from_bf.deinit();
+    try std.testing.expectEqual(from_bf.words.len, from8.words.len);
+    for (0..groups_n) |g| {
+        const sc_a = asFloat(from8.scales[g]);
+        const bi_a = asFloat(from8.biases[g]);
+        const sc_b = asFloat(from_bf.scales[g]);
+        const bi_b = asFloat(from_bf.biases[g]);
+        for (0..64) |i| {
+            const ca: f32 = @floatFromInt((from8.words[g * 8 + i / 8] >> @as(u5, @intCast(4 * (i % 8)))) & 15);
+            const cb: f32 = @floatFromInt((from_bf.words[g * 8 + i / 8] >> @as(u5, @intCast(4 * (i % 8)))) & 15);
+            try std.testing.expect(@abs((ca * sc_a + bi_a) - (cb * sc_b + bi_b)) <= @max(@abs(sc_a), @abs(sc_b)) * 1.1 + 1e-4);
+        }
+    }
 }
 test "q4 asBf16: today's bits on every zero, subnormal, infinity and tie; a NaN stays NaN" {
     const old = struct {

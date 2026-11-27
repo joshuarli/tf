@@ -840,6 +840,9 @@ const Chunk = struct {
         if (c.n <= 8) {
             c.setP(c.s.pipes.smallrow, args, &.{ x.buf, t(w), A, out });
             c.enc.dispatchGroups(mtl.Size.of((m + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+        } else if (!c.s.half and c.m.affine_pipes != null) {
+            c.setP(c.s.pipes.smallrow, args, &.{ x.buf, t(w), A, out });
+            c.enc.dispatchGroups(mtl.Size.of((m + 7) / 8, (c.n + 15) / 16, 1), mtl.Size.of(256, 1, 1));
         } else if (c.s.half and c.s.pipes.float_mpp_bf16 != null and m < 384) {
             c.setP(c.s.pipes.float_mpp_bf16.?, AffineDense{ .n = @intCast(m), .k = @intCast(width(w)), .rows = c.n, .xs = x.xs, .xb = x.xb, .bits = 0, .cap = 0 }, &.{ x.buf, t(w), A, out });
             c.enc.dispatchGroups(mtl.Size.of((m + 31) / 32, (c.n + 15) / 16, 1), mtl.Size.of(128, 1, 1));
@@ -928,7 +931,7 @@ const Chunk = struct {
                 c.enc.dispatchGroups(mtl.Size.of((n + 31) / 32, (rows + 15) / 16, 1), mtl.Size.of(128, 1, 1));
                 return;
             }
-            if (c.batch) |batch| if (c.s.fuse and n <= 256 and args.k % 512 == 0 and rows <= 2) {
+            if (c.batch) |batch| if (c.s.rounding.experts and c.s.fuse and n <= 256 and args.k % 512 == 0 and rows <= 2) {
                 c.setP(batch.scratch.shared.router_f32, args, &.{ x.buf, t(w), A, out });
                 c.enc.dispatchGroups(mtl.Size.of((n + 1) / 2, rows, 1), mtl.Size.of(128, 1, 1));
                 return;
@@ -941,7 +944,7 @@ const Chunk = struct {
     fn sharedDense(c: Chunk, w: Tensor, q: wts.Affine, x: In, out: B, args: AffineDense) bool {
         const batch = c.batch orelse return false;
         const d = (if (c.s.rounding.experts) batch.scratch.shared.naxDense(args.rows, args.n, args.k, args.bits) else null) orelse
-            (if (c.s.fuse) batch.scratch.shared.fastDense1(args.rows, args.n, args.k, args.bits) else null) orelse
+            (if (c.s.rounding.experts and c.s.fuse) batch.scratch.shared.fastDense1(args.rows, args.n, args.k, args.bits) else null) orelse
             batch.scratch.shared.dense(args.rows, args.n, args.k, args.bits) orelse return false;
         c.setP(d.pipe, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out });
         c.enc.dispatchGroups(d.groups, d.threads);
@@ -967,7 +970,7 @@ const Chunk = struct {
         };
         if (c.batch) |batch| {
             const d = (if (c.s.rounding.experts) batch.scratch.shared.naxProjections(c.n, ms, @intCast(width(a.q))) else null) orelse
-                (if (c.s.fuse) batch.scratch.shared.fastProjectionsFew(c.n, ms, @intCast(width(a.q))) else null) orelse
+                (if (c.s.rounding.experts and c.s.fuse) batch.scratch.shared.fastProjectionsFew(c.n, ms, @intCast(width(a.q))) else null) orelse
                 batch.scratch.shared.fused(c.n, ms, @intCast(width(a.q)));
             if (d) |disp| {
                 c.setP(disp.pipe, SharedProjections{ .k = @intCast(width(a.q)), .full = @intFromBool(full), .rows = c.n, .m = ms }, &bufs);

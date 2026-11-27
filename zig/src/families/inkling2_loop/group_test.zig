@@ -75,6 +75,7 @@ fn checkGrouped(path: []const u8) !void {
     defer ps.deinit();
     var bs = try batch.BatchScratch.init(m.device, config, 8);
     defer bs.deinit();
+    bs.rows.rounding = .{};
     var verifier = try group.Verifier.init(m.device, config);
     defer verifier.deinit();
     const capacity: usize = config.text.window + 64;
@@ -219,6 +220,7 @@ fn checkTaps(path: []const u8) !void {
     defer ps.deinit();
     var bs = try batch.BatchScratch.init(m.device, config, 8);
     defer bs.deinit();
+    bs.rows.rounding = .{};
     var verifier = try group.Verifier.init(m.device, config);
     defer verifier.deinit();
     const visits = [_]u32{ 5, 23, 41, config.slots() };
@@ -274,6 +276,7 @@ fn checkFused(path: []const u8) !void {
     defer ps.deinit();
     var bs = try batch.BatchScratch.init(m.device, config, 8);
     defer bs.deinit();
+    bs.rows.rounding = .{};
     var verifier = try group.Verifier.init(m.device, config);
     defer verifier.deinit();
     const vocab = config.text.unpadded_vocab;
@@ -362,8 +365,10 @@ fn checkTrees(path: []const u8) !void {
     defer ps.deinit();
     var wide = try group.scratch(m.device, config);
     defer wide.deinit();
+    wide.rows.rounding = .{};
     var bs = try batch.BatchScratch.init(m.device, config, 8);
     defer bs.deinit();
+    bs.rows.rounding = .{};
     var verifier = try group.Verifier.init(m.device, config);
     defer verifier.deinit();
     const limit = verifier.limit;
@@ -487,4 +492,57 @@ test "a tree verify row equals its path's one-row steps bit for bit, and committ
         ran = true;
     }
     if (!ran) return error.SkipZigTest;
+}
+
+test "hybrid M5 NAX grouped verify produces finite logits and matches exact f32 argmax on oQ4e" {
+    const path = std.c.getenv("TF_INKLING2_LOOP_OQ4E_DIR") orelse return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const m = try model.Model.load(gpa, std.testing.io, std.mem.span(path));
+    defer m.deinit();
+    if (!m.device.tensorUnits()) return error.SkipZigTest;
+    const config = &m.config;
+    const vocab = config.text.unpadded_vocab;
+    const parsed = try std.json.parseFromSlice([]const Prompt, gpa, prompts_json, .{});
+    defer parsed.deinit();
+    const agent = parsed.value[0].token_ids;
+    var ps = try prefill.PrefillScratch.initRounding(m.device, config, 512, 512, .{});
+    defer ps.deinit();
+    var exact = try group.scratch(m.device, config);
+    defer exact.deinit();
+    exact.rows.rounding = .{};
+    var nax = try group.scratch(m.device, config);
+    defer nax.deinit();
+    nax.rows.rounding = .{ .inputs = true, .experts = true };
+    var verifier = try group.Verifier.init(m.device, config);
+    defer verifier.deinit();
+    const start = config.text.window - 4;
+    var base = try state.Cache.init(m.device, config, config.text.window + 32);
+    defer base.deinit();
+    try prefillTokens(m, &ps, &base, agent[0..start]);
+    var work_e = try state.Cache.init(m.device, config, config.text.window + 32);
+    defer work_e.deinit();
+    var work_n = try state.Cache.init(m.device, config, config.text.window + 32);
+    defer work_n.deinit();
+    const ids = agent[start .. start + group.max_rows];
+    var total: usize = 0;
+    var agreed: usize = 0;
+    for ([_]usize{ 1, 4, 8, group.max_rows }) |w| {
+        try cloneCache(m, &base, &work_e);
+        try cloneCache(m, &base, &work_n);
+        const ge = try verifier.group(&.{&work_e}, &.{w});
+        try verifier.forward(m, &exact, &ge, ids[0..w]);
+        const gn = try verifier.group(&.{&work_n}, &.{w});
+        try verifier.forward(m, &nax, &gn, ids[0..w]);
+        const le = exact.rows.logits.slice(f32, w * vocab);
+        const ln = nax.rows.logits.slice(f32, w * vocab);
+        for (0..w) |r| {
+            const re = le[r * vocab ..][0..vocab];
+            const rn = ln[r * vocab ..][0..vocab];
+            for (rn) |v| try std.testing.expect(std.math.isFinite(v));
+            total += 1;
+            if (argmaxAt(re) == argmaxAt(rn)) agreed += 1;
+        }
+    }
+    std.debug.print("hybrid M5 NAX verify: {d}/{d} rows match exact f32 argmax across widths 1, 4, 8, {d}\n", .{ agreed, total, group.max_rows });
+    try std.testing.expect(agreed * 10 >= total * 9);
 }

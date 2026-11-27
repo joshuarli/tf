@@ -183,6 +183,7 @@ test "Inkling DFlash2 greedy speculation emits plain greedy decoding's tokens on
     try std.testing.expect(try loaded.drafter.fixedBytes() <= 4 << 30);
     var s = try spec.Speculator.init(loaded.model, loaded.drafter, dflash.tap_ids);
     defer s.deinit();
+    s.batch.rows.rounding = .{};
     const parsed = try std.json.parseFromSlice([]const Prompt, std.testing.allocator, prompts_json, .{});
     defer parsed.deinit();
     var tally: Tally = .{};
@@ -220,6 +221,7 @@ test "forced drafts accept all, none or a prefix, stop at a limit or an EOS insi
     const m = loaded.model;
     var s = try spec.Speculator.init(m, loaded.drafter, dflash.tap_ids);
     defer s.deinit();
+    s.batch.rows.rounding = .{};
     const parsed = try std.json.parseFromSlice([]const Prompt, a, prompts_json, .{});
     defer parsed.deinit();
     const ids = parsed.value[1].token_ids;
@@ -268,6 +270,7 @@ test "a round whose latest tokens occurred only before the drafter's window draf
     const m = loaded.model;
     var s = try spec.Speculator.init(m, loaded.drafter, dflash.tap_ids);
     defer s.deinit();
+    s.batch.rows.rounding = .{};
     var lookup = spec.Lookup.init(a);
     defer lookup.deinit();
     s.lookup = &lookup;
@@ -367,6 +370,7 @@ fn compareTree(s: *spec.Speculator, ids: []const u32, limit: usize, eos: []const
     defer rounds.deinit(a);
     var bs = try inkling.BatchScratch.init(m.device, &m.config, 1);
     defer bs.deinit();
+    bs.rows.rounding = .{};
     const first = try spec.prefillPlain(m, &s.prefill, &plain_cache, ids);
     try want.append(a, first);
     try spec.plain(m, &bs, &plain_cache, first, limit, eos, a, &want, null);
@@ -389,6 +393,7 @@ test "Inkling DFlash2 tree speculation with lookup chains emits plain greedy dec
     const a = std.testing.allocator;
     var s = try spec.Speculator.init(loaded.model, loaded.drafter, dflash.tap_ids);
     defer s.deinit();
+    s.batch.rows.rounding = .{};
     var lookup = spec.Lookup.init(a);
     defer lookup.deinit();
     s.lookup = &lookup;
@@ -480,6 +485,7 @@ test "forced trees accept a 15-row path, none or a later branch, stop at a limit
     const m = loaded.model;
     var s = try spec.Speculator.init(m, loaded.drafter, dflash.tap_ids);
     defer s.deinit();
+    s.batch.rows.rounding = .{};
     s.mode = .tree;
     s.plan.verify_ms = @splat(1);
     const parsed = try std.json.parseFromSlice([]const Prompt, a, prompts_json, .{});
@@ -528,6 +534,7 @@ test "a tree round merges the lookup chain from before the drafter's window, as 
     const m = loaded.model;
     var s = try spec.Speculator.init(m, loaded.drafter, dflash.tap_ids);
     defer s.deinit();
+    s.batch.rows.rounding = .{};
     var lookup = spec.Lookup.init(a);
     defer lookup.deinit();
     s.lookup = &lookup;
@@ -567,6 +574,7 @@ test "plain greedy steps keep their logits on a fresh one-row scratch and on the
     const a = std.testing.allocator;
     var s = try spec.Speculator.init(loaded.model, loaded.drafter, dflash.tap_ids);
     defer s.deinit();
+    s.batch.rows.rounding = .{};
     var lookup = spec.Lookup.init(a);
     defer lookup.deinit();
     s.lookup = &lookup;
@@ -575,6 +583,7 @@ test "plain greedy steps keep their logits on a fresh one-row scratch and on the
     defer parsed.deinit();
     var fresh = try inkling.BatchScratch.init(loaded.model.device, &loaded.model.config, 1);
     defer fresh.deinit();
+    fresh.rows.rounding = .{};
     var tokens: [4]std.ArrayList(u32) = @splat(.empty);
     defer for (&tokens) |*t| t.deinit(a);
     var hashes: [4]std.ArrayList(u64) = @splat(.empty);

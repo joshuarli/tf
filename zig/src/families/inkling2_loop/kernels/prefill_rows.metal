@@ -72,8 +72,7 @@ inline float i2pr_total(float sum, threadgroup float* part, uint t) {
         w[k][j] = e;
         total += e;
       }
-      const float inv_t = 1.0f / total;
-      for (uint j = 0; j < a.depth; ++j) w[k][j] *= inv_t;
+      for (uint j = 0; j < a.depth; ++j) w[k][j] = w[k][j] / total;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     float out[I2PR_PER];

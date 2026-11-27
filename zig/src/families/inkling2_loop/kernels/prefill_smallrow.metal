@@ -5,10 +5,12 @@ struct i2p_small_args { uint n, k, rows, xs, xb; float cap; };
 
 [[kernel]] void i2p_small(const device float* X [[buffer(0)]], const device bfloat* W [[buffer(1)]],
     constant i2p_small_args& a [[buffer(2)]], device float* O [[buffer(3)]],
-    uint tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+    uint2 tg [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]]) {
-  const uint col = tg * 8u + sg;
-  if (col >= a.n) return;
+  const uint col = tg.x * 8u + sg;
+  const uint row0 = tg.y * 16u;
+  if (col >= a.n || row0 >= a.rows) return;
+  const uint n = min(16u, a.rows - row0);
   const device bfloat* w = W + size_t(col) * a.k;
   float acc[16] = {};
   uint base = 0;
@@ -18,8 +20,8 @@ struct i2p_small_args { uint n, k, rows, xs, xb; float cap; };
     const float4 v = float4(as_type<float>((c.x & 0xffffu) << 16), as_type<float>(c.x & 0xffff0000u),
                             as_type<float>((c.y & 0xffffu) << 16), as_type<float>(c.y & 0xffff0000u));
     for (uint r = 0; r < 16; ++r) {
-      if (r >= a.rows) break;
-      const device float4* x = (const device float4*)(X + size_t(a.xb + r * a.xs) * a.k);
+      if (r >= n) break;
+      const device float4* x = (const device float4*)(X + size_t(a.xb + (row0 + r) * a.xs) * a.k);
       const float4 q = x[base / 4u + lane];
       acc[r] = fma(q.x, v.x, acc[r]);
       acc[r] = fma(q.y, v.y, acc[r]);
@@ -30,13 +32,13 @@ struct i2p_small_args { uint n, k, rows, xs, xb; float cap; };
   for (uint i = base + lane; i < a.k; i += 32u) {
     const float v = float(w[i]);
     for (uint r = 0; r < 16; ++r) {
-      if (r >= a.rows) break;
-      acc[r] = fma(X[size_t(a.xb + r * a.xs) * a.k + i], v, acc[r]);
+      if (r >= n) break;
+      acc[r] = fma(X[size_t(a.xb + (row0 + r) * a.xs) * a.k + i], v, acc[r]);
     }
   }
   for (uint r = 0; r < 16; ++r) {
-    if (r >= a.rows) break;
+    if (r >= n) break;
     const float v = simd_sum(acc[r]);
-    if (lane == 0) O[size_t(r) * a.n + col] = a.cap > 0 ? a.cap * precise::tanh(v / a.cap) : v;
+    if (lane == 0) O[size_t(row0 + r) * a.n + col] = a.cap > 0 ? a.cap * precise::tanh(v / a.cap) : v;
   }
 }

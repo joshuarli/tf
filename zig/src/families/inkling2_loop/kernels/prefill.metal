@@ -708,53 +708,73 @@ struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; 
   const uint pos = a.base + t;
   const float tau = 1.0f + a.alpha * precise::log(max(1.0f, (float(pos) + 1.0f) / a.floor));
   const float use_tau = a.window ? 1.0f : tau;
-  float qv[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-  if (t < a.rows) for (uint u = 0; u < 4u; ++u)
-    qv[u] = Q[((size_t)t * a.heads + h) * 128u + lane + 32u * u] * a.scale * use_tau;
+  float4 qv = float4(0.0f);
+  if (t < a.rows) qv = *reinterpret_cast<const device float4*>(Q + ((size_t)t * a.heads + h) * 128u + lane * 4u) * (a.scale * use_tau);
   const float sk = t < a.rows ? sink[(size_t)t * a.heads + h] : 0.0f;
   const uint lo = a.window && pos + 1u > a.window ? pos + 1u - a.window : 0u;
   const uint first = a.base + row0;
   const uint lo0 = a.window && first + 1u > a.window ? first + 1u - a.window : 0u;
   const uint last = a.base + min(row0 + 7u, a.rows - 1u);
-  float top = -INFINITY, mass = 0.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-  threadgroup float keys[8 * 128], values[8 * 128];
-  for (uint j0 = lo0 / 8u * 8u; j0 <= last; j0 += 8u) {
-    for (uint e = ti; e < 8u * 128u; e += 768u) {
-      const uint j = j0 + e / 128u, d = e % 128u;
-      float kk = 0.0f, vv = 0.0f;
+  float top = -INFINITY, mass = 0.0f;
+  float4 acc = float4(0.0f);
+  threadgroup half4 keys[32 * 32], values[32 * 32];
+  for (uint j0 = lo0 / 32u * 32u; j0 <= last; j0 += 32u) {
+    for (uint e = ti; e < 32u * 32u; e += 768u) {
+      const uint j = j0 + e / 32u, d4 = (e % 32u) * 4u;
+      half4 kk = half4(0.0h), vv = half4(0.0h);
       if (j <= last) {
         const uint rj = a.rmode && a.window ? j % a.window : j;
-        const size_t at = ((j < a.base ? (size_t)rj : (size_t)(j - a.base)) * a.kv + kv) * 128u + d;
-        kk = j < a.base ? KEYS[at] : KC[at];
-        vv = j < a.base ? VALUES[at] : VC[at];
+        const size_t at = ((j < a.base ? (size_t)rj : (size_t)(j - a.base)) * a.kv + kv) * 128u + d4;
+        kk = *reinterpret_cast<const device half4*>((j < a.base ? KEYS : KC) + at);
+        vv = *reinterpret_cast<const device half4*>((j < a.base ? VALUES : VC) + at);
       }
       keys[e] = kk; values[e] = vv;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (t < a.rows) for (uint x = 0; x < 8u; ++x) {
-      const uint j = j0 + x;
-      if (j < lo || j > pos) continue;
-      float dot = 0.0f;
-      for (uint u = 0; u < 4u; ++u) dot = fma(qv[u], keys[x * 128u + lane + 32u * u], dot);
-      const uint col = min(pos - j, a.extent);
-      const float score = simd_sum(dot) + (B[((size_t)t * a.heads + h) * (a.extent + 1u) + col] - sk);
-      const float peak = max(top, score);
-      const float rescale = precise::exp(top - peak);
-      const float w = precise::exp(score - peak);
-      mass = mass * rescale + w;
-      for (uint u = 0; u < 4u; ++u) acc[u] = acc[u] * rescale + w * values[x * 128u + lane + 32u * u];
-      top = peak;
+    if (t < a.rows) {
+      float sc[32];
+      float bmax = -INFINITY;
+      const uint n = min(32u, last + 1u - j0);
+      for (uint x = 0; x < n; ++x) {
+        const uint j = j0 + x;
+        if (j < lo || j > pos) { sc[x] = -INFINITY; continue; }
+        const float4 kk = float4(keys[x * 32u + lane]);
+        float dot = fma(qv.w, kk.w, fma(qv.z, kk.z, fma(qv.y, kk.y, qv.x * kk.x)));
+        dot += simd_shuffle_xor(dot, ushort(1));
+        dot += simd_shuffle_xor(dot, ushort(2));
+        dot += simd_shuffle_xor(dot, ushort(4));
+        dot += simd_shuffle_xor(dot, ushort(8));
+        dot += simd_shuffle_xor(dot, ushort(16));
+        const uint col = min(pos - j, a.extent);
+        const float score = dot + (B[((size_t)t * a.heads + h) * (a.extent + 1u) + col] - sk);
+        sc[x] = score;
+        bmax = max(bmax, score);
+      }
+      if (bmax != -INFINITY) {
+        const float peak = max(top, bmax);
+        const float rescale = top == -INFINITY ? 0.0f : precise::exp(top - peak);
+        const float w_lane = (lane < n && sc[lane] != -INFINITY) ? precise::exp(sc[lane] - peak) : 0.0f;
+        mass = mass * rescale + simd_sum(w_lane);
+        acc *= rescale;
+        for (uint x = 0; x < n; ++x) {
+          const float w = simd_shuffle(w_lane, ushort(x));
+          if (w == 0.0f && sc[x] == -INFINITY) continue;
+          acc = fma(float4(w), float4(values[x * 32u + lane]), acc);
+        }
+        top = peak;
+      }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
   }
-  float merged_top = 0.0f, merged_mass = 1.0f, merged_acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+  float merged_top = 0.0f, merged_mass = 1.0f;
+  float4 merged_acc = float4(0.0f);
   const float peak = max(merged_top, top);
   const float r0 = precise::exp(merged_top - peak);
   const float r1 = precise::exp(top - peak);
   merged_mass = merged_mass * r0 + mass * r1;
-  for (uint u = 0; u < 4u; ++u) merged_acc[u] = merged_acc[u] * r0 + r1 * acc[u];
-  if (t < a.rows) for (uint u = 0; u < 4u; ++u)
-    O[((size_t)t * a.heads + h) * 128u + lane + 32u * u] = merged_acc[u] / merged_mass;
+  merged_acc = merged_acc * r0 + r1 * acc;
+  if (t < a.rows)
+    *reinterpret_cast<device float4*>(O + ((size_t)t * a.heads + h) * 128u + lane * 4u) = merged_acc / merged_mass;
 }
 
 #ifdef I2P_HALF_OPERANDS

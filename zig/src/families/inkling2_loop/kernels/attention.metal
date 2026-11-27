@@ -139,8 +139,8 @@ inline void i2_split_blocks(const device float* Q, const device half* KEYS, cons
     const float score = i2_rows_sum(p, lane) + own;
     const float bmax = simd_max(lane < n ? score : -INFINITY);
     const float peak = max(top, bmax);
-    const float rescale = top == -INFINITY ? 0.0f : fast::exp2((top - peak) * M_LOG2E_F);
-    const float weights = lane < n ? fast::exp2((score - peak) * M_LOG2E_F) : 0.0f;
+    const float rescale = top == -INFINITY ? 0.0f : precise::exp(top - peak);
+    const float weights = lane < n ? precise::exp(score - peak) : 0.0f;
     mass = mass * rescale + simd_sum(weights);
     acc *= rescale;
     if (n == R) {
@@ -498,17 +498,18 @@ template <uint C, typename W>
   const device float* msg = MSG + size_t(a.msg0 + j + group.y * 4u) * a.h;
   device float* out = (j == 0u ? O0 : j == 1u ? O1 : O2) + size_t(group.y) * a.h;
   if (a.rank == 256u) {
-    const float4 xv0 = *reinterpret_cast<const device float4*>(x + lane * 8u);
-    const float4 xv1 = *reinterpret_cast<const device float4*>(x + lane * 8u + 4u);
+    float xv[8];
+#pragma unroll
+    for (uint s = 0u; s < 8u; ++s) xv[s] = x[lane + s * 32u];
     for (uint col = col0; col < min(col0 + cols, a.h); ++col) {
-      const device W* wg = (j == 0u ? G0 : j == 1u ? G1 : G2) + size_t(col) * 256u + lane * 8u;
-      const device W* wf = (j == 0u ? F0 : j == 1u ? F1 : F2) + size_t(col) * 256u + lane * 8u;
-      const float4 g0 = i2_ctl_load4(wg), g1 = i2_ctl_load4(wg + 4u);
-      const float4 f0 = i2_ctl_load4(wf), f1 = i2_ctl_load4(wf + 4u);
-      float g = fma(xv0.w, g0.w, fma(xv0.z, g0.z, fma(xv0.y, g0.y, xv0.x * g0.x)));
-      g = fma(xv1.w, g1.w, fma(xv1.z, g1.z, fma(xv1.y, g1.y, fma(xv1.x, g1.x, g))));
-      float f = fma(xv0.w, f0.w, fma(xv0.z, f0.z, fma(xv0.y, f0.y, xv0.x * f0.x)));
-      f = fma(xv1.w, f1.w, fma(xv1.z, f1.z, fma(xv1.y, f1.y, fma(xv1.x, f1.x, f))));
+      const device W* wg = (j == 0u ? G0 : j == 1u ? G1 : G2) + size_t(col) * 256u;
+      const device W* wf = (j == 0u ? F0 : j == 1u ? F1 : F2) + size_t(col) * 256u;
+      float g = 0.0f, f = 0.0f;
+#pragma unroll
+      for (uint s = 0u; s < 8u; ++s) {
+        g = fma(xv[s], float(wg[lane + s * 32u]), g);
+        f = fma(xv[s], float(wf[lane + s * 32u]), f);
+      }
       g = simd_sum(g); f = simd_sum(f);
       if (lane == 0u) out[col] = cur[col] - precise::tanh(f) * cur[col] + precise::tanh(g) * msg[col];
     }

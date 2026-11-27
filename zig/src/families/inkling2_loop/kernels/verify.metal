@@ -193,8 +193,8 @@ inline void i2v_split_blocks(const device float* Q, const device half* KEYS, con
     const float score = i2_rows_sum(p, lane) + own;
     const float bmax = simd_max(lane < n ? score : -INFINITY);
     const float peak = max(top, bmax);
-    const float rescale = top == -INFINITY ? 0.0f : fast::exp2((top - peak) * M_LOG2E_F);
-    const float weights = lane < n ? fast::exp2((score - peak) * M_LOG2E_F) : 0.0f;
+    const float rescale = top == -INFINITY ? 0.0f : precise::exp(top - peak);
+    const float weights = lane < n ? precise::exp(score - peak) : 0.0f;
     mass = mass * rescale + simd_sum(weights);
     acc *= rescale;
     if (n == R) {

@@ -73,6 +73,7 @@ test "batched independent cache steps match decode" {
     defer ds.deinit();
     var bs = try batch.BatchScratch.init(m.device, &m.config, 8);
     defer bs.deinit();
+    bs.rows.rounding = .{};
     const vocab = m.config.text.unpadded_vocab;
     const logits = try std.testing.allocator.alloc(f32, 8 * vocab);
     defer std.testing.allocator.free(logits);
@@ -146,6 +147,7 @@ const Streams = struct {
         errdefer s.ps.deinit();
         s.bs = try batch.BatchScratch.init(s.m.device, config, 8);
         errdefer s.bs.deinit();
+        s.bs.rows.rounding = .{};
         s.verifier = try @import("group.zig").Verifier.init(s.m.device, config);
         errdefer s.verifier.deinit();
         const parsed = try std.json.parseFromSlice([]const Prompt, gpa, @embedFile("fixtures/prompts.json"), .{});
@@ -474,6 +476,7 @@ fn checkFusedKernels(path: []const u8) !void {
     defer ps.deinit();
     var wide = try group.scratch(m.device, config);
     defer wide.deinit();
+    wide.rows.rounding = .{};
     const capacity = config.text.window + 64;
     var base = try state.Cache.init(m.device, config, capacity);
     defer base.deinit();

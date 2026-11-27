@@ -347,8 +347,12 @@ pub fn scratch(device: mtl.Device, config: *const Config) !batch_mod.BatchScratc
     errdefer controls_norm.deinit();
     const controls_down = try mtl.Pipeline.init(device, lib, "i2_controls_down", false);
     errdefer controls_down.deinit();
+    const controls_down_bf16 = try mtl.Pipeline.init(device, lib, "i2_controls_down_bf16", false);
+    errdefer controls_down_bf16.deinit();
     const controls_apply = try mtl.Pipeline.init(device, lib, "i2_controls_apply", false);
     errdefer controls_apply.deinit();
+    const controls_apply_bf16 = try mtl.Pipeline.init(device, lib, "i2_controls_apply_bf16", false);
+    errdefer controls_apply_bf16.deinit();
     const mix = try mtl.Pipeline.init(device, lib, "i2_batch_mix", false);
     errdefer mix.deinit();
     const mix4 = try mtl.Pipeline.init(device, lib, "i2_batch_mix4", false);
@@ -357,8 +361,10 @@ pub fn scratch(device: mtl.Device, config: *const Config) !batch_mod.BatchScratc
     errdefer qkv.deinit();
     const controls_cols = try mtl.Pipeline.init(device, lib, "i2_controls_apply_rows", false);
     errdefer controls_cols.deinit();
+    const controls_cols_bf16 = try mtl.Pipeline.init(device, lib, "i2_controls_apply_rows_bf16", false);
+    errdefer controls_cols_bf16.deinit();
     const shared = try @import("rows.zig").Pipes.init(device);
-    return .{ .rows = rows, .decode = decode, .parts = parts, .split = split, .combine = combine, .combine_sig_mul = combine_sig_mul, .controls_norm = controls_norm, .controls_down = controls_down, .controls_apply = controls_apply, .mix = mix, .mix4 = mix4, .qkv = qkv, .controls_cols = controls_cols, .shared = shared, .controls_input = controls_input, .controls_hidden = controls_hidden };
+    return .{ .rows = rows, .decode = decode, .parts = parts, .split = split, .combine = combine, .combine_sig_mul = combine_sig_mul, .controls_norm = controls_norm, .controls_down = controls_down, .controls_down_bf16 = controls_down_bf16, .controls_apply = controls_apply, .controls_apply_bf16 = controls_apply_bf16, .mix = mix, .mix4 = mix4, .qkv = qkv, .controls_cols = controls_cols, .controls_cols_bf16 = controls_cols_bf16, .shared = shared, .controls_input = controls_input, .controls_hidden = controls_hidden };
 }
 
 pub const Group = struct {

@@ -70,7 +70,7 @@ pub const Draft = struct {
         errdefer a.destroy(d);
         const name = try a.dupe(u8, dir);
         errdefer a.free(name);
-        d.* = .{ .a = a, .model = undefined, .glue = try q.glue_gpu.Kernels.init(target.device), .kernels = .{ .allocator = a, .device = target.device, .raw_tiles = false }, .dims = undefined, .bound = undefined, .config = c, .verifier = undefined, .step = undefined, .lanes = &.{}, .gathered = &.{}, .name = name };
+        d.* = .{ .a = a, .model = undefined, .glue = try q.glue_gpu.Kernels.init(target.device), .kernels = .{ .allocator = a, .device = target.device, .raw_tiles = true }, .dims = undefined, .bound = undefined, .config = c, .verifier = undefined, .step = undefined, .lanes = &.{}, .gathered = &.{}, .name = name };
         errdefer d.glue.deinit();
         errdefer d.kernels.deinit();
         d.dims = try target.device.buffer(4096, mtl.ResourceOptions.shared);

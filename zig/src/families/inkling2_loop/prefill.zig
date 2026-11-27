@@ -138,7 +138,9 @@ pub const Pipes = struct {
     affine_stage_split_hi: ?mtl.Pipeline,
     affine_stage_gemm_split: ?mtl.Pipeline,
     float_mpp: ?mtl.Pipeline,
+    float_mpp_bf16: ?mtl.Pipeline,
     gate_ctl: ?mtl.Pipeline,
+    gate_ctl_bf16: ?mtl.Pipeline,
     affine_half_up: ?mtl.Pipeline,
     affine_half_down: ?mtl.Pipeline,
     bf16_convert: ?mtl.Pipeline,
@@ -207,7 +209,9 @@ pub const Pipes = struct {
         if (p.affine_stage_split_hi) |pipe| pipe.deinit();
         if (p.affine_stage_gemm_split) |pipe| pipe.deinit();
         if (p.float_mpp) |pipe| pipe.deinit();
+        if (p.float_mpp_bf16) |pipe| pipe.deinit();
         if (p.gate_ctl) |pipe| pipe.deinit();
+        if (p.gate_ctl_bf16) |pipe| pipe.deinit();
         if (p.affine_half_up) |pipe| pipe.deinit();
         if (p.affine_half_down) |pipe| pipe.deinit();
         if (p.bf16_convert) |pipe| pipe.deinit();
@@ -504,15 +508,23 @@ pub const PrefillScratch = struct {
         s.pipes.smallrow = try mtl.Pipeline.init(device, small_lib, "i2p_small", false);
         errdefer s.pipes.smallrow.deinit();
         s.pipes.gate_ctl = null;
+        s.pipes.gate_ctl_bf16 = null;
+        s.pipes.float_mpp_bf16 = null;
         s.pipes.float_mpp = if (s.affine_stage_w != null) blk: {
             const float_lib = try mtl.Library.fromSource(device, kernels.float_mpp, opts);
             defer float_lib.deinit();
             s.pipes.gate_ctl = try mtl.Pipeline.init(device, float_lib, "i2af_gate_ctl", false);
             errdefer s.pipes.gate_ctl.?.deinit();
+            s.pipes.gate_ctl_bf16 = try mtl.Pipeline.init(device, float_lib, "i2af_gate_ctl_bf16", false);
+            errdefer s.pipes.gate_ctl_bf16.?.deinit();
+            s.pipes.float_mpp_bf16 = try mtl.Pipeline.init(device, float_lib, "i2af_gemm_bf16", false);
+            errdefer s.pipes.float_mpp_bf16.?.deinit();
             break :blk try mtl.Pipeline.init(device, float_lib, "i2af_gemm", false);
         } else null;
         errdefer if (s.pipes.float_mpp) |pipe| pipe.deinit();
+        errdefer if (s.pipes.float_mpp_bf16) |pipe| pipe.deinit();
         errdefer if (s.pipes.gate_ctl) |pipe| pipe.deinit();
+        errdefer if (s.pipes.gate_ctl_bf16) |pipe| pipe.deinit();
         s.pipes.affine_stage_prepare = null;
         s.pipes.affine_stage_gemm = null;
         s.pipes.affine_stage_split = null;
@@ -828,6 +840,9 @@ const Chunk = struct {
         if (c.n <= 8) {
             c.setP(c.s.pipes.smallrow, args, &.{ x.buf, t(w), A, out });
             c.enc.dispatchGroups(mtl.Size.of((m + 7) / 8, 1, 1), mtl.Size.of(256, 1, 1));
+        } else if (c.s.half and c.s.pipes.float_mpp_bf16 != null and m < 384) {
+            c.setP(c.s.pipes.float_mpp_bf16.?, AffineDense{ .n = @intCast(m), .k = @intCast(width(w)), .rows = c.n, .xs = x.xs, .xb = x.xb, .bits = 0, .cap = 0 }, &.{ x.buf, t(w), A, out });
+            c.enc.dispatchGroups(mtl.Size.of((m + 31) / 32, (c.n + 15) / 16, 1), mtl.Size.of(128, 1, 1));
         } else if (c.s.pipes.gemm_mpp != null and m >= 384 and args.k >= 2304 and c.n >= 16) {
             if (c.s.pipes.bf16_gemm_mpp) |pipe| {
                 const input = b(c.s.bf16_input.?);
@@ -1222,15 +1237,19 @@ const Chunk = struct {
 
     fn control(c: Chunk, ctl: Controller, cur: In, msg: In, out: B, ys: u32, yb: u32) void {
         const s = c.s;
-        if (c.batch) |batch| if (s.fuse and c.n > 1 and c.m.affine_pipes != null and ctl.down.dtype == .f32 and ctl.gain.dtype == .f32 and ctl.forget.dtype == .f32 and msg.xs == 4 and ys == 1 and yb == 0 and width(ctl.down) == 2 * c.h and nrows(ctl.gain) == c.h and nrows(ctl.forget) == c.h and width(ctl.gain) == nrows(ctl.down) and width(ctl.forget) == nrows(ctl.down)) {
+        const is_f32 = ctl.down.dtype == .f32 and ctl.gain.dtype == .f32 and ctl.forget.dtype == .f32;
+        const is_bf16 = ctl.down.dtype == .bf16 and ctl.gain.dtype == .bf16 and ctl.forget.dtype == .bf16;
+        if (c.batch) |batch| if (s.fuse and c.m.affine_pipes != null and (is_f32 or is_bf16) and msg.xs == 4 and ys == 1 and yb == 0 and width(ctl.down) == 2 * c.h and nrows(ctl.gain) == c.h and nrows(ctl.forget) == c.h and width(ctl.gain) == nrows(ctl.down) and width(ctl.forget) == nrows(ctl.down)) {
             const scratch = batch.scratch;
             const rank: u32 = @intCast(nrows(ctl.down));
             const xs: [3]u32 = @splat(cur.xs);
             const xb: [3]u32 = @splat(cur.xb);
-            c.setP(scratch.shared.controls_down, ControlsDown{ .h = c.h, .rank = rank, .rows = c.n, .msg0 = msg.xb, .xs = xs, .xb = xb }, &.{ cur.buf, cur.buf, cur.buf, msg.buf, t(ctl.down), t(ctl.down), t(ctl.down), A, b(scratch.controls_hidden) });
+            const down_pipe = if (is_bf16) scratch.shared.controls_down_bf16 else scratch.shared.controls_down;
+            const apply_pipe = if (c.n > 1) (if (is_bf16) scratch.controls_cols_bf16 else scratch.controls_cols) else (if (is_bf16) scratch.controls_apply_bf16 else scratch.controls_apply);
+            c.setP(down_pipe, ControlsDown{ .h = c.h, .rank = rank, .rows = c.n, .msg0 = msg.xb, .xs = xs, .xb = xb }, &.{ cur.buf, cur.buf, cur.buf, msg.buf, t(ctl.down), t(ctl.down), t(ctl.down), A, b(scratch.controls_hidden) });
             c.enc.dispatchGroups(mtl.Size.of((rank + 7) / 8, c.n, 1), mtl.Size.of(256, 1, 1));
-            c.setP(scratch.controls_cols, ControlsArgs{ .h = c.h, .rank = rank, .rows = c.n, .xs = xs, .xb = xb, .msg0 = msg.xb, .cols = c.applyCols() }, &.{ b(scratch.controls_hidden), t(ctl.gain), t(ctl.gain), t(ctl.gain), t(ctl.forget), t(ctl.forget), t(ctl.forget), cur.buf, cur.buf, cur.buf, msg.buf, out, out, out, A });
-            c.enc.dispatchGroups(mtl.Size.of(c.applyGroups(), c.n, 1), mtl.Size.of(256, 1, 1));
+            c.setP(apply_pipe, ControlsArgs{ .h = c.h, .rank = rank, .rows = c.n, .xs = xs, .xb = xb, .msg0 = msg.xb, .cols = if (c.n > 1) c.applyCols() else 1 }, &.{ b(scratch.controls_hidden), t(ctl.gain), t(ctl.gain), t(ctl.gain), t(ctl.forget), t(ctl.forget), t(ctl.forget), cur.buf, cur.buf, cur.buf, msg.buf, out, out, out, A });
+            c.enc.dispatchGroups(mtl.Size.of(if (c.n > 1) c.applyGroups() else (c.h + 7) / 8, c.n, 1), mtl.Size.of(256, 1, 1));
             return;
         };
         c.setP(s.pipes.rms_pair, RmsPair{ .width = c.h, .xs0 = cur.xs, .xb0 = cur.xb, .xs1 = msg.xs, .xb1 = msg.xb, .eps = 1e-6 }, &.{ cur.buf, msg.buf, A, b(s.h2in) });
@@ -1243,8 +1262,10 @@ const Chunk = struct {
             return;
         }
         const rank: u32 = @intCast(width(ctl.gain));
-        const fusable = c.batch == null and s.fuse and c.n > 8 and s.half and s.pipes.float_mpp != null and ctl.gain.dtype == .f32 and ctl.forget.dtype == .f32 and nrows(ctl.gain) == c.h and nrows(ctl.forget) == c.h and width(ctl.forget) == rank;
-        if (fusable) if (s.pipes.gate_ctl) |pipe| {
+        const gf_f32 = ctl.gain.dtype == .f32 and ctl.forget.dtype == .f32;
+        const gf_bf16 = ctl.gain.dtype == .bf16 and ctl.forget.dtype == .bf16;
+        const fusable = c.batch == null and s.fuse and c.n > 8 and s.half and s.pipes.float_mpp != null and (gf_f32 or gf_bf16) and nrows(ctl.gain) == c.h and nrows(ctl.forget) == c.h and width(ctl.forget) == rank;
+        if (fusable) if (if (gf_bf16) s.pipes.gate_ctl_bf16 else s.pipes.gate_ctl) |pipe| {
             c.setP(pipe, GateCtl{ .h = c.h, .rows = c.n, .k = rank, .cxs = cur.xs, .cxb = cur.xb, .mxs = msg.xs, .mxb = msg.xb, .ys = ys, .yb = yb }, &.{ b(s.normed), t(ctl.gain), t(ctl.forget), A, cur.buf, msg.buf, out });
             c.enc.dispatchGroups(mtl.Size.of((c.h + 31) / 32, (c.n + 15) / 16, 1), mtl.Size.of(128, 1, 1));
             return;
@@ -1255,22 +1276,24 @@ const Chunk = struct {
         c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
     }
 
-    fn controls(c: Chunk, controllers: [3]Controller, ins: [3]In, msg: B, batch: *BatchContext) void {
+    fn controls(c: Chunk, controllers: [3]Controller, ins: [3]In, msg: B, batch: *BatchContext, is_bf16: bool) void {
         const scratch = batch.scratch;
         const rank: u32 = @intCast(nrows(controllers[0].down));
-        const joined = c.s.fuse and c.n > 1;
-        const args = ControlsArgs{ .h = c.h, .rank = rank, .rows = c.n, .xs = .{ ins[0].xs, ins[1].xs, ins[2].xs }, .xb = .{ ins[0].xb, ins[1].xb, ins[2].xb }, .cols = if (joined) c.applyCols() else 1 };
-        if (joined) {
+        const fused_down = c.s.fuse;
+        const multi_col = c.s.fuse and c.n > 1;
+        const args = ControlsArgs{ .h = c.h, .rank = rank, .rows = c.n, .xs = .{ ins[0].xs, ins[1].xs, ins[2].xs }, .xb = .{ ins[0].xb, ins[1].xb, ins[2].xb }, .cols = if (multi_col) c.applyCols() else 1 };
+        if (fused_down) {
             const down = ControlsDown{ .h = c.h, .rank = rank, .rows = c.n, .msg0 = 0, .xs = args.xs, .xb = args.xb };
-            c.setP(scratch.shared.controls_down, down, &.{ ins[0].buf, ins[1].buf, ins[2].buf, msg, t(controllers[0].down), t(controllers[1].down), t(controllers[2].down), A, b(scratch.controls_hidden) });
+            c.setP(if (is_bf16) scratch.shared.controls_down_bf16 else scratch.shared.controls_down, down, &.{ ins[0].buf, ins[1].buf, ins[2].buf, msg, t(controllers[0].down), t(controllers[1].down), t(controllers[2].down), A, b(scratch.controls_hidden) });
         } else {
             c.setP(scratch.controls_norm, args, &.{ ins[0].buf, ins[1].buf, ins[2].buf, msg, A, b(scratch.controls_input) });
             c.enc.dispatchGroups(mtl.Size.of(6 * c.n, 1, 1), mtl.Size.of(256, 1, 1));
-            c.setP(scratch.controls_down, args, &.{ b(scratch.controls_input), t(controllers[0].down), t(controllers[1].down), t(controllers[2].down), A, b(scratch.controls_hidden) });
+            c.setP(if (is_bf16) scratch.controls_down_bf16 else scratch.controls_down, args, &.{ b(scratch.controls_input), t(controllers[0].down), t(controllers[1].down), t(controllers[2].down), A, b(scratch.controls_hidden) });
         }
         c.enc.dispatchGroups(mtl.Size.of((rank + 7) / 8, c.n, 3), mtl.Size.of(256, 1, 1));
-        c.setP(if (joined) scratch.controls_cols else scratch.controls_apply, args, &.{ b(scratch.controls_hidden), t(controllers[0].gain), t(controllers[1].gain), t(controllers[2].gain), t(controllers[0].forget), t(controllers[1].forget), t(controllers[2].forget), ins[0].buf, ins[1].buf, ins[2].buf, msg, b(c.s.n0), b(c.s.n1), b(c.s.n2), A });
-        c.enc.dispatchGroups(mtl.Size.of(if (joined) c.applyGroups() else (c.h + 7) / 8, c.n, 3), mtl.Size.of(256, 1, 1));
+        const apply_pipe = if (multi_col) (if (is_bf16) scratch.controls_cols_bf16 else scratch.controls_cols) else (if (is_bf16) scratch.controls_apply_bf16 else scratch.controls_apply);
+        c.setP(apply_pipe, args, &.{ b(scratch.controls_hidden), t(controllers[0].gain), t(controllers[1].gain), t(controllers[2].gain), t(controllers[0].forget), t(controllers[1].forget), t(controllers[2].forget), ins[0].buf, ins[1].buf, ins[2].buf, msg, b(c.s.n0), b(c.s.n1), b(c.s.n2), A });
+        c.enc.dispatchGroups(mtl.Size.of(if (multi_col) c.applyGroups() else (c.h + 7) / 8, c.n, 3), mtl.Size.of(256, 1, 1));
     }
 
     fn mixPair(c: Chunk, bk: Bank, ip: u32, query: Tensor) bool {
@@ -1686,12 +1709,14 @@ const Chunk = struct {
             const msg = if (paired) b(s.msg) else c.messages(bk, ip);
             c.enter(.controllers);
             const ctl: [3]Controller = .{ lay.controllers[0] orelse return error.MissingController, lay.controllers[1] orelse return error.MissingController, lay.controllers[2] orelse return error.MissingController };
-            const use_batch = if (c.batch != null and c.m.affine_pipes != null) blk: {
-                for (ctl) |item| if (item.down.dtype != .f32 or item.gain.dtype != .f32 or item.forget.dtype != .f32) break :blk false;
-                break :blk true;
-            } else false;
-            if (use_batch) {
-                c.controls(ctl, ins, msg, c.batch.?);
+            const batch_bf16: ?bool = if (c.batch != null and c.m.affine_pipes != null) blk: {
+                const dt = ctl[0].down.dtype;
+                if (dt != .f32 and dt != .bf16) break :blk null;
+                for (ctl) |item| if (item.down.dtype != dt or item.gain.dtype != dt or item.forget.dtype != dt) break :blk null;
+                break :blk dt == .bf16;
+            } else null;
+            if (batch_bf16) |bf16| {
+                c.controls(ctl, ins, msg, c.batch.?, bf16);
                 ins = .{ .{ .buf = b(s.n0), .xs = 1, .xb = 0 }, .{ .buf = b(s.n1), .xs = 1, .xb = 0 }, .{ .buf = b(s.n2), .xs = 1, .xb = 0 } };
             } else {
                 for (0..3) |j| {

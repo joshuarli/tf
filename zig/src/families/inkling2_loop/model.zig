@@ -295,6 +295,13 @@ pub const Model = struct {
         return .{ .buffer = buf, .offset = 0, .bytes = rows * cols * 4, .dtype = .f32, .shape = .{ rows, cols, 1, 1, 1 }, .rank = 2 };
     }
 
+    fn ownedBf16Tensor(m: *Model, rows: usize, cols: usize) !Tensor {
+        const buf = try m.device.buffer(rows * cols * 2, mtl.ResourceOptions.shared);
+        errdefer buf.deinit();
+        try m.owned.append(m.arena.allocator(), buf);
+        return .{ .buffer = buf, .offset = 0, .bytes = rows * cols * 2, .dtype = .bf16, .shape = .{ rows, cols, 1, 1, 1 }, .rank = 2 };
+    }
+
     fn affineWeight(m: *Model, base: []const u8, rows: usize, cols: usize, bits: u32) !Tensor {
         if ((bits != 4 and bits != 8) or cols % 64 != 0) return error.BadGeometry;
         const a = m.arena.allocator();
@@ -450,6 +457,11 @@ const MlxLoader = struct {
     }
 };
 
+fn exactBf16(values: []const f32) bool {
+    for (values) |v| if ((@as(u32, @bitCast(v)) & 0xffff) != 0) return false;
+    return true;
+}
+
 fn mapMlxControllers(m: *Model, prefix: []const u8, out: *Layer) !void {
     const h: usize = m.config.text.hidden;
     const rank: usize = m.config.loop.gate_rank;
@@ -458,21 +470,39 @@ fn mapMlxControllers(m: *Model, prefix: []const u8, out: *Layer) !void {
     const gates = try m.want(sub(a, prefix, "loop_gain_forget"), .f32, &.{ 4, rank, 2 * h });
     const ds = std.mem.bytesAsSlice(f32, @as([]align(4) const u8, @alignCast(down.buffer.contents()[down.offset..][0..down.bytes])));
     const gs = std.mem.bytesAsSlice(f32, @as([]align(4) const u8, @alignCast(gates.buffer.contents()[gates.offset..][0..gates.bytes])));
+    const bf16 = exactBf16(ds) and exactBf16(gs);
     for (0..4) |j| {
-        const d = try m.ownedTensor(rank, 2 * h);
-        const g = try m.ownedTensor(h, rank);
-        const f = try m.ownedTensor(h, rank);
-        const dv = d.buffer.slice(f32, rank * 2 * h);
-        const gv = g.buffer.slice(f32, h * rank);
-        const fv = f.buffer.slice(f32, h * rank);
-        for (0..rank) |r| for (0..2 * h) |col| {
-            dv[r * 2 * h + col] = ds[(j * 2 * h + col) * rank + r];
-        };
-        for (0..h) |col| for (0..rank) |r| {
-            gv[col * rank + r] = gs[(j * rank + r) * 2 * h + col];
-            fv[col * rank + r] = gs[(j * rank + r) * 2 * h + h + col];
-        };
-        out.controllers[j] = .{ .down = d, .gain = g, .forget = f };
+        if (bf16) {
+            const d = try m.ownedBf16Tensor(rank, 2 * h);
+            const g = try m.ownedBf16Tensor(h, rank);
+            const f = try m.ownedBf16Tensor(h, rank);
+            const dv = d.buffer.slice(u16, rank * 2 * h);
+            const gv = g.buffer.slice(u16, h * rank);
+            const fv = f.buffer.slice(u16, h * rank);
+            for (0..rank) |r| for (0..2 * h) |col| {
+                dv[r * 2 * h + col] = @truncate(@as(u32, @bitCast(ds[(j * 2 * h + col) * rank + r])) >> 16);
+            };
+            for (0..h) |col| for (0..rank) |r| {
+                gv[col * rank + r] = @truncate(@as(u32, @bitCast(gs[(j * rank + r) * 2 * h + col])) >> 16);
+                fv[col * rank + r] = @truncate(@as(u32, @bitCast(gs[(j * rank + r) * 2 * h + h + col])) >> 16);
+            };
+            out.controllers[j] = .{ .down = d, .gain = g, .forget = f };
+        } else {
+            const d = try m.ownedTensor(rank, 2 * h);
+            const g = try m.ownedTensor(h, rank);
+            const f = try m.ownedTensor(h, rank);
+            const dv = d.buffer.slice(f32, rank * 2 * h);
+            const gv = g.buffer.slice(f32, h * rank);
+            const fv = f.buffer.slice(f32, h * rank);
+            for (0..rank) |r| for (0..2 * h) |col| {
+                dv[r * 2 * h + col] = ds[(j * 2 * h + col) * rank + r];
+            };
+            for (0..h) |col| for (0..rank) |r| {
+                gv[col * rank + r] = gs[(j * rank + r) * 2 * h + col];
+                fv[col * rank + r] = gs[(j * rank + r) * 2 * h + h + col];
+            };
+            out.controllers[j] = .{ .down = d, .gain = g, .forget = f };
+        }
     }
 }
 

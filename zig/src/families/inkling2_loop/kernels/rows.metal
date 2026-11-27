@@ -331,9 +331,20 @@ template [[host_name("i2r_dense_ahead_2")]] [[kernel]] void i2r_dense_ahead<2, 4
 
 struct i2r_controls_args { uint h, rank, rows, msg0; uint xs[3], xb[3]; };
 
-[[kernel]] void i2r_controls_down(const device float* X0 [[buffer(0)]], const device float* X1 [[buffer(1)]],
-    const device float* X2 [[buffer(2)]], const device float* MSG [[buffer(3)]], const device float* W0 [[buffer(4)]],
-    const device float* W1 [[buffer(5)]], const device float* W2 [[buffer(6)]], constant i2r_controls_args& a [[buffer(7)]],
+inline float4 i2r_load4(const device float* p) {
+  return float4(*reinterpret_cast<const device packed_float4*>(p));
+}
+
+inline float4 i2r_load4(const device bfloat* p) {
+  const uint2 u = *reinterpret_cast<const device uint2*>(p);
+  return float4(as_type<float>(u.x << 16u), as_type<float>(u.x & 0xffff0000u),
+                as_type<float>(u.y << 16u), as_type<float>(u.y & 0xffff0000u));
+}
+
+template <typename W>
+[[kernel]] void i2r_controls_down_t(const device float* X0 [[buffer(0)]], const device float* X1 [[buffer(1)]],
+    const device float* X2 [[buffer(2)]], const device float* MSG [[buffer(3)]], const device W* W0 [[buffer(4)]],
+    const device W* W1 [[buffer(5)]], const device W* W2 [[buffer(6)]], constant i2r_controls_args& a [[buffer(7)]],
     device float* OUT [[buffer(8)]], uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) {
   threadgroup float part[2][8];
   threadgroup float inv[2];
@@ -359,18 +370,29 @@ struct i2r_controls_args { uint h, rank, rows, msg0; uint xs[3], xb[3]; };
   const uint col = group.x * 8u + tid / 32u, lane = tid % 32u;
   if (col >= a.rank) return;
   const uint width = 2u * a.h;
-  const device float* w = (j == 0u ? W0 : j == 1u ? W1 : W2) + size_t(col) * width;
+  const device W* w = (j == 0u ? W0 : j == 1u ? W1 : W2) + size_t(col) * width;
   float acc = 0.0f;
   uint base = 0u;
   for (; base + 128u <= width; base += 128u) {
     const uint k = base + lane * 4u;
     const bool first = k < a.h;
     const float4 xv = float4(*reinterpret_cast<const device packed_float4*>(first ? cur + k : msg + (k - a.h))) * (first ? inv[0] : inv[1]);
-    const float4 wv = float4(*reinterpret_cast<const device packed_float4*>(w + k));
+    const float4 wv = i2r_load4(w + k);
     acc = fma(xv.x, wv.x, acc); acc = fma(xv.y, wv.y, acc);
     acc = fma(xv.z, wv.z, acc); acc = fma(xv.w, wv.w, acc);
   }
-  for (uint k = base + lane; k < width; k += 32u) acc = fma(k < a.h ? cur[k] * inv[0] : msg[k - a.h] * inv[1], w[k], acc);
+  for (uint k = base + lane; k < width; k += 32u) acc = fma(k < a.h ? cur[k] * inv[0] : msg[k - a.h] * inv[1], float(w[k]), acc);
   acc = simd_sum(acc);
   if (lane == 0u) OUT[(size_t(j) * a.rows + row) * a.rank + col] = acc;
 }
+
+template [[host_name("i2r_controls_down")]] [[kernel]] void i2r_controls_down_t<float>(
+    const device float* X0 [[buffer(0)]], const device float* X1 [[buffer(1)]],
+    const device float* X2 [[buffer(2)]], const device float* MSG [[buffer(3)]], const device float* W0 [[buffer(4)]],
+    const device float* W1 [[buffer(5)]], const device float* W2 [[buffer(6)]], constant i2r_controls_args& a [[buffer(7)]],
+    device float* OUT [[buffer(8)]], uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]);
+template [[host_name("i2r_controls_down_bf16")]] [[kernel]] void i2r_controls_down_t<bfloat>(
+    const device float* X0 [[buffer(0)]], const device float* X1 [[buffer(1)]],
+    const device float* X2 [[buffer(2)]], const device float* MSG [[buffer(3)]], const device bfloat* W0 [[buffer(4)]],
+    const device bfloat* W1 [[buffer(5)]], const device bfloat* W2 [[buffer(6)]], constant i2r_controls_args& a [[buffer(7)]],
+    device float* OUT [[buffer(8)]], uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]);

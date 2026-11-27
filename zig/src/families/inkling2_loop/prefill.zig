@@ -1529,7 +1529,7 @@ const Chunk = struct {
             c.setP(nax.pick_ks9, Pick{ .experts = E, .topk = K, .rows = c.n, .route_scale = cc.text.route_scale }, &.{ b(nax.router_ks), t(lay.router_bias), A, b(s.router), b(s.picks), b(s.wts) });
             c.enc.dispatchGroups(mtl.Size.of(c.n, 1, 1), mtl.Size.of(32, 1, 1));
         } else {
-            if (lay.router.dtype == .f32 or (c.batch != null and c.s.rounding.experts and c.s.fuse) or (c.batch == null and c.s.half)) {
+            if (lay.router.dtype == .f32 or c.m.affine_pipes != null or (c.batch == null and c.s.half)) {
                 c.lin(lay.router, .{ .buf = input, .xs = 1, .xb = 0 }, b(s.router));
             } else {
                 c.setP(s.pipes.router, RouterA{ .n = E, .k = c.h, .rows = c.n, .xs = 1, .xb = 0 }, &.{ input, t(lay.router), A, b(s.router) });

@@ -501,7 +501,7 @@ test "forced trees accept a 15-row path, none or a later branch, stop at a limit
     s.tree_proposer = .{ .ptr = &oracle, .call = TreeOracle.call };
     var tally: TreeTally = .{};
     try std.testing.expectEqual(@as(usize, 1 + 15 * 8), try compareTree(&s, ids, 1 + 15 * 8, &.{}, &tally, true));
-    try std.testing.expectEqual(inkling.verify.max_drafts - 1, tally.most_accepted);
+    try std.testing.expectEqual(@as(usize, 14), tally.most_accepted);
     try std.testing.expect(tally.deep >= 7 and tally.wide >= 7);
     tally = .{};
     try std.testing.expectEqual(@as(usize, 1 + 15 * 5 + 6), try compareTree(&s, ids, 1 + 15 * 5 + 6, &.{}, &tally, false));

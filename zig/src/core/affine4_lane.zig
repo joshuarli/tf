@@ -11,6 +11,8 @@ pub const Packed = struct {
         p.metadata.deinit();
     }
 };
+/// Packs prepared affine-4 weights and metadata into shared Metal buffers, optionally rewritten into `reg_layout`.
+/// Caller owns the returned `Packed` buffers and must call `deinit()`.
 pub fn pack(device: mtl.Device, prepared: cpu.Prepared, sk: usize, order: ?lane.RegOrder) !Packed {
     const layout = lane.Layout{ .n = prepared.n, .k = prepared.k, .format = .{ .bits = 4, .group = 64 }, .sk = sk, .precompute_sums = true, .cooperative = order == null, .reg = order != null };
     try layout.validate();

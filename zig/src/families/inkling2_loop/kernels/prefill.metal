@@ -667,6 +667,59 @@ struct i2p_batch_rel_args { uint heads, kv, dim, rel, extent, window, pos, tau; 
   const float sk = sink[(size_t)t * a.heads + h];
   const uint lo = a.window ? (pos + 1u > a.window ? pos + 1u - a.window : 0u) : 0u;
   const device float* b = B + (size_t)t * a.heads * (a.extent + 1u);
+  if (D == 128u) {
+    const float4 qv4 = *reinterpret_cast<const device float4*>(q + h * 128u + lane * 4u) * (a.scale * use_tau);
+    float top = -INFINITY, mass = 0.0f;
+    float4 acc = float4(0.0f);
+    for (uint j0 = lo / 32u * 32u; j0 <= pos; j0 += 32u) {
+      float sc[32];
+      float bmax = -INFINITY;
+      const uint n = min(32u, pos + 1u - j0);
+      for (uint x = 0; x < n; ++x) {
+        const uint j = j0 + x;
+        if (j < lo) { sc[x] = -INFINITY; continue; }
+        const uint rj = (a.rmode && a.window) ? j % a.window : j;
+        const size_t at = ((j < a.base ? (size_t)rj : (size_t)(j - a.base)) * a.kv + kv) * 128u + lane * 4u;
+        const float4 kk = float4(*reinterpret_cast<const device half4*>((j < a.base ? KEYS : KC) + at));
+        float dot = fma(qv4.w, kk.w, fma(qv4.z, kk.z, fma(qv4.y, kk.y, qv4.x * kk.x)));
+        dot += simd_shuffle_xor(dot, ushort(1));
+        dot += simd_shuffle_xor(dot, ushort(2));
+        dot += simd_shuffle_xor(dot, ushort(4));
+        dot += simd_shuffle_xor(dot, ushort(8));
+        dot += simd_shuffle_xor(dot, ushort(16));
+        const uint col = min(pos - j, a.extent);
+        const float score = dot + (b[h * (a.extent + 1u) + col] - sk);
+        sc[x] = score;
+        bmax = max(bmax, score);
+      }
+      if (bmax != -INFINITY) {
+        const float peak = max(top, bmax);
+        const float rescale = top == -INFINITY ? 0.0f : precise::exp(top - peak);
+        const float w_lane = (lane < n && sc[lane] != -INFINITY) ? precise::exp(sc[lane] - peak) : 0.0f;
+        mass = mass * rescale + simd_sum(w_lane);
+        acc *= rescale;
+        for (uint x = 0; x < n; ++x) {
+          const float w = simd_shuffle(w_lane, ushort(x));
+          if (w == 0.0f && sc[x] == -INFINITY) continue;
+          const uint j = j0 + x;
+          const uint rj = (a.rmode && a.window) ? j % a.window : j;
+          const size_t at = ((j < a.base ? (size_t)rj : (size_t)(j - a.base)) * a.kv + kv) * 128u + lane * 4u;
+          const float4 vv = float4(*reinterpret_cast<const device half4*>((j < a.base ? VALUES : VC) + at));
+          acc = fma(float4(w), vv, acc);
+        }
+        top = peak;
+      }
+    }
+    float merged_top = 0.0f, merged_mass = 1.0f;
+    float4 merged_acc = float4(0.0f);
+    const float peak = max(merged_top, top);
+    const float r0 = precise::exp(merged_top - peak);
+    const float r1 = precise::exp(top - peak);
+    merged_mass = merged_mass * r0 + mass * r1;
+    merged_acc = merged_acc * r0 + r1 * acc;
+    *reinterpret_cast<device float4*>(O + ((size_t)t * a.heads + h) * 128u + lane * 4u) = merged_acc / merged_mass;
+    return;
+  }
   float top = -INFINITY, mass = 0.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
   for (uint j = lo; j <= pos; ++j) {
     const uint col = min(pos - j, a.extent);

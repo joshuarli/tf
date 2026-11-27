@@ -38,6 +38,8 @@ pub fn prepare(a: std.mem.Allocator, weights: []const u16, n: usize, k: usize) !
     for (results[0..workers]) |r| try r;
     return .{ .allocator = a, .n = n, .k = k, .words = words, .scales = scales, .biases = biases };
 }
+/// Requantizes an affine-8 matrix (`n` x `k`, group size 64) into affine-4 words, scales and biases.
+/// Caller owns the returned `Prepared` and must call `deinit()`.
 pub fn prepareFromAffine8(a: std.mem.Allocator, words8: []const u32, scales8: []const u16, biases8: []const u16, n: usize, k: usize) !Prepared {
     if (n == 0 or k == 0 or k % 64 != 0) return error.BadAffineShape;
     const total = try std.math.mul(usize, n, k);
@@ -215,6 +217,12 @@ test "prepareFromAffine8 matches prepare on dequantized bf16 groups" {
             try std.testing.expect(@abs((ca * sc_a + bi_a) - (cb * sc_b + bi_b)) <= @max(@abs(sc_a), @abs(sc_b)) * 1.1 + 1e-4);
         }
     }
+    try std.testing.expectError(error.BadAffineShape, prepareFromAffine8(a, w8, s8, b8, 0, k));
+    try std.testing.expectError(error.BadAffineShape, prepareFromAffine8(a, w8[0..1], s8, b8, n, k));
+    const saved = s8[0];
+    s8[0] = 0x7fc0;
+    try std.testing.expectError(error.NonFiniteAffineInput, prepareFromAffine8(a, w8, s8, b8, n, k));
+    s8[0] = saved;
 }
 test "q4 asBf16: today's bits on every zero, subnormal, infinity and tie; a NaN stays NaN" {
     const old = struct {

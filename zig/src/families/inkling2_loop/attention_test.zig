@@ -508,7 +508,7 @@ fn sameBits(a: []const f32, b: []const f32) bool {
     return true;
 }
 
-test "staged split attention keeps the serial kernel's bytes, single and batched" {
+test "staged split attention matches the serial kernel within tolerance and stays byte-equal across batch rows" {
     if (comptime !@hasDecl(mtl.Device, "init")) return error.SkipZigTest;
     const device = mtl.Device.init() catch return error.SkipZigTest;
     defer device.deinit();

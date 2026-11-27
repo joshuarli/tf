@@ -404,7 +404,9 @@ pub const Draft = struct {
     /// One shared tree round across 2 to 8 concurrent streams: one batched drafter pass and one grouped verify.
     pub fn roundBatch(d: *Draft, m: *inkling.Model, batch: *inkling.BatchScratch, slots: []const BatchSlot, out: []Round) !void {
         const count = slots.len;
-        std.debug.assert(count >= 2 and count <= 8 and out.len == count);
+        std.debug.assert(count >= 2);
+        std.debug.assert(count <= 8);
+        std.debug.assert(out.len == count);
         const t0 = now();
         var chains: [8][inkling.verify.max_drafts]u32 = undefined;
         var chained: [8]u32 = @splat(0);
@@ -413,6 +415,9 @@ pub const Draft = struct {
         var draft_owners: [8]usize = undefined;
         var draft_count: usize = 0;
         for (slots, 0..) |sl, i| {
+            std.debug.assert(sl.lane < d.lanes.len);
+            std.debug.assert(sl.history.emitted.len > 0);
+            std.debug.assert(sl.offered <= inkling.verify.max_drafts);
             const l = &d.lanes[sl.lane];
             const pending = sl.history.emitted[sl.history.emitted.len - 1];
             if (sl.offered > 0) {

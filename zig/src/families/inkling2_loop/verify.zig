@@ -475,7 +475,9 @@ pub const Plan = struct {
 
     /// Jointly allocates up to `total_limit` rows across concurrent streams to maximize combined tokens per millisecond.
     pub fn buildBatch(inputs: []const BatchInput, total_limit: usize, out: []Tree) void {
-        std.debug.assert(inputs.len > 0 and inputs.len <= 8 and inputs.len == out.len);
+        std.debug.assert(inputs.len > 0);
+        std.debug.assert(inputs.len <= 8);
+        std.debug.assert(inputs.len == out.len);
         const n = inputs.len;
         var all_nodes: [8][max_pool_nodes]Node = undefined;
         var counts: [8]usize = undefined;

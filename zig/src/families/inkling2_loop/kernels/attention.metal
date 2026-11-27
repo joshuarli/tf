@@ -422,7 +422,7 @@ struct i2_controls_args { uint h, rank, rows; uint xs[3], xb[3]; uint msg0, cols
   const uint row = rem / 2u, which = rem % 2u;
   const device float* cur = controller == 0u ? X0 : controller == 1u ? X1 : X2;
   const device float* src = which == 0u ? cur + size_t(a.xb[controller] + row * a.xs[controller]) * a.h
-    : MSG + size_t(controller + row * 4u) * a.h;
+    : MSG + size_t(a.msg0 + controller + row * 4u) * a.h;
   device float* dst = OUT + (size_t(controller) * a.rows + row) * 2u * a.h + which * a.h;
   float sum = 0.0f;
   for (uint i = tid; i < a.h; i += nth) sum = fma(src[i], src[i], sum);
@@ -497,6 +497,23 @@ template <uint C, typename W>
   const device float* cur = (j == 0u ? C0 : j == 1u ? C1 : C2) + size_t(a.xb[j] + group.y * a.xs[j]) * a.h;
   const device float* msg = MSG + size_t(a.msg0 + j + group.y * 4u) * a.h;
   device float* out = (j == 0u ? O0 : j == 1u ? O1 : O2) + size_t(group.y) * a.h;
+  if (a.rank == 256u) {
+    const float4 xv0 = *reinterpret_cast<const device float4*>(x + lane * 8u);
+    const float4 xv1 = *reinterpret_cast<const device float4*>(x + lane * 8u + 4u);
+    for (uint col = col0; col < min(col0 + cols, a.h); ++col) {
+      const device W* wg = (j == 0u ? G0 : j == 1u ? G1 : G2) + size_t(col) * 256u + lane * 8u;
+      const device W* wf = (j == 0u ? F0 : j == 1u ? F1 : F2) + size_t(col) * 256u + lane * 8u;
+      const float4 g0 = i2_ctl_load4(wg), g1 = i2_ctl_load4(wg + 4u);
+      const float4 f0 = i2_ctl_load4(wf), f1 = i2_ctl_load4(wf + 4u);
+      float g = fma(xv0.w, g0.w, fma(xv0.z, g0.z, fma(xv0.y, g0.y, xv0.x * g0.x)));
+      g = fma(xv1.w, g1.w, fma(xv1.z, g1.z, fma(xv1.y, g1.y, fma(xv1.x, g1.x, g))));
+      float f = fma(xv0.w, f0.w, fma(xv0.z, f0.z, fma(xv0.y, f0.y, xv0.x * f0.x)));
+      f = fma(xv1.w, f1.w, fma(xv1.z, f1.z, fma(xv1.y, f1.y, fma(xv1.x, f1.x, f))));
+      g = simd_sum(g); f = simd_sum(f);
+      if (lane == 0u) out[col] = cur[col] - precise::tanh(f) * cur[col] + precise::tanh(g) * msg[col];
+    }
+    return;
+  }
   for (uint col = col0; col < min(col0 + cols, a.h); ++col) {
     const device W* wg = (j == 0u ? G0 : j == 1u ? G1 : G2) + size_t(col) * a.rank;
     const device W* wf = (j == 0u ? F0 : j == 1u ? F1 : F2) + size_t(col) * a.rank;

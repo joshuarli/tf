@@ -396,3 +396,170 @@ template [[host_name("i2r_controls_down_bf16")]] [[kernel]] void i2r_controls_do
     const device float* X2 [[buffer(2)]], const device float* MSG [[buffer(3)]], const device bfloat* W0 [[buffer(4)]],
     const device bfloat* W1 [[buffer(5)]], const device bfloat* W2 [[buffer(6)]], constant i2r_controls_args& a [[buffer(7)]],
     device float* OUT [[buffer(8)]], uint3 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]);
+
+template <uint R, uint PER>
+inline void i2r_affine8_vec(const device float* x, size_t step, const device uint* w, const device bfloat* s,
+    const device bfloat* b, uint row0, uint last, uint k, uint lane, thread float (&acc)[PER][R]) {
+  const uint words = k >> 2u, groups = k >> 6u, steps = k >> 9u;
+  const uint4 shift8 = uint4(0u, 8u, 16u, 24u);
+  size_t wr[PER];
+#pragma unroll
+  for (uint p = 0u; p < PER; ++p) wr[p] = min(row0 + p, last);
+#pragma unroll
+  for (uint p = 0u; p < PER; ++p) {
+#pragma unroll
+    for (uint r = 0u; r < R; ++r) acc[p][r] = 0.0f;
+  }
+  for (uint st = 0u; st < steps; ++st) {
+    float4 xv[R][4];
+    float xsum[R];
+#pragma unroll
+    for (uint r = 0u; r < R; ++r) {
+      const device float* xp = x + size_t(r) * step + 512u * st + 16u * lane;
+      xv[r][0] = *reinterpret_cast<const device float4*>(xp);
+      xv[r][1] = *reinterpret_cast<const device float4*>(xp + 4u);
+      xv[r][2] = *reinterpret_cast<const device float4*>(xp + 8u);
+      xv[r][3] = *reinterpret_cast<const device float4*>(xp + 12u);
+      const float4 s0 = xv[r][0] + xv[r][1] + xv[r][2] + xv[r][3];
+      xsum[r] = (s0.x + s0.y) + (s0.z + s0.w);
+    }
+    const uint g = 8u * st + (lane >> 2u);
+#pragma unroll
+    for (uint p = 0u; p < PER; ++p) {
+      const uint4 wv = *reinterpret_cast<const device uint4*>(w + wr[p] * words + 128u * st + 4u * lane);
+      const float4 c0 = float4((uint4(wv.x) >> shift8) & 255u);
+      const float4 c1 = float4((uint4(wv.y) >> shift8) & 255u);
+      const float4 c2 = float4((uint4(wv.z) >> shift8) & 255u);
+      const float4 c3 = float4((uint4(wv.w) >> shift8) & 255u);
+      const float sc = float(s[wr[p] * groups + g]);
+      const float bi = float(b[wr[p] * groups + g]);
+#pragma unroll
+      for (uint r = 0u; r < R; ++r) {
+        float dot = fma(c0.w, xv[r][0].w, fma(c0.z, xv[r][0].z, fma(c0.y, xv[r][0].y, c0.x * xv[r][0].x)));
+        dot = fma(c1.w, xv[r][1].w, fma(c1.z, xv[r][1].z, fma(c1.y, xv[r][1].y, fma(c1.x, xv[r][1].x, dot))));
+        dot = fma(c2.w, xv[r][2].w, fma(c2.z, xv[r][2].z, fma(c2.y, xv[r][2].y, fma(c2.x, xv[r][2].x, dot))));
+        dot = fma(c3.w, xv[r][3].w, fma(c3.z, xv[r][3].z, fma(c3.y, xv[r][3].y, fma(c3.x, xv[r][3].x, dot))));
+        acc[p][r] = fma(sc, dot, fma(bi, xsum[r], acc[p][r]));
+      }
+    }
+  }
+}
+
+[[kernel]] void i2r_dense1(const device float* x [[buffer(0)]], const device uint* w [[buffer(1)]],
+    const device bfloat* s [[buffer(2)]], const device bfloat* b [[buffer(3)]],
+    constant i2t_dense_args& a [[buffer(4)]], device float* y [[buffer(5)]],
+    uint group [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]) {
+  const uint row0 = group * 16u + sg * 4u;
+  if (row0 >= a.n) return;
+  float acc[4][1];
+  i2r_affine8_vec<1u, 4u>(x + size_t(a.xb) * a.k, size_t(a.xs) * a.k, w, s, b, row0, a.n - 1u, a.k, lane, acc);
+#pragma unroll
+  for (uint p = 0u; p < 4u; ++p) {
+    if (row0 + p >= a.n) break;
+    float v = simd_sum(acc[p][0]);
+    if (lane == 0u) y[row0 + p] = a.cap > 0.0f ? a.cap * precise::tanh(v / a.cap) : v;
+  }
+}
+
+template <uint R, uint PER>
+[[kernel]] void i2r_proj_few_t(const device float* xq [[buffer(0)]], const device float* xk [[buffer(1)]],
+    const device float* xv [[buffer(2)]], const device uint* wq [[buffer(3)]], const device bfloat* sq [[buffer(4)]],
+    const device bfloat* bq [[buffer(5)]], const device uint* wk [[buffer(6)]], const device bfloat* sk [[buffer(7)]],
+    const device bfloat* bk [[buffer(8)]], const device uint* wv [[buffer(9)]], const device bfloat* sv [[buffer(10)]],
+    const device bfloat* bv [[buffer(11)]], device float* oq [[buffer(12)]], device float* ok [[buffer(13)]],
+    device float* ov [[buffer(14)]], device float* orl [[buffer(15)]], device float* og [[buffer(16)]],
+    device float* os [[buffer(17)]], device float* okd [[buffer(18)]], device float* ovd [[buffer(19)]],
+    constant i2t_projection_args& a [[buffer(20)]], uint group [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]]) {
+  constexpr uint TG_ROWS = 4u * PER;
+  uint which = 0u, first = group;
+  for (; which < 8u; ++which) {
+    const uint span = (a.m[which] + TG_ROWS - 1u) / TG_ROWS;
+    if (first < span) break;
+    first -= span;
+  }
+  if (which == 8u) return;
+  const uint m = a.m[which];
+  const uint row0 = first * TG_ROWS + sg * PER;
+  if (row0 >= m) return;
+  const bool key = which == 1u || which == 6u;
+  const bool val = which == 2u || which == 7u;
+  uint offset = 0u;
+  if (which == 1u) offset = a.full ? 0u : a.m[0];
+  if (which == 2u) offset = a.full ? 0u : a.m[0] + a.m[1];
+  if (which == 3u) offset = a.m[0] + (a.full ? 0u : a.m[1] + a.m[2]);
+  if (which == 4u) offset = a.m[0] + (a.full ? 0u : a.m[1] + a.m[2]) + a.m[3];
+  if (which == 5u) offset = a.m[0] + (a.full ? 0u : a.m[1] + a.m[2]) + a.m[3] + a.m[4];
+  if (which == 6u) offset = a.m[1];
+  if (which == 7u) offset = a.m[2];
+  float acc[PER][R];
+  i2r_affine8_vec<R, PER>(key ? xk : val ? xv : xq, a.k,
+      a.full && key ? wk : a.full && val ? wv : wq,
+      a.full && key ? sk : a.full && val ? sv : sq,
+      a.full && key ? bk : a.full && val ? bv : bq,
+      offset + row0, offset + m - 1u, a.k, lane, acc);
+  device float* y = which == 0u ? oq : which == 1u ? ok : which == 2u ? ov : which == 3u ? orl
+      : which == 4u ? og : which == 5u ? os : which == 6u ? okd : ovd;
+#pragma unroll
+  for (uint p = 0u; p < PER; ++p) {
+    if (row0 + p >= m) break;
+#pragma unroll
+    for (uint r = 0u; r < R; ++r) {
+      const float v = simd_sum(acc[p][r]);
+      if (lane == 0u) y[size_t(r) * m + row0 + p] = v;
+    }
+  }
+}
+
+template [[host_name("i2r_projections1")]] [[kernel]] void i2r_proj_few_t<1u, 4u>(
+    const device float* xq [[buffer(0)]], const device float* xk [[buffer(1)]], const device float* xv [[buffer(2)]],
+    const device uint* wq [[buffer(3)]], const device bfloat* sq [[buffer(4)]], const device bfloat* bq [[buffer(5)]],
+    const device uint* wk [[buffer(6)]], const device bfloat* sk [[buffer(7)]], const device bfloat* bk [[buffer(8)]],
+    const device uint* wv [[buffer(9)]], const device bfloat* sv [[buffer(10)]], const device bfloat* bv [[buffer(11)]],
+    device float* oq [[buffer(12)]], device float* ok [[buffer(13)]], device float* ov [[buffer(14)]],
+    device float* orl [[buffer(15)]], device float* og [[buffer(16)]], device float* os [[buffer(17)]],
+    device float* okd [[buffer(18)]], device float* ovd [[buffer(19)]], constant i2t_projection_args& a [[buffer(20)]],
+    uint group [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]);
+
+template [[host_name("i2r_projections2")]] [[kernel]] void i2r_proj_few_t<2u, 2u>(
+    const device float* xq [[buffer(0)]], const device float* xk [[buffer(1)]], const device float* xv [[buffer(2)]],
+    const device uint* wq [[buffer(3)]], const device bfloat* sq [[buffer(4)]], const device bfloat* bq [[buffer(5)]],
+    const device uint* wk [[buffer(6)]], const device bfloat* sk [[buffer(7)]], const device bfloat* bk [[buffer(8)]],
+    const device uint* wv [[buffer(9)]], const device bfloat* sv [[buffer(10)]], const device bfloat* bv [[buffer(11)]],
+    device float* oq [[buffer(12)]], device float* ok [[buffer(13)]], device float* ov [[buffer(14)]],
+    device float* orl [[buffer(15)]], device float* og [[buffer(16)]], device float* os [[buffer(17)]],
+    device float* okd [[buffer(18)]], device float* ovd [[buffer(19)]], constant i2t_projection_args& a [[buffer(20)]],
+    uint group [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]);
+
+[[kernel]] void i2r_router_f32(const device float* x [[buffer(0)]], const device float* w [[buffer(1)]],
+    constant i2t_dense_args& a [[buffer(2)]], device float* y [[buffer(3)]],
+    uint2 group [[threadgroup_position_in_grid]], uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]) {
+  threadgroup float red[4 * 2];
+  const uint col0 = group.x * 2u;
+  if (col0 >= a.n) return;
+  const uint row = group.y;
+  const device float* input = x + (size_t)(row * a.xs + a.xb) * a.k;
+  const device float* w0 = w + (size_t)col0 * a.k;
+  const device float* w1 = w + (size_t)min(col0 + 1u, a.n - 1u) * a.k;
+  float a0 = 0.0f, a1 = 0.0f;
+  for (uint base = sg * 128u; base + 128u <= a.k; base += 512u) {
+    const uint k = base + lane * 4u;
+    const float4 xv = *reinterpret_cast<const device float4*>(input + k);
+    const float4 v0 = *reinterpret_cast<const device float4*>(w0 + k);
+    const float4 v1 = *reinterpret_cast<const device float4*>(w1 + k);
+    a0 = fma(xv.w, v0.w, fma(xv.z, v0.z, fma(xv.y, v0.y, fma(xv.x, v0.x, a0))));
+    a1 = fma(xv.w, v1.w, fma(xv.z, v1.z, fma(xv.y, v1.y, fma(xv.x, v1.x, a1))));
+  }
+  a0 = simd_sum(a0);
+  a1 = simd_sum(a1);
+  if (lane == 0u) { red[sg * 2u] = a0; red[sg * 2u + 1u] = a1; }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (sg == 0u && lane == 0u) {
+    y[(size_t)row * a.n + col0] = red[0] + red[2] + red[4] + red[6];
+    if (col0 + 1u < a.n) y[(size_t)row * a.n + col0 + 1u] = red[1] + red[3] + red[5] + red[7];
+  }
+}

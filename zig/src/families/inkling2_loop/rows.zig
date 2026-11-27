@@ -33,10 +33,88 @@ const Kind = enum(u8) { dense, projections, gate_up, down, aff4_up, aff4_down };
 
 /// The batch step's few-row kernels: every row's output has its one-row kernel's bits at every width.
 pub const Pipes = struct {
+    pub const Nax = struct {
+        sort: mtl.Pipeline,
+        nvfp4_up: mtl.Pipeline,
+        nvfp4_down: mtl.Pipeline,
+        aff4_up: mtl.Pipeline,
+        aff4_down: mtl.Pipeline,
+        dense4: mtl.Pipeline,
+        dense8: mtl.Pipeline,
+        projections: mtl.Pipeline,
+        controls_down_bf16: mtl.Pipeline,
+        controls_apply_bf16: mtl.Pipeline,
+        meta: mtl.Buffer,
+        indirect: mtl.Buffer,
+
+        pub fn init(device: mtl.Device) !Nax {
+            const lib = try mtl.Library.fromSource(device, @import("kernels.zig").verify_nax, mtl.CompileOptions.mlx());
+            defer lib.deinit();
+            const sort = try mtl.Pipeline.init(device, lib, "i2n_moe_sort", false);
+            errdefer sort.deinit();
+            const nvfp4_up = try mtl.Pipeline.init(device, lib, "i2n_nvfp4_up", false);
+            errdefer nvfp4_up.deinit();
+            const nvfp4_down = try mtl.Pipeline.init(device, lib, "i2n_nvfp4_down", false);
+            errdefer nvfp4_down.deinit();
+            const aff4_up = try mtl.Pipeline.init(device, lib, "i2n_aff4_up", false);
+            errdefer aff4_up.deinit();
+            const aff4_down = try mtl.Pipeline.init(device, lib, "i2n_aff4_down", false);
+            errdefer aff4_down.deinit();
+            const dense4_pipe = try mtl.Pipeline.init(device, lib, "i2n_dense4", false);
+            errdefer dense4_pipe.deinit();
+            const dense8_pipe = try mtl.Pipeline.init(device, lib, "i2n_dense8", false);
+            errdefer dense8_pipe.deinit();
+            const proj_pipe = try mtl.Pipeline.init(device, lib, "i2n_projections", false);
+            errdefer proj_pipe.deinit();
+            const ctl_down = try mtl.Pipeline.init(device, lib, "i2n_controls_down_bf16", false);
+            errdefer ctl_down.deinit();
+            const ctl_apply = try mtl.Pipeline.init(device, lib, "i2n_controls_apply_bf16", false);
+            errdefer ctl_apply.deinit();
+            const meta = try device.buffer(640 * 4, mtl.ResourceOptions.private);
+            errdefer meta.deinit();
+            const indirect = try device.buffer(8 * 4, mtl.ResourceOptions.private);
+            return .{
+                .sort = sort,
+                .nvfp4_up = nvfp4_up,
+                .nvfp4_down = nvfp4_down,
+                .aff4_up = aff4_up,
+                .aff4_down = aff4_down,
+                .dense4 = dense4_pipe,
+                .dense8 = dense8_pipe,
+                .projections = proj_pipe,
+                .controls_down_bf16 = ctl_down,
+                .controls_apply_bf16 = ctl_apply,
+                .meta = meta,
+                .indirect = indirect,
+            };
+        }
+
+        pub fn deinit(n: *Nax) void {
+            n.indirect.deinit();
+            n.meta.deinit();
+            n.controls_apply_bf16.deinit();
+            n.controls_down_bf16.deinit();
+            n.projections.deinit();
+            n.dense8.deinit();
+            n.dense4.deinit();
+            n.aff4_down.deinit();
+            n.aff4_up.deinit();
+            n.nvfp4_down.deinit();
+            n.nvfp4_up.deinit();
+            n.sort.deinit();
+        }
+    };
+
     pipes: [kernels.len]mtl.Pipeline,
+    gu1: mtl.Pipeline,
+    dense1: mtl.Pipeline,
+    projections1: mtl.Pipeline,
+    projections2: mtl.Pipeline,
+    router_f32: mtl.Pipeline,
     head_pair: mtl.Pipeline,
     controls_down: mtl.Pipeline,
     controls_down_bf16: mtl.Pipeline,
+    nax: ?Nax,
     /// Whether this device's matrix products are the fma chains the tiles rely on; if not, one-row kernels serve.
     tiles: bool,
 
@@ -50,22 +128,73 @@ pub const Pipes = struct {
             pipes[i] = try mtl.Pipeline.init(device, lib, k.name, false);
             made += 1;
         }
+        const gu1 = try mtl.Pipeline.init(device, lib, "i2e_gu1", false);
+        errdefer gu1.deinit();
+        const dense1 = try mtl.Pipeline.init(device, lib, "i2r_dense1", false);
+        errdefer dense1.deinit();
+        const projections1 = try mtl.Pipeline.init(device, lib, "i2r_projections1", false);
+        errdefer projections1.deinit();
+        const projections2 = try mtl.Pipeline.init(device, lib, "i2r_projections2", false);
+        errdefer projections2.deinit();
+        const router_f32 = try mtl.Pipeline.init(device, lib, "i2r_router_f32", false);
+        errdefer router_f32.deinit();
         const head_pair = try mtl.Pipeline.init(device, lib, "i2r_dense_ahead_2", false);
         errdefer head_pair.deinit();
         const controls_down = try mtl.Pipeline.init(device, lib, "i2r_controls_down", false);
         errdefer controls_down.deinit();
         const controls_down_bf16 = try mtl.Pipeline.init(device, lib, "i2r_controls_down_bf16", false);
         errdefer controls_down_bf16.deinit();
+        var nax: ?Nax = if (device.tensorUnits()) try Nax.init(device) else null;
+        errdefer if (nax) |*n| n.deinit();
         const probe = try mtl.Pipeline.init(device, lib, "i2t_probe", false);
         defer probe.deinit();
-        return .{ .pipes = pipes, .head_pair = head_pair, .controls_down = controls_down, .controls_down_bf16 = controls_down_bf16, .tiles = try chains(device, probe) };
+        return .{ .pipes = pipes, .gu1 = gu1, .dense1 = dense1, .projections1 = projections1, .projections2 = projections2, .router_f32 = router_f32, .head_pair = head_pair, .controls_down = controls_down, .controls_down_bf16 = controls_down_bf16, .nax = nax, .tiles = try chains(device, probe) };
     }
 
     pub fn deinit(p: *Pipes) void {
+        if (p.nax) |*n| n.deinit();
         for (p.pipes) |pipe| pipe.deinit();
+        p.gu1.deinit();
+        p.dense1.deinit();
+        p.projections1.deinit();
+        p.projections2.deinit();
+        p.router_f32.deinit();
         p.head_pair.deinit();
         p.controls_down.deinit();
         p.controls_down_bf16.deinit();
+    }
+
+    pub fn fastDense1(p: *const Pipes, rows: usize, n: u32, k: u32, bits: u32) ?Dispatch {
+        if (bits != 8 or rows != 1 or k % 512 != 0) return null;
+        return .{ .pipe = p.dense1, .groups = mtl.Size.of((n + 15) / 16, 1, 1), .threads = mtl.Size.of(128, 1, 1) };
+    }
+
+    pub fn fastProjectionsFew(p: *const Pipes, rows: usize, m: [8]u32, k: u32) ?Dispatch {
+        if ((rows != 1 and rows != 2) or k % 512 != 0) return null;
+        const span_rows: u32 = if (rows == 1) 16 else 8;
+        var groups: u32 = 0;
+        for (m) |n| groups += (n + span_rows - 1) / span_rows;
+        return .{ .pipe = if (rows == 1) p.projections1 else p.projections2, .groups = mtl.Size.of(groups, 1, 1), .threads = mtl.Size.of(128, 1, 1) };
+    }
+
+    pub fn fastGateUp1(p: *const Pipes, rows: usize, inter: u32, k: u32, slots: u32) ?Dispatch {
+        if (rows != 1 or k % 16 != 0) return null;
+        return .{ .pipe = p.gu1, .groups = mtl.Size.of((inter + 7) / 8, slots, 1), .threads = mtl.Size.of(128, 1, 1) };
+    }
+
+    pub fn naxDense(p: *const Pipes, rows: usize, n: u32, k: u32, bits: u32) ?Dispatch {
+        const nax = p.nax orelse return null;
+        if (bits != 8 or rows < 3 or rows > max_rows or k % 64 != 0) return null;
+        if (n <= 4096) return .{ .pipe = nax.dense8, .groups = mtl.Size.of((n + 31) / 32, 1, 1), .threads = mtl.Size.of(256, 1, 1) };
+        return .{ .pipe = nax.dense4, .groups = mtl.Size.of((n + 31) / 32, 1, 1), .threads = mtl.Size.of(128, 1, 1) };
+    }
+
+    pub fn naxProjections(p: *const Pipes, rows: usize, m: [8]u32, k: u32) ?Dispatch {
+        const nax = p.nax orelse return null;
+        if (rows < 3 or rows > max_rows or k % 64 != 0) return null;
+        var groups: u32 = 0;
+        for (m) |n| groups += (n + 31) / 32;
+        return .{ .pipe = nax.projections, .groups = mtl.Size.of(groups, 1, 1), .threads = mtl.Size.of(128, 1, 1) };
     }
 
     fn pick(p: *const Pipes, kind: Kind, rows: usize, outputs: []const u32, slots: u32) Dispatch {

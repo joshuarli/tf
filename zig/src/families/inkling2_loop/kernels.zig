@@ -17,6 +17,7 @@ pub const affine_stage = @embedFile("kernels/affine_stage.metal");
 pub const float_mpp = @embedFile("kernels/float_mpp.metal");
 pub const prefill_smallrow = @embedFile("kernels/prefill_smallrow.metal");
 pub const prefill_gemm_mpp = @embedFile("kernels/prefill_gemm_mpp.metal");
+pub const verify_nax = @embedFile("kernels/verify_nax.metal");
 
 pub fn prefillSource(comptime mxfp8: bool) []const u8 {
     return if (mxfp8) "#define I2P_MXFP8 1\n" ++ prefill else prefill;

@@ -309,9 +309,8 @@ pub const Plan = struct {
     const sibling_cap: f64 = 0.98;
     const Count = struct { hits: f64, trials: f64 };
 
-    /// V3's verify ms in rounds at 2-8 and 16 rows; sustained widths scaled to rounds at 1, 9, 10, 12; a line between.
-    pub const default_verify_ms = [max_rows + 1]f64{ 0.0, 16.2, 20.7, 25.0, 27.9, 31.1, 33.5, 36.7, 38.7, 43.9, 47.6, 50.4, 53.2, 55.2, 57.3, 59.3, 61.4 };
-    pub const default_draft_ms: f64 = 4.9;
+    pub const default_verify_ms = [max_rows + 1]f64{ 0.0, 13.6, 17.8, 21.0, 23.6, 25.4, 27.0, 28.4, 29.8, 31.3, 32.7, 34.0, 35.3, 36.4, 37.4, 38.4, 39.4 };
+    pub const default_draft_ms: f64 = 3.8;
 
     pub fn init() Plan {
         var p = Plan{};

@@ -928,6 +928,11 @@ const Chunk = struct {
                 c.enc.dispatchGroups(mtl.Size.of((n + 31) / 32, (rows + 15) / 16, 1), mtl.Size.of(128, 1, 1));
                 return;
             }
+            if (c.batch) |batch| if (c.s.fuse and n <= 256 and args.k % 512 == 0 and rows <= 2) {
+                c.setP(batch.scratch.shared.router_f32, args, &.{ x.buf, t(w), A, out });
+                c.enc.dispatchGroups(mtl.Size.of((n + 1) / 2, rows, 1), mtl.Size.of(128, 1, 1));
+                return;
+            };
             c.setP(p.float, args, &.{ x.buf, t(w), A, out });
         }
         c.enc.dispatchGroups(mtl.Size.of((n + 7) / 8, rows, 1), mtl.Size.of(256, 1, 1));
@@ -935,7 +940,9 @@ const Chunk = struct {
 
     fn sharedDense(c: Chunk, w: Tensor, q: wts.Affine, x: In, out: B, args: AffineDense) bool {
         const batch = c.batch orelse return false;
-        const d = batch.scratch.shared.dense(args.rows, args.n, args.k, args.bits) orelse return false;
+        const d = (if (c.s.rounding.experts) batch.scratch.shared.naxDense(args.rows, args.n, args.k, args.bits) else null) orelse
+            (if (c.s.fuse) batch.scratch.shared.fastDense1(args.rows, args.n, args.k, args.bits) else null) orelse
+            batch.scratch.shared.dense(args.rows, args.n, args.k, args.bits) orelse return false;
         c.setP(d.pipe, args, &.{ x.buf, t(w), bo(q.scales, q.scale_offset), bo(q.biases, q.bias_offset), A, out });
         c.enc.dispatchGroups(d.groups, d.threads);
         return true;
@@ -958,11 +965,16 @@ const Chunk = struct {
             t(v), bo(vf.scales, vf.scale_offset), bo(vf.biases, vf.bias_offset),
             b(s.q), b(s.k), b(s.v), b(s.r), b(s.gate), b(s.sink), b(s.kdyn), b(s.vdyn), A,
         };
-        if (c.batch) |batch| if (batch.scratch.shared.fused(c.n, ms, @intCast(width(a.q)))) |d| {
-            c.setP(d.pipe, SharedProjections{ .k = @intCast(width(a.q)), .full = @intFromBool(full), .rows = c.n, .m = ms }, &bufs);
-            c.enc.dispatchGroups(d.groups, d.threads);
-            return;
-        };
+        if (c.batch) |batch| {
+            const d = (if (c.s.rounding.experts) batch.scratch.shared.naxProjections(c.n, ms, @intCast(width(a.q))) else null) orelse
+                (if (c.s.fuse) batch.scratch.shared.fastProjectionsFew(c.n, ms, @intCast(width(a.q))) else null) orelse
+                batch.scratch.shared.fused(c.n, ms, @intCast(width(a.q)));
+            if (d) |disp| {
+                c.setP(disp.pipe, SharedProjections{ .k = @intCast(width(a.q)), .full = @intFromBool(full), .rows = c.n, .m = ms }, &bufs);
+                c.enc.dispatchGroups(disp.groups, disp.threads);
+                return;
+            }
+        }
         c.setP(c.m.affine_pipes.?.batch_projections, AffineProjections{ .k = @intCast(width(a.q)), .full = @intFromBool(full), .m = ms }, &bufs);
         c.enc.dispatchGroups(mtl.Size.of((total + 7) / 8, c.n, 1), mtl.Size.of(256, 1, 1));
     }
@@ -1244,6 +1256,16 @@ const Chunk = struct {
             const rank: u32 = @intCast(nrows(ctl.down));
             const xs: [3]u32 = @splat(cur.xs);
             const xb: [3]u32 = @splat(cur.xb);
+            if (c.s.rounding.experts and is_bf16 and c.n >= 3 and c.n <= @import("rows.zig").max_rows and c.h % 64 == 0 and rank % 64 == 0) if (scratch.shared.nax) |nax| {
+                const args = ControlsArgs{ .h = c.h, .rank = rank, .rows = c.n, .xs = xs, .xb = xb, .msg0 = msg.xb, .cols = 1 };
+                c.setP(scratch.controls_norm, args, &.{ cur.buf, cur.buf, cur.buf, msg.buf, A, b(scratch.controls_input) });
+                c.enc.dispatchGroups(mtl.Size.of(2 * c.n, 1, 1), mtl.Size.of(256, 1, 1));
+                c.setP(nax.controls_down_bf16, args, &.{ b(scratch.controls_input), t(ctl.down), t(ctl.down), t(ctl.down), A, b(scratch.controls_hidden) });
+                c.enc.dispatchGroups(mtl.Size.of((rank + 31) / 32, 1, 1), mtl.Size.of(256, 1, 1));
+                c.setP(nax.controls_apply_bf16, args, &.{ b(scratch.controls_hidden), t(ctl.gain), t(ctl.gain), t(ctl.gain), t(ctl.forget), t(ctl.forget), t(ctl.forget), cur.buf, cur.buf, cur.buf, msg.buf, out, out, out, A });
+                c.enc.dispatchGroups(mtl.Size.of((c.h + 31) / 32, 1, 1), mtl.Size.of(32, 1, 1));
+                return;
+            };
             const down_pipe = if (is_bf16) scratch.shared.controls_down_bf16 else scratch.shared.controls_down;
             const apply_pipe = if (c.n > 1) (if (is_bf16) scratch.controls_cols_bf16 else scratch.controls_cols) else (if (is_bf16) scratch.controls_apply_bf16 else scratch.controls_apply);
             c.setP(down_pipe, ControlsDown{ .h = c.h, .rank = rank, .rows = c.n, .msg0 = msg.xb, .xs = xs, .xb = xb }, &.{ cur.buf, cur.buf, cur.buf, msg.buf, t(ctl.down), t(ctl.down), t(ctl.down), A, b(scratch.controls_hidden) });
@@ -1282,6 +1304,15 @@ const Chunk = struct {
         const fused_down = c.s.fuse;
         const multi_col = c.s.fuse and c.n > 1;
         const args = ControlsArgs{ .h = c.h, .rank = rank, .rows = c.n, .xs = .{ ins[0].xs, ins[1].xs, ins[2].xs }, .xb = .{ ins[0].xb, ins[1].xb, ins[2].xb }, .cols = if (multi_col) c.applyCols() else 1 };
+        if (c.s.rounding.experts and is_bf16 and c.n >= 3 and c.n <= @import("rows.zig").max_rows and c.h % 64 == 0 and rank % 64 == 0) if (scratch.shared.nax) |nax| {
+            c.setP(scratch.controls_norm, args, &.{ ins[0].buf, ins[1].buf, ins[2].buf, msg, A, b(scratch.controls_input) });
+            c.enc.dispatchGroups(mtl.Size.of(6 * c.n, 1, 1), mtl.Size.of(256, 1, 1));
+            c.setP(nax.controls_down_bf16, args, &.{ b(scratch.controls_input), t(controllers[0].down), t(controllers[1].down), t(controllers[2].down), A, b(scratch.controls_hidden) });
+            c.enc.dispatchGroups(mtl.Size.of((rank + 31) / 32, 3, 1), mtl.Size.of(256, 1, 1));
+            c.setP(nax.controls_apply_bf16, args, &.{ b(scratch.controls_hidden), t(controllers[0].gain), t(controllers[1].gain), t(controllers[2].gain), t(controllers[0].forget), t(controllers[1].forget), t(controllers[2].forget), ins[0].buf, ins[1].buf, ins[2].buf, msg, b(c.s.n0), b(c.s.n1), b(c.s.n2), A });
+            c.enc.dispatchGroups(mtl.Size.of((c.h + 31) / 32, 3, 1), mtl.Size.of(32, 1, 1));
+            return;
+        };
         if (fused_down) {
             const down = ControlsDown{ .h = c.h, .rank = rank, .rows = c.n, .msg0 = 0, .xs = args.xs, .xb = args.xb };
             c.setP(if (is_bf16) scratch.shared.controls_down_bf16 else scratch.shared.controls_down, down, &.{ ins[0].buf, ins[1].buf, ins[2].buf, msg, t(controllers[0].down), t(controllers[1].down), t(controllers[2].down), A, b(scratch.controls_hidden) });
@@ -1491,6 +1522,7 @@ const Chunk = struct {
         c.enter(if (lay.precision == .affine4) .affine_experts else .experts);
         if (lay.precision == .affine4) {
             const p = m.affine_pipes.?;
+            if (c.batch) |batch| if (c.naxExperts(lay, input, batch, true)) return;
             if (c.n > 8 and s.half) {
                 c.setP(s.pipes.moe_zero, E, &.{ b(s.moe_cnt), A });
                 c.enc.dispatchThreads(mtl.Size.of(E, 1, 1), mtl.Size.of(32, 1, 1));
@@ -1538,6 +1570,7 @@ const Chunk = struct {
         }
         if (c.n <= 8 or !s.half) {
             const codes = b(if (lay.precision == .mxfp8) m.t256 else m.t16);
+            if (lay.precision == .nvfp4) if (c.batch) |batch| if (c.naxExperts(lay, input, batch, false)) return;
             if (lay.precision == .nvfp4) if (c.batch) |batch| if (c.gatheredExperts(lay, input, batch, codes)) return;
             const gu = if (lay.precision == .mxfp8) s.pipes.gu_mx else s.pipes.gu_nv;
             const down = if (lay.precision == .mxfp8) s.pipes.down_mx else s.pipes.down_nv;
@@ -1616,13 +1649,46 @@ const Chunk = struct {
         c.enc.dispatchThreads(mtl.Size.of(c.h, c.n, 1), mtl.Size.of(256, 1, 1));
     }
 
+    fn naxExperts(c: Chunk, lay: *const Layer, input: B, batch: *BatchContext, affine: bool) bool {
+        if (!c.s.rounding.experts) return false;
+        const nax = batch.scratch.shared.nax orelse return false;
+        const text = &c.m.config.text;
+        const s = c.s;
+        if (c.n < 3 or c.n > @import("rows.zig").max_rows or text.experts > 128) return false;
+        if (c.h % 64 != 0 or text.expert_inter % 64 != 0) return false;
+        const slots: u32 = c.n * text.topk;
+        if (slots > 256) return false;
+        const SortArgs = extern struct { slots: u32, experts: u32, grid_x_up: u32, grid_x_down: u32 };
+        const grid_x_up: u32 = (2 * text.expert_inter + 31) / 32;
+        const grid_x_down: u32 = (c.h + 31) / 32;
+        c.setP(nax.sort, SortArgs{ .slots = slots, .experts = text.experts, .grid_x_up = grid_x_up, .grid_x_down = grid_x_down }, &.{ b(s.picks), A, b(nax.meta), b(nax.indirect) });
+        c.enc.dispatchGroups(mtl.Size.of(1, 1, 1), mtl.Size.of(128, 1, 1));
+        const up_args = MoeB{ .k = c.h, .n = text.expert_inter, .slots = slots, .topk = text.topk, .gate_cap = text.gate_cap, .up_cap = text.up_cap };
+        const dn_args = MoeB{ .k = text.expert_inter, .n = c.h, .slots = slots, .topk = text.topk, .gate_cap = 0, .up_cap = 0 };
+        if (affine) {
+            c.setP(nax.aff4_up, up_args, &.{ input, t(lay.w13), t(lay.w13_scale), t(lay.w13_bias.?), b(s.act), b(nax.meta), A, b(s.act) });
+            c.enc.dispatchIndirect(nax.indirect, 0, mtl.Size.of(128, 1, 1));
+            c.setP(nax.aff4_down, dn_args, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), t(lay.w2_bias.?), b(s.down), b(nax.meta), A, b(s.down) });
+            c.enc.dispatchIndirect(nax.indirect, 12, mtl.Size.of(128, 1, 1));
+        } else {
+            c.setP(nax.nvfp4_up, up_args, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(nax.meta), A, b(s.act) });
+            c.enc.dispatchIndirect(nax.indirect, 0, mtl.Size.of(128, 1, 1));
+            c.setP(nax.nvfp4_down, dn_args, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(nax.meta), A, b(s.down) });
+            c.enc.dispatchIndirect(nax.indirect, 12, mtl.Size.of(128, 1, 1));
+        }
+        c.combine(text.topk);
+        return true;
+    }
+
     fn gatheredExperts(c: Chunk, lay: *const Layer, input: B, batch: *BatchContext, codes: B) bool {
         const s = c.s;
         const text = &c.m.config.text;
         const shared = &batch.scratch.shared;
         const slots: u32 = c.n * text.topk;
         const dn = shared.downs(c.n, c.h, text.expert_inter, slots) orelse return false;
-        const gu = shared.gateUp(c.n, text.expert_inter, c.h, slots) orelse Dispatch{ .pipe = s.pipes.gu_nv, .groups = mtl.Size.of(text.expert_inter, slots, 1), .threads = mtl.Size.of(32, 1, 1) };
+        const gu = shared.fastGateUp1(c.n, text.expert_inter, c.h, slots) orelse
+            shared.gateUp(c.n, text.expert_inter, c.h, slots) orelse
+            Dispatch{ .pipe = s.pipes.gu_nv, .groups = mtl.Size.of(text.expert_inter, slots, 1), .threads = mtl.Size.of(32, 1, 1) };
         c.setP(gu.pipe, MoeB{ .k = c.h, .n = text.expert_inter, .slots = slots, .topk = text.topk, .gate_cap = text.gate_cap, .up_cap = text.up_cap }, &.{ input, t(lay.w13), t(lay.w13_scale), opt(lay.w13_global), opt(lay.w13_den), b(s.picks), A, b(s.act), codes });
         c.enc.dispatchGroups(gu.groups, gu.threads);
         c.setP(dn.pipe, MoeB{ .k = text.expert_inter, .n = c.h, .slots = slots, .topk = text.topk, .gate_cap = 0, .up_cap = 0 }, &.{ b(s.act), t(lay.w2), t(lay.w2_scale), opt(lay.w2_global), opt(lay.w2_den), b(s.picks), A, b(s.down), codes });

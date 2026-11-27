@@ -19,7 +19,7 @@ pub fn main(init: std.process.Init, args: []const [:0]const u8) !void {
     defer m.deinit();
     const c = &m.config;
     const vocab: usize = c.text.unpadded_vocab;
-    var bs = try inkling.BatchScratch.init(m.device, c, inkling.group.max_rows);
+    var bs = try inkling.group.scratch(m.device, c);
     defer bs.deinit();
     var verifier = try inkling.group.Verifier.init(m.device, c);
     defer verifier.deinit();

@@ -109,6 +109,8 @@ test "inkling served speculation: tree rounds with lookup equal draft-off replie
     const drafter = std.c.getenv("TF_INKLING2_DFLASH2_DIR") orelse return error.SkipZigTest;
     if (setenv("INKLING_DRAFTER", drafter, 1) != 0) return error.SetEnv;
     defer _ = unsetenv("INKLING_DRAFTER");
+    if (setenv("INKLING_PREFILL_HALF", "off", 1) != 0) return error.SetEnv;
+    defer _ = unsetenv("INKLING_PREFILL_HALF");
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const o: api.Open = .{ .dir = std.mem.span(target), .model_type = "inkling2_loop", .lanes = 2, .lanes_fixed = true, .context = 8192, .prompt_cache_gib = 2 };

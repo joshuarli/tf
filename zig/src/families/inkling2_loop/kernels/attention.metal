@@ -200,34 +200,26 @@ inline void i2_combine_serial(const device float* PART, constant i2_attn_parts& 
   for (uint u = 0; u < per; ++u) if (lane + 32u * u < D) O[h * D + lane + 32u * u] = acc[u] / mass;
 }
 
-// The same merge for 128-wide heads and at most 16 splits, every partial loaded before the merge starts.
 inline void i2_combine_loaded(const device float* PART, constant i2_attn_parts& a, device float* O, uint h, uint lane) {
   constexpr uint D = 128u;
   const uint S = a.splits;
   const size_t first = (size_t)h * S * (D + 2u);
   const size_t mine = first + (size_t)min(lane, S - 1u) * (D + 2u);
   const float tops = PART[mine], masses = PART[mine + 1u];
-  float pv[16][4];
-#pragma unroll
-  for (uint s = 0; s < 16u; ++s) {
-    const size_t base = first + (size_t)min(s, S - 1u) * (D + 2u) + 2u + lane;
-    pv[s][0] = PART[base];
-    pv[s][1] = PART[base + 32u];
-    pv[s][2] = PART[base + 64u];
-    pv[s][3] = PART[base + 96u];
-  }
   float top = 0.0f, mass = 1.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-#pragma unroll
-  for (uint s = 0; s < 16u; ++s) {
-    if (s >= S) break;
+  for (uint s = 0; s < S; ++s) {
     const float ptop = simd_shuffle(tops, ushort(s));
     const float pmass = simd_shuffle(masses, ushort(s));
     if (pmass == 0.0f) continue;
+    const size_t base = first + (size_t)s * (D + 2u) + 2u + lane;
     const float peak = max(top, ptop);
     const float r0 = precise::exp(top - peak);
     const float r1 = precise::exp(ptop - peak);
     mass = mass * r0 + pmass * r1;
-    for (uint u = 0; u < 4u; ++u) acc[u] = acc[u] * r0 + r1 * pv[s][u];
+    acc[0] = acc[0] * r0 + r1 * PART[base];
+    acc[1] = acc[1] * r0 + r1 * PART[base + 32u];
+    acc[2] = acc[2] * r0 + r1 * PART[base + 64u];
+    acc[3] = acc[3] * r0 + r1 * PART[base + 96u];
     top = peak;
   }
   for (uint u = 0; u < 4u; ++u) O[h * D + lane + 32u * u] = acc[u] / mass;
@@ -282,27 +274,20 @@ struct i2_batch_row { device half* keys; device half* values; i2_attn_parts args
     const size_t first = (size_t)h * S * (D + 2u);
     const size_t mine = first + (size_t)min(lane, S - 1u) * (D + 2u);
     const float tops = PART[mine], masses = PART[mine + 1u];
-    float pv[16][4];
-#pragma unroll
-    for (uint s = 0; s < 16u; ++s) {
-      const size_t base = first + (size_t)min(s, S - 1u) * (D + 2u) + 2u + lane;
-      pv[s][0] = PART[base];
-      pv[s][1] = PART[base + 32u];
-      pv[s][2] = PART[base + 64u];
-      pv[s][3] = PART[base + 96u];
-    }
     float top = 0.0f, mass = 1.0f, acc[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-#pragma unroll
-    for (uint s = 0; s < 16u; ++s) {
-      if (s >= S) break;
+    for (uint s = 0; s < S; ++s) {
       const float ptop = simd_shuffle(tops, ushort(s));
       const float pmass = simd_shuffle(masses, ushort(s));
       if (pmass == 0.0f) continue;
+      const size_t base = first + (size_t)s * (D + 2u) + 2u + lane;
       const float peak = max(top, ptop);
       const float r0 = precise::exp(top - peak);
       const float r1 = precise::exp(ptop - peak);
       mass = mass * r0 + pmass * r1;
-      for (uint u = 0; u < 4u; ++u) acc[u] = acc[u] * r0 + r1 * pv[s][u];
+      acc[0] = acc[0] * r0 + r1 * PART[base];
+      acc[1] = acc[1] * r0 + r1 * PART[base + 32u];
+      acc[2] = acc[2] * r0 + r1 * PART[base + 64u];
+      acc[3] = acc[3] * r0 + r1 * PART[base + 96u];
       top = peak;
     }
     for (uint u = 0; u < 4u; ++u) {

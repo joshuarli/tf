@@ -4,7 +4,7 @@ This is the single plan for this repository: all current and future work, and th
 
 ## Status
 
-**Active 2026-11-27 — M5 Max native inference hillclimb Round 2 complete on `main` (past Round 1 `5a07f8689` / V5 `2faa69cb8`).**
+**Winding down 2026-11-28 — M5 Max native inference hillclimb paused after Round 3 Step 3A; no new lanes start.**
 - Resume prompt: "resume the roadmap". Campaign **M5 Max native inference** (slice Decision 17) plus post-V5 general-performance hillclimb Rounds 1 and 2 are complete and pushed on `main`.
 - **Post-V5 hillclimb Round 2 summary (oQ4e `3eea042751cd` + DFlash2 `4f9088ea66c2`, `INKLING_LOAD_LIMIT_GB=26`, `tensorfold-native` ReleaseFast, quiet-host gated via `perf-gate-ready` / `perf-gate-ready -1`):**
   - **What landed (`5a07f8689`..`HEAD`):**

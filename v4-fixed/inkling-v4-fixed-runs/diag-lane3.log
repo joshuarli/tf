@@ -1,0 +1,19 @@
+# attempt 0 22:32:25: /Users/josh/repos/tf/.work/tmp/v4/run-lane3/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-lane3.jsonl 0.0 0,1,8,16
+gpu-gate-ready: contended (check 1 of 1): compressor 9398 pages/s (limit 5000); 
+  gpu_other=0.0% util=0%/0% pressure=1 swap=0/s compressor=9398/s window=1s
+heavy: done: peak charged 0.0 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.0 GB); host pressure worst 1, host swap +0 MB, host pageins 943
+# attempt 1 22:32:57: /Users/josh/repos/tf/.work/tmp/v4/run-lane3/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-lane3.jsonl 0.0 0,1,8,16
+exact code-1024: width=1 rows bit-equal to one-row steps 1/1 max_abs_diff=0e0
+exact code-1024: width=8 rows bit-equal to one-row steps 8/8 max_abs_diff=0e0
+exact code-1024: width=16 rows bit-equal to one-row steps 16/16 max_abs_diff=0e0
+widths code-1024: context=1024 batch_step width=1 p50=13.743 ms p90=13.812 ms forward p50=13.743 ms gpu p50=13.507 ms
+widths code-1024: context=1024 grouped width=1 p50=14.063 ms p90=14.109 ms forward p50=13.822 ms gpu p50=13.619 ms
+widths code-1024: context=1024 grouped width=8 p50=32.691 ms p90=32.748 ms forward p50=32.448 ms gpu p50=32.198 ms
+widths code-1024: context=1024 grouped width=16 p50=51.167 ms p90=51.254 ms forward p50=50.906 ms gpu p50=50.657 ms
+routes code-1024: width=1 distinct experts a visit mean=8.00 min=8 max=8
+routes code-1024: width=2 distinct experts a visit mean=13.19 min=10 max=16
+routes code-1024: width=4 distinct experts a visit mean=20.29 min=15 max=29
+routes code-1024: width=8 distinct experts a visit mean=30.73 min=17 max=39
+routes code-1024: width=12 distinct experts a visit mean=37.27 min=18 max=50
+routes code-1024: width=16 distinct experts a visit mean=41.90 min=21 max=59
+heavy: done: peak charged 17.8 GB of the 28 GB cap (footprint 17.6 GB, resident 15.1 GB, host wired growth 17.8 GB); host pressure worst 1, host swap +0 MB, host pageins 1050549

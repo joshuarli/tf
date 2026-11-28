@@ -1,0 +1,15 @@
+# attempt 0 22:31:47: /Users/josh/repos/tf/.work/tmp/v4/run-base2/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-main-a.jsonl 0.0 0,1,8,16
+exact code-1024: width=1 rows bit-equal to one-row steps 1/1 max_abs_diff=0e0
+exact code-1024: width=8 rows bit-equal to one-row steps 8/8 max_abs_diff=0e0
+exact code-1024: width=16 rows bit-equal to one-row steps 16/16 max_abs_diff=0e0
+widths code-1024: context=1024 batch_step width=1 p50=15.428 ms p90=15.513 ms forward p50=15.428 ms gpu p50=14.870 ms
+widths code-1024: context=1024 grouped width=1 p50=15.732 ms p90=15.805 ms forward p50=15.492 ms gpu p50=14.951 ms
+widths code-1024: context=1024 grouped width=8 p50=33.637 ms p90=33.651 ms forward p50=33.385 ms gpu p50=32.797 ms
+widths code-1024: context=1024 grouped width=16 p50=52.501 ms p90=52.624 ms forward p50=52.264 ms gpu p50=51.633 ms
+routes code-1024: width=1 distinct experts a visit mean=8.00 min=8 max=8
+routes code-1024: width=2 distinct experts a visit mean=13.19 min=10 max=16
+routes code-1024: width=4 distinct experts a visit mean=20.29 min=15 max=29
+routes code-1024: width=8 distinct experts a visit mean=30.73 min=17 max=39
+routes code-1024: width=12 distinct experts a visit mean=37.27 min=18 max=50
+routes code-1024: width=16 distinct experts a visit mean=41.90 min=21 max=59
+heavy: done: peak charged 17.6 GB of the 28 GB cap (footprint 17.6 GB, resident 14.2 GB, host wired growth 17.5 GB); host pressure worst 1, host swap +0 MB, host pageins 1126811

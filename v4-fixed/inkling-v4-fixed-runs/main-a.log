@@ -1,0 +1,114 @@
+# attempt 0 23:54:12: /Users/josh/repos/tf/.work/tmp/v4/run-base3/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/prompts.json dflash /Users/josh/models/Inkling-2-Mini-DFlash2@4f9088ea66c2 512 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/main-a.jsonl 4 entering incremental tree
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=2.5% mem=0.0% rss=13968KiB vsz=488727312KiB elapsed=11-14:37:54 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=106.0% mem=22.5% rss=11337536KiB vsz=492629248KiB elapsed=11-14:36:31 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+  * pid=95289 ppid=1 pgid=95289 uid=502 cpu=364.0% mem=6.1% rss=3064384KiB vsz=2488464192KiB elapsed=02-08:46:58 state=Rs command=/Applications/OrbStack.app/Contents/Frameworks/OrbStack Helper.app/Contents/MacOS/OrbStack Helper vmgr -build-id macho:f05617e057d83e1c951ceb158b6406f3 -handoff
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+perf-gate-ready: app bundle attribution pid=95289 bundle_id=dev.kdrag0n.MacVirt
+host busy: load 25.45 on 18 cores (limit 0.7 per core), check 1 of 3
+host busy: load 25.45 on 18 cores (limit 0.7 per core), check 2 of 3
+host busy: load 25.45 on 18 cores (limit 0.7 per core), check 3 of 3
+heavy: done: peak charged 0.0 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.0 GB); host pressure worst 1, host swap +0 MB, host pageins 33683
+# attempt 1 23:59:17: /Users/josh/repos/tf/.work/tmp/v4/run-base3/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/prompts.json dflash /Users/josh/models/Inkling-2-Mini-DFlash2@4f9088ea66c2 512 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/main-a.jsonl 4 entering incremental tree
+gpu-gate-ready: contended (check 1 of 1): memory pressure level 2 (limit 1); swapping 243 pages/s (limit 100); compressor 72407 pages/s (limit 5000); 
+  gpu_other=0.1% util=0%/0% pressure=2 swap=243/s compressor=72407/s window=1s
+  GPU time users: WindowServer pid=623 0.1%; 
+heavy: done: peak charged 0.0 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.0 GB); host pressure worst 2, host swap -8 MB, host pageins 1716
+# attempt 2 00:04:19: /Users/josh/repos/tf/.work/tmp/v4/run-base3/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/prompts.json dflash /Users/josh/models/Inkling-2-Mini-DFlash2@4f9088ea66c2 512 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/main-a.jsonl 4 entering incremental tree
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.1% mem=0.0% rss=20160KiB vsz=488726752KiB elapsed=11-14:48:01 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=103.7% mem=23.0% rss=11552304KiB vsz=492728064KiB elapsed=11-14:46:38 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+host busy: load 25.63 on 18 cores (limit 0.7 per core), check 1 of 3
+host busy: load 25.63 on 18 cores (limit 0.7 per core), check 2 of 3
+host busy: load 25.63 on 18 cores (limit 0.7 per core), check 3 of 3
+heavy: done: peak charged 0.0 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.0 GB); host pressure worst 1, host swap -8 MB, host pageins 67019
+# attempt 3 00:09:24: /Users/josh/repos/tf/.work/tmp/v4/run-base3/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/prompts.json dflash /Users/josh/models/Inkling-2-Mini-DFlash2@4f9088ea66c2 512 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/main-a.jsonl 4 entering incremental tree
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.0% mem=0.0% rss=20800KiB vsz=488726752KiB elapsed=11-14:53:06 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=101.3% mem=23.3% rss=11730880KiB vsz=492794848KiB elapsed=11-14:51:43 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+  * pid=95289 ppid=1 pgid=95289 uid=502 cpu=1484.9% mem=11.0% rss=5518288KiB vsz=2488463600KiB elapsed=02-09:02:10 state=Rs command=/Applications/OrbStack.app/Contents/Frameworks/OrbStack Helper.app/Contents/MacOS/OrbStack Helper vmgr -build-id macho:f05617e057d83e1c951ceb158b6406f3 -handoff
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+perf-gate-ready: app bundle attribution pid=95289 bundle_id=dev.kdrag0n.MacVirt
+host busy: 18.00 cores of CPU time used over 1s (limit 4), check 1 of 3
+host busy: 18.00 cores of CPU time used over 1s (limit 4), check 2 of 3
+host busy: load 13.07 on 18 cores (limit 0.7 per core), check 3 of 3
+heavy: done: peak charged 0.3 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.3 GB); host pressure worst 1, host swap +0 MB, host pageins 1731
+# attempt 4 00:14:33: /Users/josh/repos/tf/.work/tmp/v4/run-base3/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/prompts.json dflash /Users/josh/models/Inkling-2-Mini-DFlash2@4f9088ea66c2 512 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/main-a.jsonl 4 entering incremental tree
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.0% mem=0.0% rss=20960KiB vsz=488726752KiB elapsed=11-14:58:14 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=104.1% mem=23.5% rss=11839344KiB vsz=492856112KiB elapsed=11-14:56:51 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+  * pid=28807 ppid=1 pgid=28807 uid=502 cpu=115.3% mem=0.4% rss=211136KiB vsz=489160000KiB elapsed=02-07:53:02 state=R command=/System/Library/PrivateFrameworks/MediaAnalysis.framework/Versions/A/mediaanalysisd
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+perf-gate-ready: macOS resource coalition unavailable for pid=28807
+host busy: load 14.04 on 18 cores (limit 0.7 per core), check 1 of 3
+host busy: load 13.32 on 18 cores (limit 0.7 per core), check 2 of 3
+host busy: load 13.32 on 18 cores (limit 0.7 per core), check 3 of 3
+heavy: done: peak charged 0.0 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.0 GB); host pressure worst 1, host swap +0 MB, host pageins 179
+# attempt 5 00:19:37: /Users/josh/repos/tf/.work/tmp/v4/run-base3/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/prompts.json dflash /Users/josh/models/Inkling-2-Mini-DFlash2@4f9088ea66c2 512 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/main-a.jsonl 4 entering incremental tree
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.0% mem=0.0% rss=21568KiB vsz=488727312KiB elapsed=11-15:03:18 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=101.5% mem=23.7% rss=11939616KiB vsz=492930352KiB elapsed=11-15:01:55 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+  - pid=52604 ppid=1 pgid=52602 uid=502 cpu=0.0% mem=0.0% rss=1872KiB vsz=488778608KiB elapsed=01:25 state=SN command=/bin/bash -c cd /Users/josh/repos/laputa-systems/stuff/.work/wt/perf && (REPOMOD_AST_GREP=$PWD/.work/tmp/bin/ast-grep .venv/bin/python /tmp/lintcmd.py > .work/tmp/lint-final.out 2> .work/tmp/lint-final.err; echo "exit=$?" > .work/tmp/lint-final.exit) & echo started; sleep 2; cat .work/tmp/lint-final.exit 2>/dev/null
+    - pid=52606 ppid=52604 pgid=52602 uid=502 cpu=0.0% mem=0.0% rss=1840KiB vsz=488778608KiB elapsed=01:25 state=SN command=/bin/bash -c cd /Users/josh/repos/laputa-systems/stuff/.work/wt/perf && (REPOMOD_AST_GREP=$PWD/.work/tmp/bin/ast-grep .venv/bin/python /tmp/lintcmd.py > .work/tmp/lint-final.out 2> .work/tmp/lint-final.err; echo "exit=$?" > .work/tmp/lint-final.exit) & echo started; sleep 2; cat .work/tmp/lint-final.exit 2>/dev/null
+      * pid=52607 ppid=52606 pgid=52602 uid=502 cpu=108.3% mem=1.2% rss=596816KiB vsz=489581504KiB elapsed=01:25 state=RN command=.venv/bin/python /tmp/lintcmd.py
+        - pid=57833 ppid=52607 pgid=52602 uid=502 cpu=1.0% mem=0.0% rss=5536KiB vsz=488836864KiB elapsed=00:00 state=SN command=/Users/josh/repos/laputa-systems/stuff/.work/wt/perf/.work/tmp/bin/ast-grep scan --inline-rules id: cmd\012language: bash\012rule:\012 kind: command_name --json=compact --stdin
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+perf-gate-ready: app bundle attribution pid=52607 bundle_id=com.joshuarli.ghostty-custom
+host busy: load 34.36 on 18 cores (limit 0.7 per core), check 1 of 3
+host busy: load 34.36 on 18 cores (limit 0.7 per core), check 2 of 3
+host busy: load 31.92 on 18 cores (limit 0.7 per core), check 3 of 3
+heavy: done: peak charged 0.0 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.0 GB); host pressure worst 1, host swap -8 MB, host pageins 11961
+# attempt 6 00:24:41: /Users/josh/repos/tf/.work/tmp/v4/run-base3/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/prompts.json dflash /Users/josh/models/Inkling-2-Mini-DFlash2@4f9088ea66c2 512 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/main-a.jsonl 4 entering incremental tree
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.0% mem=0.0% rss=21680KiB vsz=488726752KiB elapsed=11-15:08:23 state=Ss command=/sbin/launchd
+  - pid=37222 ppid=1 pgid=36128 uid=502 cpu=0.3% mem=0.2% rss=113648KiB vsz=498120784KiB elapsed=01:04:40 state=SN command=/Users/josh/.local/share/nodejs/26.13.1-npm11.20.0-darwin-arm64/bin/node --experimental-strip-types /Users/josh/usr/tools/pi-subagent-bridge/src/sdk-worker.ts /Users/josh/repos/laputa-systems/stuff/.work/worker-bridge/1ea57d28-e813-47d7-923c-e8ef06c55883.job.json
+    - pid=37528 ppid=37222 pgid=37528 uid=502 cpu=0.1% mem=0.2% rss=125312KiB vsz=498112736KiB elapsed=01:04:39 state=SNs command=/Users/josh/.local/share/nodejs/26.13.1-npm11.20.0-darwin-arm64/bin/node --import file:///Users/josh/.local/share/pi-runtime/releases/9c23e8eac56f78246a2dac81e16be322236c2cfa86b3cb6e586dad839f3d3608/node_modules/pi-subagents/runner-peer-preload.mjs /Users/josh/.local/share/pi-runtime/releases/9c23e8eac56f78246a2dac81e16be322236c2cfa86b3cb6e586dad839f3d3608/node_modules/pi-subagents/src/runs/background/subagent-runner-bootstrap.js /var/folders/h5/z5h1tjvn4hv1h02qfyvjsmg80000gp/T/pi-subagents-uid-502/async-cfg-624b21e6-e3bb-434b-90c2-239ed409fe56.json
+      - pid=11911 ppid=37528 pgid=11911 uid=502 cpu=0.0% mem=0.0% rss=2528KiB vsz=488782144KiB elapsed=01:02 state=SNs command=/bin/bash -c cat > /tmp/countcmd.py <<'EOF'\012import os, sys\012counts = {"scandir": 0, "walk_calls": 0, "walk_steps": 0, "iterdir": 0, "popen": 0}\012_real_scandir = os.scandir\012def counting_scandir(*a, **k):\012 counts["scandir"] += 1\012 return _real_scandir(*a, **k)\012os.scandir = counting_scandir\012_real_walk = os.walk\012def counting_walk(*a, **k):\012 counts["walk_calls"] += 1\012 for item in _real_walk(*a, **k):\012 counts["walk_steps"] += 1\012 yield item\012os.walk = counting_walk\012import pathlib\012_real_iterdir = pathlib.Path.iterdir\012def counting_iterdir(self):\012 counts["iterdir"] += 1\012 return _real_iterdir(self)\012pathlib.Path.iterdir = counting_iterdir\012import subprocess\012_real_popen_init = subprocess.Popen.__init__\012def counting_popen(self, *a, **k):\012 counts["popen"] += 1\012 return _real_popen_init(self, *a, **k)\012subprocess.Popen.__init__ = counting_popen\012sys.argv = ["repomod", "lint", "--include-private"]\012from repomod.cli import main\012try:\012 main()\012except SystemExit:\012 pass\012print("COUNTS " + repr(counts), file=sys.stderr)\012EOF\012cd /Users/josh/repos/laputa-systems/stuff/.work/wt/perf && (REPOMOD_AST_GREP=$PWD/.work/tmp/bin/ast-grep .venv/bin/python /tmp/countcmd.py > /tmp/count-after.out 2>/tmp/count-after.err; echo "exit=$?" >> /tmp/count-after.err) && tail -2 /tmp/count-after.err
+        - pid=11915 ppid=11911 pgid=11911 uid=502 cpu=0.0% mem=0.0% rss=1872KiB vsz=488778608KiB elapsed=01:02 state=SN command=/bin/bash -c cat > /tmp/countcmd.py <<'EOF'\012import os, sys\012counts = {"scandir": 0, "walk_calls": 0, "walk_steps": 0, "iterdir": 0, "popen": 0}\012_real_scandir = os.scandir\012def counting_scandir(*a, **k):\012 counts["scandir"] += 1\012 return _real_scandir(*a, **k)\012os.scandir = counting_scandir\012_real_walk = os.walk\012def counting_walk(*a, **k):\012 counts["walk_calls"] += 1\012 for item in _real_walk(*a, **k):\012 counts["walk_steps"] += 1\012 yield item\012os.walk = counting_walk\012import pathlib\012_real_iterdir = pathlib.Path.iterdir\012def counting_iterdir(self):\012 counts["iterdir"] += 1\012 return _real_iterdir(self)\012pathlib.Path.iterdir = counting_iterdir\012import subprocess\012_real_popen_init = subprocess.Popen.__init__\012def counting_popen(self, *a, **k):\012 counts["popen"] += 1\012 return _real_popen_init(self, *a, **k)\012subprocess.Popen.__init__ = counting_popen\012sys.argv = ["repomod", "lint", "--include-private"]\012from repomod.cli import main\012try:\012 main()\012except SystemExit:\012 pass\012print("COUNTS " + repr(counts), file=sys.stderr)\012EOF\012cd /Users/josh/repos/laputa-systems/stuff/.work/wt/perf && (REPOMOD_AST_GREP=$PWD/.work/tmp/bin/ast-grep .venv/bin/python /tmp/countcmd.py > /tmp/count-after.out 2>/tmp/count-after.err; echo "exit=$?" >> /tmp/count-after.err) && tail -2 /tmp/count-after.err
+          * pid=11916 ppid=11915 pgid=11911 uid=502 cpu=104.2% mem=1.3% rss=675216KiB vsz=489683968KiB elapsed=01:02 state=RN command=.venv/bin/python /tmp/countcmd.py
+            - pid=16176 ppid=11916 pgid=11911 uid=502 cpu=0.3% mem=0.0% rss=5568KiB vsz=488786208KiB elapsed=00:00 state=RN command=(git)
+perf-gate-ready: app bundle attribution pid=11916 bundle_id=com.joshuarli.ghostty-custom
+host busy: load 14.22 on 18 cores (limit 0.7 per core), check 1 of 3
+host busy: load 14.22 on 18 cores (limit 0.7 per core), check 2 of 3
+host busy: load 14.22 on 18 cores (limit 0.7 per core), check 3 of 3
+heavy: done: peak charged 0.2 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.2 GB); host pressure worst 1, host swap -24 MB, host pageins 42103
+# attempt 7 00:29:46: /Users/josh/repos/tf/.work/tmp/v4/run-base3/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/prompts.json dflash /Users/josh/models/Inkling-2-Mini-DFlash2@4f9088ea66c2 512 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/main-a.jsonl 4 entering incremental tree
+dflash code-1024: prompt=1024 equal=true rounds=51 committed/round=10.020 round_ms mean=45.89 p90=56.43 (draft 2.41 verify 43.46 select 0.00 commit 0.02 host 0.00) spec_tok_s=218.35 plain_tok_s=61.91 plain_ms=16.15 full=36 zero=3
+dflash prose-1024: prompt=1024 equal=true rounds=112 committed/round=4.563 round_ms mean=43.22 p90=48.42 (draft 4.74 verify 38.46 select 0.00 commit 0.02 host 0.00) spec_tok_s=105.56 plain_tok_s=59.89 plain_ms=16.70 full=34 zero=6
+dflash structured-1024: prompt=1024 equal=true rounds=126 committed/round=4.056 round_ms mean=42.02 p90=48.56 (draft 4.73 verify 37.28 select 0.00 commit 0.00 host 0.00) spec_tok_s=96.51 plain_tok_s=58.44 plain_ms=17.11 full=40 zero=14
+dflash code-4096: prompt=4096 equal=true rounds=68 committed/round=7.515 round_ms mean=51.15 p90=76.48 (draft 3.26 verify 47.88 select 0.00 commit 0.01 host 0.00) spec_tok_s=146.91 plain_tok_s=57.29 plain_ms=17.46 full=29 zero=6
+dflash prose-4096: prompt=4096 equal=true rounds=143 committed/round=3.573 round_ms mean=52.66 p90=48.42 (draft 6.36 verify 46.30 select 0.00 commit 0.00 host 0.00) spec_tok_s=67.86 plain_tok_s=56.53 plain_ms=17.69 full=42 zero=15
+dflash structured-4096: prompt=4096 equal=true rounds=145 committed/round=3.524 round_ms mean=43.23 p90=52.36 (draft 5.26 verify 37.96 select 0.00 commit 0.01 host 0.00) spec_tok_s=81.53 plain_tok_s=55.22 plain_ms=18.11 full=42 zero=15
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.1% mem=0.0% rss=14192KiB vsz=488726752KiB elapsed=11-15:15:51 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=103.4% mem=23.9% rss=12051232KiB vsz=493104752KiB elapsed=11-15:14:28 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+  * pid=95289 ppid=1 pgid=95289 uid=502 cpu=113.7% mem=5.8% rss=2937152KiB vsz=2488463600KiB elapsed=02-09:24:55 state=Ss command=/Applications/OrbStack.app/Contents/Frameworks/OrbStack Helper.app/Contents/MacOS/OrbStack Helper vmgr -build-id macho:f05617e057d83e1c951ceb158b6406f3 -handoff
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+perf-gate-ready: app bundle attribution pid=95289 bundle_id=dev.kdrag0n.MacVirt
+host busy: 5.11 cores of CPU time used over 1s (limit 4), check 1 of 1
+heavy: done: peak charged 18.4 GB of the 28 GB cap (footprint 18.4 GB, resident 11.8 GB, host wired growth 18.2 GB); host pressure worst 1, host swap -24 MB, host pageins 1268033
+# attempt 8 00:37:13: /Users/josh/repos/tf/.work/tmp/v4/run-base3/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/prompts.json dflash /Users/josh/models/Inkling-2-Mini-DFlash2@4f9088ea66c2 512 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/main-a.jsonl 4 entering incremental tree
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.1% mem=0.0% rss=21840KiB vsz=488727312KiB elapsed=11-15:20:54 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=107.9% mem=24.2% rss=12169680KiB vsz=493159680KiB elapsed=11-15:19:31 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+dflash code-1024: prompt=1024 equal=true rounds=51 committed/round=10.020 round_ms mean=45.94 p90=56.31 (draft 2.43 verify 43.48 select 0.00 commit 0.02 host 0.00) spec_tok_s=218.11 plain_tok_s=61.68 plain_ms=16.21 full=36 zero=3
+dflash prose-1024: prompt=1024 equal=true rounds=112 committed/round=4.563 round_ms mean=41.34 p90=46.73 (draft 4.57 verify 36.75 select 0.00 commit 0.02 host 0.00) spec_tok_s=110.37 plain_tok_s=59.90 plain_ms=16.69 full=34 zero=6
+dflash structured-1024: prompt=1024 equal=true rounds=126 committed/round=4.056 round_ms mean=40.00 p90=45.70 (draft 4.53 verify 35.46 select 0.00 commit 0.01 host 0.00) spec_tok_s=101.38 plain_tok_s=58.58 plain_ms=17.07 full=40 zero=14
+dflash code-4096: prompt=4096 equal=true rounds=68 committed/round=7.515 round_ms mean=49.71 p90=73.96 (draft 3.14 verify 46.57 select 0.00 commit 0.01 host 0.00) spec_tok_s=151.16 plain_tok_s=57.53 plain_ms=17.38 full=29 zero=6
+dflash prose-4096: prompt=4096 equal=true rounds=143 committed/round=3.573 round_ms mean=40.42 p90=49.09 (draft 4.83 verify 35.59 select 0.00 commit 0.00 host 0.00) spec_tok_s=88.41 plain_tok_s=57.72 plain_ms=17.33 full=42 zero=15
+dflash structured-4096: prompt=4096 equal=true rounds=145 committed/round=3.524 round_ms mean=40.12 p90=48.52 (draft 4.85 verify 35.27 select 0.00 commit 0.00 host 0.00) spec_tok_s=87.83 plain_tok_s=57.52 plain_ms=17.38 full=42 zero=15
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.0% mem=0.0% rss=9712KiB vsz=488727872KiB elapsed=11-15:23:09 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=105.2% mem=23.9% rss=12052544KiB vsz=493185888KiB elapsed=11-15:21:46 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+heavy: done: peak charged 18.4 GB of the 28 GB cap (footprint 18.4 GB, resident 10.8 GB, host wired growth 18.2 GB); host pressure worst 1, host swap -24 MB, host pageins 1175285

@@ -1,0 +1,105 @@
+# attempt 0 22:33:32: /Users/josh/repos/tf/.work/tmp/v4/run-noflush/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-noflush.jsonl 0.0 0,1,8,16
+host busy: 4.61 cores of CPU time used over 1s (limit 4), check 1 of 3
+host busy: 5.33 cores of CPU time used over 1s (limit 4), check 2 of 3
+exact code-1024: width=1 rows bit-equal to one-row steps 1/1 max_abs_diff=0e0
+exact code-1024: width=8 rows bit-equal to one-row steps 8/8 max_abs_diff=0e0
+exact code-1024: width=16 rows bit-equal to one-row steps 16/16 max_abs_diff=0e0
+widths code-1024: context=1024 batch_step width=1 p50=14.356 ms p90=15.521 ms forward p50=14.356 ms gpu p50=13.835 ms
+widths code-1024: context=1024 grouped width=1 p50=14.728 ms p90=15.033 ms forward p50=14.477 ms gpu p50=13.971 ms
+widths code-1024: context=1024 grouped width=8 p50=33.329 ms p90=33.535 ms forward p50=33.090 ms gpu p50=32.533 ms
+widths code-1024: context=1024 grouped width=16 p50=51.735 ms p90=51.946 ms forward p50=51.474 ms gpu p50=50.771 ms
+routes code-1024: width=1 distinct experts a visit mean=8.00 min=8 max=8
+routes code-1024: width=2 distinct experts a visit mean=13.19 min=10 max=16
+routes code-1024: width=4 distinct experts a visit mean=20.29 min=15 max=29
+routes code-1024: width=8 distinct experts a visit mean=30.73 min=17 max=39
+routes code-1024: width=12 distinct experts a visit mean=37.27 min=18 max=50
+routes code-1024: width=16 distinct experts a visit mean=41.90 min=21 max=59
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.1% mem=0.0% rss=15360KiB vsz=488727312KiB elapsed=11-13:17:56 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=105.9% mem=15.8% rss=7954464KiB vsz=491349712KiB elapsed=11-13:16:33 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+  * pid=95289 ppid=1 pgid=95289 uid=502 cpu=127.7% mem=5.3% rss=2668064KiB vsz=2488464192KiB elapsed=02-07:27:00 state=Rs command=/Applications/OrbStack.app/Contents/Frameworks/OrbStack Helper.app/Contents/MacOS/OrbStack Helper vmgr -build-id macho:f05617e057d83e1c951ceb158b6406f3 -handoff
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+perf-gate-ready: app bundle attribution pid=95289 bundle_id=dev.kdrag0n.MacVirt
+host busy: 4.86 cores of CPU time used over 1s (limit 4), check 1 of 1
+heavy: done: peak charged 17.6 GB of the 28 GB cap (footprint 17.6 GB, resident 15.2 GB, host wired growth 17.1 GB); host pressure worst 1, host swap -16 MB, host pageins 1059752
+# attempt 1 22:34:48: /Users/josh/repos/tf/.work/tmp/v4/run-noflush/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-noflush.jsonl 0.0 0,1,8,16
+host busy: 6.32 cores of CPU time used over 1s (limit 4), check 1 of 3
+exact code-1024: width=1 rows bit-equal to one-row steps 1/1 max_abs_diff=0e0
+exact code-1024: width=8 rows bit-equal to one-row steps 8/8 max_abs_diff=0e0
+exact code-1024: width=16 rows bit-equal to one-row steps 16/16 max_abs_diff=0e0
+widths code-1024: context=1024 batch_step width=1 p50=14.729 ms p90=15.568 ms forward p50=14.729 ms gpu p50=13.978 ms
+widths code-1024: context=1024 grouped width=1 p50=15.269 ms p90=15.713 ms forward p50=15.012 ms gpu p50=14.219 ms
+widths code-1024: context=1024 grouped width=8 p50=33.938 ms p90=36.428 ms forward p50=33.694 ms gpu p50=32.695 ms
+widths code-1024: context=1024 grouped width=16 p50=52.295 ms p90=57.752 ms forward p50=52.021 ms gpu p50=51.176 ms
+routes code-1024: width=1 distinct experts a visit mean=8.00 min=8 max=8
+routes code-1024: width=2 distinct experts a visit mean=13.19 min=10 max=16
+routes code-1024: width=4 distinct experts a visit mean=20.29 min=15 max=29
+routes code-1024: width=8 distinct experts a visit mean=30.73 min=17 max=39
+routes code-1024: width=12 distinct experts a visit mean=37.27 min=18 max=50
+routes code-1024: width=16 distinct experts a visit mean=41.90 min=21 max=59
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.0% mem=0.0% rss=15760KiB vsz=488726752KiB elapsed=11-13:19:03 state=Ss command=/sbin/launchd
+  * pid=95289 ppid=1 pgid=95289 uid=502 cpu=1615.4% mem=8.1% rss=4098848KiB vsz=2488464192KiB elapsed=02-07:28:07 state=Rs command=/Applications/OrbStack.app/Contents/Frameworks/OrbStack Helper.app/Contents/MacOS/OrbStack Helper vmgr -build-id macho:f05617e057d83e1c951ceb158b6406f3 -handoff
+perf-gate-ready: app bundle attribution pid=95289 bundle_id=dev.kdrag0n.MacVirt
+host busy: 17.32 cores of CPU time used over 1s (limit 4), check 1 of 1
+heavy: done: peak charged 17.9 GB of the 28 GB cap (footprint 17.6 GB, resident 17.9 GB, host wired growth 17.5 GB); host pressure worst 1, host swap +0 MB, host pageins 969450
+# attempt 2 22:35:56: /Users/josh/repos/tf/.work/tmp/v4/run-noflush/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-noflush.jsonl 0.0 0,1,8,16
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.1% mem=0.0% rss=16096KiB vsz=488727312KiB elapsed=11-13:19:38 state=Ss command=/sbin/launchd
+  * pid=95289 ppid=1 pgid=95289 uid=502 cpu=1499.1% mem=8.7% rss=4377408KiB vsz=2488464192KiB elapsed=02-07:28:42 state=Rs command=/Applications/OrbStack.app/Contents/Frameworks/OrbStack Helper.app/Contents/MacOS/OrbStack Helper vmgr -build-id macho:f05617e057d83e1c951ceb158b6406f3 -handoff
+perf-gate-ready: app bundle attribution pid=95289 bundle_id=dev.kdrag0n.MacVirt
+host busy: load 12.76 on 18 cores (limit 0.7 per core), check 1 of 3
+host busy: load 12.76 on 18 cores (limit 0.7 per core), check 2 of 3
+host busy: load 12.76 on 18 cores (limit 0.7 per core), check 3 of 3
+heavy: done: peak charged 0.0 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.0 GB); host pressure worst 1, host swap +0 MB, host pageins 24742
+# attempt 3 22:36:31: /Users/josh/repos/tf/.work/tmp/v4/run-noflush/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-noflush.jsonl 0.0 0,1,8,16
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.0% mem=0.0% rss=18688KiB vsz=488727312KiB elapsed=11-13:20:12 state=Ss command=/sbin/launchd
+  * pid=95289 ppid=1 pgid=95289 uid=502 cpu=102.7% mem=7.7% rss=3887200KiB vsz=2488464192KiB elapsed=02-07:29:16 state=Rs command=/Applications/OrbStack.app/Contents/Frameworks/OrbStack Helper.app/Contents/MacOS/OrbStack Helper vmgr -build-id macho:f05617e057d83e1c951ceb158b6406f3 -handoff
+perf-gate-ready: app bundle attribution pid=95289 bundle_id=dev.kdrag0n.MacVirt
+host busy: load 15.12 on 18 cores (limit 0.7 per core), check 1 of 3
+host busy: load 15.12 on 18 cores (limit 0.7 per core), check 2 of 3
+host busy: load 15.12 on 18 cores (limit 0.7 per core), check 3 of 3
+heavy: done: peak charged 0.0 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.0 GB); host pressure worst 1, host swap +0 MB, host pageins 1306
+# attempt 4 22:37:05: /Users/josh/repos/tf/.work/tmp/v4/run-noflush/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-noflush.jsonl 0.0 0,1,8,16
+exact code-1024: width=1 rows bit-equal to one-row steps 1/1 max_abs_diff=0e0
+exact code-1024: width=8 rows bit-equal to one-row steps 8/8 max_abs_diff=0e0
+exact code-1024: width=16 rows bit-equal to one-row steps 16/16 max_abs_diff=0e0
+widths code-1024: context=1024 batch_step width=1 p50=14.029 ms p90=14.122 ms forward p50=14.029 ms gpu p50=13.521 ms
+widths code-1024: context=1024 grouped width=1 p50=14.307 ms p90=14.470 ms forward p50=14.108 ms gpu p50=13.609 ms
+widths code-1024: context=1024 grouped width=8 p50=32.967 ms p90=33.103 ms forward p50=32.746 ms gpu p50=32.214 ms
+widths code-1024: context=1024 grouped width=16 p50=51.442 ms p90=51.552 ms forward p50=51.205 ms gpu p50=50.676 ms
+routes code-1024: width=1 distinct experts a visit mean=8.00 min=8 max=8
+routes code-1024: width=2 distinct experts a visit mean=13.19 min=10 max=16
+routes code-1024: width=4 distinct experts a visit mean=20.29 min=15 max=29
+routes code-1024: width=8 distinct experts a visit mean=30.73 min=17 max=39
+routes code-1024: width=12 distinct experts a visit mean=37.27 min=18 max=50
+routes code-1024: width=16 distinct experts a visit mean=41.90 min=21 max=59
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.0% mem=0.0% rss=12512KiB vsz=488727312KiB elapsed=11-13:21:23 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=100.0% mem=16.7% rss=8423136KiB vsz=491353248KiB elapsed=11-13:20:00 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+host busy: 14.27 cores of CPU time used over 1s (limit 4), check 1 of 1
+heavy: done: peak charged 17.6 GB of the 28 GB cap (footprint 17.6 GB, resident 14.3 GB, host wired growth 17.6 GB); host pressure worst 1, host swap -8 MB, host pageins 1057904
+# attempt 5 22:38:15: /Users/josh/repos/tf/.work/tmp/v4/run-noflush/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-noflush.jsonl 0.0 0,1,8,16
+gpu-gate-ready: contended (check 1 of 1): swapping 132 pages/s (limit 100); 
+  gpu_other=4.5% util=0%/0% pressure=1 swap=132/s compressor=4432/s window=1s
+  GPU time users: WindowServer pid=623 4.5%; 
+heavy: done: peak charged 0.0 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.0 GB); host pressure worst 1, host swap -16 MB, host pageins 766
+# attempt 6 22:38:47: /Users/josh/repos/tf/.work/tmp/v4/run-noflush/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-noflush.jsonl 0.0 0,1,8,16
+exact code-1024: width=1 rows bit-equal to one-row steps 1/1 max_abs_diff=0e0
+exact code-1024: width=8 rows bit-equal to one-row steps 8/8 max_abs_diff=0e0
+exact code-1024: width=16 rows bit-equal to one-row steps 16/16 max_abs_diff=0e0
+widths code-1024: context=1024 batch_step width=1 p50=14.120 ms p90=14.311 ms forward p50=14.120 ms gpu p50=13.609 ms
+widths code-1024: context=1024 grouped width=1 p50=14.434 ms p90=14.710 ms forward p50=14.212 ms gpu p50=13.707 ms
+widths code-1024: context=1024 grouped width=8 p50=33.073 ms p90=33.166 ms forward p50=32.828 ms gpu p50=32.293 ms
+widths code-1024: context=1024 grouped width=16 p50=51.574 ms p90=51.636 ms forward p50=51.299 ms gpu p50=50.721 ms
+routes code-1024: width=1 distinct experts a visit mean=8.00 min=8 max=8
+routes code-1024: width=2 distinct experts a visit mean=13.19 min=10 max=16
+routes code-1024: width=4 distinct experts a visit mean=20.29 min=15 max=29
+routes code-1024: width=8 distinct experts a visit mean=30.73 min=17 max=39
+routes code-1024: width=12 distinct experts a visit mean=37.27 min=18 max=50
+routes code-1024: width=16 distinct experts a visit mean=41.90 min=21 max=59
+heavy: done: peak charged 17.6 GB of the 28 GB cap (footprint 17.6 GB, resident 14.5 GB, host wired growth 17.5 GB); host pressure worst 1, host swap +0 MB, host pageins 1011385

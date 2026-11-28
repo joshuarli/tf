@@ -1,0 +1,106 @@
+# attempt 0 22:39:26: /Users/josh/repos/tf/.work/tmp/v4/run-noaffine/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-noaffine.jsonl 0.0 0,1,8,16
+exact code-1024: width=1 rows bit-equal to one-row steps 1/1 max_abs_diff=0e0
+exact code-1024: width=8 rows bit-equal to one-row steps 8/8 max_abs_diff=0e0
+exact code-1024: width=16 rows bit-equal to one-row steps 16/16 max_abs_diff=0e0
+widths code-1024: context=1024 batch_step width=1 p50=15.203 ms p90=16.479 ms forward p50=15.203 ms gpu p50=14.907 ms
+widths code-1024: context=1024 grouped width=1 p50=15.335 ms p90=16.287 ms forward p50=15.066 ms gpu p50=14.785 ms
+widths code-1024: context=1024 grouped width=8 p50=34.450 ms p90=38.208 ms forward p50=34.176 ms gpu p50=33.871 ms
+widths code-1024: context=1024 grouped width=16 p50=54.871 ms p90=62.270 ms forward p50=54.589 ms gpu p50=54.291 ms
+routes code-1024: width=1 distinct experts a visit mean=8.00 min=8 max=8
+routes code-1024: width=2 distinct experts a visit mean=13.19 min=10 max=16
+routes code-1024: width=4 distinct experts a visit mean=20.29 min=15 max=29
+routes code-1024: width=8 distinct experts a visit mean=30.73 min=17 max=39
+routes code-1024: width=12 distinct experts a visit mean=37.27 min=18 max=50
+routes code-1024: width=16 distinct experts a visit mean=41.90 min=21 max=59
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.0% mem=0.0% rss=13072KiB vsz=488726752KiB elapsed=11-13:23:40 state=Ss command=/sbin/launchd
+  * pid=95289 ppid=1 pgid=95289 uid=502 cpu=1561.6% mem=7.9% rss=3961712KiB vsz=2488464192KiB elapsed=02-07:32:44 state=Rs command=/Applications/OrbStack.app/Contents/Frameworks/OrbStack Helper.app/Contents/MacOS/OrbStack Helper vmgr -build-id macho:f05617e057d83e1c951ceb158b6406f3 -handoff
+perf-gate-ready: app bundle attribution pid=95289 bundle_id=dev.kdrag0n.MacVirt
+host busy: 17.65 cores of CPU time used over 1s (limit 4), check 1 of 1
+heavy: done: peak charged 17.6 GB of the 28 GB cap (footprint 17.6 GB, resident 17.4 GB, host wired growth 17.6 GB); host pressure worst 1, host swap +0 MB, host pageins 947929
+# attempt 1 22:40:32: /Users/josh/repos/tf/.work/tmp/v4/run-noaffine/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-noaffine.jsonl 0.0 0,1,8,16
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=20.8% mem=0.0% rss=13744KiB vsz=488727312KiB elapsed=11-13:24:14 state=Rs command=/sbin/launchd
+  * pid=95289 ppid=1 pgid=95289 uid=502 cpu=1499.6% mem=8.1% rss=4081248KiB vsz=2488464192KiB elapsed=02-07:33:18 state=Rs command=/Applications/OrbStack.app/Contents/Frameworks/OrbStack Helper.app/Contents/MacOS/OrbStack Helper vmgr -build-id macho:f05617e057d83e1c951ceb158b6406f3 -handoff
+perf-gate-ready: app bundle attribution pid=95289 bundle_id=dev.kdrag0n.MacVirt
+host busy: load 15.38 on 18 cores (limit 0.7 per core), check 1 of 3
+host busy: load 15.38 on 18 cores (limit 0.7 per core), check 2 of 3
+host busy: load 15.38 on 18 cores (limit 0.7 per core), check 3 of 3
+heavy: done: peak charged 0.4 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.4 GB); host pressure worst 1, host swap +0 MB, host pageins 10325
+# attempt 2 22:41:07: /Users/josh/repos/tf/.work/tmp/v4/run-noaffine/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-noaffine.jsonl 0.0 0,1,8,16
+gpu-gate-ready: contended (check 1 of 1): compressor 8820 pages/s (limit 5000); 
+  gpu_other=4.6% util=0%/0% pressure=1 swap=12/s compressor=8820/s window=1s
+  GPU time users: WindowServer pid=623 4.6%; 
+heavy: done: peak charged 0.0 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.0 GB); host pressure worst 1, host swap +0 MB, host pageins 17037
+# attempt 3 22:41:40: /Users/josh/repos/tf/.work/tmp/v4/run-noaffine/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-noaffine.jsonl 0.0 0,1,8,16
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.4% mem=0.0% rss=16784KiB vsz=488726752KiB elapsed=11-13:25:21 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=101.7% mem=20.8% rss=10479888KiB vsz=491384160KiB elapsed=11-13:23:58 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+host busy: load 18.86 on 18 cores (limit 0.7 per core), check 1 of 3
+host busy: load 17.83 on 18 cores (limit 0.7 per core), check 2 of 3
+host busy: load 17.83 on 18 cores (limit 0.7 per core), check 3 of 3
+heavy: done: peak charged 0.0 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.0 GB); host pressure worst 1, host swap +0 MB, host pageins 13279
+# attempt 4 22:42:14: /Users/josh/repos/tf/.work/tmp/v4/run-noaffine/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-noaffine.jsonl 0.0 0,1,8,16
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.1% mem=0.0% rss=17616KiB vsz=488727872KiB elapsed=11-13:25:56 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=101.4% mem=20.9% rss=10518256KiB vsz=491392912KiB elapsed=11-13:24:33 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+host busy: load 12.74 on 18 cores (limit 0.7 per core), check 1 of 3
+host busy: load 12.74 on 18 cores (limit 0.7 per core), check 2 of 3
+host busy: 4.92 cores of CPU time used over 1s (limit 4), check 3 of 3
+heavy: done: peak charged 0.0 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.0 GB); host pressure worst 1, host swap +0 MB, host pageins 19017
+# attempt 5 22:42:50: /Users/josh/repos/tf/.work/tmp/v4/run-noaffine/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-noaffine.jsonl 0.0 0,1,8,16
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.1% mem=0.0% rss=18544KiB vsz=488727312KiB elapsed=11-13:26:31 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=105.5% mem=20.9% rss=10529552KiB vsz=491402784KiB elapsed=11-13:25:08 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+host busy: 4.21 cores of CPU time used over 1s (limit 4), check 1 of 3
+exact code-1024: width=1 rows bit-equal to one-row steps 1/1 max_abs_diff=0e0
+exact code-1024: width=8 rows bit-equal to one-row steps 8/8 max_abs_diff=0e0
+exact code-1024: width=16 rows bit-equal to one-row steps 16/16 max_abs_diff=0e0
+widths code-1024: context=1024 batch_step width=1 p50=13.938 ms p90=14.350 ms forward p50=13.938 ms gpu p50=13.696 ms
+widths code-1024: context=1024 grouped width=1 p50=14.265 ms p90=14.356 ms forward p50=14.026 ms gpu p50=13.790 ms
+widths code-1024: context=1024 grouped width=8 p50=32.072 ms p90=32.251 ms forward p50=31.804 ms gpu p50=31.560 ms
+widths code-1024: context=1024 grouped width=16 p50=50.213 ms p90=50.524 ms forward p50=49.950 ms gpu p50=49.704 ms
+routes code-1024: width=1 distinct experts a visit mean=8.00 min=8 max=8
+routes code-1024: width=2 distinct experts a visit mean=13.19 min=10 max=16
+routes code-1024: width=4 distinct experts a visit mean=20.29 min=15 max=29
+routes code-1024: width=8 distinct experts a visit mean=30.73 min=17 max=39
+routes code-1024: width=12 distinct experts a visit mean=37.27 min=18 max=50
+routes code-1024: width=16 distinct experts a visit mean=41.90 min=21 max=59
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.0% mem=0.0% rss=7808KiB vsz=488726752KiB elapsed=11-13:27:11 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=104.2% mem=19.0% rss=9560112KiB vsz=491415248KiB elapsed=11-13:25:48 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+host busy: 4.82 cores of CPU time used over 1s (limit 4), check 1 of 1
+heavy: done: peak charged 17.9 GB of the 28 GB cap (footprint 17.6 GB, resident 9.8 GB, host wired growth 17.9 GB); host pressure worst 1, host swap +0 MB, host pageins 1051660
+# attempt 6 22:44:03: /Users/josh/repos/tf/.work/tmp/v4/run-noaffine/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-noaffine.jsonl 0.0 0,1,8,16
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=3.4% mem=0.0% rss=10064KiB vsz=488727312KiB elapsed=11-13:27:45 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=100.8% mem=20.9% rss=10499728KiB vsz=491423440KiB elapsed=11-13:26:22 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+exact code-1024: width=1 rows bit-equal to one-row steps 1/1 max_abs_diff=0e0
+exact code-1024: width=8 rows bit-equal to one-row steps 8/8 max_abs_diff=0e0
+exact code-1024: width=16 rows bit-equal to one-row steps 16/16 max_abs_diff=0e0
+widths code-1024: context=1024 batch_step width=1 p50=13.807 ms p90=13.910 ms forward p50=13.807 ms gpu p50=13.549 ms
+widths code-1024: context=1024 grouped width=1 p50=14.090 ms p90=14.249 ms forward p50=13.877 ms gpu p50=13.656 ms
+widths code-1024: context=1024 grouped width=8 p50=31.892 ms p90=32.004 ms forward p50=31.662 ms gpu p50=31.431 ms
+widths code-1024: context=1024 grouped width=16 p50=50.129 ms p90=50.241 ms forward p50=49.915 ms gpu p50=49.669 ms
+routes code-1024: width=1 distinct experts a visit mean=8.00 min=8 max=8
+routes code-1024: width=2 distinct experts a visit mean=13.19 min=10 max=16
+routes code-1024: width=4 distinct experts a visit mean=20.29 min=15 max=29
+routes code-1024: width=8 distinct experts a visit mean=30.73 min=17 max=39
+routes code-1024: width=12 distinct experts a visit mean=37.27 min=18 max=50
+routes code-1024: width=16 distinct experts a visit mean=41.90 min=21 max=59
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.0% mem=0.0% rss=8544KiB vsz=488727312KiB elapsed=11-13:28:17 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=100.8% mem=19.2% rss=9643120KiB vsz=491432752KiB elapsed=11-13:26:54 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+heavy: done: peak charged 17.6 GB of the 28 GB cap (footprint 17.6 GB, resident 14.7 GB, host wired growth 17.6 GB); host pressure worst 1, host swap +0 MB, host pageins 1010909

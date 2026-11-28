@@ -1,0 +1,10 @@
+# attempt 0 22:52:54: /Users/josh/repos/tf/.work/tmp/v4/run-base2/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/code-1024.json dflash-widths 9 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/diag-main-b.jsonl 0.0 0,1,8,16
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.5% mem=0.0% rss=17488KiB vsz=488727312KiB elapsed=11-13:36:35 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=103.6% mem=21.2% rss=10684016KiB vsz=491524496KiB elapsed=11-13:35:12 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+host busy: load 40.23 on 18 cores (limit 0.7 per core), check 1 of 3
+host busy: load 40.23 on 18 cores (limit 0.7 per core), check 2 of 3
+host busy: load 39.17 on 18 cores (limit 0.7 per core), check 3 of 3
+heavy: done: peak charged 0.0 GB of the 28 GB cap (footprint 0.0 GB, resident 0.0 GB, host wired growth 0.0 GB); host pressure worst 1, host swap -8 MB, host pageins 3948

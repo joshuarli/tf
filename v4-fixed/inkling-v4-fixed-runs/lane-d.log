@@ -1,0 +1,58 @@
+# attempt 0 01:12:42: /Users/josh/repos/tf/.work/tmp/v4/run-lane5/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/prompts.json dflash /Users/josh/models/Inkling-2-Mini-DFlash2@4f9088ea66c2 512 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/lane-d.jsonl 4 entering incremental tree
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.2% mem=0.0% rss=14256KiB vsz=488727312KiB elapsed=11-15:56:23 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=127.4% mem=24.8% rss=12477648KiB vsz=493568352KiB elapsed=11-15:55:00 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+dflash code-1024: prompt=1024 equal=true rounds=51 committed/round=10.020 round_ms mean=43.80 p90=54.34 (draft 2.43 verify 41.35 select 0.00 commit 0.02 host 0.00) spec_tok_s=228.74 plain_tok_s=69.03 plain_ms=14.49 full=36 zero=3
+dflash prose-1024: prompt=1024 equal=true rounds=112 committed/round=4.563 round_ms mean=39.97 p90=45.09 (draft 4.67 verify 35.29 select 0.00 commit 0.01 host 0.00) spec_tok_s=114.15 plain_tok_s=66.34 plain_ms=15.07 full=34 zero=6
+dflash structured-1024: prompt=1024 equal=true rounds=126 committed/round=4.056 round_ms mean=38.90 p90=44.94 (draft 4.67 verify 34.22 select 0.00 commit 0.01 host 0.00) spec_tok_s=104.26 plain_tok_s=65.95 plain_ms=15.16 full=40 zero=14
+dflash code-4096: prompt=4096 equal=true rounds=68 committed/round=7.515 round_ms mean=47.18 p90=69.36 (draft 3.20 verify 43.96 select 0.00 commit 0.01 host 0.00) spec_tok_s=159.28 plain_tok_s=64.75 plain_ms=15.44 full=29 zero=6
+dflash prose-4096: prompt=4096 equal=true rounds=143 committed/round=3.573 round_ms mean=37.33 p90=45.27 (draft 4.76 verify 32.56 select 0.00 commit 0.01 host 0.00) spec_tok_s=95.73 plain_tok_s=64.11 plain_ms=15.60 full=42 zero=15
+dflash structured-4096: prompt=4096 equal=true rounds=145 committed/round=3.524 round_ms mean=36.71 p90=43.93 (draft 4.78 verify 31.92 select 0.00 commit 0.01 host 0.00) spec_tok_s=96.00 plain_tok_s=65.09 plain_ms=15.36 full=42 zero=15
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.1% mem=0.0% rss=14896KiB vsz=488726752KiB elapsed=11-15:58:27 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=100.5% mem=24.7% rss=12412384KiB vsz=493578400KiB elapsed=11-15:57:04 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+host busy: 4.27 cores of CPU time used over 1s (limit 4), check 1 of 1
+heavy: done: peak charged 18.4 GB of the 28 GB cap (footprint 18.4 GB, resident 15.0 GB, host wired growth 18.2 GB); host pressure worst 1, host swap -8 MB, host pageins 1172410
+# attempt 1 01:19:49: /Users/josh/repos/tf/.work/tmp/v4/run-lane5/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/prompts.json dflash /Users/josh/models/Inkling-2-Mini-DFlash2@4f9088ea66c2 512 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/lane-d.jsonl 4 entering incremental tree
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.3% mem=0.0% rss=18448KiB vsz=488726752KiB elapsed=11-16:03:31 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=102.4% mem=25.2% rss=12661376KiB vsz=493634064KiB elapsed=11-16:02:08 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+dflash code-1024: prompt=1024 equal=true rounds=51 committed/round=10.020 round_ms mean=46.70 p90=65.15 (draft 2.68 verify 43.99 select 0.00 commit 0.02 host 0.00) spec_tok_s=214.56 plain_tok_s=63.17 plain_ms=15.83 full=36 zero=3
+dflash prose-1024: prompt=1024 equal=true rounds=112 committed/round=4.563 round_ms mean=42.27 p90=47.72 (draft 4.92 verify 37.33 select 0.00 commit 0.02 host 0.00) spec_tok_s=107.94 plain_tok_s=64.32 plain_ms=15.55 full=34 zero=6
+dflash structured-1024: prompt=1024 equal=true rounds=126 committed/round=4.056 round_ms mean=42.05 p90=50.29 (draft 5.06 verify 36.99 select 0.00 commit 0.00 host 0.00) spec_tok_s=96.44 plain_tok_s=63.26 plain_ms=15.81 full=40 zero=14
+dflash code-4096: prompt=4096 equal=true rounds=68 committed/round=7.515 round_ms mean=50.65 p90=74.13 (draft 3.42 verify 47.22 select 0.00 commit 0.01 host 0.00) spec_tok_s=148.35 plain_tok_s=62.07 plain_ms=16.11 full=29 zero=6
+dflash prose-4096: prompt=4096 equal=true rounds=143 committed/round=3.573 round_ms mean=40.45 p90=49.03 (draft 5.21 verify 35.23 select 0.00 commit 0.01 host 0.00) spec_tok_s=88.33 plain_tok_s=61.80 plain_ms=16.18 full=42 zero=15
+dflash structured-4096: prompt=4096 equal=true rounds=145 committed/round=3.524 round_ms mean=42.22 p90=50.62 (draft 6.72 verify 35.49 select 0.00 commit 0.01 host 0.00) spec_tok_s=83.47 plain_tok_s=62.46 plain_ms=16.01 full=42 zero=15
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=1.4% mem=0.0% rss=15888KiB vsz=488727872KiB elapsed=11-16:05:45 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=109.2% mem=25.0% rss=12570720KiB vsz=493657520KiB elapsed=11-16:04:22 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+host busy: 9.92 cores of CPU time used over 1s (limit 4), check 1 of 1
+heavy: done: peak charged 18.4 GB of the 28 GB cap (footprint 18.4 GB, resident 13.4 GB, host wired growth 18.3 GB); host pressure worst 1, host swap -8 MB, host pageins 1259598
+# attempt 2 01:27:08: /Users/josh/repos/tf/.work/tmp/v4/run-lane5/bin/tf-inkling2-loop-run /Users/josh/models/Inkling-2-Mini-oQ4e-mtp@3eea042751cd /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/prompts.json dflash /Users/josh/models/Inkling-2-Mini-DFlash2@4f9088ea66c2 512 /Users/josh/repos/tf/.work/wt/v4-fixed/campaign/kernels/inkling-v4-fixed-runs/lane-d.jsonl 4 entering incremental tree
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.0% mem=0.0% rss=17808KiB vsz=488727312KiB elapsed=11-16:10:49 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=102.3% mem=25.3% rss=12756016KiB vsz=493710544KiB elapsed=11-16:09:26 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+  * pid=95289 ppid=1 pgid=95289 uid=502 cpu=105.5% mem=10.3% rss=5162528KiB vsz=2488464160KiB elapsed=02-10:19:53 state=Rs command=/Applications/OrbStack.app/Contents/Frameworks/OrbStack Helper.app/Contents/MacOS/OrbStack Helper vmgr -build-id macho:f05617e057d83e1c951ceb158b6406f3 -handoff
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+perf-gate-ready: app bundle attribution pid=95289 bundle_id=dev.kdrag0n.MacVirt
+dflash code-1024: prompt=1024 equal=true rounds=51 committed/round=10.020 round_ms mean=43.72 p90=54.34 (draft 2.41 verify 41.29 select 0.00 commit 0.02 host 0.00) spec_tok_s=229.16 plain_tok_s=70.65 plain_ms=14.15 full=36 zero=3
+dflash prose-1024: prompt=1024 equal=true rounds=112 committed/round=4.563 round_ms mean=40.30 p90=44.83 (draft 4.71 verify 35.57 select 0.00 commit 0.02 host 0.00) spec_tok_s=113.21 plain_tok_s=67.80 plain_ms=14.75 full=34 zero=6
+dflash structured-1024: prompt=1024 equal=true rounds=126 committed/round=4.056 round_ms mean=38.86 p90=44.62 (draft 4.66 verify 34.19 select 0.00 commit 0.01 host 0.00) spec_tok_s=104.36 plain_tok_s=65.81 plain_ms=15.19 full=40 zero=14
+dflash code-4096: prompt=4096 equal=true rounds=68 committed/round=7.515 round_ms mean=47.48 p90=69.94 (draft 3.16 verify 44.30 select 0.00 commit 0.01 host 0.00) spec_tok_s=158.28 plain_tok_s=64.54 plain_ms=15.50 full=29 zero=6
+dflash prose-4096: prompt=4096 equal=true rounds=143 committed/round=3.573 round_ms mean=38.34 p90=46.80 (draft 4.85 verify 33.48 select 0.00 commit 0.01 host 0.00) spec_tok_s=93.20 plain_tok_s=63.57 plain_ms=15.73 full=42 zero=15
+dflash structured-4096: prompt=4096 equal=true rounds=145 committed/round=3.524 round_ms mean=38.09 p90=46.08 (draft 4.88 verify 33.20 select 0.00 commit 0.01 host 0.00) spec_tok_s=92.52 plain_tok_s=63.43 plain_ms=15.77 full=42 zero=15
+perf-gate-ready: hot process tree (>= 100% CPU)
+- pid=1 ppid=0 pgid=1 uid=0 cpu=0.0% mem=0.0% rss=9984KiB vsz=488726752KiB elapsed=11-16:13:05 state=Ss command=/sbin/launchd
+  * pid=553 ppid=1 pgid=553 uid=0 cpu=100.6% mem=25.0% rss=12560576KiB vsz=493724688KiB elapsed=11-16:11:42 state=Rs command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+Could not print domain: 1: Operation not permitted
+perf-gate-ready: macOS resource coalition unavailable for pid=553
+heavy: done: peak charged 18.4 GB of the 28 GB cap (footprint 18.4 GB, resident 9.9 GB, host wired growth 18.2 GB); host pressure worst 2, host swap -24 MB, host pageins 1157197
